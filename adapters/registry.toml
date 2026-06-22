@@ -1,0 +1,74 @@
+# =============================================================================
+# Declarative tool registry — the single source of truth for every AI tool that
+# consumes governed skills. Adding a new tool is ONE [[tool]] entry here (plus a
+# template under adapters/templates/). Nothing in the Makefile needs to change.
+#
+# Consumed by: src/ml_python_base/skills_sync (run via `make sync-skills`).
+# =============================================================================
+
+schema_version = 1
+
+# Governance files surfaced in every generated adapter region.
+[governance]
+files = [
+    ".github/architecture.md",
+    ".github/standards.md",
+    ".github/domain-boundaries.md",
+]
+automation = ".github/automation.md"
+orchestration = ".github/orchestration.md"
+
+# --- Tools -------------------------------------------------------------------
+
+[[tool]]
+id = "claude"
+display_name = "Claude Code"
+native_skills_dir = ".claude/skills"
+link_strategy = "symlink"            # symlink | copy | none
+needs_manifest = false
+adapter_file = "CLAUDE.md"
+adapter_template = "claude.md.j2"
+native_agents_dir = ".claude/agents"  # Claude Code native subagents
+agent_format = "claude"               # claude | opencode | (empty = none)
+
+[[tool]]
+id = "opencode"
+display_name = "OpenCode"
+native_skills_dir = ".opencode/skills"
+link_strategy = "symlink"
+needs_manifest = false
+adapter_file = "OPENCODE.md"
+adapter_template = "opencode.md.j2"
+native_agents_dir = ".opencode/agents"  # OpenCode native markdown agents (plural per docs)
+agent_format = "opencode"
+
+[[tool]]
+id = "antigravity"
+display_name = "Antigravity"
+native_skills_dir = ".agents/skills"
+link_strategy = "copy"               # cannot follow symlinks reliably
+needs_manifest = true
+manifest_path = ".agents/skills/.generated-manifest.tsv"
+adapter_file = ".agents/rules/GEMINI.md"
+adapter_template = "gemini.md.j2"
+reference_prefix = "@"               # GEMINI uses @.github/... reference syntax
+
+[[tool]]
+id = "codex"
+display_name = "Codex"
+native_skills_dir = ".codex/skills"  # Codex @-mention skill picker reads from here
+link_strategy = "symlink"            # same mechanism as claude/opencode
+needs_manifest = false
+adapter_file = "AGENTS.md"
+adapter_template = "agents.md.j2"
+native_agents_dir = ".codex/agents"  # Codex subagent TOML files
+agent_format = "codex"               # emits .codex/agents/<name>.toml
+
+[[tool]]
+id = "copilot"
+display_name = "GitHub Copilot"
+native_skills_dir = ""
+link_strategy = "none"
+needs_manifest = false
+adapter_file = ".github/copilot-instructions.md"
+adapter_template = "copilot.md.j2"

@@ -1,0 +1,35 @@
+{
+  "name": "ML Python Base Dev",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter",
+        "charliermarsh.ruff",
+        "tamasfe.even-better-toml",
+        "donjayamanne.python-environment-manager"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": ".venv/bin/python",
+        "python.terminal.activateEnvironment": true,
+        "editor.formatOnSave": true,
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.codeActionsOnSave": {
+            "source.fixAll": "explicit",
+            "source.organizeImports": "explicit"
+          }
+        }
+      }
+    }
+  },
+  // Usamos tu Makefile para instalar todo automáticamente al crear el contenedor
+  "postCreateCommand": "make install",
+
+  // Usuario remoto (vscode es el default en las imágenes de Microsoft)
+  "remoteUser": "vscode"
+}

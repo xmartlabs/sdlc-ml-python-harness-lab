@@ -1,0 +1,1 @@
+../../../.github/skills/research_current_info.md

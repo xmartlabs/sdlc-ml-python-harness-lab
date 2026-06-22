@@ -1,0 +1,18 @@
+{% if tool.has_native_view %}{% set intro = "The governed skills below are projected into `" ~ ref ~ tool.native_skills_dir ~ "/`. Internal skills are the source of truth and take precedence over external synced skills on name conflicts." %}{% else %}{% set intro = "Read the governed skills below directly from `" ~ ref ~ ".github/skills/` (internal) and `" ~ ref ~ ".github/skills-external/` (external). Internal skills take precedence over external synced skills on name conflicts." %}{% endif %}
+{{ intro }}
+
+**Internal skills:**
+
+{% for s in internal_skills %}
+- `{{ s.name }}` — {{ s.description }}
+{% endfor %}
+{% if external_skills %}
+
+**External synced skills:**
+
+{% for s in external_skills %}
+- `{{ s.name }}` — {{ s.description }}
+{% endfor %}
+{% endif %}
+
+Refresh this layout with `{{ refresh_command }}` (or `make check-sync` to verify it is current).

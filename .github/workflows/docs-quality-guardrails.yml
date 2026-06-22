@@ -1,0 +1,51 @@
+name: Docs and Quality Guardrails
+
+on:
+  pull_request:
+    branches:
+      - "**"
+
+jobs:
+  enforce-docs-and-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: make install
+
+      - name: Enforce docs update when src/tests change
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch origin "${BASE_REF}" --depth=1
+          CHANGED_FILES=$(git diff --name-only FETCH_HEAD HEAD)
+
+          if echo "${CHANGED_FILES}" | grep -E '^(src/|tests/)'; then
+            if ! echo "${CHANGED_FILES}" | grep -E '^docs/'; then
+              echo "❌ Changes in src/tests require at least one updated file in docs/."
+              exit 1
+            fi
+          fi
+
+      # CI verifies; it never mutates the tree. Run `make fix` / `make format`
+      # locally before pushing. `make check` covers format --check, ruff, bandit,
+      # mypy, and tests; `make check-sync` fails if generated skill artifacts or
+      # adapter skill regions are stale relative to the governed sources.
+      - name: Read-only quality gate
+        run: make check
+
+      - name: Skill-sync drift gate
+        run: make check-sync

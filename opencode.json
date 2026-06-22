@@ -1,0 +1,74 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["OPENCODE.md", "LOCAL_AGENT.md"],
+  "model": "{env:OPENCODE_MODEL}",
+  "small_model": "{env:OPENCODE_SMALL_MODEL}",
+  "agent": {
+    "plan": {
+      "model": "{env:OPENCODE_MODEL_PLAN}",
+      "temperature": 0.2
+    },
+    "build": {
+      "model": "{env:OPENCODE_MODEL}",
+      "temperature": 0.2
+    },
+    "conductor": {
+      "model": "{env:OPENCODE_MODEL_PLAN}",
+      "temperature": 0.2
+    }
+  },
+  "provider": {
+    "gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "AI Gateway (LiteLLM :4000)",
+      "options": {
+        "baseURL": "{env:GATEWAY_BASE_URL}",
+        "apiKey": "{env:GATEWAY_TOKEN}"
+      },
+      "models": {
+        "lmstudio-qwen3.6-35b-build": { "name": "Qwen3.6 35B build (local, capped)" },
+        "lmstudio-qwen3.6-27b-build": { "name": "Qwen3.6 27B build (local, capped)" },
+        "ollama-qwen3.6-35b-build": { "name": "Qwen3.6 35B build (Ollama, capped)" },
+        "ollama-qwen3.6-27b-build": { "name": "Qwen3.6 27B build (Ollama, capped)" },
+        "gpt-5.5": { "name": "GPT-5.5 (cloud, plan — default)" },
+        "gpt-5": { "name": "GPT-5 (cloud, plan — cheaper)" },
+        "claude-sonnet-4.6": { "name": "Claude Sonnet 4.6 (cloud, plan — last resort, Bedrock ~2x)" },
+        "auto": { "name": "Auto router (complexity-tiered)" }
+      }
+    },
+    "nvidia": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "NVIDIA NIM (free cloud)",
+      "options": {
+        "baseURL": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "{env:NVIDIA_API_KEY}"
+      },
+      "models": {
+        "nvidia/nemotron-3-super-120b-a12b": { "name": "Nemotron 3 Super 120B (free, planning)" }
+      }
+    },
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (self-hosted)",
+      "options": {
+        "baseURL": "{env:OLLAMA_BASE_URL}"
+      },
+      "models": {
+        "qwen2.5-coder:32b": { "name": "Qwen2.5 Coder 32B (large tier)" },
+        "qwen2.5-coder:14b": { "name": "Qwen2.5 Coder 14B (mid tier)" },
+        "llama3.1:8b": { "name": "Llama 3.1 8B (small tier)" }
+      }
+    },
+    "lmstudio": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LM Studio (self-hosted)",
+      "options": {
+        "baseURL": "{env:LMSTUDIO_BASE_URL}"
+      },
+      "models": {
+        "qwen/qwen3-coder-30b": { "name": "Qwen3 Coder 30B (LM Studio)" },
+        "openai/gpt-oss-20b": { "name": "GPT-OSS 20B (LM Studio)" }
+      }
+    }
+  }
+}

@@ -1,0 +1,166 @@
+[project]
+name = "ml-python-base"
+version = "0.1.0"
+description = "Template base para proyectos de ML"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas",
+    "nbstripout>=0.7.0",
+    "ipykernel",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ml_python_base"]
+
+[tool.ruff]
+# Configuración general de Ruff
+line-length = 88
+target-version = "py311"
+
+# Directorios a incluir y excluir
+include = ["*.py", "*.pyi", "**/pyproject.toml"]
+extend-exclude = [
+    ".venv",
+    ".git",
+    "__pycache__",
+    "*.egg-info",
+    "build",
+    "dist",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "htmlcov",
+]
+
+[tool.ruff.lint]
+# Reglas habilitadas (compatible con Black, Flake8, isort, pyupgrade, bugbear)
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort (ordenar imports)
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade (modernizar código Python)
+    "ARG",    # flake8-unused-arguments
+    "C90",    # mccabe (complejidad)
+    "T20",    # flake8-print (detectar prints olvidados)
+    "SIM",    # flake8-simplify
+    "TCH",    # flake8-type-checking
+    "RUF",    # Ruff-specific rules
+]
+
+# Ignorar reglas específicas si es necesario
+ignore = [
+    "E501",   # line too long (lo maneja el formatter)
+    "B008",   # do not perform function calls in argument defaults (común en FastAPI)
+    "C901",   # too complex (ajustar según necesidades del proyecto)
+    "W191",   # indentation contains tabs (lo maneja el formatter)
+]
+
+# Permitir autofix para estas reglas
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]
+"tests/**/*.py" = [
+    "ARG001",
+    "ARG002",  # Fixtures de pytest pueden parecer no usados
+    "TCH001",
+    "TCH002",
+    "TCH003",  # No exigir bloques TYPE_CHECKING en tests
+]
+# The skills sync CLI legitimately prints user-facing progress to stdout.
+"src/ml_python_base/skills_sync/cli.py" = ["T201"]
+# Bootstrap/maintenance scripts are CLIs: stdout progress is their interface.
+"scripts/*.py" = ["T201"]
+
+[tool.ruff.lint.isort]
+# Configuración compatible con Black.
+# The package is imported as `ml_python_base` (src-layout), so the import
+# name — not the directory — is what isort must recognize as first-party.
+known-first-party = ["ml_python_base"]
+combine-as-imports = true
+force-wrap-aliases = true
+
+[tool.ruff.lint.mccabe]
+# Complejidad ciclomática máxima
+max-complexity = 10
+
+[tool.ruff.format]
+# Configuración del formatter (compatible con Black)
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[tool.mypy]
+# Lenient baseline: catches obvious type errors without blocking the template.
+python_version = "3.11"
+files = ["src", "scripts"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+exclude = ['(^|/)__pycache__/']
+
+[tool.pytest.ini_options]
+# Configuración de pytest
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+    "--cov-report=term-missing:skip-covered",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]
+
+[tool.coverage.run]
+# Configuración de coverage
+source = ["src"]
+omit = [
+    "tests/*",
+    "*/migrations/*",
+    "*/__pycache__/*",
+    ".venv/*",
+]
+
+[tool.coverage.report]
+# Reportes de cobertura
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[dependency-groups]
+dev = [
+    "bandit>=1.9.2",
+    "pre-commit>=3.8.0",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "mypy>=1.11",
+    # Pinned exactly to the ruff-pre-commit `rev` in .pre-commit-config.yaml.
+    # Both must move together or import sorting will ping-pong between them.
+    "ruff==0.14.10",
+    # Tooling for the skills sync engine (src/ml_python_base/skills_sync).
+    # Kept in the dev group so it never bloats the product wheel.
+    "jinja2>=3.1",
+]

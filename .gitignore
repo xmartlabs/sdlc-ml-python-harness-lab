@@ -1,0 +1,81 @@
+.venv/
+venv/
+env/
+.env
+
+# Python cache y compilados
+*.pyc
+__pycache__/
+dash/__pycache__/
+webapp01/__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Entornos virtuales
+instance/
+
+# Testing y coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Build y distribución
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Linting y code quality
+.mypy_cache/
+.ruff_cache/
+.pylint.d/
+security-report.json
+bandit-report.json
+semgrep-report.json
+
+# IDEs y editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Promptflow temps
+.promptflow/
+
+# Milvus temps
+milvus/volumes/*
+volumes/*
+
+# App logs
+flow/logger/data/*
+notebooks/memory/data/*
+notebooks/chat_history.db
+chat_history.db
+notebooks/azure-sdk.ipynb
+notebooks/data/users.db
+
+# LangGraph
+.langgraph_api/
+
+# Logger data
+src/logger/data/*
+
+# CI/CD temps
+.venv-ci/
+test-reports/
+
+# Evaluation results
+notebooks/data/evaluation/results/*
+notebooks/data/experiments/*
+
+# Sistema
+.DS_Store
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+.pylintrc
