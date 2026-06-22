@@ -5,71 +5,79 @@ Seguí los pasos en orden; cada uno tiene un comando concreto y una señal de é
 
 ---
 
+## Cómo funciona la atribución en Langfuse
+
+OpenCode no sabe nada de session_ids ni tags — manda llamadas OpenAI-compatibles al gateway
+sin metadata. La solución: `create_run.py` crea una **virtual key específica del run** en
+LiteLLM con `session_id` y `tags` bakeados adentro. Cuando OpenCode usa esa key como
+`GATEWAY_TOKEN`, LiteLLM propaga esos valores a Langfuse en cada traza — automáticamente.
+
+```
+OpenCode → LiteLLM (key bench-tetris-v1-A-001)
+                 ↳ agrega session_id + tags a cada llamada
+                            → Langfuse  (todas las trazas agrupadas bajo esa session)
+```
+
+---
+
 ## Prerequisitos (hacer una sola vez)
 
 - [ ] Gateway activo en `http://localhost:4000`
-- [ ] Langfuse activo (OTEL activo — ya funciona)
+- [ ] Langfuse OTEL activo (ya funciona)
 - [ ] LM Studio o Ollama sirviendo `qwen3.6-35b` con **contexto ≥ 32k**
-- [ ] Virtual key `bench-opencode-local` creada en el gateway
-  → ver `docs/GATEWAY_CHANGES.md` secciones 1–3 y el prompt en `harnesses/opencode-local.md`
-- [ ] `make opencode-doctor` verde en este repo (confirma que el gateway y el modelo se alcanzan)
+- [ ] `LITELLM_MASTER_KEY` en el `.env` de este repo (mismo valor que en ai-gateway)
+- [ ] `make opencode-doctor` verde en este repo
 
 ---
 
 ## Paso 1 — Congelar el `base_commit`
 
-Esto fija el punto de partida del sujeto. Solo se hace una vez por batch de runs.
+Solo una vez por batch de runs. Fija el punto de partida del sujeto.
 
 ```bash
-git -C /ruta/a/ml-python-base rev-parse HEAD
+git -C /ruta/a/este/repo rev-parse HEAD
 ```
 
-Copiar el SHA resultante y editarlo en `benchmarks/tetris/runs.yaml`:
+Pegar el SHA en `benchmarks/tetris/runs.yaml`:
 
 ```yaml
-base_commit: <SHA>    # reemplazá TBD con el sha real
+base_commit: abc1234   # reemplazá TBD
 ```
 
 ---
 
-## Paso 2 — Registrar la corrida
+## Paso 2 — Registrar la corrida y crear la virtual key
 
 ```bash
 uv run python scripts/create_run.py --benchmark tetris-v1 --run tetris-v1-A-001
 ```
 
-**Señal de éxito:** imprime el `session_id`, el branch, y el snippet `.env`.
-Crea `data/runs/tetris-v1-A-001/report.md` y marca `status: running` en `runs.yaml`.
+**Señal de éxito:** imprime el `GATEWAY_TOKEN=sk-...` generado — ese es el key del run.
 
-Guardá el output — vas a necesitar el `session_id` y el snippet.
+El script:
+- Crea `data/runs/tetris-v1-A-001/report.md` pre-llenado
+- Marca `status: running` en `runs.yaml`
+- Llama a `POST /key/generate` en el gateway y retorna la key con la session ya bakeada
+
+Si falla con "LITELLM_MASTER_KEY not set": agregar en `.env` (ver `.env.example`).
 
 ---
 
 ## Paso 3 — Aislar el sujeto en un branch
 
 ```bash
-# Desde el directorio del sujeto (ml-python-base / ai-agentic-harness-lab):
 git worktree add ../bench-tetris-v1-A-001 -b bench/tetris-v1-A-001 <base_commit>
 cd ../bench-tetris-v1-A-001
-```
-
-El código del sujeto vive en esa carpeta temporal. No commitear nada de esto al lab.
-
----
-
-## Paso 4 — Configurar el `.env` del worktree
-
-```bash
 cp .env.example .env
 ```
 
-Editá `.env` con el snippet que imprimió `create_run.py`:
+Editar el `.env` del worktree con el snippet que imprimió `create_run.py`:
 
 ```bash
 OPENCODE_MODEL=gateway/lmstudio-qwen3.6-35b-build
-OPENCODE_MODEL_PLAN=gateway/lmstudio-qwen3.6-35b-build   # mismo modelo (local-only)
+OPENCODE_MODEL_PLAN=gateway/lmstudio-qwen3.6-35b-build
 GATEWAY_BASE_URL=http://localhost:4000/v1
-GATEWAY_TOKEN=<tu virtual key bench-opencode-local>
+GATEWAY_TOKEN=sk-<key-generada-por-create_run>    # ← la key del run, NO la master key
 ```
 
 Verificar que llega:
@@ -78,69 +86,58 @@ Verificar que llega:
 make opencode-doctor
 ```
 
-**Señal de éxito:** todos los checks verdes (gateway reachable, modelo responde).
+**Señal de éxito:** todos los checks verdes.
 
 ---
 
-## Paso 5 — Correr la corrida
+## Paso 4 — Correr la corrida
 
 ```bash
 make opencode
 ```
 
-OpenCode abre el TUI. Pegá el prompt de `benchmarks/tetris/prompt_incremental.md`.
+Pegá el prompt de `benchmarks/tetris/prompt_incremental.md`.
 
-Reglas mientras corrés:
-- **Un incremento por turno.** Después de cada respuesta, validá que el código corre antes de continuar.
-- No modifiques el prompt entre los 3 runs de la celda.
-- Anotá cada vez que intervenís manualmente (desbloqueás, corregís, reintentás).
-- Si el modelo loopeó o rompió scope, eso es dato — no lo "arreglés" fuera del benchmark.
+Reglas:
+- **Un incremento por turno.** Validá que corre antes de continuar.
+- No modificar el prompt entre los 3 runs de la celda.
+- Anotar cada intervención manual (desbloquear, corregir, reintentar) — es dato.
+
+Verificar en Langfuse: todas las trazas de esta sesión deben aparecer agrupadas bajo
+`session_id = bench-tetris-v1-A-001`.
 
 ---
 
-## Paso 6 — Capturar los artefactos
-
-Cuando la corrida termina (o se estanca):
+## Paso 5 — Capturar los artefactos
 
 ```bash
 # Desde el worktree del sujeto:
-git log --oneline HEAD ^<base_commit>   # commits del run
-git diff <base_commit> HEAD > /ruta/al/lab/data/runs/tetris-v1-A-001/diff.patch
-git rev-parse HEAD                      # result_commit
+git log --oneline HEAD ^<base_commit>
+git diff <base_commit> HEAD > /ruta/lab/data/runs/tetris-v1-A-001/diff.patch
+git rev-parse HEAD   # result_commit — guardarlo
 ```
 
-Guardá también:
-- Screenshot del juego corriendo (si llegó a correr).
-- El log del terminal de OpenCode si lo capturaste.
+Guardar también screenshot del juego si llegó a correr.
 
 ---
 
-## Paso 7 — Scoring manual
+## Paso 6 — Score y cerrar
 
-```bash
-uv run python scripts/score_tetris.py --run tetris-v1-A-001
-```
+Completar `data/runs/tetris-v1-A-001/report.md` con los valores de `benchmarks/tetris/scoring.md`.
 
-(Stub — todavía imprime TODO. Mientras tanto: completá `data/runs/tetris-v1-A-001/report.md`
-a mano con los valores de scoring de `benchmarks/tetris/scoring.md`.)
+Subir scores a Langfuse contra `session_id=bench-tetris-v1-A-001`:
+- `tetris_functional_level` (0–10)
+- `human_interventions` (entero)
+- `runnable` (0/1)
+- `scope_adherence` (0–5)
 
-Scores a registrar en Langfuse contra `session_id=bench-tetris-v1-A-001`:
-- `tetris_functional_level`: 0–10
-- `human_interventions`: cuántas veces interveniste
-- `runnable`: 0 o 1
-- `scope_adherence`: 0–5
-
----
-
-## Paso 8 — Cerrar la corrida
-
-En `benchmarks/tetris/runs.yaml`, completar la entrada `tetris-v1-A-001`:
+Actualizar `benchmarks/tetris/runs.yaml`:
 
 ```yaml
 status: completed
-result_level: <score 0–10>
+result_level: <score>
 human_interventions: <n>
-notes: "resumen breve del resultado"
+notes: "resumen breve"
 ```
 
 Limpiar el worktree:
@@ -151,17 +148,16 @@ git worktree remove ../bench-tetris-v1-A-001
 
 ---
 
-## Flujo completo resumido
+## Flujo resumido
 
 ```
 1. base_commit en runs.yaml (una vez)
-2. uv run python scripts/create_run.py --benchmark tetris-v1 --run tetris-v1-A-001
-3. git worktree add  →  cd worktree  →  editar .env  →  make opencode-doctor
+2. uv run python scripts/create_run.py ...   → imprime GATEWAY_TOKEN del run
+3. git worktree add  →  .env con esa key  →  make opencode-doctor
 4. make opencode  →  pegar prompt_incremental.md  →  un incremento por turno
-5. capturar diff + result_commit + screenshot
-6. completar report.md + subir scores a Langfuse
-7. cerrar en runs.yaml + git worktree remove
+5. diff.patch + result_commit + screenshot → data/runs/tetris-v1-A-001/
+6. report.md + scores en Langfuse  →  status: completed en runs.yaml
+7. git worktree remove
 ```
 
-Para la siguiente repetición (A-002): repetir desde el paso 2.
-No toques el prompt entre repeticiones.
+Para A-002: repetir desde el paso 2 con `--run tetris-v1-A-002`.
