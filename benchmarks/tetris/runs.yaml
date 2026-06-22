@@ -1,0 +1,264 @@
+# Tetris v1 — declarative run registry.
+# 5 cells (A–E) x 3 repetitions = 15 runs. Do NOT change prompts between runs of a cell.
+# Fill base_commit before the first run. result_level/human_interventions stay empty until scored.
+#
+# Model notes:
+#   gpt-5.5            -> gateway/gpt-5.5                       (real)
+#   qwen3.6-35b        -> gateway/lmstudio-qwen3.6-35b-build    (real, output-capped build profile)
+#   qwen3.5-9b         -> gateway/lmstudio-qwen3.5-9b  (LM Studio, openai/qwen/qwen3.5-9b)
+#                         default temp 0.7; role alias qwen9b-executor uses 0.2 for execution
+
+benchmark_id: tetris-v1
+subject_repo: ml-python-base
+base_commit: TBD            # freeze the ml-python-base sha here before the first run
+
+# --- Cell A: opencode local pure (Qwen 35B), incremental ---------------------
+runs:
+  - run_id: tetris-v1-A-001
+    methodology: opencode-local
+    harness: opencode
+    planner_model: qwen3.6-35b
+    executor_model: qwen3.6-35b
+    gateway_models: [gateway/lmstudio-qwen3.6-35b-build]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_incremental_v1
+    langfuse_session_id: bench-tetris-v1-A-001
+    virtual_key: bench-opencode-local
+    branch: bench/tetris-v1-A-001
+    status: running          # pending | running | completed
+    result_level:            # 0..10
+    human_interventions:
+    notes: ""
+  - run_id: tetris-v1-A-002
+    methodology: opencode-local
+    harness: opencode
+    planner_model: qwen3.6-35b
+    executor_model: qwen3.6-35b
+    gateway_models: [gateway/lmstudio-qwen3.6-35b-build]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_incremental_v1
+    langfuse_session_id: bench-tetris-v1-A-002
+    virtual_key: bench-opencode-local
+    branch: bench/tetris-v1-A-002
+    status: running
+    result_level:
+    human_interventions:
+    notes: ""
+  - run_id: tetris-v1-A-003
+    methodology: opencode-local
+    harness: opencode
+    planner_model: qwen3.6-35b
+    executor_model: qwen3.6-35b
+    gateway_models: [gateway/lmstudio-qwen3.6-35b-build]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_incremental_v1
+    langfuse_session_id: bench-tetris-v1-A-003
+    virtual_key: bench-opencode-local
+    branch: bench/tetris-v1-A-003
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+
+  # --- Cell B: conductor GPT-5.5 + executor Qwen 35B -------------------------
+  - run_id: tetris-v1-B-001
+    methodology: conductor-cloud-local
+    harness: opencode-conductor
+    planner_model: gpt-5.5
+    executor_model: qwen3.6-35b
+    gateway_models: [gateway/gpt-5.5, gateway/lmstudio-qwen3.6-35b-build]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_conductor_v1
+    langfuse_session_id: bench-tetris-v1-B-001
+    virtual_key: bench-conductor-gpt55-qwen35b
+    branch: bench/tetris-v1-B-001
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+  - run_id: tetris-v1-B-002
+    methodology: conductor-cloud-local
+    harness: opencode-conductor
+    planner_model: gpt-5.5
+    executor_model: qwen3.6-35b
+    gateway_models: [gateway/gpt-5.5, gateway/lmstudio-qwen3.6-35b-build]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_conductor_v1
+    langfuse_session_id: bench-tetris-v1-B-002
+    virtual_key: bench-conductor-gpt55-qwen35b
+    branch: bench/tetris-v1-B-002
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+  - run_id: tetris-v1-B-003
+    methodology: conductor-cloud-local
+    harness: opencode-conductor
+    planner_model: gpt-5.5
+    executor_model: qwen3.6-35b
+    gateway_models: [gateway/gpt-5.5, gateway/lmstudio-qwen3.6-35b-build]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_conductor_v1
+    langfuse_session_id: bench-tetris-v1-B-003
+    virtual_key: bench-conductor-gpt55-qwen35b
+    branch: bench/tetris-v1-B-003
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+
+  # --- Cell C: conductor GPT-5.5 + executor Qwen 3.5 9B ----------------------
+  - run_id: tetris-v1-C-001
+    methodology: conductor-cloud-small
+    harness: opencode-conductor
+    planner_model: gpt-5.5
+    executor_model: qwen3.5-9b
+    gateway_models: [gateway/gpt-5.5, gateway/qwen9b-executor]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_conductor_v1
+    langfuse_session_id: bench-tetris-v1-C-001
+    virtual_key: bench-conductor-gpt55-qwen9b
+    branch: bench/tetris-v1-C-001
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+  - run_id: tetris-v1-C-002
+    methodology: conductor-cloud-small
+    harness: opencode-conductor
+    planner_model: gpt-5.5
+    executor_model: qwen3.5-9b
+    gateway_models: [gateway/gpt-5.5, gateway/qwen9b-executor]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_conductor_v1
+    langfuse_session_id: bench-tetris-v1-C-002
+    virtual_key: bench-conductor-gpt55-qwen9b
+    branch: bench/tetris-v1-C-002
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+  - run_id: tetris-v1-C-003
+    methodology: conductor-cloud-small
+    harness: opencode-conductor
+    planner_model: gpt-5.5
+    executor_model: qwen3.5-9b
+    gateway_models: [gateway/gpt-5.5, gateway/qwen9b-executor]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_conductor_v1
+    langfuse_session_id: bench-tetris-v1-C-003
+    virtual_key: bench-conductor-gpt55-qwen9b
+    branch: bench/tetris-v1-C-003
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+
+  # --- Cell D: conductor Qwen 35B + executor Qwen 3.5 9B (all local) ---------
+  - run_id: tetris-v1-D-001
+    methodology: conductor-local-small
+    harness: opencode-conductor
+    planner_model: qwen3.6-35b
+    executor_model: qwen3.5-9b
+    gateway_models: [gateway/lmstudio-qwen3.6-35b-build, gateway/qwen9b-executor]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_conductor_small_steps_v1
+    langfuse_session_id: bench-tetris-v1-D-001
+    virtual_key: bench-conductor-qwen35b-qwen9b
+    branch: bench/tetris-v1-D-001
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+  - run_id: tetris-v1-D-002
+    methodology: conductor-local-small
+    harness: opencode-conductor
+    planner_model: qwen3.6-35b
+    executor_model: qwen3.5-9b
+    gateway_models: [gateway/lmstudio-qwen3.6-35b-build, gateway/qwen9b-executor]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_conductor_small_steps_v1
+    langfuse_session_id: bench-tetris-v1-D-002
+    virtual_key: bench-conductor-qwen35b-qwen9b
+    branch: bench/tetris-v1-D-002
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+  - run_id: tetris-v1-D-003
+    methodology: conductor-local-small
+    harness: opencode-conductor
+    planner_model: qwen3.6-35b
+    executor_model: qwen3.5-9b
+    gateway_models: [gateway/lmstudio-qwen3.6-35b-build, gateway/qwen9b-executor]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_conductor_small_steps_v1
+    langfuse_session_id: bench-tetris-v1-D-003
+    virtual_key: bench-conductor-qwen35b-qwen9b
+    branch: bench/tetris-v1-D-003
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+
+  # --- Cell E: cloud baseline (GPT-5.5 plan + exec) -------------------------
+  - run_id: tetris-v1-E-001
+    methodology: cloud-baseline
+    harness: opencode
+    planner_model: gpt-5.5
+    executor_model: gpt-5.5
+    gateway_models: [gateway/gpt-5.5]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_incremental_v1
+    langfuse_session_id: bench-tetris-v1-E-001
+    virtual_key: bench-cloud-baseline
+    branch: bench/tetris-v1-E-001
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+  - run_id: tetris-v1-E-002
+    methodology: cloud-baseline
+    harness: opencode
+    planner_model: gpt-5.5
+    executor_model: gpt-5.5
+    gateway_models: [gateway/gpt-5.5]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_incremental_v1
+    langfuse_session_id: bench-tetris-v1-E-002
+    virtual_key: bench-cloud-baseline
+    branch: bench/tetris-v1-E-002
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+  - run_id: tetris-v1-E-003
+    methodology: cloud-baseline
+    harness: opencode
+    planner_model: gpt-5.5
+    executor_model: gpt-5.5
+    gateway_models: [gateway/gpt-5.5]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_incremental_v1
+    langfuse_session_id: bench-tetris-v1-E-003
+    virtual_key: bench-cloud-baseline
+    branch: bench/tetris-v1-E-003
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
