@@ -30,6 +30,8 @@
         "lmstudio-qwen3.6-27b-build": { "name": "Qwen3.6 27B build (local, capped)" },
         "ollama-qwen3.6-35b-build": { "name": "Qwen3.6 35B build (Ollama, capped)" },
         "ollama-qwen3.6-27b-build": { "name": "Qwen3.6 27B build (Ollama, capped)" },
+        "lmstudio-qwen3.5-9b": { "name": "Qwen3.5 9B (local, direct)" },
+        "qwen9b-executor": { "name": "Qwen3.5 9B executor (local, temp 0.2 — benchmark)" },
         "gpt-5.5": { "name": "GPT-5.5 (cloud, plan — default)" },
         "gpt-5": { "name": "GPT-5 (cloud, plan — cheaper)" },
         "claude-sonnet-4.6": { "name": "Claude Sonnet 4.6 (cloud, plan — last resort, Bedrock ~2x)" },
