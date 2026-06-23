@@ -201,6 +201,24 @@ opencode:
 	fi
 	@set -a; [ -f .env ] && . ./.env; set +a; opencode
 
+# Start a benchmark run: register, create workspace, inject prompt, launch opencode.
+# Usage: make bench-start RUN=tetris-v1-A-002 [KEY=sk-xxx]
+bench-start:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: make bench-start RUN=tetris-v1-A-002"; exit 1; }
+	@command -v opencode >/dev/null 2>&1 || { echo "❌ opencode not found. Install: brew install anomalyco/tap/opencode"; exit 1; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/bench_start.py --run $(RUN) $(if $(KEY),--key $(KEY),)
+
+# Close a benchmark run: save artifacts, update runs.yaml, commit, clean workspace.
+# Usage: make bench-close RUN=tetris-v1-A-002 SCORE=5 INTERVENTIONS=0 [NOTES="texto"]
+bench-close:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: make bench-close RUN=tetris-v1-A-002 SCORE=5 INTERVENTIONS=0"; exit 1; }
+	@[ -n "$(SCORE)" ] || { echo "❌ SCORE is required (0-10)."; exit 1; }
+	@[ -n "$(INTERVENTIONS)" ] || { echo "❌ INTERVENTIONS is required (0, 1, 2...)."; exit 1; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/bench_close.py --run $(RUN) --score $(SCORE) \
+	  --interventions $(INTERVENTIONS) $(if $(NOTES),--notes "$(NOTES)",)
+
 # Verify opencode is installed and the configured local endpoints are reachable.
 opencode-doctor:
 	@set -a; [ -f .env ] && . ./.env; set +a; \

@@ -47,6 +47,10 @@ semgrep-report.json
 # Promptflow temps
 .promptflow/
 
+# Benchmark active workspace (cleaned up by make bench-close; archived to data/runs/)
+/workspace/
+BENCH_CONTEXT.md
+
 # Milvus temps
 milvus/volumes/*
 volumes/*

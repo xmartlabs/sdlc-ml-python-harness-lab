@@ -1,137 +1,128 @@
 # Receta: cómo correr un experimento
 
-Una corrida = un modelo + un prompt + un worktree aislado. Las corridas no se mezclan.
+Dos comandos por run. El resto es automático.
 
 ---
 
-## Una vez por benchmark (setup inicial)
+## Setup (una sola vez)
 
 ```bash
-# 1. Congelar el punto de partida del sujeto
-git rev-parse HEAD
-# → copiar el SHA a benchmarks/tetris/runs.yaml → base_commit: <sha>
+cp .env.example .env
+# Editar .env: GATEWAY_BASE_URL, GATEWAY_TOKEN (key inicial), LITELLM_MASTER_KEY
+# LITELLM_MASTER_KEY es la master key de LiteLLM — se usa para crear keys por run
+```
 
-# 2. Verificar que el gateway responde
+Verificar que el gateway responde:
+
+```bash
 make opencode-doctor
 ```
 
 ---
 
-## Por cada corrida (ej: tetris-v1-A-001)
+## Por cada corrida
 
-### A) Registrar y crear el worktree
-
-```bash
-# Registra la corrida en runs.yaml, genera data/runs/<id>/report.md
-uv run python scripts/create_run.py --benchmark tetris-v1 --run tetris-v1-A-001
-
-# Crear worktree aislado (el código del benchmark vive acá, NO en main)
-git worktree add ../bench-tetris-v1-A-001 -b bench/tetris-v1-A-001 <base_commit>
-cd ../bench-tetris-v1-A-001
-cp .env.example .env
-```
-
-### B) Configurar `.env` del worktree
+### 1. Iniciar
 
 ```bash
-# Editar el .env con los valores de esta corrida:
-OPENCODE_MODEL=gateway/lmstudio-qwen3.6-35b-build
-OPENCODE_MODEL_PLAN=gateway/lmstudio-qwen3.6-35b-build
-GATEWAY_TOKEN=sk-...   # la key de esta corrida (creada en LiteLLM UI con key_alias=tetris-v1-A-001)
-GATEWAY_BASE_URL=https://ai.msinnovatech.com.ar/v1
+make bench-start RUN=tetris-v1-A-002
 ```
 
-### C) Correr OpenCode con el prompt
+Esto hace todo de una vez:
+- Registra el run en `runs.yaml` (status → running)
+- Crea `workspace/tetris-v1-A-002/` — ahí va a escribir OpenCode
+- Genera `data/runs/tetris-v1-A-002/prompt.md` con el workspace path ya inyectado
+- Crea una virtual key en LiteLLM con `session_id` baked in y parchea `.env`
+- Escribe `BENCH_CONTEXT.md` con las reglas de workspace (OpenCode lo lee al arrancar)
+- Copia el prompt al clipboard (Cmd+V en OpenCode)
+- Lanza OpenCode
+
+Si la creación automática de key falla (Cloudflare bloquea el script), pásala manualmente:
 
 ```bash
-make opencode
-# → pegar el contenido de benchmarks/tetris/prompt_incremental.md
-# → responder "yes, proceed" o "proceed" después de cada increment validado
-# → correr python main.py para validar cada increment antes de continuar
+make bench-start RUN=tetris-v1-A-002 KEY=sk-tu-key-aqui
 ```
 
-### D) Capturar el resultado
+### 2. Correr el experimento en OpenCode
+
+```
+Cmd+V → Enter   (pega el prompt que ya está en el clipboard)
+```
+
+Validar cada increment antes de aprobar el siguiente:
 
 ```bash
-# Desde el worktree, cuando termina:
-git add -A && git commit -m "bench: tetris-v1-A-001 result"
-RESULT_COMMIT=$(git rev-parse HEAD)
-
-# Guardar diff en el lab
-git diff <base_commit> HEAD > /ruta/al/lab/data/runs/tetris-v1-A-001/diff.patch
-
-# Volver al lab y limpiar el worktree
-cd /ruta/al/lab
-git worktree remove ../bench-tetris-v1-A-001
+python workspace/tetris-v1-A-002/main.py
 ```
 
-### E) Scorear y cerrar
+OpenCode escribe en `workspace/tetris-v1-A-002/` — nunca en el root del repo.
 
-Abrir `data/runs/tetris-v1-A-001/report.md` y completar:
+### 3. Cerrar (desde otra terminal)
 
-```markdown
-- Result commit: <RESULT_COMMIT>
-- Total requests: (ver LiteLLM Usage → key tetris-v1-A-001)
-- Total tokens: 
-- Total cost: 
-
-## Functional score
-- Level achieved: X/10   ← según benchmarks/tetris/scoring.md
-- Window opens: sí/no
-- Piece falls: sí/no
-...
-
-## Engineering score
-- Human interventions: N
+```bash
+make bench-close RUN=tetris-v1-A-002 SCORE=5 INTERVENTIONS=0
 ```
 
-Actualizar `benchmarks/tetris/runs.yaml`:
+Con notas opcionales:
 
-```yaml
-status: completed
-result_level: X
-human_interventions: N
-notes: "breve descripción"
+```bash
+make bench-close RUN=tetris-v1-A-002 SCORE=7 INTERVENTIONS=1 NOTES="Llegó a rotación, falló lock"
+```
+
+Esto:
+- Copia `workspace/tetris-v1-A-002/` → `data/runs/tetris-v1-A-002/workspace/`
+- Genera `data/runs/tetris-v1-A-002/diff.patch`
+- Elimina `workspace/tetris-v1-A-002/`
+- Actualiza `runs.yaml` con score e interventions
+- Hace un commit con todo
+
+### 4. Completar el reporte (opcional pero recomendado)
+
+Abrir `data/runs/tetris-v1-A-002/report.md` y completar los campos de uso:
+
+```
+- Total requests: (ver LiteLLM UI → key tetris-v1-A-002)
+- Total tokens:
+- Total cost USD:
 ```
 
 ---
 
-## Segunda corrida (tetris-v1-A-002)
+## Segunda corrida del mismo experimento
 
-Mismo modelo, mismo prompt — **no cambiar nada entre corridas de la misma celda**.
+Mismo modelo, mismo prompt — no cambiar nada entre runs de la misma celda:
 
 ```bash
-# Volver al lab (main branch)
-cd /ruta/al/lab
-
-uv run python scripts/create_run.py --benchmark tetris-v1 --run tetris-v1-A-002
-# Nueva key en LiteLLM UI con key_alias=tetris-v1-A-002
-git worktree add ../bench-tetris-v1-A-002 -b bench/tetris-v1-A-002 <mismo base_commit>
-# ... repetir pasos B → E
+make bench-start RUN=tetris-v1-A-003
+# ... correr ...
+make bench-close RUN=tetris-v1-A-003 SCORE=6 INTERVENTIONS=0
 ```
 
 ---
 
-## Cambiar modelo/metodología (celda B, C, D, E)
+## Cambiar de celda (modelo diferente)
 
-Distinto modelo = distinto run_id + distinta key + distinto OPENCODE_MODEL en el .env.
-El prompt puede ser distinto según la celda (ver `benchmarks/tetris/`).
-El `base_commit` es el mismo para todas las celdas del mismo benchmark.
+Solo cambia el `RUN` — la key y el modelo están en `runs.yaml` y se aplican automáticamente:
+
+```bash
+make bench-start RUN=tetris-v1-B-001   # conductor GPT-5.5 + Qwen 35B
+make bench-start RUN=tetris-v1-E-001   # cloud full GPT-5.5
+```
 
 ---
 
-## Cheatsheet de scoring (benchmarks/tetris/scoring.md)
+## Cheatsheet de scoring
 
-| Nivel | Qué logró |
+| Score | Qué logró |
 |-------|-----------|
 | 0 | No produjo código útil |
 | 1 | Genera archivos pero no corre |
 | 2 | Corre sin crashear |
-| 3 | Abre ventana ← **estás acá** |
+| 3 | Abre ventana pygame |
 | 4 | Muestra pieza estática |
 | 5 | Pieza cae |
 | 6 | Movimiento lateral |
 | 7 | Rotación |
 | 8 | Colisiones y lock |
 | 9 | Limpia líneas + score |
-| 10 | Jugable completo |
+| 10 | Jugable completo (game over, reinicio) |
