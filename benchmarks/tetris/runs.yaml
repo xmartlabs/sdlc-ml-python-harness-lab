@@ -10,7 +10,7 @@
 
 benchmark_id: tetris-v1
 subject_repo: ml-python-base
-base_commit: TBD            # freeze the ml-python-base sha here before the first run
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3            # freeze the ml-python-base sha here before the first run
 
 # --- Cell A: opencode local pure (Qwen 35B), incremental ---------------------
 runs:
@@ -26,10 +26,10 @@ runs:
     langfuse_session_id: bench-tetris-v1-A-001
     virtual_key: bench-opencode-local
     branch: bench/tetris-v1-A-001
-    status: pending          # pending | running | completed
-    result_level:            # 0..10
-    human_interventions:
-    notes: ""
+    status: completed          # pending | running | completed
+    result_level: 3           # 0..10
+    human_interventions: 1
+    notes: "Increment 1 completo, ventana abre. Run de calibración sin worktree."
   - run_id: tetris-v1-A-002
     methodology: opencode-local
     harness: opencode
@@ -42,7 +42,7 @@ runs:
     langfuse_session_id: bench-tetris-v1-A-002
     virtual_key: bench-opencode-local
     branch: bench/tetris-v1-A-002
-    status: pending
+    status: running
     result_level:
     human_interventions:
     notes: ""

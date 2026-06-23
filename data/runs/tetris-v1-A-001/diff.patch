@@ -1,0 +1,325 @@
+diff --git a/benchmarks/tetris/runs.yaml b/benchmarks/tetris/runs.yaml
+index ba05c2c..3f3e2e9 100644
+--- a/benchmarks/tetris/runs.yaml
++++ b/benchmarks/tetris/runs.yaml
+@@ -10,7 +10,7 @@
+ 
+ benchmark_id: tetris-v1
+ subject_repo: ml-python-base
+-base_commit: TBD            # freeze the ml-python-base sha here before the first run
++base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3            # freeze the ml-python-base sha here before the first run
+ 
+ # --- Cell A: opencode local pure (Qwen 35B), incremental ---------------------
+ runs:
+@@ -26,7 +26,7 @@ runs:
+     langfuse_session_id: bench-tetris-v1-A-001
+     virtual_key: bench-opencode-local
+     branch: bench/tetris-v1-A-001
+-    status: pending          # pending | running | completed
++    status: running          # pending | running | completed
+     result_level:            # 0..10
+     human_interventions:
+     notes: ""
+@@ -42,7 +42,7 @@ runs:
+     langfuse_session_id: bench-tetris-v1-A-002
+     virtual_key: bench-opencode-local
+     branch: bench/tetris-v1-A-002
+-    status: pending
++    status: running
+     result_level:
+     human_interventions:
+     notes: ""
+diff --git a/docs/runbook-first-run.md b/docs/runbook-first-run.md
+index 88120f5..6f874df 100644
+--- a/docs/runbook-first-run.md
++++ b/docs/runbook-first-run.md
+@@ -1,163 +1,137 @@
+-# Runbook: primera corrida (Cell A — opencode local Qwen 35B)
++# Receta: cómo correr un experimento
+ 
+-Esto cubre exactamente una corrida completa de `tetris-v1-A-001`.
+-Seguí los pasos en orden; cada uno tiene un comando concreto y una señal de éxito.
++Una corrida = un modelo + un prompt + un worktree aislado. Las corridas no se mezclan.
+ 
+ ---
+ 
+-## Cómo funciona la atribución en Langfuse
+-
+-OpenCode no sabe nada de session_ids ni tags — manda llamadas OpenAI-compatibles al gateway
+-sin metadata. La solución: `create_run.py` crea una **virtual key específica del run** en
+-LiteLLM con `session_id` y `tags` bakeados adentro. Cuando OpenCode usa esa key como
+-`GATEWAY_TOKEN`, LiteLLM propaga esos valores a Langfuse en cada traza — automáticamente.
+-
+-```
+-OpenCode → LiteLLM (key bench-tetris-v1-A-001)
+-                 ↳ agrega session_id + tags a cada llamada
+-                            → Langfuse  (todas las trazas agrupadas bajo esa session)
+-```
+-
+----
+-
+-## Prerequisitos (hacer una sola vez)
+-
+-- [ ] Gateway activo en `http://localhost:4000`
+-- [ ] Langfuse OTEL activo (ya funciona)
+-- [ ] LM Studio o Ollama sirviendo `qwen3.6-35b` con **contexto ≥ 32k**
+-- [ ] `LITELLM_MASTER_KEY` en el `.env` de este repo (mismo valor que en ai-gateway)
+-- [ ] `make opencode-doctor` verde en este repo
+-
+----
+-
+-## Paso 1 — Congelar el `base_commit`
+-
+-Solo una vez por batch de runs. Fija el punto de partida del sujeto.
++## Una vez por benchmark (setup inicial)
+ 
+ ```bash
+-git -C /ruta/a/este/repo rev-parse HEAD
+-```
++# 1. Congelar el punto de partida del sujeto
++git rev-parse HEAD
++# → copiar el SHA a benchmarks/tetris/runs.yaml → base_commit: <sha>
+ 
+-Pegar el SHA en `benchmarks/tetris/runs.yaml`:
+-
+-```yaml
+-base_commit: abc1234   # reemplazá TBD
++# 2. Verificar que el gateway responde
++make opencode-doctor
+ ```
+ 
+ ---
+ 
+-## Paso 2 — Registrar la corrida y crear la virtual key
++## Por cada corrida (ej: tetris-v1-A-001)
++
++### A) Registrar y crear el worktree
+ 
+ ```bash
++# Registra la corrida en runs.yaml, genera data/runs/<id>/report.md
+ uv run python scripts/create_run.py --benchmark tetris-v1 --run tetris-v1-A-001
+-```
+-
+-**Señal de éxito:** imprime el `GATEWAY_TOKEN=sk-...` generado — ese es el key del run.
+ 
+-El script:
+-- Crea `data/runs/tetris-v1-A-001/report.md` pre-llenado
+-- Marca `status: running` en `runs.yaml`
+-- Llama a `POST /key/generate` en el gateway y retorna la key con la session ya bakeada
+-
+-Si falla con "LITELLM_MASTER_KEY not set": agregar en `.env` (ver `.env.example`).
+-
+----
+-
+-## Paso 3 — Aislar el sujeto en un branch
+-
+-```bash
++# Crear worktree aislado (el código del benchmark vive acá, NO en main)
+ git worktree add ../bench-tetris-v1-A-001 -b bench/tetris-v1-A-001 <base_commit>
+ cd ../bench-tetris-v1-A-001
+ cp .env.example .env
+ ```
+ 
+-Editar el `.env` del worktree con el snippet que imprimió `create_run.py`:
++### B) Configurar `.env` del worktree
+ 
+ ```bash
++# Editar el .env con los valores de esta corrida:
+ OPENCODE_MODEL=gateway/lmstudio-qwen3.6-35b-build
+ OPENCODE_MODEL_PLAN=gateway/lmstudio-qwen3.6-35b-build
+-GATEWAY_BASE_URL=http://localhost:4000/v1
+-GATEWAY_TOKEN=sk-<key-generada-por-create_run>    # ← la key del run, NO la master key
++GATEWAY_TOKEN=sk-...   # la key de esta corrida (creada en LiteLLM UI con key_alias=tetris-v1-A-001)
++GATEWAY_BASE_URL=https://ai.msinnovatech.com.ar/v1
+ ```
+ 
+-Verificar que llega:
+-
+-```bash
+-make opencode-doctor
+-```
+-
+-**Señal de éxito:** todos los checks verdes.
+-
+----
+-
+-## Paso 4 — Correr la corrida
++### C) Correr OpenCode con el prompt
+ 
+ ```bash
+ make opencode
++# → pegar el contenido de benchmarks/tetris/prompt_incremental.md
++# → responder "yes, proceed" o "proceed" después de cada increment validado
++# → correr python main.py para validar cada increment antes de continuar
+ ```
+ 
+-Pegá el prompt de `benchmarks/tetris/prompt_incremental.md`.
+-
+-Reglas:
+-- **Un incremento por turno.** Validá que corre antes de continuar.
+-- No modificar el prompt entre los 3 runs de la celda.
+-- Anotar cada intervención manual (desbloquear, corregir, reintentar) — es dato.
+-
+-Verificar en Langfuse: todas las trazas de esta sesión deben aparecer agrupadas bajo
+-`session_id = bench-tetris-v1-A-001`.
++### D) Capturar el resultado
+ 
+----
++```bash
++# Desde el worktree, cuando termina:
++git add -A && git commit -m "bench: tetris-v1-A-001 result"
++RESULT_COMMIT=$(git rev-parse HEAD)
+ 
+-## Paso 5 — Capturar los artefactos
++# Guardar diff en el lab
++git diff <base_commit> HEAD > /ruta/al/lab/data/runs/tetris-v1-A-001/diff.patch
+ 
+-```bash
+-# Desde el worktree del sujeto:
+-git log --oneline HEAD ^<base_commit>
+-git diff <base_commit> HEAD > /ruta/lab/data/runs/tetris-v1-A-001/diff.patch
+-git rev-parse HEAD   # result_commit — guardarlo
++# Volver al lab y limpiar el worktree
++cd /ruta/al/lab
++git worktree remove ../bench-tetris-v1-A-001
+ ```
+ 
+-Guardar también screenshot del juego si llegó a correr.
++### E) Scorear y cerrar
+ 
+----
++Abrir `data/runs/tetris-v1-A-001/report.md` y completar:
+ 
+-## Paso 6 — Score y cerrar
++```markdown
++- Result commit: <RESULT_COMMIT>
++- Total requests: (ver LiteLLM Usage → key tetris-v1-A-001)
++- Total tokens: 
++- Total cost: 
+ 
+-Completar `data/runs/tetris-v1-A-001/report.md` con los valores de `benchmarks/tetris/scoring.md`.
++## Functional score
++- Level achieved: X/10   ← según benchmarks/tetris/scoring.md
++- Window opens: sí/no
++- Piece falls: sí/no
++...
+ 
+-Subir scores a Langfuse contra `session_id=bench-tetris-v1-A-001`:
+-- `tetris_functional_level` (0–10)
+-- `human_interventions` (entero)
+-- `runnable` (0/1)
+-- `scope_adherence` (0–5)
++## Engineering score
++- Human interventions: N
++```
+ 
+ Actualizar `benchmarks/tetris/runs.yaml`:
+ 
+ ```yaml
+ status: completed
+-result_level: <score>
+-human_interventions: <n>
+-notes: "resumen breve"
++result_level: X
++human_interventions: N
++notes: "breve descripción"
+ ```
+ 
+-Limpiar el worktree:
++---
++
++## Segunda corrida (tetris-v1-A-002)
++
++Mismo modelo, mismo prompt — **no cambiar nada entre corridas de la misma celda**.
+ 
+ ```bash
+-git worktree remove ../bench-tetris-v1-A-001
++# Volver al lab (main branch)
++cd /ruta/al/lab
++
++uv run python scripts/create_run.py --benchmark tetris-v1 --run tetris-v1-A-002
++# Nueva key en LiteLLM UI con key_alias=tetris-v1-A-002
++git worktree add ../bench-tetris-v1-A-002 -b bench/tetris-v1-A-002 <mismo base_commit>
++# ... repetir pasos B → E
+ ```
+ 
+ ---
+ 
+-## Flujo resumido
++## Cambiar modelo/metodología (celda B, C, D, E)
+ 
+-```
+-1. base_commit en runs.yaml (una vez)
+-2. uv run python scripts/create_run.py ...   → imprime GATEWAY_TOKEN del run
+-3. git worktree add  →  .env con esa key  →  make opencode-doctor
+-4. make opencode  →  pegar prompt_incremental.md  →  un incremento por turno
+-5. diff.patch + result_commit + screenshot → data/runs/tetris-v1-A-001/
+-6. report.md + scores en Langfuse  →  status: completed en runs.yaml
+-7. git worktree remove
+-```
++Distinto modelo = distinto run_id + distinta key + distinto OPENCODE_MODEL en el .env.
++El prompt puede ser distinto según la celda (ver `benchmarks/tetris/`).
++El `base_commit` es el mismo para todas las celdas del mismo benchmark.
++
++---
+ 
+-Para A-002: repetir desde el paso 2 con `--run tetris-v1-A-002`.
++## Cheatsheet de scoring (benchmarks/tetris/scoring.md)
++
++| Nivel | Qué logró |
++|-------|-----------|
++| 0 | No produjo código útil |
++| 1 | Genera archivos pero no corre |
++| 2 | Corre sin crashear |
++| 3 | Abre ventana ← **estás acá** |
++| 4 | Muestra pieza estática |
++| 5 | Pieza cae |
++| 6 | Movimiento lateral |
++| 7 | Rotación |
++| 8 | Colisiones y lock |
++| 9 | Limpia líneas + score |
++| 10 | Jugable completo |
+diff --git a/scripts/create_run.py b/scripts/create_run.py
+index 91dcbf9..a9903f5 100644
+--- a/scripts/create_run.py
++++ b/scripts/create_run.py
+@@ -130,16 +130,9 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
+     url = f"{base}/key/generate"
+ 
+     session_id = run["langfuse_session_id"]
+-    tags = [
+-        "benchmark:tetris-v1",
+-        f"harness:{run.get('harness', '')}",
+-        f"method:{run.get('methodology', '')}",
+-        f"planner:{run.get('planner_model', '')}",
+-        f"executor:{run.get('executor_model', '')}",
+-        f"prompt:{run.get('prompt_variant', '')}",
+-        f"run:{run['run_id']}",
+-    ]
+ 
++    # Note: LiteLLM `tags` require Enterprise. We use metadata only (free tier).
++    # LiteLLM forwards metadata.session_id to Langfuse for session grouping.
+     payload = {
+         "key_alias": run["run_id"],
+         "metadata": {
+@@ -150,8 +143,8 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
+             "methodology": run.get("methodology", ""),
+             "planner_model": run.get("planner_model", ""),
+             "executor_model": run.get("executor_model", ""),
++            "prompt_variant": run.get("prompt_variant", ""),
+         },
+-        "tags": tags,
+     }
+ 
+     data = json.dumps(payload).encode()
+@@ -161,6 +154,10 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
+         headers={
+             "Authorization": f"Bearer {master_key}",
+             "Content-Type": "application/json",
++            # Cloudflare bot-protection requires browser-like headers on external gateways
++            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
++            "Accept": "application/json",
++            "Origin": url.rsplit("/key", 1)[0],
+         },
+     )
+     try:

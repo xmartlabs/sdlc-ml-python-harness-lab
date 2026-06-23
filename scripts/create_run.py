@@ -130,16 +130,9 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
     url = f"{base}/key/generate"
 
     session_id = run["langfuse_session_id"]
-    tags = [
-        "benchmark:tetris-v1",
-        f"harness:{run.get('harness', '')}",
-        f"method:{run.get('methodology', '')}",
-        f"planner:{run.get('planner_model', '')}",
-        f"executor:{run.get('executor_model', '')}",
-        f"prompt:{run.get('prompt_variant', '')}",
-        f"run:{run['run_id']}",
-    ]
 
+    # Note: LiteLLM `tags` require Enterprise. We use metadata only (free tier).
+    # LiteLLM forwards metadata.session_id to Langfuse for session grouping.
     payload = {
         "key_alias": run["run_id"],
         "metadata": {
@@ -150,8 +143,8 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
             "methodology": run.get("methodology", ""),
             "planner_model": run.get("planner_model", ""),
             "executor_model": run.get("executor_model", ""),
+            "prompt_variant": run.get("prompt_variant", ""),
         },
-        "tags": tags,
     }
 
     data = json.dumps(payload).encode()
@@ -161,6 +154,10 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
         headers={
             "Authorization": f"Bearer {master_key}",
             "Content-Type": "application/json",
+            # Cloudflare bot-protection requires browser-like headers on external gateways
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Accept": "application/json",
+            "Origin": url.rsplit("/key", 1)[0],
         },
     )
     try:
