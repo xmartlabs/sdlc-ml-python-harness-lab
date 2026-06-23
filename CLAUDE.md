@@ -10,6 +10,36 @@ Always read and apply these files before generating code or plans:
 - `.github/standards.md`
 - `.github/domain-boundaries.md`
 
+## Operating playbook
+
+How to work in this repository to produce high-quality, well-grounded changes. These
+are defaults, not ceremony — scale them to the task. The full rationale and the
+end-to-end loop live in `docs/agentic-workflow.md`.
+
+1. **Ground before doing.** Read and search the relevant code before editing. Skim
+   `memory/context.md` and `memory/learnings.md` for prior context. Explore first;
+   blind edits cause rework.
+2. **Plan multi-step work.** For anything beyond a trivial change, start with a
+   `TodoWrite` plan and the `writing-plans` / `brainstorming` (or `brainstorm_quick`)
+   skill. Complete one phase before the next.
+3. **Delegate independent work in parallel.** When subtasks are independent, dispatch
+   them to subagents concurrently (one message, multiple `Task` calls) per the
+   `subagent-driven-development` skill. Use the governed agents in `.github/agents/`.
+4. **Verify continuously.** Run `make test` (or focused `pytest`) after each
+   substantive change, and close work with `make check` and the
+   `requesting-code-review` skill. The `/verify` command bundles the gate.
+5. **Compound knowledge.** When you finish a unit of work, record decisions in
+   `docs/adr/` and durable learnings in `memory/`. Use `/adr` and `/retro`. Leave the
+   repo's memory richer than you found it.
+6. **Prefer CLI, load tools on demand.** Reach for `make` / `uv` / CLI over MCP where
+   both work (leaner and reproducible). Use ToolSearch to load tool schemas on demand
+   rather than assuming a tool is unavailable.
+7. **Recover, don't thrash.** On an error, diagnose the cause before retrying; do not
+   hammer the same file repeatedly. Get it right early rather than iterating blindly.
+8. **Match the model to the task.** Use the planner / executor / fast tiers in
+   `.github/portability.md`; offload routine sub-work to cheaper models and reserve
+   the strongest model for planning and hard reasoning.
+
 ## Native Skills
 
 Claude Code discovers internal and synced external skills from:
@@ -49,7 +79,10 @@ The governed skills below are projected into `.claude/skills/`. Internal skills 
 - `plan_and_execute_feature` — Use when delivering a feature through explicit planning, phased execution, validation, and governed handoff — or when implementing/fixing already-scoped engineering work via the execute_only mode.
 - `refactor_to_clean_architecture` — Use when refactoring modules to align dependency direction, responsibilities, and boundaries with clean architecture.
 - `research_current_info` — Use when the user asks for up-to-date or current information, to confirm something is still accurate, or when a task depends on facts that may have changed since training (library versions, APIs, pricing, releases, news, current best practices). Runs a governed web search with a curated domain allow/deny policy and cited, recency-checked results.
+- `retrospective` — Use at the end of a unit of work to capture durable, non-obvious knowledge into project memory (memory/) and flag decisions worth an ADR. Turns one-off discoveries into compounding, persistent context.
+- `systematic_debugging` — Use when diagnosing a bug, failing test, or unexpected behavior — drive a methodical reproduce → isolate → hypothesize → fix → verify loop instead of guessing. Prevents thrashing and repeated edits to the same file.
 - `validate_module_structure` — Use when validating module placement, dependency direction, and structure against repository governance.
+- `verify_changes` — Use before considering work done — run the read-only quality gate and tests, interpret failures, and confirm the change is correct. The verification step of the working loop.
 
 **External synced skills:**
 

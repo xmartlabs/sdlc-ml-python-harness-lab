@@ -46,6 +46,9 @@ make setup-opencode-skills
 - `generate_migration_plan`
 - `plan_and_execute_feature`
 - `research_current_info`
+- `systematic_debugging`
+- `retrospective`
+- `verify_changes`
 
 ## Governance Dependency
 

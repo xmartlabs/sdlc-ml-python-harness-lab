@@ -8,6 +8,14 @@ Use this repository-level structure as the canonical source of instructions.
 - `.github/standards.md`
 - `.github/domain-boundaries.md`
 
+## Working loop
+
+Default working loop for this repository: **Ground → Plan → Delegate → Verify →
+Compound.** Read `memory/context.md` and `memory/learnings.md` before starting;
+explore before editing; verify with `make check` / tests; record decisions in
+`docs/adr/` and durable learnings in `memory/`. Full guide:
+`docs/agentic-workflow.md`.
+
 ## Level 2 — Operational Skills
 
 <!-- BEGIN GENERATED SKILLS (managed by skills_sync; do not edit) -->
@@ -25,7 +33,10 @@ The governed skills below are projected into `.codex/skills/`. Internal skills a
 - `plan_and_execute_feature` — Use when delivering a feature through explicit planning, phased execution, validation, and governed handoff — or when implementing/fixing already-scoped engineering work via the execute_only mode.
 - `refactor_to_clean_architecture` — Use when refactoring modules to align dependency direction, responsibilities, and boundaries with clean architecture.
 - `research_current_info` — Use when the user asks for up-to-date or current information, to confirm something is still accurate, or when a task depends on facts that may have changed since training (library versions, APIs, pricing, releases, news, current best practices). Runs a governed web search with a curated domain allow/deny policy and cited, recency-checked results.
+- `retrospective` — Use at the end of a unit of work to capture durable, non-obvious knowledge into project memory (memory/) and flag decisions worth an ADR. Turns one-off discoveries into compounding, persistent context.
+- `systematic_debugging` — Use when diagnosing a bug, failing test, or unexpected behavior — drive a methodical reproduce → isolate → hypothesize → fix → verify loop instead of guessing. Prevents thrashing and repeated edits to the same file.
 - `validate_module_structure` — Use when validating module placement, dependency direction, and structure against repository governance.
+- `verify_changes` — Use before considering work done — run the read-only quality gate and tests, interpret failures, and confirm the change is correct. The verification step of the working loop.
 
 **External synced skills:**
 

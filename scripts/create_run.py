@@ -41,8 +41,12 @@ DATA_DIR = REPO_ROOT / "data/runs"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--benchmark", required=True, help="benchmark_id, e.g. tetris-v1")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--benchmark", required=True, help="benchmark_id, e.g. tetris-v1"
+    )
     parser.add_argument("--run", required=True, help="run_id, e.g. tetris-v1-A-001")
     parser.add_argument(
         "--no-key",
@@ -70,7 +74,10 @@ def find_run(runs_path: Path, run_id: str) -> dict:
         if run["run_id"] == run_id:
             return run
     available = [r["run_id"] for r in data.get("runs", [])]
-    sys.exit(f"run_id '{run_id}' not found.\nAvailable:\n" + "\n".join(f"  {r}" for r in available))
+    sys.exit(
+        f"run_id '{run_id}' not found.\nAvailable:\n"
+        + "\n".join(f"  {r}" for r in available)
+    )
 
 
 def set_status_running(runs_path: Path, run_id: str) -> None:
@@ -151,7 +158,10 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
     req = urllib.request.Request(
         url,
         data=data,
-        headers={"Authorization": f"Bearer {master_key}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {master_key}",
+            "Content-Type": "application/json",
+        },
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -225,7 +235,9 @@ def main(argv: list[str] | None = None) -> int:
         if planner != executor:
             print(f"    OPENCODE_MODEL_PLAN={models[0] if models else ''}")
         else:
-            print(f"    OPENCODE_MODEL_PLAN={models[0] if models else ''}   # same model (local-only)")
+            print(
+                f"    OPENCODE_MODEL_PLAN={models[0] if models else ''}   # same model (local-only)"
+            )
         print(f"    GATEWAY_TOKEN={run_key}")
     else:
         tag_label = run.get("virtual_key", "bench-opencode-local")
@@ -233,7 +245,9 @@ def main(argv: list[str] | None = None) -> int:
         print("  Create the key manually in the LiteLLM UI or via:")
         print(f"    POST /key/generate  key_alias={args.run}")
         print(f"    metadata.session_id={session_id}")
-        print(f"    tags=[benchmark:tetris-v1, method:{run.get('methodology','')}, ...]")
+        print(
+            f"    tags=[benchmark:tetris-v1, method:{run.get('methodology', '')}, ...]"
+        )
         print()
         print("  Or re-run after setting LITELLM_MASTER_KEY in .env")
         print()

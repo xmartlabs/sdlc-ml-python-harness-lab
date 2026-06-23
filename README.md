@@ -247,6 +247,28 @@ Self-hosted / local-model mode (`local_model_32k`):
   usable. Short operating rules: `LOCAL_AGENT.md`. Sizing heuristics:
   [docs/task-sizing.md](docs/task-sizing.md).
 
+## 🔁 Agentic Working Loop
+
+Beyond the cross-tool rules above, this template ships an opinionated **working loop**
+for AI-assisted development — optimized for Claude Code — so the high-quality path is
+the path of least resistance:
+
+**Ground → Plan → Delegate → Verify → Compound.**
+
+| Piece | Where | Purpose |
+|-------|-------|---------|
+| Operating playbook | `CLAUDE.md` → *Operating playbook* | The loop as standing instructions for the agent. |
+| Slash commands | `.claude/commands/` | `/plan`, `/orchestrate`, `/verify`, `/adr`, `/retro`. |
+| Loop skills | `.github/skills/` | `systematic_debugging`, `verify_changes`, `retrospective` (+ existing planning/review skills). |
+| Hooks (nudge) | `.claude/settings.json`, `.claude/hooks/` | Inject the loop at session start; remind to verify/compound when code changed. Non-blocking. |
+| Memory | `memory/` | Persistent working memory (`context`, `learnings`, `patterns`) across sessions. |
+| Decisions | `docs/adr/` | Architecture Decision Records — the durable "why". |
+| MCP servers | `.mcp.json` | Optional extra tools (library docs via context7, git). Opt-in; require the tool to be installed. |
+
+Full guide: [docs/agentic-workflow.md](docs/agentic-workflow.md). How this maps to
+assessments of AI-assisted coding skill (and what a template can/can't influence):
+[docs/agentic-scoring.md](docs/agentic-scoring.md).
+
 ## 🔧 Available Commands
 
 | Command | Description |
