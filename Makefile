@@ -219,6 +219,10 @@ bench-close:
 	uv run python scripts/bench_close.py --run $(RUN) --score $(SCORE) \
 	  --interventions $(INTERVENTIONS) $(if $(NOTES),--notes "$(NOTES)",)
 
+# Print a live comparison table from runs.yaml. Shows scores, status, and cell averages.
+bench-results:
+	@uv run python scripts/show_results.py
+
 # Verify opencode is installed and the configured local endpoints are reachable.
 opencode-doctor:
 	@set -a; [ -f .env ] && . ./.env; set +a; \
