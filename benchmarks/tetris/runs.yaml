@@ -26,7 +26,7 @@ runs:
     langfuse_session_id: bench-tetris-v1-A-001
     virtual_key: bench-opencode-local
     branch: bench/tetris-v1-A-001
-    status: running          # pending | running | completed
+    status: pending          # pending | running | completed
     result_level:            # 0..10
     human_interventions:
     notes: ""
@@ -42,7 +42,7 @@ runs:
     langfuse_session_id: bench-tetris-v1-A-002
     virtual_key: bench-opencode-local
     branch: bench/tetris-v1-A-002
-    status: running
+    status: pending
     result_level:
     human_interventions:
     notes: ""
@@ -58,7 +58,7 @@ runs:
     langfuse_session_id: bench-tetris-v1-A-003
     virtual_key: bench-opencode-local
     branch: bench/tetris-v1-A-003
-    status: running
+    status: pending
     result_level:
     human_interventions:
     notes: ""
@@ -76,7 +76,7 @@ runs:
     langfuse_session_id: bench-tetris-v1-B-001
     virtual_key: bench-conductor-gpt55-qwen35b
     branch: bench/tetris-v1-B-001
-    status: running
+    status: pending
     result_level:
     human_interventions:
     notes: ""
