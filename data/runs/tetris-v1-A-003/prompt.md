@@ -1,6 +1,13 @@
-# Benchmark run: tetris-v1-A-003
+<!-- BENCHMARK RUN METADATA
+BENCHMARK_ID: tetris-v1
+RUN_ID: tetris-v1-A-003
+SESSION_ID: bench-tetris-v1-A-003
+PROMPT_VARIANT: incremental
+PLANNER_MODEL: 
+EXECUTOR_MODEL: gateway/lmstudio-qwen3.6-35b-build
+-->
 
-> All files must be created in `workspace/tetris-v1-A-003/`
+> All files MUST be created in `workspace/tetris-v1-A-003/`
 > Entry point: `workspace/tetris-v1-A-003/main.py`
 
 ---

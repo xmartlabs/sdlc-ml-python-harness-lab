@@ -58,9 +58,9 @@ runs:
     langfuse_session_id: bench-tetris-v1-A-003
     virtual_key: bench-opencode-local
     branch: bench/tetris-v1-A-003
-    status: running
-    result_level:
-    human_interventions:
+    status: completed
+    result_level: 5
+    human_interventions: 0
     notes: ""
 
   # --- Cell B: conductor GPT-5.5 + executor Qwen 35B -------------------------
@@ -142,7 +142,7 @@ runs:
     langfuse_session_id: bench-tetris-v1-C-002
     virtual_key: bench-conductor-gpt55-qwen9b
     branch: bench/tetris-v1-C-002
-    status: pending
+    status: running
     result_level:
     human_interventions:
     notes: ""
@@ -158,7 +158,7 @@ runs:
     langfuse_session_id: bench-tetris-v1-C-003
     virtual_key: bench-conductor-gpt55-qwen9b
     branch: bench/tetris-v1-C-003
-    status: pending
+    status: running
     result_level:
     human_interventions:
     notes: ""
@@ -176,7 +176,7 @@ runs:
     langfuse_session_id: bench-tetris-v1-D-001
     virtual_key: bench-conductor-qwen35b-qwen9b
     branch: bench/tetris-v1-D-001
-    status: pending
+    status: running
     result_level:
     human_interventions:
     notes: ""
