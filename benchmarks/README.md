@@ -7,6 +7,12 @@ registry, and a `results/` folder.
 
 - **`tetris/`** — `tetris-v1`. Game-build task across 5 methodology cells. The first benchmark;
   optimizes for a clear 0–10 functional ladder.
+- **`nemotron-planner-qwen-executor/`** — planner/executor split benchmark focused on
+  `nemotron-super-120b` as planner and local executors (`qwen3.6-35b`, `qwen3.5-9b`).
+  Goal: test whether a stronger planner improves local execution quality and reduces loops.
+- **`nemotron-all-120b/`** — end-to-end benchmark where both planner and executor are
+  `nemotron-super-120b`. Goal: evaluate if a non-GPT large model can complete full tasks in
+  the same harness with reproducible artifacts.
 
 ## Planned (post-Tetris — more business value than a game)
 

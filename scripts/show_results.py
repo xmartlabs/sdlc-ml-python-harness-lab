@@ -5,6 +5,7 @@ Usage:
     make bench-results
     uv run python scripts/show_results.py [--benchmark tetris-v1]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -63,7 +64,9 @@ def cell_letter(run_id: str) -> str:
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("--benchmark", default="tetris-v1")
     return p.parse_args(argv)
 
@@ -128,7 +131,9 @@ def main(argv=None):
         models = run.get("gateway_models", [])
         # Shorten model names for display
         short_models = ", ".join(
-            m.replace("gateway/lmstudio-", "").replace("gateway/", "").replace("-build", "")
+            m.replace("gateway/lmstudio-", "")
+            .replace("gateway/", "")
+            .replace("-build", "")
             for m in models
         )
         notes = run.get("notes", "") or ""

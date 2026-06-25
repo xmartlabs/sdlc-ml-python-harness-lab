@@ -24,6 +24,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -127,6 +128,14 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
     base = gateway_base.rstrip("/")
     if base.endswith("/v1"):
         base = base[:-3]
+
+    parsed_base = urllib.parse.urlparse(base)
+    if parsed_base.scheme not in {"http", "https"} or not parsed_base.netloc:
+        raise RuntimeError(
+            "GATEWAY_BASE_URL must use http(s) and include a host, "
+            f"got: {gateway_base!r}"
+        )
+
     url = f"{base}/key/generate"
 
     session_id = run["langfuse_session_id"]
@@ -161,7 +170,8 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        # URL is derived from validated GATEWAY_BASE_URL (http/https only).
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310
             result = json.loads(resp.read())
             return result["key"]
     except urllib.error.HTTPError as e:

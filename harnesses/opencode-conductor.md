@@ -1,7 +1,8 @@
 # Harness: opencode-conductor
 
 Plan/conductor model orchestrating a separate executor model through the gateway.
-Used by **Cells B, C, D** (`tetris_conductor_v1` / `tetris_conductor_small_steps_v1`).
+Used by **Cells B, C, D, F, G, H, I** (`tetris_conductor_v1` / `tetris_conductor_small_steps_v1`
+and Nemotron planner variants).
 
 ## Per-run procedure
 
@@ -22,6 +23,22 @@ OPENCODE_MODEL=gateway/qwen9b-executor        # lmstudio-qwen3.5-9b at temp 0.2 
 # Cell D: all-local conductor + Qwen 3.5 9B executor
 OPENCODE_MODEL_PLAN=gateway/lmstudio-qwen3.6-35b-build
 OPENCODE_MODEL=gateway/qwen9b-executor
+
+# Cell F: Nemotron planner + Qwen 35B executor
+OPENCODE_MODEL_PLAN=gateway/nemotron-120b-planner
+OPENCODE_MODEL=gateway/lmstudio-qwen3.6-35b-build
+
+# Cell G: Nemotron planner + Qwen 3.5 9B executor (Qwen 8B class)
+OPENCODE_MODEL_PLAN=gateway/nemotron-120b-planner
+OPENCODE_MODEL=gateway/qwen9b-executor
+
+# Cell H: Qwen 35B planner + Qwen 35B executor (homogeneous local baseline)
+OPENCODE_MODEL_PLAN=gateway/lmstudio-qwen3.6-35b-build
+OPENCODE_MODEL=gateway/lmstudio-qwen3.6-35b-build
+
+# Cell I: all Nemotron 120B
+OPENCODE_MODEL_PLAN=gateway/nemotron-120b-planner
+OPENCODE_MODEL=gateway/nemotron-120b-executor
 
 GATEWAY_BASE_URL=http://localhost:4000/v1
 GATEWAY_TOKEN=<virtual key for the cell, see runs.yaml>
@@ -48,3 +65,30 @@ mode this harness exists to avoid.
 
 - Cells B, C: `tetris_conductor_v1`.
 - Cell D: `tetris_conductor_small_steps_v1` (conductor assumes a weak executor — finer steps).
+- Cell F: `nemotron_planner_v1`.
+- Cell G: `nemotron_planner_small_steps_v1`.
+- Cell H: `tetris_conductor_v1` (homogeneous local baseline).
+- Cell I: `nemotron_planner_v1` (all-Nemotron).
+
+## Using NVIDIA NIM as planner (Nemotron variant)
+
+For Nemotron planner runs (F, G, I), map a planner alias in LiteLLM first and keep the same
+`OPENCODE_MODEL_PLAN` value for every repetition.
+
+```bash
+# example aliases expected by runs.yaml
+gateway/nemotron-120b-planner
+gateway/nemotron-120b-executor
+```
+
+Recommended metadata tags for quick filtering:
+
+- `planner:nemotron-super-120b`
+- `executor:qwen3.6-35b` or `executor:qwen3.5-9b` or `executor:nemotron-super-120b`
+- `method:conductor-nemotron-local|conductor-nemotron-small|conductor-nemotron-homogeneous`
+
+Operational notes:
+
+- Estimate token and USD budget before launching each run and store it in run metadata.
+- Keep temperature at 0.2 for plan/executor stability.
+- If NIM rate limits hit, pause and resume the same run/session instead of opening a new one.

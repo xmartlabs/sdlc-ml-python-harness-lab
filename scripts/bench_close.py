@@ -5,6 +5,7 @@ Usage (prefer make):
     make bench-close RUN=tetris-v1-A-002 SCORE=5 INTERVENTIONS=0
     uv run python scripts/bench_close.py --run tetris-v1-A-002 --score 5 --interventions 0
 """
+
 from __future__ import annotations
 
 import argparse
@@ -15,13 +16,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from create_run import DATA_DIR, REPO_ROOT, RUNS_FILES, _load_env, find_run
 from bench_start import (
     BENCH_CONTEXT,
     BENCH_CONTEXT_PLACEHOLDER,
     WORKSPACE_ROOT,
     restore_env_token,
 )
+from create_run import DATA_DIR, REPO_ROOT, RUNS_FILES, _load_env, find_run
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -31,7 +32,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--run", required=True, help="run_id, e.g. tetris-v1-A-002")
     p.add_argument("--benchmark", default="tetris-v1")
     p.add_argument("--score", required=True, type=int, help="Functional score 0-10")
-    p.add_argument("--interventions", required=True, type=int, help="Human interventions count")
+    p.add_argument(
+        "--interventions", required=True, type=int, help="Human interventions count"
+    )
     p.add_argument("--notes", default="", help="Optional notes (quoted string)")
     return p.parse_args(argv)
 
@@ -45,24 +48,36 @@ def update_runs_yaml(
     # status: running -> completed
     text = re.sub(
         rf"(run_id: {rid}.*?status: )running",
-        r"\1completed", text, count=1, flags=re.DOTALL
+        r"\1completed",
+        text,
+        count=1,
+        flags=re.DOTALL,
     )
     # result_level: <empty or old> -> score
     text = re.sub(
         rf"(run_id: {rid}.*?result_level:)[ ]*\S*",
-        rf"\g<1> {score}", text, count=1, flags=re.DOTALL
+        rf"\g<1> {score}",
+        text,
+        count=1,
+        flags=re.DOTALL,
     )
     # human_interventions: <empty or old> -> N
     text = re.sub(
         rf"(run_id: {rid}.*?human_interventions:)[ ]*\S*",
-        rf"\g<1> {interventions}", text, count=1, flags=re.DOTALL
+        rf"\g<1> {interventions}",
+        text,
+        count=1,
+        flags=re.DOTALL,
     )
     # notes: "old" -> "new" (if provided)
     if notes:
         escaped = notes.replace("\\", "\\\\").replace('"', '\\"')
         text = re.sub(
             rf'(run_id: {rid}.*?notes: *)"[^"]*"',
-            rf'\g<1>"{escaped}"', text, count=1, flags=re.DOTALL
+            rf'\g<1>"{escaped}"',
+            text,
+            count=1,
+            flags=re.DOTALL,
         )
 
     runs_path.write_text(text)
@@ -109,13 +124,14 @@ def main(argv: list[str] | None = None) -> int:
         shutil.rmtree(dest)
     shutil.copytree(workspace, dest)
     file_count = sum(1 for _ in dest.rglob("*") if _.is_file())
-    print(f"  Copied workspace/{args.run}/ -> data/runs/{args.run}/workspace/ ({file_count} files)")
+    print(
+        f"  Copied workspace/{args.run}/ -> data/runs/{args.run}/workspace/ ({file_count} files)"
+    )
 
     # 2. Diff: compare /dev/null to the saved workspace (shows all new files)
     diff_path = out_dir / "diff.patch"
     result = _run_git(
-        ["git", "diff", "--no-index", "/dev/null", str(dest)],
-        cwd=REPO_ROOT
+        ["git", "diff", "--no-index", "/dev/null", str(dest)], cwd=REPO_ROOT
     )
     # git diff --no-index exits 1 when there are diffs (expected when files differ)
     diff_path.write_text(result.stdout)
@@ -151,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         str(runs_path.relative_to(REPO_ROOT)),
         "BENCH_CONTEXT.md",
     ]
-    _run_git(["git", "add"] + files_to_stage, cwd=REPO_ROOT)
+    _run_git(["git", "add", *files_to_stage], cwd=REPO_ROOT)
 
     notes_suffix = f", {args.notes}" if args.notes else ""
     commit_msg = (
@@ -163,7 +179,9 @@ def main(argv: list[str] | None = None) -> int:
         sha = result.stdout.strip().split("\n")[0]
         print(f"  git commit: {sha}")
     else:
-        print(f"  ⚠️  git commit skipped: {result.stderr.strip() or 'nothing to commit'}")
+        print(
+            f"  ⚠️  git commit skipped: {result.stderr.strip() or 'nothing to commit'}"
+        )
 
     # 8. Summary
     print()
