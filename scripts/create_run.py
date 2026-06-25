@@ -269,5 +269,71 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def update_results_csv(results_path: Path, row: dict) -> None:
+    """Append or update a row in results.csv keyed on run_id.
+
+    Preserves all existing rows. Creates the file with the canonical header if absent.
+    Only overwrites fields that are non-empty in the incoming row — existing values
+    (e.g. tokens pulled from Langfuse) are not clobbered by a partial row.
+    """
+    import csv
+    import io
+
+    COLUMNS = [
+        "run_id",
+        "cell_id",
+        "date",
+        "methodology",
+        "harness",
+        "prompt_variant",
+        "planner_model",
+        "executor_model",
+        "executor_context",
+        "temperature",
+        "requests",
+        "input_tokens",
+        "output_tokens",
+        "cost_usd",
+        "time_minutes",
+        "turns",
+        "files_modified",
+        "diff_lines",
+        "functional_level",
+        "engineering_score",
+        "reproducibility_score",
+        "human_interventions",
+        "langfuse_session",
+        "branch",
+        "notes",
+    ]
+
+    rows: list[dict] = []
+    if results_path.exists():
+        with results_path.open(newline="") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+    updated = False
+    incoming = {k: ("" if v is None else str(v)) for k, v in row.items()}
+    for i, existing in enumerate(rows):
+        if existing.get("run_id") == incoming.get("run_id"):
+            # Merge: keep existing value when incoming is empty
+            merged = dict(existing)
+            for k, v in incoming.items():
+                if v != "":
+                    merged[k] = v
+            rows[i] = merged
+            updated = True
+            break
+    if not updated:
+        rows.append(incoming)
+
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    results_path.write_text(out.getvalue())
+
+
 if __name__ == "__main__":
     sys.exit(main())

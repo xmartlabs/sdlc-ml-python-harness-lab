@@ -213,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
         print("  3. Paste prompt:   Cmd+V  (already in clipboard ✓)")
     else:
         print(f"  3. Copy prompt:    cat data/runs/{args.run}/prompt.md | pbcopy")
-        print(f"     then paste with Cmd+V in OpenCode.")
+        print("     then paste with Cmd+V in OpenCode.")
     print()
     print("  When done, in another terminal:")
     print(f"    make bench-close RUN={args.run} SCORE=<0-10> INTERVENTIONS=<N>")

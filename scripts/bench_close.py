@@ -16,13 +16,22 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import datetime
+
 from bench_start import (
     BENCH_CONTEXT,
     BENCH_CONTEXT_PLACEHOLDER,
     WORKSPACE_ROOT,
     restore_env_token,
 )
-from create_run import DATA_DIR, REPO_ROOT, RUNS_FILES, _load_env, find_run
+from create_run import (
+    DATA_DIR,
+    REPO_ROOT,
+    RUNS_FILES,
+    _load_env,
+    find_run,
+    update_results_csv,
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -161,10 +170,36 @@ def main(argv: list[str] | None = None) -> int:
         f"interventions={args.interventions}"
     )
 
+    # 6b. Update results.csv
+    results_path = runs_path.parent / "results.csv"
+    parts = args.run.split("-")
+    update_results_csv(
+        results_path,
+        {
+            "run_id": args.run,
+            "cell_id": parts[2] if len(parts) >= 4 else "",
+            "date": datetime.date.today().isoformat(),
+            "methodology": run.get("methodology", ""),
+            "harness": run.get("harness", ""),
+            "prompt_variant": run.get("prompt_variant", ""),
+            "planner_model": run.get("planner_model", ""),
+            "executor_model": run.get("executor_model", ""),
+            "executor_context": str(run.get("executor_context", "")),
+            "temperature": str(run.get("temperature", "")),
+            "functional_level": str(args.score),
+            "human_interventions": str(args.interventions),
+            "langfuse_session": run.get("langfuse_session_id", ""),
+            "branch": run.get("branch", ""),
+            "notes": args.notes,
+        },
+    )
+    print("  results.csv updated")
+
     # 7. Commit
     files_to_stage = [
         str((out_dir).relative_to(REPO_ROOT)),
         str(runs_path.relative_to(REPO_ROOT)),
+        str(results_path.relative_to(REPO_ROOT)),
         "BENCH_CONTEXT.md",
     ]
     _run_git(["git", "add", *files_to_stage], cwd=REPO_ROOT)

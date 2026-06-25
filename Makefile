@@ -223,6 +223,32 @@ bench-close:
 bench-results:
 	@uv run python scripts/show_results.py
 
+# Run a benchmark end-to-end: prepare workspace, execute, optionally score and close.
+# Usage: make bench-run CASE=tetris-v1 RUN=tetris-v1-A-003 PROMPT=incremental \
+#          EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build SCORE_MODE=manual
+# Dry run: add DRY_RUN=1
+bench-run:
+	@[ -n "$(CASE)" ] || { echo "❌ CASE is required. Example: CASE=tetris-v1"; exit 1; }
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-A-003"; exit 1; }
+	@command -v opencode >/dev/null 2>&1 || { echo "❌ opencode not found. Install: brew install anomalyco/tap/opencode"; exit 1; }
+	@if [ ! -d "$$HOME/.config/opencode/node_modules/opencode-conductor-plugin" ]; then \
+	  echo "🔌 Installing opencode-conductor-plugin..."; \
+	  npm install --prefix "$$HOME/.config/opencode" opencode-conductor-plugin; \
+	fi
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/bench_run.py \
+		--case $(CASE) \
+		--run $(RUN) \
+		$(if $(PROMPT),--prompt $(PROMPT),) \
+		$(if $(PLANNER_MODEL),--planner-model $(PLANNER_MODEL),) \
+		$(if $(EXECUTOR_MODEL),--executor-model $(EXECUTOR_MODEL),) \
+		$(if $(SCORE_MODE),--score-mode $(SCORE_MODE),) \
+		$(if $(SCORE),--score $(SCORE),) \
+		$(if $(INTERVENTIONS),--interventions $(INTERVENTIONS),) \
+		$(if $(NOTES),--notes "$(NOTES)",) \
+		$(if $(CREATE_KEY),--create-litellm-key,) \
+		$(if $(DRY_RUN),--dry-run,)
+
 # Verify opencode is installed and the configured local endpoints are reachable.
 opencode-doctor:
 	@set -a; [ -f .env ] && . ./.env; set +a; \
