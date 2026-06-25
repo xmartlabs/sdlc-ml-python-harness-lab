@@ -198,11 +198,22 @@ def main(argv: list[str] | None = None) -> int:
         print("  Then set GATEWAY_TOKEN=<key> in .env before running opencode.")
 
     print()
-    if clipped:
-        print("  Prompt copied to clipboard ✓ — paste with Cmd+V in OpenCode")
+    print("-" * 66)
+    print("  NEXT STEP")
+    print("-" * 66)
+    if not args.no_launch:
+        print("  1. OpenCode is opening now.")
     else:
-        print(f"  Paste prompt from:  cat data/runs/{args.run}/prompt.md")
-
+        print("  1. Open OpenCode:  make opencode")
+    if models:
+        print(f"  2. Verify model:   {models[0]}")
+    else:
+        print("  2. Verify the model matches the run's gateway_models in runs.yaml.")
+    if clipped:
+        print("  3. Paste prompt:   Cmd+V  (already in clipboard ✓)")
+    else:
+        print(f"  3. Copy prompt:    cat data/runs/{args.run}/prompt.md | pbcopy")
+        print(f"     then paste with Cmd+V in OpenCode.")
     print()
     print("  When done, in another terminal:")
     print(f"    make bench-close RUN={args.run} SCORE=<0-10> INTERVENTIONS=<N>")

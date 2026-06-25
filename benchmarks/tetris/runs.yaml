@@ -92,7 +92,7 @@ runs:
     langfuse_session_id: bench-tetris-v1-B-002
     virtual_key: bench-conductor-gpt55-qwen35b
     branch: bench/tetris-v1-B-002
-    status: pending
+    status: running
     result_level:
     human_interventions:
     notes: ""
@@ -108,7 +108,7 @@ runs:
     langfuse_session_id: bench-tetris-v1-B-003
     virtual_key: bench-conductor-gpt55-qwen35b
     branch: bench/tetris-v1-B-003
-    status: pending
+    status: running
     result_level:
     human_interventions:
     notes: ""
@@ -126,7 +126,7 @@ runs:
     langfuse_session_id: bench-tetris-v1-C-001
     virtual_key: bench-conductor-gpt55-qwen9b
     branch: bench/tetris-v1-C-001
-    status: pending
+    status: running
     result_level:
     human_interventions:
     notes: ""

@@ -5,8 +5,9 @@ registry, and a `results/` folder.
 
 ## Active
 
-- **`tetris/`** — `tetris-v1`. Game-build task across 5 methodology cells. The first benchmark;
-  optimizes for a clear 0–10 functional ladder.
+- **`tetris/`** — `tetris-v1`. Game-build task across 9 experiment cells (A–I), 3 reps each.
+  The first benchmark; optimizes for a clear 0–10 functional ladder.
+  See `tetris/README.md` for the operator quickstart.
 - **`nemotron-planner-qwen-executor/`** — planner/executor split benchmark focused on
   `nemotron-super-120b` as planner and local executors (`qwen3.6-35b`, `qwen3.5-9b`).
   Goal: test whether a stronger planner improves local execution quality and reduces loops.
