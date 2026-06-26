@@ -1,0 +1,30 @@
+# opencode run started 2026-06-26T20:32:31.069020Z
+# cmd: opencode run --dangerously-skip-permissions --print-logs -m gateway/nemotron-120b-planner <prompt>
+
+timestamp=2026-06-26T20:32:31.438Z level=INFO run=5761fb04 message="creating instance" directory=/Users/marcossoto/Documents/experiments/ai-agentic-harness-lab
+timestamp=2026-06-26T20:32:31.438Z level=INFO run=5761fb04 message=fromDirectory directory=/Users/marcossoto/Documents/experiments/ai-agentic-harness-lab
+timestamp=2026-06-26T20:32:31.494Z level=INFO run=5761fb04 message=bootstrapping directory=/Users/marcossoto/Documents/experiments/ai-agentic-harness-lab
+timestamp=2026-06-26T20:32:31.498Z level=INFO run=5761fb04 message=loading path=/Users/marcossoto/.config/opencode/config.json
+timestamp=2026-06-26T20:32:31.498Z level=INFO run=5761fb04 message=loading path=/Users/marcossoto/.config/opencode/opencode.json
+timestamp=2026-06-26T20:32:31.498Z level=INFO run=5761fb04 message=loading path=/Users/marcossoto/.config/opencode/opencode.jsonc
+timestamp=2026-06-26T20:32:31.502Z level=INFO run=5761fb04 message=loading path=/Users/marcossoto/Documents/experiments/ai-agentic-harness-lab/opencode.json
+timestamp=2026-06-26T20:32:31.513Z level=INFO run=5761fb04 message=loading path=/Users/marcossoto/Documents/experiments/ai-agentic-harness-lab/.opencode/opencode.json
+timestamp=2026-06-26T20:32:31.514Z level=INFO run=5761fb04 message=loading path=/Users/marcossoto/Documents/experiments/ai-agentic-harness-lab/.opencode/opencode.jsonc
+timestamp=2026-06-26T20:32:31.557Z level=INFO run=5761fb04 message="all LSPs are disabled"
+timestamp=2026-06-26T20:32:31.557Z level=INFO run=5761fb04 message="all formatters are disabled"
+timestamp=2026-06-26T20:32:31.557Z level=INFO run=5761fb04 message=init
+timestamp=2026-06-26T20:32:31.584Z level=INFO run=5761fb04 message=created id=ses_0fa5dae9fffe76fObKn2y11Hq5 slug=cosmic-eagle version=1.17.3 projectID=6d89c3f1da41b73076fdd9a7410fbb45ac4627d2 directory=/Users/marcossoto/Documents/experiments/ai-agentic-harness-lab path="" workspaceID=undefined parentID=undefined title="New session - 2026-06-26T20:32:31.584Z" agent=undefined model=undefined metadata=undefined permission="[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]" cost=0 tokens.input=0 tokens.output=0 tokens.reasoning=0 tokens.cache.read=0 tokens.cache.write=0 time.created=1782505951584 time.updated=1782505951584
+timestamp=2026-06-26T20:32:31.594Z level=INFO run=5761fb04 message="event connected"
+timestamp=2026-06-26T20:32:31.616Z level=INFO run=5761fb04 message="booting location services" directory=/Users/marcossoto/Documents/experiments/ai-agentic-harness-lab workspaceID=undefined
+timestamp=2026-06-26T20:32:32.708Z level=INFO run=5761fb04 message="watcher backend" directory=/Users/marcossoto/Documents/experiments/ai-agentic-harness-lab platform=darwin backend=fs-events
+timestamp=2026-06-26T20:32:32.908Z level=ERROR run=5761fb04 message="share subscriber failed" type=message.updated cause=Cause([Fail(ProviderModelNotFoundError)])
+timestamp=2026-06-26T20:32:32.912Z level=INFO run=5761fb04 message=loop session.id=ses_0fa5dae9fffe76fObKn2y11Hq5 step=0
+timestamp=2026-06-26T20:32:32.915Z level=ERROR run=5761fb04 message=failed ref=err_239acbc9 error=ProviderModelNotFoundError cause="ProviderModelNotFoundError: \n    at <anonymous> (/$bunfs/root/chunk-hmjyeskv.js:668:60792)\n    at SessionPrompt.getModel (/$bunfs/root/chunk-ckq8fg8b.js:1030:1895)\n    at SessionPrompt.getModel (definition) (/$bunfs/root/chunk-ckq8fg8b.js:1029:1062)\n    at SessionPrompt.run (/$bunfs/root/chunk-ckq8fg8b.js:1031:1379)\n    at SessionPrompt.run (definition) (/$bunfs/root/chunk-ckq8fg8b.js:1030:904)\n    at SessionRunState.ensureRunning (/$bunfs/root/chunk-ckq8fg8b.js:1031:1350)\n    at SessionRunState.ensureRunning (definition) (/$bunfs/root/chunk-ckq8fg8b.js:897:5406)\n    at SessionPrompt.loop (/$bunfs/root/chunk-ckq8fg8b.js:1030:628)\n    at SessionPrompt.loop (definition) (/$bunfs/root/chunk-ckq8fg8b.js:1031:1286)\n    at SessionPrompt.prompt (/$bunfs/root/chunk-mgr60wqc.js:3:13924)\n    at SessionPrompt.prompt (definition) (/$bunfs/root/chunk-ckq8fg8b.js:1030:247)"
+[91m[1mError: [0m{
+  "name": "UnknownError",
+  "data": {
+    "message": "Unexpected server error. Check server logs for details.",
+    "ref": "err_239acbc9"
+  }
+}
+timestamp=2026-06-26T20:32:32.915Z level=INFO run=5761fb04 message="disposing instance" directory=/Users/marcossoto/Documents/experiments/ai-agentic-harness-lab

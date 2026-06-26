@@ -482,3 +482,60 @@ runs:
   result_level: null
   human_interventions: null
   notes: ''
+# ---------------------------------------------------------------------------
+# Cell J — full-effort-cloud  (techo de completitud: MAX_STEPS=10, gpt-5.5)
+# Misma configuración que Cell E pero con MAX_STEPS=10 en el comando bench-run.
+# Permite medir cuánto sube el nivel funcional cuando el modelo tiene pasos
+# suficientes para completar los 8 incrementos del prompt incremental.
+# ---------------------------------------------------------------------------
+- run_id: tetris-v1-J-001
+  methodology: full-effort-cloud
+  harness: opencode
+  planner_model: gpt-5.5
+  executor_model: gpt-5.5
+  gateway_models:
+  - gateway/gpt-5.5
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_incremental_v1
+  langfuse_session_id: bench-tetris-v1-J-001
+  virtual_key: null
+  branch: bench/tetris-v1-J-001
+  status: completed
+  result_level: 0
+  human_interventions: 0
+  notes: 'Full-effort reference cell. Use MAX_STEPS=10 to cover all 8 incremental steps plus buffer.'
+- run_id: tetris-v1-J-002
+  methodology: full-effort-cloud
+  harness: opencode
+  planner_model: gpt-5.5
+  executor_model: gpt-5.5
+  gateway_models:
+  - gateway/gpt-5.5
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_incremental_v1
+  langfuse_session_id: bench-tetris-v1-J-002
+  virtual_key: null
+  branch: bench/tetris-v1-J-002
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: 'Full-effort reference cell. Use MAX_STEPS=10 to cover all 8 incremental steps plus buffer.'
+- run_id: tetris-v1-J-003
+  methodology: full-effort-cloud
+  harness: opencode
+  planner_model: gpt-5.5
+  executor_model: gpt-5.5
+  gateway_models:
+  - gateway/gpt-5.5
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_incremental_v1
+  langfuse_session_id: bench-tetris-v1-J-003
+  virtual_key: null
+  branch: bench/tetris-v1-J-003
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: 'Full-effort reference cell. Use MAX_STEPS=10 to cover all 8 incremental steps plus buffer.'
