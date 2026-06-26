@@ -464,9 +464,12 @@ template-sync-rebase:
 setup-claude-skills:
 	@$(SKILLS_SYNC) link --tool claude
 
-# Materialize OpenCode native skills (.opencode/skills symlinks).
+# Materialize OpenCode native skills (.opencode/skills).
+# No-op: opencode already loads .claude/skills/ which is identical. Generating a
+# second copy causes duplicate-skill warnings in every opencode run. If opencode
+# ever supports per-tool skill paths and this needs to be separated, re-enable.
 setup-opencode-skills:
-	@$(SKILLS_SYNC) link --tool opencode
+	@echo "  setup-opencode-skills: skipped (opencode uses .claude/skills/ — no duplicate needed)"
 
 # Materialize Antigravity native skills (.agents/skills copies + manifest).
 setup-antigravity-skills:

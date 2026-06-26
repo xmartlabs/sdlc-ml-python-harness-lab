@@ -1,1 +1,0 @@
-../../../.github/skills-external/brainstorming/spec-document-reviewer-prompt.md

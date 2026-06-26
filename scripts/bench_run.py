@@ -1106,6 +1106,33 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             score_data = (args.score, args.interventions, args.notes)
         else:
+            # Show the result before asking for a score — give the user time to test it
+            print()
+            print("  -" * 33)
+            print("  Test the result before scoring:")
+            print(f"    python workspace/{args.run}/main.py")
+            print("    # Reference: benchmarks/tetris/scoring.md")
+            print()
+            try:
+                input("  Press Enter when ready to score (Ctrl+C to leave open)...")
+            except (EOFError, KeyboardInterrupt):
+                print()
+                print("  Run left open. Close manually when ready:")
+                print(
+                    f"    make bench-close RUN={args.run} SCORE=<0-10> INTERVENTIONS=<N>"
+                )
+                print("=" * 66)
+                return 0
+            print()
+            print("  Score reference — highest level fully reached:")
+            print("    0  no useful code            6  lateral movement works")
+            print("    1  files exist but crash     7  rotation works")
+            print("    2  runs without crashing     8  collisions + lock work")
+            print("    3  opens a window            9  clears lines + tracks score")
+            print(
+                "    4  shows a piece            10  fully playable (game over, no blocking bugs)"
+            )
+            print("    5  piece falls")
             print()
             try:
                 s = int(input("  Functional score (0-10): "))

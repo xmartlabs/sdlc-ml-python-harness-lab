@@ -1,1 +1,0 @@
-../../../.github/skills/create_domain_contract.md

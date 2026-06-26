@@ -1,1 +1,0 @@
-../../../.github/skills-external/requesting-code-review/code-reviewer.md

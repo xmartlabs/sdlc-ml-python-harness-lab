@@ -168,6 +168,29 @@ El runner encadena automáticamente hasta MAX_STEPS sesiones de opencode, genera
 
 ---
 
+## Resetear corridas y empezar de cero
+
+```bash
+# Resetear una sola corrida a pending (el caso más común)
+make bench-reset RUN=tetris-v1-A-003
+
+# Resetear todas las corridas de un caso a pending
+make bench-reset CASE=tetris-v1
+
+# Resetear + borrar artefactos (data/runs/<id>/ y workspace/<id>/)
+make bench-reset RUN=tetris-v1-A-003 CLEAN=1
+
+# Nuclear: resetear todo el caso + borrar todos los artefactos
+make bench-reset CASE=tetris-v1 CLEAN=1
+
+# Sin confirmación interactiva (para scripts)
+make bench-reset RUN=tetris-v1-A-003 FORCE=1
+```
+
+`bench-reset` actualiza `runs.yaml` (status → pending, score cleared), elimina la fila de `results.csv`, y opcionalmente borra los directorios de artefactos. Pide confirmación salvo `FORCE=1`.
+
+---
+
 ## Workflow por corrida
 
 ### Camino principal (headless automático)
