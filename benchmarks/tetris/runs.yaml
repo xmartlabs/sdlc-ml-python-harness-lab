@@ -280,9 +280,9 @@ runs:
   langfuse_session_id: bench-tetris-v1-F-001
   virtual_key: bench-conductor-nemotron-qwen35b
   branch: bench/tetris-v1-F-001
-  status: pending
-  result_level: null
-  human_interventions: null
+  status: completed
+  result_level: 0
+  human_interventions: 0
   notes: Nemotron planner + local Qwen 35B executor.
 - run_id: tetris-v1-F-002
   methodology: conductor-nemotron-local
