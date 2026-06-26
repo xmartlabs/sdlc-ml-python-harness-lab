@@ -1,7 +1,7 @@
 {
   "turns": null,
   "tool_calls": null,
-  "steps": 3,
+  "steps": 10,
   "input_tokens": null,
   "output_tokens": null,
   "cost_usd": null,

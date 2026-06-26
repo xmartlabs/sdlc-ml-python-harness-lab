@@ -547,9 +547,9 @@ runs:
   langfuse_session_id: bench-tetris-v1-K-001
   virtual_key: null
   branch: bench/tetris-v1-K-001
-  status: pending
-  result_level: null
-  human_interventions: null
+  status: completed
+  result_level: 8
+  human_interventions: 10
   notes: ''
 - run_id: tetris-v1-K-002
   methodology: full-effort-qwen35b
