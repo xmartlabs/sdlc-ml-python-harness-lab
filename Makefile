@@ -225,8 +225,16 @@ bench-results:
 
 # Run a benchmark end-to-end: prepare workspace, execute, optionally score and close.
 # Usage: make bench-run CASE=tetris-v1 RUN=tetris-v1-A-003 PROMPT=incremental \
-#          EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build SCORE_MODE=manual
-# Dry run: add DRY_RUN=1
+#          EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build SCORE_MODE=interactive
+#
+# Multi-step (auto-chain up to N opencode sessions):
+#   make bench-run ... MAX_STEPS=6 SCORE_MODE=interactive
+#
+# Resume an interrupted run (skip workspace existence check):
+#   make bench-run ... RESUME=1
+#
+# Dry run (print what would happen, write nothing):
+#   make bench-run ... DRY_RUN=1
 bench-run:
 	@[ -n "$(CASE)" ] || { echo "❌ CASE is required. Example: CASE=tetris-v1"; exit 1; }
 	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-A-003"; exit 1; }
@@ -246,8 +254,25 @@ bench-run:
 		$(if $(SCORE),--score $(SCORE),) \
 		$(if $(INTERVENTIONS),--interventions $(INTERVENTIONS),) \
 		$(if $(NOTES),--notes "$(NOTES)",) \
+		$(if $(MAX_STEPS),--max-steps $(MAX_STEPS),) \
+		$(if $(RESUME),--resume,) \
 		$(if $(CREATE_KEY),--create-litellm-key,) \
 		$(if $(DRY_RUN),--dry-run,)
+
+# Reset one run or all runs in a case back to pending so they can be re-run.
+# Usage:
+#   make bench-reset RUN=tetris-v1-A-003           # reset one run to pending
+#   make bench-reset CASE=tetris-v1                # reset ALL runs in a case to pending
+#   make bench-reset RUN=tetris-v1-A-003 CLEAN=1   # also wipe data/runs/<id>/ and workspace/
+#   make bench-reset CASE=tetris-v1 CLEAN=1        # nuclear: reset all + wipe all artifacts
+#   add FORCE=1 to skip confirmation prompts
+bench-reset:
+	@[ -n "$(RUN)$(CASE)" ] || { echo "❌ RUN or CASE is required."; exit 1; }
+	@uv run python scripts/bench_reset.py \
+		$(if $(RUN),--run $(RUN),) \
+		$(if $(CASE),--case $(CASE),) \
+		$(if $(CLEAN),--clean,) \
+		$(if $(FORCE),--force,)
 
 # Verify opencode is installed and the configured local endpoints are reachable.
 opencode-doctor:

@@ -1,12 +1,124 @@
 # tetris-v1
 
-**¿Qué corro?** Un Tetris en Python. El modelo lo construye desde cero; tú lo corres, lo observás, y le ponés un score de 0 a 10.
+**¿Qué corro?** Un Tetris en Python. El modelo lo construye desde cero; tú lo corrés, lo observás, y le ponés un score de 0 a 10.
 
-**¿Cómo arranco una corrida?** `make bench-run CASE=tetris-v1 RUN=tetris-v1-A-003 PROMPT=incremental EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build SCORE_MODE=manual`
+**¿Cómo arranco una corrida?** Ver sección [Corridas listas para copiar](#corridas-listas-para-copiar) abajo.
 
 **¿Cómo la cierro?** `make bench-close RUN=tetris-v1-A-003 SCORE=7 INTERVENTIONS=1`
 
 **¿Dónde veo el resultado?** `make bench-results`
+
+> **`bench-run` es el camino principal.** `bench-start` y `bench-close` son primitivas de nivel bajo — usarlas solo para flujos manuales avanzados. `bench-run` hace todo: prepara, ejecuta y cierra en un solo comando.
+
+---
+
+## Corridas listas para copiar
+
+Primero, ver qué corridas están pendientes:
+
+```bash
+make bench-results
+```
+
+### Qwen 3.6 35B local (Celda A) — opencode puro
+
+```bash
+# Un solo incremento, score interactivo al terminar
+make bench-run \
+  CASE=tetris-v1 \
+  RUN=tetris-v1-A-003 \
+  PROMPT=incremental \
+  EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build \
+  SCORE_MODE=interactive
+
+# Múltiples incrementos automáticos (hasta 6 pasos encadenados)
+make bench-run \
+  CASE=tetris-v1 \
+  RUN=tetris-v1-A-003 \
+  PROMPT=incremental \
+  EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build \
+  MAX_STEPS=6 \
+  SCORE_MODE=interactive
+
+# Preparar workspace y prompt, ejecutar manualmente con make opencode, cerrar luego
+make bench-run \
+  CASE=tetris-v1 \
+  RUN=tetris-v1-A-003 \
+  PROMPT=incremental \
+  EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build \
+  SCORE_MODE=manual
+# → luego: make opencode → pegá el prompt → make bench-close RUN=... SCORE=7 INTERVENTIONS=0
+
+# Retomar una corrida que se interrumpió (workspace ya existe)
+make bench-run \
+  CASE=tetris-v1 \
+  RUN=tetris-v1-A-003 \
+  PROMPT=incremental \
+  EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build \
+  MAX_STEPS=3 \
+  RESUME=1 \
+  SCORE_MODE=interactive
+
+# Dry run: ver todo lo que pasaría sin escribir nada
+make bench-run \
+  CASE=tetris-v1 \
+  RUN=tetris-v1-A-003 \
+  PROMPT=incremental \
+  EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build \
+  DRY_RUN=1
+```
+
+### Nemotron Super 120B planner + Qwen 35B executor (Celda F)
+
+```bash
+# Un solo paso — conductor prompt, score interactivo
+make bench-run \
+  CASE=tetris-v1 \
+  RUN=tetris-v1-F-001 \
+  PROMPT=conductor \
+  PLANNER_MODEL=gateway/nemotron-120b-planner \
+  EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build \
+  SCORE_MODE=interactive
+
+# Múltiples incrementos encadenados
+make bench-run \
+  CASE=tetris-v1 \
+  RUN=tetris-v1-F-001 \
+  PROMPT=conductor \
+  PLANNER_MODEL=gateway/nemotron-120b-planner \
+  EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build \
+  MAX_STEPS=6 \
+  SCORE_MODE=interactive
+
+# Dry run
+make bench-run \
+  CASE=tetris-v1 \
+  RUN=tetris-v1-F-001 \
+  PROMPT=conductor \
+  PLANNER_MODEL=gateway/nemotron-120b-planner \
+  EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build \
+  DRY_RUN=1
+```
+
+### Nemotron 120B planner + Qwen 3.5 9B executor (Celda G)
+
+```bash
+make bench-run \
+  CASE=tetris-v1 \
+  RUN=tetris-v1-G-001 \
+  PROMPT=conductor \
+  PLANNER_MODEL=gateway/nemotron-120b-planner \
+  EXECUTOR_MODEL=gateway/qwen9b-executor \
+  MAX_STEPS=6 \
+  SCORE_MODE=interactive
+```
+
+### Cerrar manualmente (si usaste SCORE_MODE=manual)
+
+```bash
+make bench-close RUN=tetris-v1-A-003 SCORE=7 INTERVENTIONS=0
+make bench-close RUN=tetris-v1-F-001 SCORE=8 INTERVENTIONS=1 NOTES="planner dominó bien"
+```
 
 ---
 
@@ -35,63 +147,46 @@ con el workspace, run_id y metadatos ya inyectados.
 ## Quickstart
 
 ```bash
-# Ver el estado de todas las corridas (pending / running / completed + score)
+# 1. Ver estado de todas las corridas
 make bench-results
 
-# Preparar la corrida: genera workspace, prompt, metadata.json, run.env
-# score-mode=manual significa: ejecutar manualmente y cerrar con bench-close
+# 2. Ejecutar un run end-to-end con score interactivo
 make bench-run \
   CASE=tetris-v1 \
-  RUN=tetris-v1-A-003 \
-  PROMPT=incremental \
+  RUN=tetris-v1-B-001 \
+  PROMPT=conductor \
+  PLANNER_MODEL=gateway/gpt-5.5 \
   EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build \
-  SCORE_MODE=manual
-
-# [Abrir OpenCode, pegar el prompt, dejar correr el modelo, observar el resultado]
-
-# Cerrar la corrida y registrar el score (actualiza runs.yaml y results.csv)
-make bench-close RUN=tetris-v1-A-003 SCORE=7 INTERVENTIONS=1
-
-# Ver estado actualizado
-make bench-results
-```
-
-Ver qué haría sin escribir nada:
-
-```bash
-make bench-run \
-  CASE=tetris-v1 \
-  RUN=tetris-v1-A-003 \
-  PROMPT=incremental \
-  EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build \
-  DRY_RUN=1
-```
-
-Score interactivo (te pregunta score/interventions después de correr):
-
-```bash
-make bench-run \
-  CASE=tetris-v1 \
-  RUN=tetris-v1-A-003 \
-  PROMPT=incremental \
-  EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build \
+  MAX_STEPS=6 \
   SCORE_MODE=interactive
+
+# 3. Ver estado actualizado
+make bench-results
 ```
+
+El runner encadena automáticamente hasta MAX_STEPS sesiones de opencode, genera los prompts de continuación para cada incremento, y al terminar te pide el score. No hace falta abrir OpenCode ni pegar el prompt a mano.
 
 ---
 
 ## Workflow por corrida
 
+### Camino principal (headless automático)
+
 1. `make bench-results` — identificar la próxima corrida en estado `pending`
-2. `make bench-run CASE=... RUN=... PROMPT=... EXECUTOR_MODEL=... SCORE_MODE=manual`
-   — genera workspace, prompt, metadata.json, run.env; copia prompt al clipboard
-3. Abrir OpenCode: `make opencode`
-4. Verificar modelo activo en OpenCode (ver `EXECUTOR_MODEL` en el output del paso 2)
-5. Pegar el prompt con `Cmd+V`
-6. Dejar correr el modelo, observar el resultado en el workspace
-7. Correr `python workspace/<run_id>/main.py` y scorear contra `scoring.md`
-8. `make bench-close RUN=<run_id> SCORE=<n> INTERVENTIONS=<n>` — guarda artefactos, actualiza `runs.yaml` y `results.csv`, hace commit
-9. Cuando las 3 reps de una celda están completas, actualizar `reports/2026-06-tetris-v1.md`
+2. `make bench-run CASE=... RUN=... PROMPT=... EXECUTOR_MODEL=... MAX_STEPS=6 SCORE_MODE=interactive`
+   — prepara, ejecuta hasta 6 incrementos encadenados, pide score al terminar
+3. El runner actualiza `runs.yaml` y `results.csv` automáticamente
+4. Cuando las 3 reps de una celda están completas, actualizar `reports/2026-06-tetris-v1.md`
+
+### Camino manual (si preferís controlar la ejecución)
+
+1. `make bench-results` — identificar la próxima corrida
+2. `make bench-run ... SCORE_MODE=manual` — prepara workspace, prompt, metadata; copia prompt al clipboard
+3. `make opencode` — abrí el TUI con el entorno configurado
+4. Verificar modelo activo, pegar el prompt con `Cmd+V`
+5. Dejar correr el modelo, observar el resultado en el workspace
+6. `python workspace/<run_id>/main.py` — validar contra `scoring.md`
+7. `make bench-close RUN=<run_id> SCORE=<n> INTERVENTIONS=<n>` — graba artefactos, actualiza `runs.yaml` y `results.csv`, hace commit
 
 ---
 

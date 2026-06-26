@@ -8,7 +8,14 @@ Usage (prefer make):
     make bench-run CASE=tetris-v1 RUN=tetris-v1-A-003 PROMPT=incremental \\
         EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build SCORE_MODE=manual
 
-    make bench-run ... DRY_RUN=1   # see what would happen without writing anything
+    # Multi-step: run up to N opencode sessions automatically
+    make bench-run ... MAX_STEPS=6 SCORE_MODE=interactive
+
+    # Resume a run whose workspace already exists
+    make bench-run ... RESUME=1 SCORE_MODE=interactive
+
+    # Dry run: see everything that would happen, writes nothing
+    make bench-run ... DRY_RUN=1
 
 Direct:
     uv run python scripts/bench_run.py \\
@@ -22,6 +29,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -71,9 +79,49 @@ VARIANT_TO_SHORT: dict[str, str] = {
     "nemotron_planner_small_steps_v1": "conductor",
 }
 
-# Non-interactive execution uses the `opencode run [message..]` subcommand
-# (NOT a top-level flag). See `opencode run --help`.
+# ---------------------------------------------------------------------------
+# Score sanity check: lightweight patterns to warn on implausible scores.
+# (non-blocking by default; warn + confirm in interactive mode)
+# ---------------------------------------------------------------------------
 
+SCORE_CHECKS: list[tuple[int, list[str], str]] = [
+    (4, ["pygame", "surface", "blit", "draw", "screen"], "pygame / drawing code"),
+    (
+        5,
+        ["tick", "drop", "fall", "gravity", "clock", "move_down"],
+        "falling / tick logic",
+    ),
+    (
+        6,
+        ["K_LEFT", "K_RIGHT", "pygame.key", "event.key", "KEYDOWN"],
+        "left/right key handling",
+    ),
+    (7, ["rotat"], "rotation logic"),
+    (
+        8,
+        ["collision", "lock", "freeze", "land", "check_collision"],
+        "collision / lock logic",
+    ),
+    (
+        9,
+        ["clear", "line_clear", "lines_cleared", "score", "level"],
+        "line clear / scoring logic",
+    ),
+]
+
+# Signals that indicate the agent has finished this increment and wants a new session
+_STOP_RE = re.compile(
+    r"\bDONE\b"
+    r"|NEXT increment"
+    r"|open a new (chat|conversation|session)"
+    r"|start a new (chat|conversation|session)"
+    r"|stop after this increment"
+    r"|implementation (is |is now )?complete"
+    r"|tetris is complete"
+    r"|game is complete"
+    r"|milestone (complete|achieved|done)",
+    re.IGNORECASE,
+)
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -111,6 +159,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--interventions", type=int, default=None, help="Human interventions count"
     )
     p.add_argument("--notes", default="", help="Optional notes string")
+    p.add_argument(
+        "--max-steps",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Max number of opencode execution steps (default: 1). "
+        "For incremental benchmarks, set to 6–10 to chain multiple increments automatically.",
+    )
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="Allow running into an existing workspace (skip workspace existence check). "
+        "Use when a previous run was interrupted and you want to continue.",
+    )
     p.add_argument(
         "--create-litellm-key",
         action="store_true",
@@ -207,6 +269,25 @@ def generate_prompt(
     return prompt_path
 
 
+def generate_continuation_prompt(run_id: str, step_n: int, steps_dir: Path) -> Path:
+    """Write a continuation prompt for step N (step > 1) in an incremental run."""
+    text = (
+        f"<!-- Continuation step {step_n} for RUN_ID={run_id} -->\n\n"
+        f"This is continuation step {step_n} for RUN_ID={run_id}.\n\n"
+        f"Continue from the existing workspace. Do NOT restart from scratch.\n"
+        f"Do NOT rewrite unrelated code.\n\n"
+        f"1. Inspect `workspace/{run_id}/main.py` and understand the current state.\n"
+        f"2. Implement only the next missing Tetris milestone.\n"
+        f"3. Validate with: `python workspace/{run_id}/main.py`\n"
+        f"4. Stop after ONE verifiable increment.\n"
+        f"5. State clearly what you implemented and what the next recommended increment is.\n"
+        f"6. If the game is complete (all milestones done), say: DONE\n"
+    )
+    path = steps_dir / f"step-{step_n}-prompt.md"
+    path.write_text(text)
+    return path
+
+
 def write_metadata(
     out_dir: Path, args: argparse.Namespace, task: dict, run: dict, prompt_short: str
 ) -> Path:
@@ -223,6 +304,7 @@ def write_metadata(
         "planner_model": args.planner_model,
         "executor_model": args.executor_model,
         "score_mode": args.score_mode,
+        "max_steps": args.max_steps,
         "skills_bundle": discover_skills(),
         "subagents": discover_subagents(),
         "base_commit": task.get("base_commit", ""),
@@ -248,17 +330,47 @@ def write_run_env(out_dir: Path, args: argparse.Namespace, session_id: str) -> P
     return path
 
 
+def validate_workspace(workspace: Path, run_id: str, resume: bool) -> None:
+    """Refuse to run into an existing workspace unless --resume is passed."""
+    if workspace.exists() and any(workspace.iterdir()):
+        if not resume:
+            sys.exit(
+                f"❌ workspace/{run_id}/ already exists and is not empty.\n"
+                f"   Pass RESUME=1 to continue from the existing state, or remove it:\n"
+                f"     rm -rf workspace/{run_id}/"
+            )
+        print(
+            f"  ⚠️  workspace/{run_id}/ exists — resuming from current state (--resume)."
+        )
+
+
+def find_next_run(
+    runs_path: Path, current_run_id: str, prompt_short: str | None
+) -> dict | None:
+    """Return the next pending run after current_run_id, or None."""
+    data = yaml.safe_load(runs_path.read_text())
+    runs = data.get("runs", [])
+    found = False
+    for run in runs:
+        if run["run_id"] == current_run_id:
+            found = True
+            continue
+        if found and run.get("status") == "pending":
+            return run
+    # fallback: any other pending run
+    for run in runs:
+        if run.get("status") == "pending" and run["run_id"] != current_run_id:
+            return run
+    return None
+
+
 # ---------------------------------------------------------------------------
-# Execution detection
+# Execution
 # ---------------------------------------------------------------------------
 
 
 def detect_run_subcommand() -> bool:
-    """Return True if `opencode run` (headless, non-interactive) is available.
-
-    Non-interactive execution is the `opencode run [message..]` subcommand, not a
-    top-level flag. We verify by invoking its --help and confirming it parses.
-    """
+    """Return True if `opencode run` (headless) subcommand is available."""
     try:
         result = subprocess.run(
             ["opencode", "run", "--help"], capture_output=True, text=True, timeout=5
@@ -273,8 +385,8 @@ def build_opencode_cmd(
 ) -> list[str]:
     """Assemble the non-interactive `opencode run` command.
 
-    --dangerously-skip-permissions is required for headless runs so the agent does
-    not block waiting for interactive permission approvals.
+    --dangerously-skip-permissions is required for headless runs so the agent
+    does not block waiting for interactive permission approvals.
     """
     cmd = ["opencode", "run", "--dangerously-skip-permissions", "--print-logs"]
     if executor_model:
@@ -286,9 +398,8 @@ def build_opencode_cmd(
 
 
 def _print_manual_fallback(
-    args, executor_model: str, prompt_path: Path, clipped: bool
+    args: argparse.Namespace, executor_model: str, prompt_path: Path, clipped: bool
 ) -> None:
-    """Precise manual instructions when headless `opencode run` is unavailable."""
     print()
     print("-" * 66)
     print("  NEXT STEP — run manually:")
@@ -305,15 +416,29 @@ def _print_manual_fallback(
     print("-" * 66)
 
 
-def run_opencode(cmd: list[str], log_path: Path) -> int:
-    """Run opencode, streaming output live to the terminal and capturing to log_path."""
+def run_opencode(
+    cmd: list[str], log_path: Path, also_append: Path | None = None
+) -> int:
+    """Run opencode, streaming output to terminal and capturing to log_path.
+
+    If also_append is given, output is also appended to that file (combined log).
+    """
     import datetime as _dt
 
+    header = f"# opencode run started {_dt.datetime.utcnow().isoformat()}Z\n"
+    cmd_line = "# cmd: " + " ".join(cmd[:-1]) + " <prompt>\n\n"
+
+    append_fh = None
+    if also_append is not None:
+        append_fh = also_append.open("a")
+
     with log_path.open("w") as log:
-        header = f"# opencode run started {_dt.datetime.utcnow().isoformat()}Z\n"
-        # Log the command WITHOUT the (large, last) message argument
-        log.write(header + "# cmd: " + " ".join(cmd[:-1]) + " <prompt>\n\n")
+        log.write(header + cmd_line)
         log.flush()
+        if append_fh:
+            append_fh.write(f"\n{'=' * 60}\n{header}{cmd_line}")
+            append_fh.flush()
+
         proc = subprocess.Popen(
             cmd,
             cwd=REPO_ROOT,
@@ -327,13 +452,84 @@ def run_opencode(cmd: list[str], log_path: Path) -> int:
             sys.stdout.write(line)
             sys.stdout.flush()
             log.write(line)
+            if append_fh:
+                append_fh.write(line)
         proc.wait()
+
+    if append_fh:
+        append_fh.close()
+
     return proc.returncode
 
 
+def detect_stop_signal(log_text: str) -> bool:
+    """Return True if the agent's output contains a completion/next-chat signal."""
+    return bool(_STOP_RE.search(log_text))
+
+
 # ---------------------------------------------------------------------------
-# Usage enrichment (optional — fail silently)
+# Usage enrichment (all fail silently)
 # ---------------------------------------------------------------------------
+
+
+def parse_log_usage(log_path: Path) -> dict | None:
+    """Extract approximate usage from opencode output log (best-effort)."""
+    if not log_path.exists():
+        return None
+    text = log_path.read_text(errors="replace")
+    result: dict = {}
+
+    # Step count (count our own header markers)
+    steps = len(re.findall(r"^# opencode run started", text, re.MULTILINE))
+    if steps > 1:
+        result["steps"] = steps
+
+    # Tool calls (opencode prints tool invocations)
+    tool_calls = len(
+        re.findall(
+            r"(?:Running tool|Tool call|Calling tool|tool_use|ToolUse)",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    if tool_calls:
+        result["tool_calls"] = tool_calls
+
+    # Rough turn count (assistant response markers)
+    turns = len(
+        re.findall(
+            r"(?:^Assistant:|>\s*Assistant|<assistant|role.*assistant)",
+            text,
+            re.IGNORECASE | re.MULTILINE,
+        )
+    )
+    if turns:
+        result["turns"] = turns
+
+    # Files touched (write/edit/create patterns)
+    files_touched = set(
+        re.findall(
+            r"(?:Writing to|Editing|Creating|Wrote|Created)\s+[`\"']?([\w./\-]+\.py)[`\"']?",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    if files_touched:
+        result["files_touched"] = sorted(files_touched)
+
+    # Detected model
+    m = re.search(
+        r"(?:Using model|model)[:\s]+([a-zA-Z0-9/._:\-]+)", text, re.IGNORECASE
+    )
+    if m:
+        result["detected_model"] = m.group(1)
+
+    # Detected session/provider
+    s = re.search(r"session[_\-]?id[:\s]+([a-zA-Z0-9\-]+)", text, re.IGNORECASE)
+    if s:
+        result["detected_session"] = s.group(1)
+
+    return result if result else None
 
 
 def pull_usage_litellm(run_id: str) -> dict | None:
@@ -354,7 +550,6 @@ def pull_usage_litellm(run_id: str) -> dict | None:
         )
         with urllib.request.urlopen(req, timeout=8) as resp:  # nosec B310
             data = json.loads(resp.read())
-        # Normalize whatever LiteLLM returns
         if isinstance(data, list) and data:
             total_input = sum(r.get("prompt_tokens", 0) for r in data)
             total_output = sum(r.get("completion_tokens", 0) for r in data)
@@ -407,18 +602,73 @@ def write_usage_json(out_dir: Path, usage: dict | None) -> Path:
     skeleton: dict = {
         "turns": None,
         "tool_calls": None,
+        "steps": None,
         "input_tokens": None,
         "output_tokens": None,
         "cost_usd": None,
         "time_minutes": None,
         "files_modified": [],
         "diff_lines": None,
+        "detected_model": None,
+        "detected_session": None,
     }
     if usage:
         skeleton.update(usage)
     path = out_dir / "usage.json"
     path.write_text(json.dumps(skeleton, indent=2))
     return path
+
+
+# ---------------------------------------------------------------------------
+# Score sanity check
+# ---------------------------------------------------------------------------
+
+
+def score_sanity_check(
+    workspace: Path, run_id: str, score: int, interactive: bool
+) -> bool:
+    """Check main.py for evidence matching the claimed score.
+
+    Non-blocking by default. In interactive mode, asks for confirmation when
+    patterns are missing.
+    """
+    main_py = workspace / run_id / "main.py"
+    if not main_py.exists():
+        main_py = workspace / "main.py"
+    if not main_py.exists():
+        return True  # can't check, don't block
+
+    text = main_py.read_text(errors="replace")
+    text_lower = text.lower()
+    warnings = []
+
+    for threshold, patterns, label in SCORE_CHECKS:
+        if score >= threshold:
+            if not any(p.lower() in text_lower for p in patterns):
+                warnings.append(
+                    f"  ⚠️  score={score} >= {threshold} but no {label} found in main.py"
+                )
+
+    if not warnings:
+        return True
+
+    print()
+    for w in warnings:
+        print(w)
+
+    if interactive:
+        try:
+            ans = (
+                input("  Score looks high for the code found — proceed anyway? [y/N]: ")
+                .strip()
+                .lower()
+            )
+            return ans in ("y", "yes")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+
+    return True  # non-blocking when not interactive
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +707,7 @@ def log_mlflow(
                     "harness": run.get("harness", ""),
                     "methodology": run.get("methodology", ""),
                     "score_mode": args.score_mode,
+                    "max_steps": args.max_steps,
                 }
             )
             if score_data:
@@ -494,11 +745,12 @@ def close_run(
     notes: str,
 ) -> None:
     workspace = WORKSPACE_ROOT / args.run
+    diff_lines = 0
 
     if not workspace.exists():
         print(
             f"  ⚠️  workspace/{args.run}/ not found — skipping artifact copy.\n"
-            f"     If files were written to the repo root, move them first:\n"
+            f"     Move files manually if needed:\n"
             f"     mkdir -p workspace/{args.run} && mv <files> workspace/{args.run}/"
         )
     else:
@@ -516,7 +768,14 @@ def close_run(
             ["git", "diff", "--no-index", "/dev/null", str(dest)], cwd=REPO_ROOT
         )
         diff_path.write_text(result.stdout)
-        print(f"  diff.patch: {result.stdout.count(chr(10))} lines")
+        diff_lines = result.stdout.count("\n")
+        print(f"  diff.patch: {diff_lines} lines")
+
+        if score > 3 and diff_lines == 0:
+            print(
+                f"  ⚠️  WARNING: score={score} but diff.patch is empty — "
+                f"workspace/{args.run}/ appears to have no implementation."
+            )
 
         shutil.rmtree(workspace)
         if WORKSPACE_ROOT.exists() and not any(WORKSPACE_ROOT.iterdir()):
@@ -550,6 +809,7 @@ def close_run(
             "executor_model": args.executor_model or run.get("executor_model", ""),
             "executor_context": str(run.get("executor_context", "")),
             "temperature": str(run.get("temperature", "")),
+            "diff_lines": str(diff_lines) if diff_lines else "",
             "functional_level": str(score),
             "human_interventions": str(interventions),
             "langfuse_session": run.get("langfuse_session_id", ""),
@@ -613,6 +873,8 @@ def main(argv: list[str] | None = None) -> int:
     args.executor_model = executor_model
     args.planner_model = planner_model
 
+    workspace = WORKSPACE_ROOT / args.run
+
     # -----------------------------------------------------------------------
     # DRY RUN
     # -----------------------------------------------------------------------
@@ -630,6 +892,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Planner model:   {planner_model or '(none)'}")
         print(f"  Executor model:  {executor_model or '(unset)'}")
         print(f"  Score mode:      {args.score_mode}")
+        print(f"  Max steps:       {args.max_steps}")
+        print(f"  Resume:          {args.resume}")
         print(f"  Session ID:      {session_id}")
         print()
         out_dir = DATA_DIR / args.run
@@ -640,20 +904,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    {out_dir.relative_to(REPO_ROOT)}/report.md")
         print(f"    {out_dir.relative_to(REPO_ROOT)}/usage.json")
         print(f"    {out_dir.relative_to(REPO_ROOT)}/opencode.log")
+        if args.max_steps > 1:
+            for s in range(1, min(args.max_steps, 4) + 1):
+                extra = (
+                    "..." if s == min(args.max_steps, 4) and args.max_steps > 3 else ""
+                )
+                print(
+                    f"    {out_dir.relative_to(REPO_ROOT)}/steps/step-{s}-prompt.md{extra}"
+                )
+                print(f"    {out_dir.relative_to(REPO_ROOT)}/steps/step-{s}.log{extra}")
         print(f"    workspace/{args.run}/")
         print()
         if detect_run_subcommand():
             preview = build_opencode_cmd(executor_model, None, "<prompt>")
             print("  Execution: " + " ".join(preview))
+            if args.max_steps > 1:
+                print(
+                    f"  (repeated up to {args.max_steps} times; stops on completion signal)"
+                )
         else:
             print("  Execution: `opencode run` not available — manual paste required")
         print()
-        print("  LiteLLM key metadata that would be registered:")
-        print(f"    key_alias: {args.run}")
-        print(f"    metadata.session_id: {session_id}")
-        print(f"    metadata.run_id: {args.run}")
-        print(f"    metadata.benchmark_id: {args.case}")
-        print(f"    metadata.executor_model: {executor_model}")
+        print("  LiteLLM metadata that would be registered:")
+        print(f"    key_alias: {args.run}   metadata.session_id: {session_id}")
         print("=" * 66)
         return 0
 
@@ -669,7 +942,9 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir = DATA_DIR / args.run
     out_dir.mkdir(parents=True, exist_ok=True)
-    (WORKSPACE_ROOT / args.run).mkdir(parents=True, exist_ok=True)
+
+    validate_workspace(workspace, args.run, args.resume)
+    workspace.mkdir(parents=True, exist_ok=True)
 
     prompt_path = generate_prompt(
         args.run,
@@ -695,7 +970,7 @@ def main(argv: list[str] | None = None) -> int:
     write_bench_context(args.run)
     set_status_running(runs_path, args.run)
 
-    # Virtual key
+    # Virtual key (optional)
     run_key: str | None = None
     if args.create_litellm_key:
         gateway_base = os.environ.get("GATEWAY_BASE_URL", "")
@@ -703,8 +978,7 @@ def main(argv: list[str] | None = None) -> int:
         if not gateway_base or not master_key:
             print(
                 f"  ⚠️  LiteLLM key skipped: GATEWAY_BASE_URL or LITELLM_MASTER_KEY not set.\n"
-                f"     Create key manually → key_alias={args.run}  "
-                f"metadata.session_id={session_id}"
+                f"     Create manually → key_alias={args.run}  metadata.session_id={session_id}"
             )
         else:
             try:
@@ -712,8 +986,7 @@ def main(argv: list[str] | None = None) -> int:
                 key_file = out_dir / ".gateway_key"
                 key_file.write_text(run_key)
                 key_file.chmod(0o600)
-                env_path = REPO_ROOT / ".env"
-                patch_env_token(env_path, run_key)
+                patch_env_token(REPO_ROOT / ".env", run_key)
                 os.environ["GATEWAY_TOKEN"] = run_key
                 print(
                     f"  Key:         written to {key_file.relative_to(REPO_ROOT)} (gitignored)"
@@ -724,13 +997,16 @@ def main(argv: list[str] | None = None) -> int:
     clipped = copy_to_clipboard(prompt_path.read_text())
 
     # -----------------------------------------------------------------------
-    # PHASE 2 — EXECUTE
+    # PHASE 2 — EXECUTE (multi-step loop)
     # -----------------------------------------------------------------------
     print()
     print("  [2/5] Executing...")
 
     opencode_log = out_dir / "opencode.log"
     has_run_cmd = detect_run_subcommand()
+    max_steps = max(1, args.max_steps)
+    steps_dir = out_dir / "steps"
+    completed_steps = 0
 
     if args.score_mode == "none":
         print("  score-mode=none: skipping execution.")
@@ -743,21 +1019,54 @@ def main(argv: list[str] | None = None) -> int:
             print("=" * 66)
             return 0
     elif has_run_cmd:
-        cmd = build_opencode_cmd(executor_model, None, prompt_path.read_text())
-        print(f"  Model:       {executor_model}")
-        print(
-            f"  Command:     opencode run --dangerously-skip-permissions -m {executor_model} <prompt>"
-        )
-        print(f"  Log:         {opencode_log.relative_to(REPO_ROOT)}")
-        print("-" * 66)
-        rc = run_opencode(cmd, opencode_log)
-        print("-" * 66)
-        if rc != 0:
-            print(
-                f"  ⚠️  opencode exited with code {rc} — see {opencode_log.relative_to(REPO_ROOT)}"
-            )
-        else:
-            print("  opencode run finished.")
+        if max_steps > 1:
+            steps_dir.mkdir(exist_ok=True)
+
+        for step_n in range(1, max_steps + 1):
+            if max_steps > 1:
+                if step_n == 1:
+                    step_prompt_path = prompt_path
+                else:
+                    step_prompt_path = generate_continuation_prompt(
+                        args.run, step_n, steps_dir
+                    )
+                    # Also copy step prompt to clipboard so user can paste if needed
+                    copy_to_clipboard(step_prompt_path.read_text())
+                step_log = steps_dir / f"step-{step_n}.log"
+                print(f"\n  --- Step {step_n}/{max_steps} ---")
+            else:
+                step_prompt_path = prompt_path
+                step_log = opencode_log
+
+            prompt_text = step_prompt_path.read_text()
+            cmd = build_opencode_cmd(executor_model, None, prompt_text)
+            print(f"  Model:       {executor_model}")
+            print(f"  Log:         {step_log.relative_to(REPO_ROOT)}")
+            print("-" * 66)
+
+            # For multi-step, each step log is primary; combined goes to opencode.log
+            also_append = opencode_log if max_steps > 1 else None
+            rc = run_opencode(cmd, step_log, also_append=also_append)
+            completed_steps += 1
+
+            print("-" * 66)
+            if rc != 0:
+                print(
+                    f"  ⚠️  opencode exited with code {rc} — see {step_log.relative_to(REPO_ROOT)}"
+                )
+                break
+
+            if max_steps > 1:
+                step_text = step_log.read_text()
+                if detect_stop_signal(step_text):
+                    print(f"  Agent signaled completion at step {step_n}.")
+                    break
+                if step_n < max_steps:
+                    print(
+                        f"  Step {step_n} complete — continuing to step {step_n + 1}..."
+                    )
+            else:
+                print("  opencode run finished.")
     else:
         print("  ⚠️  `opencode run` not available in this opencode version.")
         _print_manual_fallback(args, executor_model, prompt_path, clipped)
@@ -780,10 +1089,24 @@ def main(argv: list[str] | None = None) -> int:
     elif args.score_mode == "manual":
         print("  Run is prepared. Score it manually, then:")
         print(f"    make bench-close RUN={args.run} SCORE=<0-10> INTERVENTIONS=<N>")
+        # Still write usage.json before exiting
+        print()
+        print("  [4/5] Writing usage skeleton...")
+        log_usage = parse_log_usage(opencode_log)
+        usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id) or {}
+        if log_usage:
+            usage = {**log_usage, **usage}
+        write_usage_json(out_dir, usage or None)
         print("=" * 66)
         return 0
     else:  # interactive
         if args.score is not None and args.interventions is not None:
+            # Score sanity check before accepting pre-supplied score
+            if not score_sanity_check(
+                WORKSPACE_ROOT, args.run, args.score, interactive=True
+            ):
+                print("  Aborting — re-run with corrected score.")
+                return 1
             score_data = (args.score, args.interventions, args.notes)
         else:
             print()
@@ -791,7 +1114,6 @@ def main(argv: list[str] | None = None) -> int:
                 s = int(input("  Functional score (0-10): "))
                 i = int(input("  Human interventions: "))
                 n = input("  Notes (optional, Enter to skip): ").strip()
-                score_data = (s, i, n)
             except (ValueError, EOFError) as e:
                 print(f"  ⚠️  Could not read score: {e}. Leaving run open.")
                 print(
@@ -800,16 +1122,34 @@ def main(argv: list[str] | None = None) -> int:
                 print("=" * 66)
                 return 1
 
+            if not score_sanity_check(WORKSPACE_ROOT, args.run, s, interactive=True):
+                print("  Aborting — re-run with corrected score.")
+                return 1
+
+            score_data = (s, i, n)
+
     # -----------------------------------------------------------------------
-    # PHASE 5 — ENRICH (before close so usage lands in report)
+    # PHASE 4 — ENRICH (before close so usage lands in report)
     # -----------------------------------------------------------------------
     print()
     print("  [4/5] Enriching with usage data...")
 
-    usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id)
-    usage_path = write_usage_json(out_dir, usage)
-    if usage:
-        print(f"  Usage pulled: {usage}")
+    log_usage = parse_log_usage(opencode_log)
+    remote_usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id)
+
+    # Merge: remote values (real tokens/cost) take precedence over log estimates
+    merged_usage: dict = {}
+    if log_usage:
+        merged_usage.update(log_usage)
+    if remote_usage:
+        merged_usage.update(remote_usage)
+    if completed_steps > 1:
+        merged_usage["steps"] = completed_steps
+
+    usage_path = write_usage_json(out_dir, merged_usage or None)
+    if merged_usage:
+        keys = [k for k, v in merged_usage.items() if v is not None]
+        print(f"  Usage fields populated: {keys}")
     else:
         print(
             f"  Usage not available (LITELLM_MASTER_KEY / LANGFUSE_SECRET_KEY not set "
@@ -817,7 +1157,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     # -----------------------------------------------------------------------
-    # PHASE 4 — CLOSE
+    # PHASE 5 — CLOSE
     # -----------------------------------------------------------------------
     if score_data:
         print()
@@ -828,7 +1168,7 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print("  [5/5] No score available — run left open.")
 
-    log_mlflow(args, run, score_data, usage, out_dir)
+    log_mlflow(args, run, score_data, merged_usage or None, out_dir)
 
     # -----------------------------------------------------------------------
     # SUMMARY
@@ -845,9 +1185,31 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  Notes:         {n}")
     else:
         print("  Status:        prepared (score pending)")
+    if completed_steps:
+        print(f"  Steps run:     {completed_steps}")
     print(f"  Session ID:    {session_id}")
     print(f"  Artifacts:     data/runs/{args.run}/")
-    print("  Next:          make bench-results")
+
+    print()
+    print("  Next:")
+    print("    make bench-results")
+    next_run = find_next_run(runs_path, args.run, prompt_short)
+    if next_run:
+        nr_id = next_run["run_id"]
+        nr_models = next_run.get("gateway_models", [])
+        nr_em = nr_models[-1] if nr_models else executor_model
+        nr_prompt = VARIANT_TO_SHORT.get(
+            next_run.get("prompt_variant", ""), prompt_short
+        )
+        nr_pm = nr_models[0] if len(nr_models) > 1 else ""
+        pm_part = f" PLANNER_MODEL={nr_pm}" if nr_pm and nr_pm != nr_em else ""
+        steps_part = f" MAX_STEPS={max_steps}" if max_steps > 1 else ""
+        print(
+            f"    make bench-run CASE={args.case} RUN={nr_id}"
+            f" PROMPT={nr_prompt} EXECUTOR_MODEL={nr_em}"
+            f"{pm_part}{steps_part} SCORE_MODE=interactive"
+        )
+
     print("=" * 66)
     return 0
 

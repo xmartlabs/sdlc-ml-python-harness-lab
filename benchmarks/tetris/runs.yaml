@@ -49,9 +49,9 @@ runs:
   langfuse_session_id: bench-tetris-v1-A-003
   virtual_key: bench-opencode-local
   branch: bench/tetris-v1-A-003
-  status: completed
-  result_level: 7
-  human_interventions: 0
+  status: pending
+  result_level: null
+  human_interventions: null
   notes: ''
 - run_id: tetris-v1-B-001
   methodology: conductor-cloud-local
