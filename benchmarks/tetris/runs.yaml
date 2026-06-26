@@ -49,9 +49,9 @@ runs:
   langfuse_session_id: bench-tetris-v1-A-003
   virtual_key: bench-opencode-local
   branch: bench/tetris-v1-A-003
-  status: completed
-  result_level: 3
-  human_interventions: 0
+  status: pending
+  result_level: null
+  human_interventions: null
   notes: ''
 - run_id: tetris-v1-B-001
   methodology: conductor-cloud-local
@@ -280,9 +280,9 @@ runs:
   langfuse_session_id: bench-tetris-v1-F-001
   virtual_key: bench-conductor-nemotron-qwen35b
   branch: bench/tetris-v1-F-001
-  status: completed
-  result_level: 0
-  human_interventions: 0
+  status: pending
+  result_level: null
+  human_interventions: null
   notes: Nemotron planner + local Qwen 35B executor.
 - run_id: tetris-v1-F-002
   methodology: conductor-nemotron-local
