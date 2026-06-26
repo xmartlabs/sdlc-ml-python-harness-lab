@@ -10,7 +10,8 @@
   "prompt_variant": "incremental",
   "planner_model": null,
   "executor_model": "gateway/lmstudio-qwen3.6-35b-build",
-  "score_mode": "manual",
+  "score_mode": "interactive",
+  "max_steps": 6,
   "skills_bundle": [
     "bootstrap_project",
     "brainstorm_quick",
@@ -47,5 +48,5 @@
   ],
   "base_commit": "97338ea2747f24d49a6962fb07e2aa5f63f478b3",
   "workspace": "workspace/tetris-v1-A-003",
-  "created_at": "2026-06-25T23:55:00.926947Z"
+  "created_at": "2026-06-26T02:52:16.161273Z"
 }
