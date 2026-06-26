@@ -57,3 +57,40 @@ Langfuse under the `langfuse.*` prefix, so these become searchable in the Langfu
    cannot inject fine metadata. See `../GATEWAY_CHANGES.md`.
 3. **Virtual keys per methodology** — see consumption per methodology even if metadata is
    imperfect. The `virtual_key` field in `runs.yaml` names the key per cell.
+
+## Extended fields for planner/executor experiments
+
+When running planner/executor experiments (including all-large-model variants), extend
+`trace_metadata` with the fields below.
+
+- `benchmark_id`
+- `experiment_id`
+- `run_id`
+- `case_id`
+- `methodology`
+- `harness`
+- `planner_model`
+- `executor_model`
+- `gateway_model_aliases`
+- `prompt_variant`
+- `langfuse_session_id`
+- `estimated_input_tokens`
+- `estimated_output_tokens`
+- `actual_input_tokens`
+- `actual_output_tokens`
+- `estimated_cost_usd`
+- `actual_cost_usd`
+- `total_wall_time_minutes`
+- `turns`
+- `human_interventions`
+- `functional_score`
+- `engineering_score`
+- `reproducibility_score`
+- `verdict`
+- `recommendation`
+
+Notes:
+
+- Keep unknown values null until run close to avoid fake precision.
+- `estimated_*` fields must be captured before execution starts.
+- `actual_*` fields should come from the exported Langfuse/LiteLLM usage bundle.

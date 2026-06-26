@@ -24,6 +24,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -127,19 +128,20 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
     base = gateway_base.rstrip("/")
     if base.endswith("/v1"):
         base = base[:-3]
+
+    parsed_base = urllib.parse.urlparse(base)
+    if parsed_base.scheme not in {"http", "https"} or not parsed_base.netloc:
+        raise RuntimeError(
+            "GATEWAY_BASE_URL must use http(s) and include a host, "
+            f"got: {gateway_base!r}"
+        )
+
     url = f"{base}/key/generate"
 
     session_id = run["langfuse_session_id"]
-    tags = [
-        "benchmark:tetris-v1",
-        f"harness:{run.get('harness', '')}",
-        f"method:{run.get('methodology', '')}",
-        f"planner:{run.get('planner_model', '')}",
-        f"executor:{run.get('executor_model', '')}",
-        f"prompt:{run.get('prompt_variant', '')}",
-        f"run:{run['run_id']}",
-    ]
 
+    # Note: LiteLLM `tags` require Enterprise. We use metadata only (free tier).
+    # LiteLLM forwards metadata.session_id to Langfuse for session grouping.
     payload = {
         "key_alias": run["run_id"],
         "metadata": {
@@ -150,8 +152,8 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
             "methodology": run.get("methodology", ""),
             "planner_model": run.get("planner_model", ""),
             "executor_model": run.get("executor_model", ""),
+            "prompt_variant": run.get("prompt_variant", ""),
         },
-        "tags": tags,
     }
 
     data = json.dumps(payload).encode()
@@ -161,10 +163,15 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
         headers={
             "Authorization": f"Bearer {master_key}",
             "Content-Type": "application/json",
+            # Cloudflare bot-protection requires browser-like headers on external gateways
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Accept": "application/json",
+            "Origin": url.rsplit("/key", 1)[0],
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        # URL is derived from validated GATEWAY_BASE_URL (http/https only).
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310
             result = json.loads(resp.read())
             return result["key"]
     except urllib.error.HTTPError as e:
@@ -260,6 +267,72 @@ def main(argv: list[str] | None = None) -> int:
     print("  Next: docs/runbook-first-run.md  (Step 3 — git worktree)")
     print("=" * 66)
     return 0
+
+
+def update_results_csv(results_path: Path, row: dict) -> None:
+    """Append or update a row in results.csv keyed on run_id.
+
+    Preserves all existing rows. Creates the file with the canonical header if absent.
+    Only overwrites fields that are non-empty in the incoming row — existing values
+    (e.g. tokens pulled from Langfuse) are not clobbered by a partial row.
+    """
+    import csv
+    import io
+
+    COLUMNS = [
+        "run_id",
+        "cell_id",
+        "date",
+        "methodology",
+        "harness",
+        "prompt_variant",
+        "planner_model",
+        "executor_model",
+        "executor_context",
+        "temperature",
+        "requests",
+        "input_tokens",
+        "output_tokens",
+        "cost_usd",
+        "time_minutes",
+        "turns",
+        "files_modified",
+        "diff_lines",
+        "functional_level",
+        "engineering_score",
+        "reproducibility_score",
+        "human_interventions",
+        "langfuse_session",
+        "branch",
+        "notes",
+    ]
+
+    rows: list[dict] = []
+    if results_path.exists():
+        with results_path.open(newline="") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+    updated = False
+    incoming = {k: ("" if v is None else str(v)) for k, v in row.items()}
+    for i, existing in enumerate(rows):
+        if existing.get("run_id") == incoming.get("run_id"):
+            # Merge: keep existing value when incoming is empty
+            merged = dict(existing)
+            for k, v in incoming.items():
+                if v != "":
+                    merged[k] = v
+            rows[i] = merged
+            updated = True
+            break
+    if not updated:
+        rows.append(incoming)
+
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    results_path.write_text(out.getvalue())
 
 
 if __name__ == "__main__":

@@ -1,1 +1,0 @@
-../../../.github/skills-external/test-driven-development/SKILL.md

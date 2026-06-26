@@ -1,1 +1,0 @@
-../../../.github/skills/retrospective.md

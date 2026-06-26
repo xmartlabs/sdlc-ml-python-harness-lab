@@ -1,1 +1,0 @@
-../../../.github/skills-external/ui-ux-pro-max/SKILL.md

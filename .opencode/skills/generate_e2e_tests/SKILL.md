@@ -1,1 +1,0 @@
-../../../.github/skills/generate_e2e_tests.md

@@ -1,0 +1,165 @@
+experiment_id: nemotron-planner-qwen-executor
+benchmark_id: tetris-v1
+
+runs:
+  - run_id: tetris-v1-F-001
+    benchmark_id: tetris-v1
+    experiment_id: nemotron-planner-qwen-executor
+    case_id: tetris-v1
+    methodology: conductor-nemotron-local
+    harness: opencode-conductor
+    planner_model: nemotron-super-120b
+    executor_model: qwen3.6-35b
+    gateway_model_aliases: [gateway/nemotron-120b-planner, gateway/lmstudio-qwen3.6-35b-build]
+    prompt_variant: nemotron_planner_v1
+    langfuse_session_id: bench-tetris-v1-F-001
+    estimated_input_tokens:
+    estimated_output_tokens:
+    actual_input_tokens:
+    actual_output_tokens:
+    estimated_cost_usd:
+    actual_cost_usd:
+    total_wall_time_minutes:
+    turns:
+    human_interventions:
+    functional_score:
+    engineering_score:
+    reproducibility_score:
+    verdict:
+    recommendation:
+    status: pending
+
+  - run_id: tetris-v1-F-002
+    benchmark_id: tetris-v1
+    experiment_id: nemotron-planner-qwen-executor
+    case_id: tetris-v1
+    methodology: conductor-nemotron-local
+    harness: opencode-conductor
+    planner_model: nemotron-super-120b
+    executor_model: qwen3.6-35b
+    gateway_model_aliases: [gateway/nemotron-120b-planner, gateway/lmstudio-qwen3.6-35b-build]
+    prompt_variant: nemotron_planner_v1
+    langfuse_session_id: bench-tetris-v1-F-002
+    estimated_input_tokens:
+    estimated_output_tokens:
+    actual_input_tokens:
+    actual_output_tokens:
+    estimated_cost_usd:
+    actual_cost_usd:
+    total_wall_time_minutes:
+    turns:
+    human_interventions:
+    functional_score:
+    engineering_score:
+    reproducibility_score:
+    verdict:
+    recommendation:
+    status: pending
+
+  - run_id: tetris-v1-F-003
+    benchmark_id: tetris-v1
+    experiment_id: nemotron-planner-qwen-executor
+    case_id: tetris-v1
+    methodology: conductor-nemotron-local
+    harness: opencode-conductor
+    planner_model: nemotron-super-120b
+    executor_model: qwen3.6-35b
+    gateway_model_aliases: [gateway/nemotron-120b-planner, gateway/lmstudio-qwen3.6-35b-build]
+    prompt_variant: nemotron_planner_v1
+    langfuse_session_id: bench-tetris-v1-F-003
+    estimated_input_tokens:
+    estimated_output_tokens:
+    actual_input_tokens:
+    actual_output_tokens:
+    estimated_cost_usd:
+    actual_cost_usd:
+    total_wall_time_minutes:
+    turns:
+    human_interventions:
+    functional_score:
+    engineering_score:
+    reproducibility_score:
+    verdict:
+    recommendation:
+    status: pending
+
+  - run_id: tetris-v1-G-001
+    benchmark_id: tetris-v1
+    experiment_id: nemotron-planner-qwen-executor
+    case_id: tetris-v1
+    methodology: conductor-nemotron-small
+    harness: opencode-conductor
+    planner_model: nemotron-super-120b
+    executor_model: qwen3.5-9b
+    gateway_model_aliases: [gateway/nemotron-120b-planner, gateway/qwen9b-executor]
+    prompt_variant: nemotron_planner_small_steps_v1
+    langfuse_session_id: bench-tetris-v1-G-001
+    estimated_input_tokens:
+    estimated_output_tokens:
+    actual_input_tokens:
+    actual_output_tokens:
+    estimated_cost_usd:
+    actual_cost_usd:
+    total_wall_time_minutes:
+    turns:
+    human_interventions:
+    functional_score:
+    engineering_score:
+    reproducibility_score:
+    verdict:
+    recommendation:
+    status: pending
+
+  - run_id: tetris-v1-G-002
+    benchmark_id: tetris-v1
+    experiment_id: nemotron-planner-qwen-executor
+    case_id: tetris-v1
+    methodology: conductor-nemotron-small
+    harness: opencode-conductor
+    planner_model: nemotron-super-120b
+    executor_model: qwen3.5-9b
+    gateway_model_aliases: [gateway/nemotron-120b-planner, gateway/qwen9b-executor]
+    prompt_variant: nemotron_planner_small_steps_v1
+    langfuse_session_id: bench-tetris-v1-G-002
+    estimated_input_tokens:
+    estimated_output_tokens:
+    actual_input_tokens:
+    actual_output_tokens:
+    estimated_cost_usd:
+    actual_cost_usd:
+    total_wall_time_minutes:
+    turns:
+    human_interventions:
+    functional_score:
+    engineering_score:
+    reproducibility_score:
+    verdict:
+    recommendation:
+    status: pending
+
+  - run_id: tetris-v1-G-003
+    benchmark_id: tetris-v1
+    experiment_id: nemotron-planner-qwen-executor
+    case_id: tetris-v1
+    methodology: conductor-nemotron-small
+    harness: opencode-conductor
+    planner_model: nemotron-super-120b
+    executor_model: qwen3.5-9b
+    gateway_model_aliases: [gateway/nemotron-120b-planner, gateway/qwen9b-executor]
+    prompt_variant: nemotron_planner_small_steps_v1
+    langfuse_session_id: bench-tetris-v1-G-003
+    estimated_input_tokens:
+    estimated_output_tokens:
+    actual_input_tokens:
+    actual_output_tokens:
+    estimated_cost_usd:
+    actual_cost_usd:
+    total_wall_time_minutes:
+    turns:
+    human_interventions:
+    functional_score:
+    engineering_score:
+    reproducibility_score:
+    verdict:
+    recommendation:
+    status: pending

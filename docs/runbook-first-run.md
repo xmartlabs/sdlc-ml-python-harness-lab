@@ -1,163 +1,211 @@
-# Runbook: primera corrida (Cell A — opencode local Qwen 35B)
+# Runbook: experimentos de benchmark
 
-Esto cubre exactamente una corrida completa de `tetris-v1-A-001`.
-Seguí los pasos en orden; cada uno tiene un comando concreto y una señal de éxito.
-
----
-
-## Cómo funciona la atribución en Langfuse
-
-OpenCode no sabe nada de session_ids ni tags — manda llamadas OpenAI-compatibles al gateway
-sin metadata. La solución: `create_run.py` crea una **virtual key específica del run** en
-LiteLLM con `session_id` y `tags` bakeados adentro. Cuando OpenCode usa esa key como
-`GATEWAY_TOKEN`, LiteLLM propaga esos valores a Langfuse en cada traza — automáticamente.
-
-```
-OpenCode → LiteLLM (key bench-tetris-v1-A-001)
-                 ↳ agrega session_id + tags a cada llamada
-                            → Langfuse  (todas las trazas agrupadas bajo esa session)
-```
+Dos comandos por run. Un modelo a la vez.
 
 ---
 
-## Prerequisitos (hacer una sola vez)
-
-- [ ] Gateway activo en `http://localhost:4000`
-- [ ] Langfuse OTEL activo (ya funciona)
-- [ ] LM Studio o Ollama sirviendo `qwen3.6-35b` con **contexto ≥ 32k**
-- [ ] `LITELLM_MASTER_KEY` en el `.env` de este repo (mismo valor que en ai-gateway)
-- [ ] `make opencode-doctor` verde en este repo
-
----
-
-## Paso 1 — Congelar el `base_commit`
-
-Solo una vez por batch de runs. Fija el punto de partida del sujeto.
+## Setup (una sola vez)
 
 ```bash
-git -C /ruta/a/este/repo rev-parse HEAD
-```
-
-Pegar el SHA en `benchmarks/tetris/runs.yaml`:
-
-```yaml
-base_commit: abc1234   # reemplazá TBD
-```
-
----
-
-## Paso 2 — Registrar la corrida y crear la virtual key
-
-```bash
-uv run python scripts/create_run.py --benchmark tetris-v1 --run tetris-v1-A-001
-```
-
-**Señal de éxito:** imprime el `GATEWAY_TOKEN=sk-...` generado — ese es el key del run.
-
-El script:
-- Crea `data/runs/tetris-v1-A-001/report.md` pre-llenado
-- Marca `status: running` en `runs.yaml`
-- Llama a `POST /key/generate` en el gateway y retorna la key con la session ya bakeada
-
-Si falla con "LITELLM_MASTER_KEY not set": agregar en `.env` (ver `.env.example`).
-
----
-
-## Paso 3 — Aislar el sujeto en un branch
-
-```bash
-git worktree add ../bench-tetris-v1-A-001 -b bench/tetris-v1-A-001 <base_commit>
-cd ../bench-tetris-v1-A-001
 cp .env.example .env
+# Editar .env: GATEWAY_BASE_URL, LITELLM_MASTER_KEY
+# LITELLM_MASTER_KEY = master key de LiteLLM, necesaria para crear keys automáticas por run
 ```
 
-Editar el `.env` del worktree con el snippet que imprimió `create_run.py`:
-
-```bash
-OPENCODE_MODEL=gateway/lmstudio-qwen3.6-35b-build
-OPENCODE_MODEL_PLAN=gateway/lmstudio-qwen3.6-35b-build
-GATEWAY_BASE_URL=http://localhost:4000/v1
-GATEWAY_TOKEN=sk-<key-generada-por-create_run>    # ← la key del run, NO la master key
-```
-
-Verificar que llega:
+Verificar que el gateway responde:
 
 ```bash
 make opencode-doctor
 ```
 
-**Señal de éxito:** todos los checks verdes.
-
 ---
 
-## Paso 4 — Correr la corrida
+## El mapa de experimentos (celdas A–E)
+
+Cada **celda** = una condición experimental fija (modelo + metodología + prompt).  
+Cada **run** (001, 002, 003) = una repetición de esa condición.
+
+| Celda | Nombre | Harness | Planner | Executor | Prompt |
+|-------|--------|---------|---------|----------|--------|
+| **A** | local puro — Qwen 35B | opencode | Qwen 35B | Qwen 35B | incremental |
+| **B** | conductor cloud+local grande | opencode-conductor | GPT-5.5 | Qwen 35B | conductor |
+| **C** | conductor cloud+local chico | opencode-conductor | GPT-5.5 | Qwen 9B | conductor |
+| **D** | conductor local+local | opencode-conductor | Qwen 35B | Qwen 9B | conductor small |
+| **E** | baseline cloud puro | opencode | GPT-5.5 | GPT-5.5 | incremental |
+
+**Regla clave:** no cambiar nada entre runs de la misma celda (mismo modelo, misma key, mismo prompt). El objetivo es medir varianza, no cambiar condiciones.
+
+Ver tabla en vivo (qué está completado, scores, promedios por celda):
 
 ```bash
-make opencode
+make bench-results
 ```
-
-Pegá el prompt de `benchmarks/tetris/prompt_incremental.md`.
-
-Reglas:
-- **Un incremento por turno.** Validá que corre antes de continuar.
-- No modificar el prompt entre los 3 runs de la celda.
-- Anotar cada intervención manual (desbloquear, corregir, reintentar) — es dato.
-
-Verificar en Langfuse: todas las trazas de esta sesión deben aparecer agrupadas bajo
-`session_id = bench-tetris-v1-A-001`.
 
 ---
 
-## Paso 5 — Capturar los artefactos
+## Flujo por run
+
+### 1. Elegir el run_id
+
+Seguir el orden natural dentro de cada celda: A-001, A-002, A-003, luego B-001, etc.  
+Para ver cuáles están pendientes:
 
 ```bash
-# Desde el worktree del sujeto:
-git log --oneline HEAD ^<base_commit>
-git diff <base_commit> HEAD > /ruta/lab/data/runs/tetris-v1-A-001/diff.patch
-git rev-parse HEAD   # result_commit — guardarlo
+make bench-results
 ```
 
-Guardar también screenshot del juego si llegó a correr.
+### 2. Iniciar
+
+```bash
+make bench-start RUN=tetris-v1-A-002
+```
+
+Si la creación automática de key falla (Cloudflare), pasarla manualmente:
+
+```bash
+make bench-start RUN=tetris-v1-A-002 KEY=sk-tu-key
+```
+
+Esto hace todo de una vez:
+- Registra el run (`runs.yaml` → running)
+- Crea `workspace/tetris-v1-A-002/` — aquí escribe OpenCode
+- Genera `data/runs/tetris-v1-A-002/prompt.md` con el workspace path inyectado
+- Escribe `BENCH_CONTEXT.md` (OpenCode lo lee y sabe dónde escribir)
+- Copia el prompt al clipboard
+- Lanza OpenCode
+
+### 3. Correr en OpenCode
+
+```
+Cmd+V → Enter    ← pega el prompt que ya está en el clipboard
+```
+
+Validar cada increment antes de aprobar el siguiente:
+
+```bash
+python workspace/tetris-v1-A-002/main.py
+```
+
+OpenCode escribe en `workspace/tetris-v1-A-002/` — nunca en el root.
+
+### 4. Cerrar (desde otra terminal, o después de cerrar OpenCode)
+
+```bash
+make bench-close RUN=tetris-v1-A-002 SCORE=5 INTERVENTIONS=0
+```
+
+Con notas:
+
+```bash
+make bench-close RUN=tetris-v1-A-002 SCORE=7 INTERVENTIONS=1 NOTES="Llegó a rotación, falló lock"
+```
+
+Esto:
+- Archiva `workspace/tetris-v1-A-002/` → `data/runs/tetris-v1-A-002/workspace/`
+- Genera `diff.patch`
+- Actualiza `runs.yaml` con score e interventions
+- Hace commit
+
+### 5. Ver resultados actualizados
+
+```bash
+make bench-results
+```
 
 ---
 
-## Paso 6 — Score y cerrar
+## Orden sugerido de ejecución
 
-Completar `data/runs/tetris-v1-A-001/report.md` con los valores de `benchmarks/tetris/scoring.md`.
+Completar las 3 repeticiones de cada celda antes de pasar a la siguiente (para tener
+varianza medible). Si tenés dos máquinas, podés correr celdas en paralelo:
 
-Subir scores a Langfuse contra `session_id=bench-tetris-v1-A-001`:
-- `tetris_functional_level` (0–10)
-- `human_interventions` (entero)
-- `runnable` (0/1)
-- `scope_adherence` (0–5)
+```
+A-001 → A-002 → A-003 → (ver avg A) → B-001 → B-002 → B-003 → ... → make bench-results
+```
 
-Actualizar `benchmarks/tetris/runs.yaml`:
+---
+
+## Agregar un modelo nuevo al comparativo
+
+1. Añadir una nueva sección de celda en `benchmarks/tetris/runs.yaml`:
 
 ```yaml
-status: completed
-result_level: <score>
-human_interventions: <n>
-notes: "resumen breve"
+  # --- Cell F: nuevo modelo — descripción ---------------------------------
+  - run_id: tetris-v1-F-001
+    methodology: opencode-local
+    harness: opencode
+    planner_model: <alias-del-modelo>
+    executor_model: <alias-del-modelo>
+    gateway_models: [gateway/<alias>]
+    executor_context: 32768
+    temperature: 0.2
+    prompt_variant: tetris_incremental_v1
+    langfuse_session_id: bench-tetris-v1-F-001
+    virtual_key: bench-opencode-<nombre>
+    branch: bench/tetris-v1-F-001
+    status: pending
+    result_level:
+    human_interventions:
+    notes: ""
+  - run_id: tetris-v1-F-002
+    ... (copiar y ajustar F-002, F-003)
 ```
 
-Limpiar el worktree:
+2. Agregar el modelo al gateway si no está: editar `opencode.json` en la sección
+   `provider.gateway.models` para que aparezca en el selector de OpenCode.
+
+3. Correr normalmente:
 
 ```bash
-git worktree remove ../bench-tetris-v1-A-001
+make bench-start RUN=tetris-v1-F-001
+make bench-close RUN=tetris-v1-F-001 SCORE=X INTERVENTIONS=N
+make bench-results   # ya aparece en la tabla
 ```
 
 ---
 
-## Flujo resumido
+## Keys de LiteLLM (una por run)
 
-```
-1. base_commit en runs.yaml (una vez)
-2. uv run python scripts/create_run.py ...   → imprime GATEWAY_TOKEN del run
-3. git worktree add  →  .env con esa key  →  make opencode-doctor
-4. make opencode  →  pegar prompt_incremental.md  →  un incremento por turno
-5. diff.patch + result_commit + screenshot → data/runs/tetris-v1-A-001/
-6. report.md + scores en Langfuse  →  status: completed en runs.yaml
-7. git worktree remove
+Crear manualmente en la UI del gateway (`GATEWAY_BASE_URL/ui → Keys → New Key`):
+- **Key alias**: el run_id exacto (ej. `tetris-v1-A-002`)
+- **Metadata**: `session_id = bench-tetris-v1-A-002` (para agrupar en Langfuse)
+
+Pasar al comando:
+
+```bash
+make bench-start RUN=tetris-v1-A-002 KEY=sk-tu-key-de-litellm
 ```
 
-Para A-002: repetir desde el paso 2 con `--run tetris-v1-A-002`.
+Una key distinta por run es lo correcto: LiteLLM muestra el uso por key y Langfuse
+agrupa las trazas por `session_id` baked en la key.
+
+---
+
+## Cheatsheet de scoring
+
+| Score | Qué logró |
+|-------|-----------|
+| 0 | No produjo código útil |
+| 1 | Genera archivos pero no corre |
+| 2 | Corre sin crashear |
+| 3 | Abre ventana pygame |
+| 4 | Muestra pieza estática |
+| 5 | Pieza cae |
+| 6 | Movimiento lateral |
+| 7 | Rotación |
+| 8 | Colisiones y lock |
+| 9 | Limpia líneas + score |
+| 10 | Jugable completo (game over, reinicio) |
+
+---
+
+## Dónde ver resultados
+
+| Fuente | Qué muestra |
+|--------|-------------|
+| `make bench-results` | tabla comparativa en vivo: todos los runs, scores, promedios por celda |
+| `data/runs/<run-id>/report.md` | detalle de un run individual |
+| `data/runs/<run-id>/diff.patch` | qué escribió el modelo |
+| LiteLLM UI → Keys | tokens y costo por run (buscar por key alias = run_id) |
+| Langfuse → Sessions | trazas agrupadas por session_id (si la key tiene session_id baked in) |
+| `reports/tetris-v1-results.md` | reporte final narrativo (rellenar cuando todas las celdas terminen) |

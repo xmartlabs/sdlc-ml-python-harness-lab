@@ -201,6 +201,79 @@ opencode:
 	fi
 	@set -a; [ -f .env ] && . ./.env; set +a; opencode
 
+# Start a benchmark run: register, create workspace, inject prompt, launch opencode.
+# Usage: make bench-start RUN=tetris-v1-A-002 [KEY=sk-xxx]
+bench-start:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: make bench-start RUN=tetris-v1-A-002"; exit 1; }
+	@command -v opencode >/dev/null 2>&1 || { echo "❌ opencode not found. Install: brew install anomalyco/tap/opencode"; exit 1; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/bench_start.py --run $(RUN) $(if $(KEY),--key $(KEY),)
+
+# Close a benchmark run: save artifacts, update runs.yaml, commit, clean workspace.
+# Usage: make bench-close RUN=tetris-v1-A-002 SCORE=5 INTERVENTIONS=0 [NOTES="texto"]
+bench-close:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: make bench-close RUN=tetris-v1-A-002 SCORE=5 INTERVENTIONS=0"; exit 1; }
+	@[ -n "$(SCORE)" ] || { echo "❌ SCORE is required (0-10)."; exit 1; }
+	@[ -n "$(INTERVENTIONS)" ] || { echo "❌ INTERVENTIONS is required (0, 1, 2...)."; exit 1; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/bench_close.py --run $(RUN) --score $(SCORE) \
+	  --interventions $(INTERVENTIONS) $(if $(NOTES),--notes "$(NOTES)",)
+
+# Print a live comparison table from runs.yaml. Shows scores, status, and cell averages.
+bench-results:
+	@uv run python scripts/show_results.py
+
+# Run a benchmark end-to-end: prepare workspace, execute, optionally score and close.
+# Usage: make bench-run CASE=tetris-v1 RUN=tetris-v1-A-003 PROMPT=incremental \
+#          EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build SCORE_MODE=interactive
+#
+# Multi-step (auto-chain up to N opencode sessions):
+#   make bench-run ... MAX_STEPS=6 SCORE_MODE=interactive
+#
+# Resume an interrupted run (skip workspace existence check):
+#   make bench-run ... RESUME=1
+#
+# Dry run (print what would happen, write nothing):
+#   make bench-run ... DRY_RUN=1
+bench-run:
+	@[ -n "$(CASE)" ] || { echo "❌ CASE is required. Example: CASE=tetris-v1"; exit 1; }
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-A-003"; exit 1; }
+	@command -v opencode >/dev/null 2>&1 || { echo "❌ opencode not found. Install: brew install anomalyco/tap/opencode"; exit 1; }
+	@if [ ! -d "$$HOME/.config/opencode/node_modules/opencode-conductor-plugin" ]; then \
+	  echo "🔌 Installing opencode-conductor-plugin..."; \
+	  npm install --prefix "$$HOME/.config/opencode" opencode-conductor-plugin; \
+	fi
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/bench_run.py \
+		--case $(CASE) \
+		--run $(RUN) \
+		$(if $(PROMPT),--prompt $(PROMPT),) \
+		$(if $(PLANNER_MODEL),--planner-model $(PLANNER_MODEL),) \
+		$(if $(EXECUTOR_MODEL),--executor-model $(EXECUTOR_MODEL),) \
+		$(if $(SCORE_MODE),--score-mode $(SCORE_MODE),) \
+		$(if $(SCORE),--score $(SCORE),) \
+		$(if $(INTERVENTIONS),--interventions $(INTERVENTIONS),) \
+		$(if $(NOTES),--notes "$(NOTES)",) \
+		$(if $(MAX_STEPS),--max-steps $(MAX_STEPS),) \
+		$(if $(RESUME),--resume,) \
+		$(if $(CREATE_KEY),--create-litellm-key,) \
+		$(if $(DRY_RUN),--dry-run,)
+
+# Reset one run or all runs in a case back to pending so they can be re-run.
+# Usage:
+#   make bench-reset RUN=tetris-v1-A-003           # reset one run to pending
+#   make bench-reset CASE=tetris-v1                # reset ALL runs in a case to pending
+#   make bench-reset RUN=tetris-v1-A-003 CLEAN=1   # also wipe data/runs/<id>/ and workspace/
+#   make bench-reset CASE=tetris-v1 CLEAN=1        # nuclear: reset all + wipe all artifacts
+#   add FORCE=1 to skip confirmation prompts
+bench-reset:
+	@[ -n "$(RUN)$(CASE)" ] || { echo "❌ RUN or CASE is required."; exit 1; }
+	@uv run python scripts/bench_reset.py \
+		$(if $(RUN),--run $(RUN),) \
+		$(if $(CASE),--case $(CASE),) \
+		$(if $(CLEAN),--clean,) \
+		$(if $(FORCE),--force,)
+
 # Verify opencode is installed and the configured local endpoints are reachable.
 opencode-doctor:
 	@set -a; [ -f .env ] && . ./.env; set +a; \
@@ -391,9 +464,12 @@ template-sync-rebase:
 setup-claude-skills:
 	@$(SKILLS_SYNC) link --tool claude
 
-# Materialize OpenCode native skills (.opencode/skills symlinks).
+# Materialize OpenCode native skills (.opencode/skills).
+# No-op: opencode already loads .claude/skills/ which is identical. Generating a
+# second copy causes duplicate-skill warnings in every opencode run. If opencode
+# ever supports per-tool skill paths and this needs to be separated, re-enable.
 setup-opencode-skills:
-	@$(SKILLS_SYNC) link --tool opencode
+	@echo "  setup-opencode-skills: skipped (opencode uses .claude/skills/ — no duplicate needed)"
 
 # Materialize Antigravity native skills (.agents/skills copies + manifest).
 setup-antigravity-skills:
