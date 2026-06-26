@@ -1,0 +1,16 @@
+{
+  "turns": null,
+  "tool_calls": null,
+  "steps": 10,
+  "input_tokens": null,
+  "output_tokens": null,
+  "cost_usd": null,
+  "time_minutes": null,
+  "files_modified": [],
+  "diff_lines": null,
+  "detected_model": null,
+  "detected_session": null,
+  "files_touched": [
+    "main.py"
+  ]
+}

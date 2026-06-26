@@ -272,7 +272,7 @@ runs:
   planner_model: nemotron-super-120b
   executor_model: qwen3.6-35b
   gateway_models:
-  - gateway/nemotron-120b-planner
+  - gateway/nim-nemotron-super-120b
   - gateway/lmstudio-qwen3.6-35b-build
   executor_context: 32768
   temperature: 0.2
@@ -290,7 +290,7 @@ runs:
   planner_model: nemotron-super-120b
   executor_model: qwen3.6-35b
   gateway_models:
-  - gateway/nemotron-120b-planner
+  - gateway/nim-nemotron-super-120b
   - gateway/lmstudio-qwen3.6-35b-build
   executor_context: 32768
   temperature: 0.2
@@ -308,7 +308,7 @@ runs:
   planner_model: nemotron-super-120b
   executor_model: qwen3.6-35b
   gateway_models:
-  - gateway/nemotron-120b-planner
+  - gateway/nim-nemotron-super-120b
   - gateway/lmstudio-qwen3.6-35b-build
   executor_context: 32768
   temperature: 0.2
@@ -326,7 +326,7 @@ runs:
   planner_model: nemotron-super-120b
   executor_model: qwen3.5-9b
   gateway_models:
-  - gateway/nemotron-120b-planner
+  - gateway/nim-nemotron-super-120b
   - gateway/qwen9b-executor
   executor_context: 32768
   temperature: 0.2
@@ -344,7 +344,7 @@ runs:
   planner_model: nemotron-super-120b
   executor_model: qwen3.5-9b
   gateway_models:
-  - gateway/nemotron-120b-planner
+  - gateway/nim-nemotron-super-120b
   - gateway/qwen9b-executor
   executor_context: 32768
   temperature: 0.2
@@ -362,7 +362,7 @@ runs:
   planner_model: nemotron-super-120b
   executor_model: qwen3.5-9b
   gateway_models:
-  - gateway/nemotron-120b-planner
+  - gateway/nim-nemotron-super-120b
   - gateway/qwen9b-executor
   executor_context: 32768
   temperature: 0.2
@@ -434,7 +434,7 @@ runs:
   planner_model: nemotron-super-120b
   executor_model: nemotron-super-120b
   gateway_models:
-  - gateway/nemotron-120b-planner
+  - gateway/nim-nemotron-super-120b
   - gateway/nemotron-120b-executor
   executor_context: 32768
   temperature: 0.2
@@ -452,7 +452,7 @@ runs:
   planner_model: nemotron-super-120b
   executor_model: nemotron-super-120b
   gateway_models:
-  - gateway/nemotron-120b-planner
+  - gateway/nim-nemotron-super-120b
   - gateway/nemotron-120b-executor
   executor_context: 32768
   temperature: 0.2
@@ -470,7 +470,7 @@ runs:
   planner_model: nemotron-super-120b
   executor_model: nemotron-super-120b
   gateway_models:
-  - gateway/nemotron-120b-planner
+  - gateway/nim-nemotron-super-120b
   - gateway/nemotron-120b-executor
   executor_context: 32768
   temperature: 0.2
@@ -498,32 +498,32 @@ runs:
   status: pending
   result_level: null
   human_interventions: null
-  notes: 'FAILED: ran with gateway/nemotron-120b-planner (alias inexistente) → ProviderModelNotFoundError.
+  notes: 'FAILED: ran with gateway/nim-nemotron-super-120b (alias inexistente) → ProviderModelNotFoundError.
     Usar nvidia/nemotron-3-super-120b-a12b.'
 - run_id: tetris-v1-J-002
   methodology: full-effort-nemotron
   harness: opencode
-  planner_model: nemotron-120b-planner
-  executor_model: nemotron-120b-planner
+  planner_model: nim-nemotron-super-120b
+  executor_model: nim-nemotron-super-120b
   gateway_models:
-  - gateway/nemotron-120b-planner
+  - gateway/nim-nemotron-super-120b
   executor_context: 32768
   temperature: 0.2
   prompt_variant: tetris_incremental_v1
   langfuse_session_id: bench-tetris-v1-J-002
   virtual_key: null
   branch: bench/tetris-v1-J-002
-  status: pending
-  result_level: null
-  human_interventions: null
+  status: completed
+  result_level: 8
+  human_interventions: 10
   notes: ''
 - run_id: tetris-v1-J-003
   methodology: full-effort-nemotron
   harness: opencode
-  planner_model: nemotron-120b-planner
-  executor_model: nemotron-120b-planner
+  planner_model: nim-nemotron-super-120b
+  executor_model: nim-nemotron-super-120b
   gateway_models:
-  - gateway/nemotron-120b-planner
+  - gateway/nim-nemotron-super-120b
   executor_context: 32768
   temperature: 0.2
   prompt_variant: tetris_incremental_v1
@@ -547,9 +547,9 @@ runs:
   langfuse_session_id: bench-tetris-v1-K-001
   virtual_key: null
   branch: bench/tetris-v1-K-001
-  status: completed
-  result_level: 9
-  human_interventions: 0
+  status: pending
+  result_level: null
+  human_interventions: null
   notes: ''
 - run_id: tetris-v1-K-002
   methodology: full-effort-qwen35b
