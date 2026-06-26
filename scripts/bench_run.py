@@ -601,6 +601,7 @@ def pull_usage_opencode_db(run_id: str) -> dict | None:
     """Query the local opencode SQLite DB for token usage summed across all sessions for this run.
 
     Matches sessions where the title contains run_id and directory is the repo root.
+    time_minutes = sum of per-session durations (excludes user breaks between steps).
     The gateway always reports cost=0.0, so we leave cost_usd null.
     """
     import sqlite3
@@ -611,7 +612,6 @@ def pull_usage_opencode_db(run_id: str) -> dict | None:
     try:
         con = sqlite3.connect(str(db_path))
         cur = con.cursor()
-        # Match sessions mentioning run_id in the title, restricted to our repo directory
         cur.execute(
             """
             SELECT
@@ -620,7 +620,8 @@ def pull_usage_opencode_db(run_id: str) -> dict | None:
                 SUM(tokens_output) as total_output,
                 SUM(tokens_cache_read) as total_cache_read,
                 SUM(tokens_cache_write) as total_cache_write,
-                SUM(tokens_reasoning) as total_reasoning
+                SUM(tokens_reasoning) as total_reasoning,
+                SUM(time_updated - time_created) as total_active_ms
             FROM session
             WHERE title LIKE ?
               AND directory = ?
@@ -632,9 +633,15 @@ def pull_usage_opencode_db(run_id: str) -> dict | None:
         con.close()
         if not row or row[0] == 0:
             return None
-        session_count, total_input, total_output, cache_read, cache_write, reasoning = (
-            row
-        )
+        (
+            session_count,
+            total_input,
+            total_output,
+            cache_read,
+            cache_write,
+            reasoning,
+            total_active_ms,
+        ) = row
         result: dict = {
             "input_tokens": int(total_input or 0) or None,
             "output_tokens": int(total_output or 0) or None,
@@ -647,6 +654,9 @@ def pull_usage_opencode_db(run_id: str) -> dict | None:
             result["tokens_cache_write"] = int(cache_write)
         if session_count and session_count > 1:
             result["turns"] = int(session_count)
+        if total_active_ms and total_active_ms > 0:
+            # Sum of per-session durations = actual LLM execution time (excludes user breaks between steps)
+            result["time_minutes"] = round(total_active_ms / 60000.0, 1)
         return result
     except Exception:
         return None
