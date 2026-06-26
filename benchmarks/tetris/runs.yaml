@@ -49,9 +49,9 @@ runs:
   langfuse_session_id: bench-tetris-v1-A-003
   virtual_key: bench-opencode-local
   branch: bench/tetris-v1-A-003
-  status: completed
-  result_level: 2
-  human_interventions: 0
+  status: pending
+  result_level: null
+  human_interventions: null
   notes: ''
 - run_id: tetris-v1-B-001
   methodology: conductor-cloud-local
@@ -482,36 +482,31 @@ runs:
   result_level: null
   human_interventions: null
   notes: ''
-# ---------------------------------------------------------------------------
-# Cell J — full-effort-cloud  (techo de completitud: MAX_STEPS=10, gpt-5.5)
-# Misma configuración que Cell E pero con MAX_STEPS=10 en el comando bench-run.
-# Permite medir cuánto sube el nivel funcional cuando el modelo tiene pasos
-# suficientes para completar los 8 incrementos del prompt incremental.
-# ---------------------------------------------------------------------------
 - run_id: tetris-v1-J-001
-  methodology: full-effort-cloud
+  methodology: full-effort-nemotron
   harness: opencode
-  planner_model: gpt-5.5
-  executor_model: gpt-5.5
+  planner_model: nemotron-3-super-120b-a12b
+  executor_model: nemotron-3-super-120b-a12b
   gateway_models:
-  - gateway/gpt-5.5
+  - nvidia/nemotron-3-super-120b-a12b
   executor_context: 32768
   temperature: 0.2
   prompt_variant: tetris_incremental_v1
   langfuse_session_id: bench-tetris-v1-J-001
   virtual_key: null
   branch: bench/tetris-v1-J-001
-  status: completed
-  result_level: 0
-  human_interventions: 0
-  notes: 'Full-effort reference cell. Use MAX_STEPS=10 to cover all 8 incremental steps plus buffer.'
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: 'FAILED: ran with gateway/nemotron-120b-planner (alias inexistente) → ProviderModelNotFoundError.
+    Usar nvidia/nemotron-3-super-120b-a12b.'
 - run_id: tetris-v1-J-002
-  methodology: full-effort-cloud
+  methodology: full-effort-nemotron
   harness: opencode
-  planner_model: gpt-5.5
-  executor_model: gpt-5.5
+  planner_model: nemotron-120b-planner
+  executor_model: nemotron-120b-planner
   gateway_models:
-  - gateway/gpt-5.5
+  - gateway/nemotron-120b-planner
   executor_context: 32768
   temperature: 0.2
   prompt_variant: tetris_incremental_v1
@@ -521,14 +516,14 @@ runs:
   status: pending
   result_level: null
   human_interventions: null
-  notes: 'Full-effort reference cell. Use MAX_STEPS=10 to cover all 8 incremental steps plus buffer.'
+  notes: ''
 - run_id: tetris-v1-J-003
-  methodology: full-effort-cloud
+  methodology: full-effort-nemotron
   harness: opencode
-  planner_model: gpt-5.5
-  executor_model: gpt-5.5
+  planner_model: nemotron-120b-planner
+  executor_model: nemotron-120b-planner
   gateway_models:
-  - gateway/gpt-5.5
+  - gateway/nemotron-120b-planner
   executor_context: 32768
   temperature: 0.2
   prompt_variant: tetris_incremental_v1
@@ -538,4 +533,55 @@ runs:
   status: pending
   result_level: null
   human_interventions: null
-  notes: 'Full-effort reference cell. Use MAX_STEPS=10 to cover all 8 incremental steps plus buffer.'
+  notes: ''
+- run_id: tetris-v1-K-001
+  methodology: full-effort-qwen35b
+  harness: opencode
+  planner_model: qwen3.6-35b
+  executor_model: qwen3.6-35b
+  gateway_models:
+  - gateway/lmstudio-qwen3.6-35b-build
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_incremental_v1
+  langfuse_session_id: bench-tetris-v1-K-001
+  virtual_key: null
+  branch: bench/tetris-v1-K-001
+  status: completed
+  result_level: 9
+  human_interventions: 0
+  notes: ''
+- run_id: tetris-v1-K-002
+  methodology: full-effort-qwen35b
+  harness: opencode
+  planner_model: qwen3.6-35b
+  executor_model: qwen3.6-35b
+  gateway_models:
+  - gateway/lmstudio-qwen3.6-35b-build
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_incremental_v1
+  langfuse_session_id: bench-tetris-v1-K-002
+  virtual_key: null
+  branch: bench/tetris-v1-K-002
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: ''
+- run_id: tetris-v1-K-003
+  methodology: full-effort-qwen35b
+  harness: opencode
+  planner_model: qwen3.6-35b
+  executor_model: qwen3.6-35b
+  gateway_models:
+  - gateway/lmstudio-qwen3.6-35b-build
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_incremental_v1
+  langfuse_session_id: bench-tetris-v1-K-003
+  virtual_key: null
+  branch: bench/tetris-v1-K-003
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: ''
