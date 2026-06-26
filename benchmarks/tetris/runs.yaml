@@ -509,7 +509,7 @@ runs:
   - gateway/nim-nemotron-super-120b
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_incremental_v1
+  prompt_variant: tetris_sdlc_v1
   langfuse_session_id: bench-tetris-v1-J-002
   virtual_key: null
   branch: bench/tetris-v1-J-002
@@ -526,7 +526,7 @@ runs:
   - gateway/nim-nemotron-super-120b
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_incremental_v1
+  prompt_variant: tetris_sdlc_v1
   langfuse_session_id: bench-tetris-v1-J-003
   virtual_key: null
   branch: bench/tetris-v1-J-003
@@ -543,7 +543,7 @@ runs:
   - gateway/lmstudio-qwen3.6-35b-build
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_incremental_v1
+  prompt_variant: tetris_sdlc_v1
   langfuse_session_id: bench-tetris-v1-K-001
   virtual_key: null
   branch: bench/tetris-v1-K-001
@@ -560,7 +560,7 @@ runs:
   - gateway/lmstudio-qwen3.6-35b-build
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_incremental_v1
+  prompt_variant: tetris_sdlc_v1
   langfuse_session_id: bench-tetris-v1-K-002
   virtual_key: null
   branch: bench/tetris-v1-K-002
@@ -577,7 +577,7 @@ runs:
   - gateway/lmstudio-qwen3.6-35b-build
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_incremental_v1
+  prompt_variant: tetris_sdlc_v1
   langfuse_session_id: bench-tetris-v1-K-003
   virtual_key: null
   branch: bench/tetris-v1-K-003

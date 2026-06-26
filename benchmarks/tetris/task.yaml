@@ -45,6 +45,7 @@ prompts:
   naive:       benchmarks/tetris/prompt_naive.md        # variant id: tetris_naive_v1
   incremental: benchmarks/tetris/prompt_incremental.md  # variant id: tetris_incremental_v1
   conductor:   benchmarks/tetris/prompt_conductor.md    # variant id: tetris_conductor_v1
+  sdlc:        benchmarks/tetris/prompt_sdlc.md         # variant id: tetris_sdlc_v1
 
 experiment_matrix: benchmarks/tetris/runs.yaml
 scoring_rubric:    benchmarks/tetris/scoring.md

@@ -269,20 +269,53 @@ def generate_prompt(
     return prompt_path
 
 
-def generate_continuation_prompt(run_id: str, step_n: int, steps_dir: Path) -> Path:
-    """Write a continuation prompt for step N (step > 1) in an incremental run."""
-    text = (
-        f"<!-- Continuation step {step_n} for RUN_ID={run_id} -->\n\n"
-        f"This is continuation step {step_n} for RUN_ID={run_id}.\n\n"
-        f"Continue from the existing workspace. Do NOT restart from scratch.\n"
-        f"Do NOT rewrite unrelated code.\n\n"
-        f"1. Inspect `workspace/{run_id}/main.py` and understand the current state.\n"
-        f"2. Implement only the next missing Tetris milestone.\n"
-        f"3. Validate with: `python workspace/{run_id}/main.py`\n"
-        f"4. Stop after ONE verifiable increment.\n"
-        f"5. State clearly what you implemented and what the next recommended increment is.\n"
-        f"6. If the game is complete (all milestones done), say: DONE\n"
-    )
+def generate_continuation_prompt(
+    run_id: str, step_n: int, steps_dir: Path, workspace_dir: Path | None = None
+) -> Path:
+    """Write a continuation prompt for step N (step > 1).
+
+    If PLAN.md exists in the workspace (SDLC mode), injects the plan so the model
+    resumes from documented state rather than rediscovering code from scratch.
+    Otherwise falls back to a generic increment prompt.
+    """
+    plan_md: str | None = None
+    if workspace_dir is not None:
+        plan_file = workspace_dir / "PLAN.md"
+        if plan_file.exists():
+            plan_md = plan_file.read_text().strip()
+
+    if plan_md:
+        text = (
+            f"<!-- SDLC continuation step {step_n} for RUN_ID={run_id} -->\n\n"
+            f"# Tetris — Session {step_n}\n\n"
+            f"You are continuing an ongoing build. Your plan and decision records are below.\n\n"
+            f"---\n\n"
+            f"## Current plan (from `workspace/{run_id}/PLAN.md`)\n\n"
+            f"{plan_md}\n\n"
+            f"---\n\n"
+            f"## Your task for this session\n\n"
+            f"1. Read the plan above — find the first unchecked milestone (`[ ]`).\n"
+            f"2. Implement **that milestone only**. Do not touch completed milestones.\n"
+            f"3. Validate: `python workspace/{run_id}/main.py` must run without error.\n"
+            f"4. Update `workspace/{run_id}/PLAN.md`:\n"
+            f"   - Mark the milestone as `[x]` (done)\n"
+            f"   - Add an ADR if you made any non-obvious architecture decision\n"
+            f"   - Append to Session Log: `Session {step_n}: ✅ Milestone N — <what you built>`\n"
+            f"5. If ALL milestones are `[x]`, say: DONE\n"
+        )
+    else:
+        text = (
+            f"<!-- Continuation step {step_n} for RUN_ID={run_id} -->\n\n"
+            f"This is continuation step {step_n} for RUN_ID={run_id}.\n\n"
+            f"Continue from the existing workspace. Do NOT restart from scratch.\n"
+            f"Do NOT rewrite unrelated code.\n\n"
+            f"1. Inspect `workspace/{run_id}/main.py` and understand the current state.\n"
+            f"2. Implement only the next missing Tetris milestone.\n"
+            f"3. Validate with: `python workspace/{run_id}/main.py`\n"
+            f"4. Stop after ONE verifiable increment.\n"
+            f"5. State clearly what you implemented and what the next recommended increment is.\n"
+            f"6. If the game is complete (all milestones done), say: DONE\n"
+        )
     path = steps_dir / f"step-{step_n}-prompt.md"
     path.write_text(text)
     return path
@@ -1025,7 +1058,10 @@ def main(argv: list[str] | None = None) -> int:
                     step_prompt_path = prompt_path
                 else:
                     step_prompt_path = generate_continuation_prompt(
-                        args.run, step_n, steps_dir
+                        args.run,
+                        step_n,
+                        steps_dir,
+                        workspace_dir=WORKSPACE_ROOT / args.run,
                     )
                     # Also copy step prompt to clipboard so user can paste if needed
                     copy_to_clipboard(step_prompt_path.read_text())

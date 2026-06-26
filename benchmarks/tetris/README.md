@@ -14,7 +14,7 @@ Cada comando prepara el workspace, ejecuta hasta 10 sesiones encadenadas de open
 
 ---
 
-### Qwen3.6 35B local — Cell K ✅ funciona ahora
+### Qwen3.6 35B local — Cell K ✅ funciona ahora (modo SDLC)
 
 **Prerequisito:** LM Studio corriendo con el modelo `qwen3.6-35b` cargado.
 
@@ -23,7 +23,7 @@ Cada comando prepara el workspace, ejecuta hasta 10 sesiones encadenadas de open
 make bench-run \
   CASE=tetris-v1 \
   RUN=tetris-v1-K-001 \
-  PROMPT=incremental \
+  PROMPT=sdlc \
   EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build \
   MAX_STEPS=10 \
   SCORE_MODE=interactive
@@ -33,14 +33,14 @@ make bench-run \
 
 ---
 
-### Nemotron Super 120B — Cell J ✅ vía AI gateway
+### Nemotron Super 120B — Cell J ✅ vía AI gateway (modo SDLC)
 
 ```bash
 # J-002  (J-001 cerrada con error de config anterior)
 make bench-run \
   CASE=tetris-v1 \
   RUN=tetris-v1-J-002 \
-  PROMPT=incremental \
+  PROMPT=sdlc \
   EXECUTOR_MODEL=gateway/nim-nemotron-super-120b \
   MAX_STEPS=10 \
   SCORE_MODE=interactive
@@ -55,7 +55,7 @@ make bench-run \
 **Prerequisito:** `GATEWAY_TOKEN` en `.env` con acceso al gateway LiteLLM configurado.
 
 ```bash
-# E-001
+# E-001  (modo incremental, baseline)
 make bench-run \
   CASE=tetris-v1 \
   RUN=tetris-v1-E-001 \
