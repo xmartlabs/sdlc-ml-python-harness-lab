@@ -73,6 +73,7 @@ except ImportError:
 VARIANT_TO_SHORT: dict[str, str] = {
     "tetris_naive_v1": "naive",
     "tetris_incremental_v1": "incremental",
+    "tetris_sdlc_v1": "sdlc",
     "tetris_conductor_v1": "conductor",
     "tetris_conductor_small_steps_v1": "conductor",
     "nemotron_planner_v1": "conductor",
@@ -596,6 +597,61 @@ def pull_usage_litellm(run_id: str) -> dict | None:
     return None
 
 
+def pull_usage_opencode_db(run_id: str) -> dict | None:
+    """Query the local opencode SQLite DB for token usage summed across all sessions for this run.
+
+    Matches sessions where the title contains run_id and directory is the repo root.
+    The gateway always reports cost=0.0, so we leave cost_usd null.
+    """
+    import sqlite3
+
+    db_path = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+    if not db_path.exists():
+        return None
+    try:
+        con = sqlite3.connect(str(db_path))
+        cur = con.cursor()
+        # Match sessions mentioning run_id in the title, restricted to our repo directory
+        cur.execute(
+            """
+            SELECT
+                COUNT(*) as session_count,
+                SUM(tokens_input) as total_input,
+                SUM(tokens_output) as total_output,
+                SUM(tokens_cache_read) as total_cache_read,
+                SUM(tokens_cache_write) as total_cache_write,
+                SUM(tokens_reasoning) as total_reasoning
+            FROM session
+            WHERE title LIKE ?
+              AND directory = ?
+              AND (tokens_input > 0 OR tokens_output > 0)
+            """,
+            (f"%{run_id}%", str(REPO_ROOT)),
+        )
+        row = cur.fetchone()
+        con.close()
+        if not row or row[0] == 0:
+            return None
+        session_count, total_input, total_output, cache_read, cache_write, reasoning = (
+            row
+        )
+        result: dict = {
+            "input_tokens": int(total_input or 0) or None,
+            "output_tokens": int(total_output or 0) or None,
+        }
+        if reasoning:
+            result["tokens_reasoning"] = int(reasoning)
+        if cache_read:
+            result["tokens_cache_read"] = int(cache_read)
+        if cache_write:
+            result["tokens_cache_write"] = int(cache_write)
+        if session_count and session_count > 1:
+            result["turns"] = int(session_count)
+        return result
+    except Exception:
+        return None
+
+
 def pull_usage_langfuse(session_id: str) -> dict | None:
     secret = os.environ.get("LANGFUSE_SECRET_KEY", "")
     public = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
@@ -773,6 +829,7 @@ def close_run(
     score: int,
     interventions: int,
     notes: str,
+    usage: dict | None = None,
 ) -> None:
     workspace = WORKSPACE_ROOT / args.run
     diff_lines = 0
@@ -826,6 +883,7 @@ def close_run(
 
     results_path = runs_path.parent / "results.csv"
     parts = args.run.split("-")
+    u = usage or {}
     update_results_csv(
         results_path,
         {
@@ -839,6 +897,12 @@ def close_run(
             "executor_model": args.executor_model or run.get("executor_model", ""),
             "executor_context": str(run.get("executor_context", "")),
             "temperature": str(run.get("temperature", "")),
+            "requests": str(u.get("requests") or ""),
+            "input_tokens": str(u.get("input_tokens") or ""),
+            "output_tokens": str(u.get("output_tokens") or ""),
+            "cost_usd": str(u.get("cost_usd") or ""),
+            "time_minutes": str(u.get("time_minutes") or ""),
+            "turns": str(u.get("turns") or ""),
             "diff_lines": str(diff_lines) if diff_lines else "",
             "functional_level": str(score),
             "human_interventions": str(interventions),
@@ -849,26 +913,16 @@ def close_run(
     )
     print("  results.csv updated")
 
-    files_to_stage = [
-        str(out_dir.relative_to(REPO_ROOT)),
-        str(runs_path.relative_to(REPO_ROOT)),
-        str(results_path.relative_to(REPO_ROOT)),
-        "BENCH_CONTEXT.md",
-    ]
-    _run_git(["git", "add", *files_to_stage], cwd=REPO_ROOT)
     notes_suffix = f", {notes}" if notes else ""
     commit_msg = (
         f"bench: close {args.run} "
         f"(score={score}/10, interventions={interventions}{notes_suffix})"
     )
-    result = _run_git(["git", "commit", "-m", commit_msg], cwd=REPO_ROOT)
-    if result.returncode == 0:
-        sha = result.stdout.strip().split("\n")[0]
-        print(f"  git commit: {sha}")
-    else:
-        print(
-            f"  ⚠️  git commit skipped: {result.stderr.strip() or 'nothing to commit'}"
-        )
+    print("  Suggested commit:")
+    print(
+        f"    git add data/runs/{args.run}/ benchmarks/tetris/runs.yaml benchmarks/tetris/results.csv BENCH_CONTEXT.md"
+    )
+    print(f'    git commit -m "{commit_msg}"')
 
 
 # ---------------------------------------------------------------------------
@@ -1126,9 +1180,15 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print("  [4/5] Writing usage skeleton...")
         log_usage = parse_log_usage(opencode_log)
-        usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id) or {}
+        remote_usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id)
+        db_usage = pull_usage_opencode_db(args.run)
+        usage: dict = {}
         if log_usage:
-            usage = {**log_usage, **usage}
+            usage.update(log_usage)
+        if db_usage:
+            usage.update(db_usage)
+        if remote_usage:
+            usage.update(remote_usage)
         write_usage_json(out_dir, usage or None)
         print("=" * 66)
         return 0
@@ -1196,11 +1256,14 @@ def main(argv: list[str] | None = None) -> int:
 
     log_usage = parse_log_usage(opencode_log)
     remote_usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id)
+    db_usage = pull_usage_opencode_db(args.run)
 
-    # Merge: remote values (real tokens/cost) take precedence over log estimates
+    # Merge priority (highest wins): remote API > opencode DB > log estimates
     merged_usage: dict = {}
     if log_usage:
         merged_usage.update(log_usage)
+    if db_usage:
+        merged_usage.update(db_usage)
     if remote_usage:
         merged_usage.update(remote_usage)
     if completed_steps > 1:
@@ -1223,7 +1286,7 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print("  [5/5] Closing run...")
         s, i, n = score_data
-        close_run(args, run, runs_path, out_dir, s, i, n)
+        close_run(args, run, runs_path, out_dir, s, i, n, usage=merged_usage or None)
     else:
         print()
         print("  [5/5] No score available — run left open.")
