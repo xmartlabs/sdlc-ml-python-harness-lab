@@ -165,7 +165,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=1,
         metavar="N",
         help="Max number of opencode execution steps (default: 1). "
-        "For incremental benchmarks, set to 6–10 to chain multiple increments automatically.",
+        "For incremental benchmarks, set to 6-10 to chain multiple increments automatically.",
     )
     p.add_argument(
         "--resume",
@@ -344,9 +344,7 @@ def validate_workspace(workspace: Path, run_id: str, resume: bool) -> None:
         )
 
 
-def find_next_run(
-    runs_path: Path, current_run_id: str, prompt_short: str | None
-) -> dict | None:
+def find_next_run(runs_path: Path, current_run_id: str) -> dict | None:
     """Return the next pending run after current_run_id, or None."""
     data = yaml.safe_load(runs_path.read_text())
     runs = data.get("runs", [])
@@ -643,11 +641,10 @@ def score_sanity_check(
     warnings = []
 
     for threshold, patterns, label in SCORE_CHECKS:
-        if score >= threshold:
-            if not any(p.lower() in text_lower for p in patterns):
-                warnings.append(
-                    f"  ⚠️  score={score} >= {threshold} but no {label} found in main.py"
-                )
+        if score >= threshold and not any(p.lower() in text_lower for p in patterns):
+            warnings.append(
+                f"  ⚠️  score={score} >= {threshold} but no {label} found in main.py"
+            )
 
     if not warnings:
         return True
@@ -1193,7 +1190,7 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print("  Next:")
     print("    make bench-results")
-    next_run = find_next_run(runs_path, args.run, prompt_short)
+    next_run = find_next_run(runs_path, args.run)
     if next_run:
         nr_id = next_run["run_id"]
         nr_models = next_run.get("gateway_models", [])

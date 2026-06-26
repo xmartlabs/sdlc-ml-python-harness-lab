@@ -126,9 +126,6 @@ def remove_from_csv(results_path: Path, run_id: str) -> bool:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames or []
         rows = [r for r in reader if r.get("run_id") != run_id]
-        removed = (
-            len(list(csv.DictReader(results_path.open()))) - len(rows) + 1
-        )  # rough
 
     out = io.StringIO()
     writer = csv.DictWriter(out, fieldnames=fieldnames, extrasaction="ignore")
