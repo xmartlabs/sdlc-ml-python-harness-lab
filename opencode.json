@@ -35,6 +35,7 @@
         "gpt-5.5": { "name": "GPT-5.5 (cloud, plan — default)" },
         "gpt-5": { "name": "GPT-5 (cloud, plan — cheaper)" },
         "claude-sonnet-4.6": { "name": "Claude Sonnet 4.6 (cloud, plan — last resort, Bedrock ~2x)" },
+        "nim-nemotron-super-120b": { "name": "Nemotron Super 120B (NVIDIA NIM, via gateway)" },
         "auto": { "name": "Auto router (complexity-tiered)" }
       }
     },
@@ -46,7 +47,10 @@
         "apiKey": "{env:NVIDIA_API_KEY}"
       },
       "models": {
-        "nvidia/nemotron-3-super-120b-a12b": { "name": "Nemotron 3 Super 120B (free, planning)" }
+        "nemotron-super-120b": {
+          "name": "Nemotron Super 120B (NVIDIA NIM, free tier)",
+          "modelId": "nvidia/nemotron-3-super-120b-a12b"
+        }
       }
     },
     "ollama": {

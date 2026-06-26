@@ -109,17 +109,17 @@ SCORE_CHECKS: list[tuple[int, list[str], str]] = [
     ),
 ]
 
-# Signals that indicate the agent has finished this increment and wants a new session
+# Signals that indicate the *entire game* is complete — triggers early exit from the
+# multi-step loop.  Must NOT match normal per-increment completion messages like
+# "DONE: Increment 1 complete" or "NEXT: open a new chat for increment 2", which the
+# incremental prompt instructs the agent to emit after every single step.
 _STOP_RE = re.compile(
-    r"\bDONE\b"
-    r"|NEXT increment"
-    r"|open a new (chat|conversation|session)"
-    r"|start a new (chat|conversation|session)"
-    r"|stop after this increment"
-    r"|implementation (is |is now )?complete"
-    r"|tetris is complete"
-    r"|game is complete"
-    r"|milestone (complete|achieved|done)",
+    r"tetris is (fully )?complete"
+    r"|game is (fully )?complete"
+    r"|all (8 )?milestones (done|complete|achieved|finished)"
+    r"|level 10 (reached|achieved|complete)"
+    r"|playable tetris (is )?complete"
+    r"|all increments (done|complete|finished)",
     re.IGNORECASE,
 )
 
