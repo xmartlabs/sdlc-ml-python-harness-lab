@@ -85,6 +85,44 @@ make bench-run \
 
 ---
 
+### GPT-4o-mini cloud — Cell L ⚠️ requiere GATEWAY_TOKEN
+
+**Prerequisito:** `GATEWAY_TOKEN` en `.env` con acceso al gateway LiteLLM para OpenAI.
+
+```bash
+# L-001  (modo sdlc)
+make bench-run \
+  CASE=tetris-v1 \
+  RUN=tetris-v1-L-001 \
+  PROMPT=sdlc \
+  EXECUTOR_MODEL=openai/gpt-4o-mini \
+  MAX_STEPS=10 \
+  SCORE_MODE=interactive
+
+# L-002 / L-003: cambiar solo RUN=tetris-v1-L-002  (o L-003)
+```
+
+---
+
+### Kimi-K2.6 cloud — Cell M ⚠️ requiere GATEWAY_TOKEN
+
+**Prerequisito:** `GATEWAY_TOKEN` en `.env` con acceso al gateway LiteLLM para Moonshot AI.
+
+```bash
+# M-001  (modo sdlc)
+make bench-run \
+  CASE=tetris-v1 \
+  RUN=tetris-v1-M-001 \
+  PROMPT=sdlc \
+  EXECUTOR_MODEL=openai/moonshotai/kimi-k2.6 \
+  MAX_STEPS=10 \
+  SCORE_MODE=interactive
+
+# M-002 / M-003: cambiar solo RUN=tetris-v1-M-002  (o M-003)
+```
+
+---
+
 ## Resetear y empezar de cero
 
 ```bash
