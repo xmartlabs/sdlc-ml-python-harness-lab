@@ -74,6 +74,7 @@ VARIANT_TO_SHORT: dict[str, str] = {
     "tetris_naive_v1": "naive",
     "tetris_incremental_v1": "incremental",
     "tetris_sdlc_v1": "sdlc",
+    "tetris_sdlc_full_v1": "sdlc_full",
     "tetris_conductor_v1": "conductor",
     "tetris_conductor_small_steps_v1": "conductor",
     "nemotron_planner_v1": "conductor",

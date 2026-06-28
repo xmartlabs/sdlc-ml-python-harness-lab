@@ -1,0 +1,1 @@
+../../../.github/skills-external/test-driven-development/testing-anti-patterns.md

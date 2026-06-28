@@ -32,6 +32,44 @@ gate is green.
 5. **CI is read-only.** Use `make fix` / `make format` locally; CI only verifies
    (`make ci` = `make check` + `make check-sync`). See `.github/automation.md`.
 
+## Operating discipline for agents
+
+These rules apply to any agent (any tool) executing a non-trivial coding task.
+
+6. **Mandatory skill flow for full features.** For a new feature, behavior change,
+   UI/game, or multi-step implementation, use the governed skills in order — do not
+   jump straight to code:
+   1. `brainstorming` when requirements/design are not already fixed.
+   2. `writing-plans` or `plan_and_execute_feature` before editing code.
+   3. `test-driven-development` before implementation when behavior is testable.
+   4. `verify_changes` before declaring completion.
+   5. `requesting-code-review` for major features or benchmark deliverables.
+
+   If you skip a skill, state the reason in the run trace. Skip straight to a tiny
+   edit only when the user explicitly asks for one.
+7. **Validate before claiming done.** Never report completion without running the
+   repository's validation gate (prefer `make` targets) and reporting the exact
+   commands and their results. If no suitable target exists, run the most relevant
+   tests/lints directly and explain the fallback.
+8. **Minimize human interventions.** Before asking the user, inspect the repo, read
+   relevant files, run safe read-only commands, and make a reasonable assumption when
+   the next step is low-risk and reversible. Ask only for destructive actions,
+   secrets/credentials, ambiguous product decisions, or irreversible choices — and
+   when you do, state the exact blocker, what you tried, and 1-3 concrete options.
+9. **Stay in scope.** For task- or benchmark-scoped work, edit only inside the
+   requested directory unless the user authorizes repository-level changes. If a
+   change outside scope seems necessary, stop and explain why before editing.
+
+## Run trace & handoff
+
+Leave an auditable trace so a reviewer (human or LLM) can reconstruct the run:
+
+- **At start:** state the governed files you read, the skills you will use (and why),
+  the edit/path boundary, and a short plan with validation steps.
+- **At end:** a concise handoff — skills actually used, files changed, gates/tests run
+  with results, any skipped validation and why, assumptions made, and any human
+  intervention required.
+
 ## Degraded runtimes
 
 On a runtime without sub-agent delegation, the `orchestrator` runs the same phases

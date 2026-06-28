@@ -1,0 +1,1 @@
+../../../.github/skills/bootstrap_project.md

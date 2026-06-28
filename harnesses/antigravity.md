@@ -21,10 +21,14 @@ Antigravity uses. To compare the IDE vs the standalone panel, add another cell w
 ## Procedure (4 steps)
 
 1. **Prepare** — `make bench-antigravity RUN=tetris-v1-N-001`
-   Registers the run, creates `workspace/<id>/`, writes `prompt.md` (resolved from the run's
-   `prompt_variant`, e.g. `tetris_sdlc_v1` for comparability with cells K/L/M), scaffolds
-   `transcript.md` and `notes.md`, copies the prompt to the clipboard, and prints instructions.
-   It does not launch anything.
+   Registers the run, creates `workspace/<id>/`, writes `prompt.md`, scaffolds `transcript.md`
+   and `notes.md`, copies the prompt to the clipboard, and prints instructions. It does not
+   launch anything.
+
+   The N cell defaults to the **`sdlc_full`** prompt: one prompt that drives the full build of
+   all 8 milestones in a single autonomous session (Antigravity is agentic, so it runs straight
+   through — there is no harness loop to advance milestones like opencode has). To run only
+   Milestone 1 (a single opencode-style step), pass `PROMPT=sdlc`.
 
 2. **Run in Antigravity (by hand)** — Open the project in Antigravity (IDE or panel). It reads
    `.agents/rules/GEMINI.md` + `.agents/skills/` automatically. Paste the prompt, work the task

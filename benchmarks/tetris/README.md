@@ -233,9 +233,15 @@ del caso Google (`.agents/rules/GEMINI.md` + skills). Antigravity es human-drive
 headless, la ejecución la maneja una persona. **No toca el flujo opencode.** Detalle completo en
 [`harnesses/antigravity.md`](../../harnesses/antigravity.md).
 
+La celda N usa por defecto el prompt **`sdlc_full`**: un solo prompt que instruye construir los
+**8 milestones en una sesión autónoma** (Antigravity es agéntico y lo hace de corrido). Esto es el
+"caso completo". Si querés solo Milestone 1 (como un step suelto del flujo opencode), pasá
+`PROMPT=sdlc`.
+
 ```bash
-# 1. Preparar: registra, workspace, prompt, plantillas transcript.md/notes.md
+# 1. Preparar: registra, workspace, prompt full (8 milestones), plantillas
 make bench-antigravity RUN=tetris-v1-N-001
+#    Solo Milestone 1:  make bench-antigravity RUN=tetris-v1-N-001 PROMPT=sdlc
 
 # 2. (a mano) Abrir Antigravity, pegar el prompt, trabajar en workspace/<id>/,
 #    pegar el transcript en data/runs/<id>/transcript.md y completar notes.md

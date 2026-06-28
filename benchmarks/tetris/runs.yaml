@@ -548,8 +548,8 @@ runs:
   virtual_key: null
   branch: bench/tetris-v1-K-001
   status: pending
-  result_level:
-  human_interventions:
+  result_level: null
+  human_interventions: null
   notes: ''
 - run_id: tetris-v1-K-002
   methodology: full-effort-qwen35b
@@ -695,13 +695,13 @@ runs:
   gateway_models: []
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_sdlc_v1
+  prompt_variant: tetris_sdlc_full_v1
   langfuse_session_id: bench-tetris-v1-N-001
   virtual_key: null
   branch: bench/tetris-v1-N-001
   status: pending
-  result_level:
-  human_interventions:
+  result_level: null
+  human_interventions: null
   notes: Human-driven Antigravity IDE. executor_model is a label; set to the actual
     Gemini model Antigravity uses.
 - run_id: tetris-v1-N-002
@@ -712,7 +712,7 @@ runs:
   gateway_models: []
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_sdlc_v1
+  prompt_variant: tetris_sdlc_full_v1
   langfuse_session_id: bench-tetris-v1-N-002
   virtual_key: null
   branch: bench/tetris-v1-N-002
@@ -728,7 +728,7 @@ runs:
   gateway_models: []
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_sdlc_v1
+  prompt_variant: tetris_sdlc_full_v1
   langfuse_session_id: bench-tetris-v1-N-003
   virtual_key: null
   branch: bench/tetris-v1-N-003
