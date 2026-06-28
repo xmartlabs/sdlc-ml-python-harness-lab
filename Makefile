@@ -487,6 +487,39 @@ template-sync-rebase:
 	}; \
 	echo "✅ Template rebase completed."
 
+# Selective sync: pull ONLY the governance layer (skills, agents, governance docs,
+# adapter templates) from the template at a tag/branch, then regenerate adapters.
+# Unlike template-sync-merge/-rebase, this does NOT touch your code, Makefile, or data.
+# Usage:
+#   make template-sync                          # latest v* tag, all tools
+#   make template-sync REF=v0.2.0 TOOL=opencode # pin a tag, one tool
+#   make template-sync PREVIEW=1                # show incoming governance diff only
+template-sync:
+	@uv run python scripts/template_sync.py \
+		$(if $(REF),--ref $(REF),) \
+		$(if $(TOOL),--tool $(TOOL),) \
+		$(if $(REMOTE),--remote $(REMOTE),) \
+		$(if $(BRANCH),--branch $(BRANCH),) \
+		$(if $(PREVIEW),--preview,)
+
+# Cut a template release: bump pyproject version, require a CHANGELOG entry, and
+# create an annotated semver tag. Template-side only. Push manually afterwards.
+# Usage: make template-release VERSION=0.2.0
+template-release:
+	@[ -n "$(VERSION)" ] || { echo "❌ VERSION is required. Example: VERSION=0.2.0"; exit 1; }
+	@set -e; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "❌ Working tree is not clean. Commit or stash before releasing."; exit 1; \
+	fi; \
+	grep -q "^## \[$(VERSION)\]" CHANGELOG.md || { \
+		echo "❌ CHANGELOG.md has no '## [$(VERSION)]' section. Add it first."; exit 1; \
+	}; \
+	uv run python -c "import re,pathlib; p=pathlib.Path('pyproject.toml'); t=p.read_text(); p.write_text(re.sub(r'^version = \".*\"', 'version = \"$(VERSION)\"', t, count=1, flags=re.M))"; \
+	git add pyproject.toml CHANGELOG.md; \
+	git commit -m "release: v$(VERSION)"; \
+	git tag -a "v$(VERSION)" -m "Template release v$(VERSION)"; \
+	echo "✅ Tagged v$(VERSION). Push with: git push origin $$(git branch --show-current) --tags"
+
 # =============================================================================
 # AI TOOL SKILLS SYNC
 # Declarative engine: src/ml_python_base/skills_sync, driven by
