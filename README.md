@@ -287,26 +287,52 @@ assessments of AI-assisted coding skill (and what a template can/can't influence
 | `make sync-skills` | Sync external skills, refresh `skills-lock.json`, and refresh Claude and Antigravity native skill layouts |
 | `make purge-external-skills` | Remove all external skills and refresh Claude and Antigravity native skill layouts |
 | `make template-remote-setup` | Add or update the template upstream remote |
+| `make template-sync` | Selective governance sync from a semver tag (recommended) |
+| `make template-sync PREVIEW=1` | Preview the governance diff without applying |
+| `make template-release VERSION=x` | Tag a semver release of this template |
 | `make template-sync-preview` | Fetch template changes and preview incoming commits |
-| `make template-sync-merge` | Merge template branch into current branch |
-| `make template-sync-rebase` | Rebase current branch onto template branch |
+| `make template-sync-merge` | Merge full template branch into current branch |
+| `make template-sync-rebase` | Rebase current branch onto full template branch |
 | `make generate-requirements` | Export `uv.lock` to `requirements.txt` |
 | `make clean` | Remove cache and generated files |
 | `make help` | Show all available commands |
 
-## Template Sync
+## Template Sync & Release
 
-If this repository is used as a long-lived template, derived repositories can keep receiving updates by using a Git remote as upstream.
+This template uses **semver tags** (`vX.Y.Z`) + a CHANGELOG so downstream projects can pin
+to a specific version and adopt improvements incrementally.
 
-Quick setup:
+### For maintainers of this template — cut a release
 
 ```bash
-make template-remote-setup
-make template-sync-preview
-make template-sync-merge
+# 1. Add a ## [X.Y.Z] section to CHANGELOG.md
+# 2. Commit your governance changes normally
+git add .github/ .agents/ CHANGELOG.md && git commit -m "feat: ..."
+
+# 3. Tag the release (bumps pyproject, creates annotated tag)
+make template-release VERSION=0.3.0
+
+# 4. Push branch + tags
+git push origin main --tags
 ```
 
-For a full guide (including conflict resolution and rebase flow), see `docs/template-sync.md`.
+### For downstream projects — adopt a release
+
+```bash
+# Selective sync: governance layer only (skills, agents, rules, adapter templates)
+# Does NOT touch src/, Makefile, data/, or the skills_sync engine
+make template-sync REF=v0.3.0        # adopt a specific version
+make template-sync                    # adopt the latest v* tag
+make template-sync PREVIEW=1          # inspect the diff before applying
+make template-sync TOOL=opencode      # regenerate only one tool's adapter
+```
+
+Review with `git diff`, then `make check-sync && make check`, then commit on a branch.
+
+For the **full release cycle** (when to tag, semver rules, bootstrap for older projects),
+see [docs/updating-existing-projects.md](docs/updating-existing-projects.md).
+For the full sync workflow (conflict resolution, full-repo merge/rebase option),
+see [docs/template-sync.md](docs/template-sync.md).
 
 ## 🧩 Skills Lifecycle (Template)
 

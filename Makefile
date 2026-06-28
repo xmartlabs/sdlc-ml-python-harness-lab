@@ -259,6 +259,40 @@ bench-run:
 		$(if $(CREATE_KEY),--create-litellm-key,) \
 		$(if $(DRY_RUN),--dry-run,)
 
+# Audit the behavior of a completed run: an LLM reads data/runs/<id>/ artifacts
+# (logs, diff, usage, score) and writes a descriptive diagnostic to audit.md.
+# Usage: make bench-audit RUN=tetris-v1-K-001 [AUDITOR_MODEL=gateway/gpt-5.5] [DRY_RUN=1]
+bench-audit:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-K-001"; exit 1; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/bench_audit.py \
+		--run $(RUN) \
+		$(if $(AUDITOR_MODEL),--auditor-model $(AUDITOR_MODEL),) \
+		$(if $(DRY_RUN),--dry-run,)
+
+# Prepare a human-driven Antigravity run: register, workspace, prompt, capture
+# templates. Does NOT touch the opencode flow. Open Antigravity by hand, then close.
+# Usage: make bench-antigravity RUN=tetris-v1-N-001 [PROMPT=sdlc] [BENCHMARK=tetris-v1]
+bench-antigravity:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-N-001"; exit 1; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/bench_antigravity.py \
+		--run $(RUN) \
+		$(if $(PROMPT),--prompt $(PROMPT),) \
+		$(if $(BENCHMARK),--benchmark $(BENCHMARK),)
+
+# Prescriptive audit of the .agents (Antigravity/Gemini) rules from a run: an LLM
+# reads the run evidence vs the current rules and proposes edits to GEMINI.md/skills.
+# Writes data/runs/<id>/agents_audit.md.
+# Usage: make bench-agents-audit RUN=tetris-v1-N-001 [AUDITOR_MODEL=gpt-5.5] [DRY_RUN=1]
+bench-agents-audit:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-N-001"; exit 1; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/bench_agents_audit.py \
+		--run $(RUN) \
+		$(if $(AUDITOR_MODEL),--auditor-model $(AUDITOR_MODEL),) \
+		$(if $(DRY_RUN),--dry-run,)
+
 # Reset one run or all runs in a case back to pending so they can be re-run.
 # Usage:
 #   make bench-reset RUN=tetris-v1-A-003           # reset one run to pending
@@ -452,6 +486,39 @@ template-sync-rebase:
 		exit 1; \
 	}; \
 	echo "✅ Template rebase completed."
+
+# Selective sync: pull ONLY the governance layer (skills, agents, governance docs,
+# adapter templates) from the template at a tag/branch, then regenerate adapters.
+# Unlike template-sync-merge/-rebase, this does NOT touch your code, Makefile, or data.
+# Usage:
+#   make template-sync                          # latest v* tag, all tools
+#   make template-sync REF=v0.2.0 TOOL=opencode # pin a tag, one tool
+#   make template-sync PREVIEW=1                # show incoming governance diff only
+template-sync:
+	@uv run python scripts/template_sync.py \
+		$(if $(REF),--ref $(REF),) \
+		$(if $(TOOL),--tool $(TOOL),) \
+		$(if $(REMOTE),--remote $(REMOTE),) \
+		$(if $(BRANCH),--branch $(BRANCH),) \
+		$(if $(PREVIEW),--preview,)
+
+# Cut a template release: bump pyproject version, require a CHANGELOG entry, and
+# create an annotated semver tag. Template-side only. Push manually afterwards.
+# Usage: make template-release VERSION=0.2.0
+template-release:
+	@[ -n "$(VERSION)" ] || { echo "❌ VERSION is required. Example: VERSION=0.2.0"; exit 1; }
+	@set -e; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "❌ Working tree is not clean. Commit or stash before releasing."; exit 1; \
+	fi; \
+	grep -q "^## \[$(VERSION)\]" CHANGELOG.md || { \
+		echo "❌ CHANGELOG.md has no '## [$(VERSION)]' section. Add it first."; exit 1; \
+	}; \
+	uv run python -c "import re,pathlib; p=pathlib.Path('pyproject.toml'); t=p.read_text(); p.write_text(re.sub(r'^version = \".*\"', 'version = \"$(VERSION)\"', t, count=1, flags=re.M))"; \
+	git add pyproject.toml CHANGELOG.md; \
+	git commit -m "release: v$(VERSION)"; \
+	git tag -a "v$(VERSION)" -m "Template release v$(VERSION)"; \
+	echo "✅ Tagged v$(VERSION). Push with: git push origin $$(git branch --show-current) --tags"
 
 # =============================================================================
 # AI TOOL SKILLS SYNC

@@ -509,7 +509,7 @@ runs:
   - gateway/nim-nemotron-super-120b
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_incremental_v1
+  prompt_variant: tetris_sdlc_v1
   langfuse_session_id: bench-tetris-v1-J-002
   virtual_key: null
   branch: bench/tetris-v1-J-002
@@ -526,7 +526,7 @@ runs:
   - gateway/nim-nemotron-super-120b
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_incremental_v1
+  prompt_variant: tetris_sdlc_v1
   langfuse_session_id: bench-tetris-v1-J-003
   virtual_key: null
   branch: bench/tetris-v1-J-003
@@ -543,7 +543,7 @@ runs:
   - gateway/lmstudio-qwen3.6-35b-build
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_incremental_v1
+  prompt_variant: tetris_sdlc_v1
   langfuse_session_id: bench-tetris-v1-K-001
   virtual_key: null
   branch: bench/tetris-v1-K-001
@@ -560,7 +560,7 @@ runs:
   - gateway/lmstudio-qwen3.6-35b-build
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_incremental_v1
+  prompt_variant: tetris_sdlc_v1
   langfuse_session_id: bench-tetris-v1-K-002
   virtual_key: null
   branch: bench/tetris-v1-K-002
@@ -577,10 +577,161 @@ runs:
   - gateway/lmstudio-qwen3.6-35b-build
   executor_context: 32768
   temperature: 0.2
-  prompt_variant: tetris_incremental_v1
+  prompt_variant: tetris_sdlc_v1
   langfuse_session_id: bench-tetris-v1-K-003
   virtual_key: null
   branch: bench/tetris-v1-K-003
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: ''
+- run_id: tetris-v1-L-001
+  methodology: cloud-gpt4o-mini
+  harness: opencode
+  planner_model: gpt-4o-mini
+  executor_model: gpt-4o-mini
+  gateway_models:
+  - gateway/openai-gpt-4o-mini
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_sdlc_v1
+  langfuse_session_id: bench-tetris-v1-L-001
+  virtual_key: null
+  branch: bench/tetris-v1-L-001
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: GPT-4o-mini via gateway
+- run_id: tetris-v1-L-002
+  methodology: cloud-gpt4o-mini
+  harness: opencode
+  planner_model: gpt-4o-mini
+  executor_model: gpt-4o-mini
+  gateway_models:
+  - gateway/openai-gpt-4o-mini
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_sdlc_v1
+  langfuse_session_id: bench-tetris-v1-L-002
+  virtual_key: null
+  branch: bench/tetris-v1-L-002
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: ''
+- run_id: tetris-v1-L-003
+  methodology: cloud-gpt4o-mini
+  harness: opencode
+  planner_model: gpt-4o-mini
+  executor_model: gpt-4o-mini
+  gateway_models:
+  - gateway/openai-gpt-4o-mini
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_sdlc_v1
+  langfuse_session_id: bench-tetris-v1-L-003
+  virtual_key: null
+  branch: bench/tetris-v1-L-003
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: ''
+- run_id: tetris-v1-M-001
+  methodology: cloud-kimi-k2.6
+  harness: opencode
+  planner_model: kimi-k2.6
+  executor_model: kimi-k2.6
+  gateway_models:
+  - gateway/moonshotai-kimi-k2.6
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_sdlc_v1
+  langfuse_session_id: bench-tetris-v1-M-001
+  virtual_key: null
+  branch: bench/tetris-v1-M-001
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: Kimi-K2.6 via litellm
+- run_id: tetris-v1-M-002
+  methodology: cloud-kimi-k2.6
+  harness: opencode
+  planner_model: kimi-k2.6
+  executor_model: kimi-k2.6
+  gateway_models:
+  - gateway/moonshotai-kimi-k2.6
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_sdlc_v1
+  langfuse_session_id: bench-tetris-v1-M-002
+  virtual_key: null
+  branch: bench/tetris-v1-M-002
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: ''
+- run_id: tetris-v1-M-003
+  methodology: cloud-kimi-k2.6
+  harness: opencode
+  planner_model: kimi-k2.6
+  executor_model: kimi-k2.6
+  gateway_models:
+  - gateway/moonshotai-kimi-k2.6
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_sdlc_v1
+  langfuse_session_id: bench-tetris-v1-M-003
+  virtual_key: null
+  branch: bench/tetris-v1-M-003
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: ''
+- run_id: tetris-v1-N-001
+  methodology: antigravity-ide-human
+  harness: antigravity
+  planner_model: antigravity-gemini
+  executor_model: antigravity-gemini
+  gateway_models: []
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_sdlc_full_v1
+  langfuse_session_id: bench-tetris-v1-N-001
+  virtual_key: null
+  branch: bench/tetris-v1-N-001
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: Human-driven Antigravity IDE. executor_model is a label; set to the actual
+    Gemini model Antigravity uses.
+- run_id: tetris-v1-N-002
+  methodology: antigravity-ide-human
+  harness: antigravity
+  planner_model: antigravity-gemini
+  executor_model: antigravity-gemini
+  gateway_models: []
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_sdlc_full_v1
+  langfuse_session_id: bench-tetris-v1-N-002
+  virtual_key: null
+  branch: bench/tetris-v1-N-002
+  status: pending
+  result_level: null
+  human_interventions: null
+  notes: ''
+- run_id: tetris-v1-N-003
+  methodology: antigravity-ide-human
+  harness: antigravity
+  planner_model: antigravity-gemini
+  executor_model: antigravity-gemini
+  gateway_models: []
+  executor_context: 32768
+  temperature: 0.2
+  prompt_variant: tetris_sdlc_full_v1
+  langfuse_session_id: bench-tetris-v1-N-003
+  virtual_key: null
+  branch: bench/tetris-v1-N-003
   status: pending
   result_level: null
   human_interventions: null

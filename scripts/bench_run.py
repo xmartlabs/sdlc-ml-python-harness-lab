@@ -73,6 +73,8 @@ except ImportError:
 VARIANT_TO_SHORT: dict[str, str] = {
     "tetris_naive_v1": "naive",
     "tetris_incremental_v1": "incremental",
+    "tetris_sdlc_v1": "sdlc",
+    "tetris_sdlc_full_v1": "sdlc_full",
     "tetris_conductor_v1": "conductor",
     "tetris_conductor_small_steps_v1": "conductor",
     "nemotron_planner_v1": "conductor",
@@ -269,20 +271,59 @@ def generate_prompt(
     return prompt_path
 
 
-def generate_continuation_prompt(run_id: str, step_n: int, steps_dir: Path) -> Path:
-    """Write a continuation prompt for step N (step > 1) in an incremental run."""
-    text = (
-        f"<!-- Continuation step {step_n} for RUN_ID={run_id} -->\n\n"
-        f"This is continuation step {step_n} for RUN_ID={run_id}.\n\n"
-        f"Continue from the existing workspace. Do NOT restart from scratch.\n"
-        f"Do NOT rewrite unrelated code.\n\n"
-        f"1. Inspect `workspace/{run_id}/main.py` and understand the current state.\n"
-        f"2. Implement only the next missing Tetris milestone.\n"
-        f"3. Validate with: `python workspace/{run_id}/main.py`\n"
-        f"4. Stop after ONE verifiable increment.\n"
-        f"5. State clearly what you implemented and what the next recommended increment is.\n"
-        f"6. If the game is complete (all milestones done), say: DONE\n"
-    )
+def generate_continuation_prompt(
+    run_id: str, step_n: int, steps_dir: Path, workspace_dir: Path | None = None
+) -> Path:
+    """Write a continuation prompt for step N (step > 1).
+
+    If PLAN.md exists in the workspace (SDLC mode), injects the plan so the model
+    resumes from documented state rather than rediscovering code from scratch.
+    Otherwise falls back to a generic increment prompt.
+    """
+    plan_md: str | None = None
+    if workspace_dir is not None:
+        plan_file = workspace_dir / "PLAN.md"
+        if plan_file.exists():
+            plan_md = plan_file.read_text().strip()
+
+    if plan_md:
+        text = (
+            f"<!-- SDLC continuation step {step_n} for RUN_ID={run_id} -->\n\n"
+            f"# Tetris — Session {step_n}\n\n"
+            f"You are continuing an ongoing build. Your plan and decision records are below.\n\n"
+            f"---\n\n"
+            f"## Current plan (from `workspace/{run_id}/PLAN.md`)\n\n"
+            f"{plan_md}\n\n"
+            f"---\n\n"
+            f"## Your task for this session\n\n"
+            f"1. Read the plan above — find the first unchecked milestone (`[ ]`).\n"
+            f"2. Implement **exactly that ONE milestone**. Do not implement more than\n"
+            f"   one milestone this session, and do not touch completed milestones.\n"
+            f"3. Validate headlessly (a hanging window or a `timeout` is NOT success):\n"
+            f'   `BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python workspace/{run_id}/main.py; echo "exit=$?"`\n'
+            f"   A correct build prints `exit=0`.\n"
+            f"4. Update `workspace/{run_id}/PLAN.md`:\n"
+            f"   - Mark the milestone as `[x]` (done)\n"
+            f"   - Add an ADR if you made any non-obvious architecture decision\n"
+            f"   - Append to Session Log: `Session {step_n}: ✅ Milestone N — <what you built>`\n"
+            f"5. End your response:\n"
+            f"   - If milestones still remain `[ ]`: `DONE: Milestone N complete.`\n"
+            f"   - If and ONLY if every milestone is now `[x]`: `ALL MILESTONES COMPLETE`\n"
+        )
+    else:
+        text = (
+            f"<!-- Continuation step {step_n} for RUN_ID={run_id} -->\n\n"
+            f"This is continuation step {step_n} for RUN_ID={run_id}.\n\n"
+            f"Continue from the existing workspace. Do NOT restart from scratch.\n"
+            f"Do NOT rewrite unrelated code.\n\n"
+            f"1. Inspect `workspace/{run_id}/main.py` and understand the current state.\n"
+            f"2. Implement only the next missing Tetris milestone (exactly one).\n"
+            f"3. Validate headlessly (a `timeout` is NOT success):\n"
+            f'   `BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python workspace/{run_id}/main.py; echo "exit=$?"`\n'
+            f"4. Stop after ONE verifiable increment.\n"
+            f"5. State clearly what you implemented and what the next recommended increment is.\n"
+            f"6. If and ONLY if the game is fully complete, end with: ALL MILESTONES COMPLETE\n"
+        )
     path = steps_dir / f"step-{step_n}-prompt.md"
     path.write_text(text)
     return path
@@ -563,6 +604,71 @@ def pull_usage_litellm(run_id: str) -> dict | None:
     return None
 
 
+def pull_usage_opencode_db(run_id: str) -> dict | None:
+    """Query the local opencode SQLite DB for token usage summed across all sessions for this run.
+
+    Matches sessions where the title contains run_id and directory is the repo root.
+    time_minutes = sum of per-session durations (excludes user breaks between steps).
+    The gateway always reports cost=0.0, so we leave cost_usd null.
+    """
+    import sqlite3
+
+    db_path = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+    if not db_path.exists():
+        return None
+    try:
+        con = sqlite3.connect(str(db_path))
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT
+                COUNT(*) as session_count,
+                SUM(tokens_input) as total_input,
+                SUM(tokens_output) as total_output,
+                SUM(tokens_cache_read) as total_cache_read,
+                SUM(tokens_cache_write) as total_cache_write,
+                SUM(tokens_reasoning) as total_reasoning,
+                SUM(time_updated - time_created) as total_active_ms
+            FROM session
+            WHERE title LIKE ?
+              AND directory = ?
+              AND (tokens_input > 0 OR tokens_output > 0)
+            """,
+            (f"%{run_id}%", str(REPO_ROOT)),
+        )
+        row = cur.fetchone()
+        con.close()
+        if not row or row[0] == 0:
+            return None
+        (
+            session_count,
+            total_input,
+            total_output,
+            cache_read,
+            cache_write,
+            reasoning,
+            total_active_ms,
+        ) = row
+        result: dict = {
+            "input_tokens": int(total_input or 0) or None,
+            "output_tokens": int(total_output or 0) or None,
+        }
+        if reasoning:
+            result["tokens_reasoning"] = int(reasoning)
+        if cache_read:
+            result["tokens_cache_read"] = int(cache_read)
+        if cache_write:
+            result["tokens_cache_write"] = int(cache_write)
+        if session_count and session_count > 1:
+            result["turns"] = int(session_count)
+        if total_active_ms and total_active_ms > 0:
+            # Sum of per-session durations = actual LLM execution time (excludes user breaks between steps)
+            result["time_minutes"] = round(total_active_ms / 60000.0, 1)
+        return result
+    except Exception:
+        return None
+
+
 def pull_usage_langfuse(session_id: str) -> dict | None:
     secret = os.environ.get("LANGFUSE_SECRET_KEY", "")
     public = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
@@ -740,6 +846,7 @@ def close_run(
     score: int,
     interventions: int,
     notes: str,
+    usage: dict | None = None,
 ) -> None:
     workspace = WORKSPACE_ROOT / args.run
     diff_lines = 0
@@ -793,6 +900,7 @@ def close_run(
 
     results_path = runs_path.parent / "results.csv"
     parts = args.run.split("-")
+    u = usage or {}
     update_results_csv(
         results_path,
         {
@@ -806,6 +914,12 @@ def close_run(
             "executor_model": args.executor_model or run.get("executor_model", ""),
             "executor_context": str(run.get("executor_context", "")),
             "temperature": str(run.get("temperature", "")),
+            "requests": str(u.get("requests") or ""),
+            "input_tokens": str(u.get("input_tokens") or ""),
+            "output_tokens": str(u.get("output_tokens") or ""),
+            "cost_usd": str(u.get("cost_usd") or ""),
+            "time_minutes": str(u.get("time_minutes") or ""),
+            "turns": str(u.get("turns") or ""),
             "diff_lines": str(diff_lines) if diff_lines else "",
             "functional_level": str(score),
             "human_interventions": str(interventions),
@@ -816,26 +930,16 @@ def close_run(
     )
     print("  results.csv updated")
 
-    files_to_stage = [
-        str(out_dir.relative_to(REPO_ROOT)),
-        str(runs_path.relative_to(REPO_ROOT)),
-        str(results_path.relative_to(REPO_ROOT)),
-        "BENCH_CONTEXT.md",
-    ]
-    _run_git(["git", "add", *files_to_stage], cwd=REPO_ROOT)
     notes_suffix = f", {notes}" if notes else ""
     commit_msg = (
         f"bench: close {args.run} "
         f"(score={score}/10, interventions={interventions}{notes_suffix})"
     )
-    result = _run_git(["git", "commit", "-m", commit_msg], cwd=REPO_ROOT)
-    if result.returncode == 0:
-        sha = result.stdout.strip().split("\n")[0]
-        print(f"  git commit: {sha}")
-    else:
-        print(
-            f"  ⚠️  git commit skipped: {result.stderr.strip() or 'nothing to commit'}"
-        )
+    print("  Suggested commit:")
+    print(
+        f"    git add data/runs/{args.run}/ benchmarks/tetris/runs.yaml benchmarks/tetris/results.csv BENCH_CONTEXT.md"
+    )
+    print(f'    git commit -m "{commit_msg}"')
 
 
 # ---------------------------------------------------------------------------
@@ -1025,7 +1129,10 @@ def main(argv: list[str] | None = None) -> int:
                     step_prompt_path = prompt_path
                 else:
                     step_prompt_path = generate_continuation_prompt(
-                        args.run, step_n, steps_dir
+                        args.run,
+                        step_n,
+                        steps_dir,
+                        workspace_dir=WORKSPACE_ROOT / args.run,
                     )
                     # Also copy step prompt to clipboard so user can paste if needed
                     copy_to_clipboard(step_prompt_path.read_text())
@@ -1090,9 +1197,15 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print("  [4/5] Writing usage skeleton...")
         log_usage = parse_log_usage(opencode_log)
-        usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id) or {}
+        remote_usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id)
+        db_usage = pull_usage_opencode_db(args.run)
+        usage: dict = {}
         if log_usage:
-            usage = {**log_usage, **usage}
+            usage.update(log_usage)
+        if db_usage:
+            usage.update(db_usage)
+        if remote_usage:
+            usage.update(remote_usage)
         write_usage_json(out_dir, usage or None)
         print("=" * 66)
         return 0
@@ -1160,11 +1273,14 @@ def main(argv: list[str] | None = None) -> int:
 
     log_usage = parse_log_usage(opencode_log)
     remote_usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id)
+    db_usage = pull_usage_opencode_db(args.run)
 
-    # Merge: remote values (real tokens/cost) take precedence over log estimates
+    # Merge priority (highest wins): remote API > opencode DB > log estimates
     merged_usage: dict = {}
     if log_usage:
         merged_usage.update(log_usage)
+    if db_usage:
+        merged_usage.update(db_usage)
     if remote_usage:
         merged_usage.update(remote_usage)
     if completed_steps > 1:
@@ -1187,7 +1303,7 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print("  [5/5] Closing run...")
         s, i, n = score_data
-        close_run(args, run, runs_path, out_dir, s, i, n)
+        close_run(args, run, runs_path, out_dir, s, i, n, usage=merged_usage or None)
     else:
         print()
         print("  [5/5] No score available — run left open.")

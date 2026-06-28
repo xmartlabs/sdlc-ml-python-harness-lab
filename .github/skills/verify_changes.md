@@ -21,6 +21,9 @@ not mutate the tree.
 - The commands run and their results.
 - A pass/fail verdict per gate (format, lint, types, security, tests, sync).
 - For failures: the failing command, the relevant output, and the smallest fix.
+- Relevant manual checks performed (e.g. a CLI/app run, behavior exercised).
+- Known remaining risks.
+- Whether the implementation is ready for review.
 
 ## Execution Rules
 

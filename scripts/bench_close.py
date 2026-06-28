@@ -195,28 +195,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     print("  results.csv updated")
 
-    # 7. Commit
-    files_to_stage = [
-        str((out_dir).relative_to(REPO_ROOT)),
-        str(runs_path.relative_to(REPO_ROOT)),
-        str(results_path.relative_to(REPO_ROOT)),
-        "BENCH_CONTEXT.md",
-    ]
-    _run_git(["git", "add", *files_to_stage], cwd=REPO_ROOT)
-
+    # 7. Suggest commit (user controls what gets committed)
     notes_suffix = f", {args.notes}" if args.notes else ""
     commit_msg = (
         f"bench: close {args.run} "
         f"(score={args.score}/10, interventions={args.interventions}{notes_suffix})"
     )
-    result = _run_git(["git", "commit", "-m", commit_msg], cwd=REPO_ROOT)
-    if result.returncode == 0:
-        sha = result.stdout.strip().split("\n")[0]
-        print(f"  git commit: {sha}")
-    else:
-        print(
-            f"  ⚠️  git commit skipped: {result.stderr.strip() or 'nothing to commit'}"
-        )
+    run_dir = out_dir.relative_to(REPO_ROOT)
+    runs_rel = runs_path.relative_to(REPO_ROOT)
+    results_rel = results_path.relative_to(REPO_ROOT)
+    print("  Suggested commit:")
+    print(f"    git add {run_dir} {runs_rel} {results_rel} BENCH_CONTEXT.md")
+    print(f'    git commit -m "{commit_msg}"')
 
     # 8. Summary
     print()

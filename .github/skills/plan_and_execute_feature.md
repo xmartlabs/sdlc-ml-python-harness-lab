@@ -65,7 +65,11 @@ Deliver a feature through explicit orchestration phases with architecture-safe e
 
 ### Phase 4 - Execution
 
+- Before editing files, publish a short visible plan: scope, files likely to change,
+  tests to add or run, risks/assumptions. (In IDE agents like Antigravity that lack a
+  separate plan surface, state it inline before the first edit.)
 - Implement changes following selected skills and plan order.
+- Execute in small checkpoints; update the plan when it changes.
 - Keep modifications scoped and documented.
 
 ### Phase 5 - Validation
