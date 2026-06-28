@@ -93,9 +93,17 @@ def governance_paths() -> list[str]:
 
 
 def resolve_ref(remote: str, branch: str, ref: str | None) -> tuple[str, bool]:
-    """Return (ref, is_tag). Default: latest v* tag, else <remote>/<branch>."""
+    """Return (ref, is_tag). Default: latest v* tag, else <remote>/<branch>.
+
+    When --ref is a bare branch name (no '/' and not a v* tag), qualify it as
+    <remote>/<ref> so we read from the template remote, not the local branch.
+    """
     if ref:
-        return ref, ref.startswith("v")
+        is_tag = ref.startswith("v")
+        # Bare branch name → qualify with remote so we don't use the local branch
+        if not is_tag and "/" not in ref:
+            ref = f"{remote}/{ref}"
+        return ref, is_tag
     tags = run(
         ["git", "tag", "--list", "v*", "--sort=-v:refname"], capture=True
     ).stdout.split()
