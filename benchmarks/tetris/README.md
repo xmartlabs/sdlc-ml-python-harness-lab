@@ -198,6 +198,34 @@ cat benchmarks/tetris/results.csv  # solo scored
 
 ---
 
+## Auditar el comportamiento de una corrida
+
+Un LLM auditor lee los artefactos que la corrida ya dejó en `data/runs/<id>/`
+(`opencode.log` / `steps/step-*.log`, `diff.patch`, `usage.json`, `metadata.json`,
+el score, y el corpus de reglas que el agente vio en `OPENCODE.md`) y escribe un
+**diagnóstico de comportamiento descriptivo** en `data/runs/<id>/audit.md`.
+
+Cubre cuatro dimensiones: uso de skills/reglas, eficiencia/loops, adherencia al SDLC,
+y puntos de falla. Es descriptivo (no propone ediciones al harness).
+
+**Prerequisito:** la corrida tiene que tener artefactos en `data/runs/<id>/` (ejecutala
+primero con `make bench-run ...`). Necesita `GATEWAY_BASE_URL` y `GATEWAY_TOKEN` en `.env`.
+
+```bash
+# Auditar una corrida con el auditor por defecto (gateway/gpt-5.5)
+make bench-audit RUN=tetris-v1-K-001
+
+# Elegir el modelo auditor
+make bench-audit RUN=tetris-v1-K-001 AUDITOR_MODEL=gateway/claude-sonnet-4.6
+
+# Dry run: ver qué artefactos detecta y el request armado, sin llamar al gateway
+make bench-audit RUN=tetris-v1-K-001 DRY_RUN=1
+```
+
+El modelo auditor también se puede fijar con `AUDITOR_MODEL` en `.env`.
+
+---
+
 ## Archivos de referencia
 
 | Archivo | Rol |

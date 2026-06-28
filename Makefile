@@ -259,6 +259,17 @@ bench-run:
 		$(if $(CREATE_KEY),--create-litellm-key,) \
 		$(if $(DRY_RUN),--dry-run,)
 
+# Audit the behavior of a completed run: an LLM reads data/runs/<id>/ artifacts
+# (logs, diff, usage, score) and writes a descriptive diagnostic to audit.md.
+# Usage: make bench-audit RUN=tetris-v1-K-001 [AUDITOR_MODEL=gateway/gpt-5.5] [DRY_RUN=1]
+bench-audit:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-K-001"; exit 1; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/bench_audit.py \
+		--run $(RUN) \
+		$(if $(AUDITOR_MODEL),--auditor-model $(AUDITOR_MODEL),) \
+		$(if $(DRY_RUN),--dry-run,)
+
 # Reset one run or all runs in a case back to pending so they can be re-run.
 # Usage:
 #   make bench-reset RUN=tetris-v1-A-003           # reset one run to pending
