@@ -296,13 +296,18 @@ def generate_continuation_prompt(
             f"---\n\n"
             f"## Your task for this session\n\n"
             f"1. Read the plan above — find the first unchecked milestone (`[ ]`).\n"
-            f"2. Implement **that milestone only**. Do not touch completed milestones.\n"
-            f"3. Validate: `python workspace/{run_id}/main.py` must run without error.\n"
+            f"2. Implement **exactly that ONE milestone**. Do not implement more than\n"
+            f"   one milestone this session, and do not touch completed milestones.\n"
+            f"3. Validate headlessly (a hanging window or a `timeout` is NOT success):\n"
+            f'   `BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python workspace/{run_id}/main.py; echo "exit=$?"`\n'
+            f"   A correct build prints `exit=0`.\n"
             f"4. Update `workspace/{run_id}/PLAN.md`:\n"
             f"   - Mark the milestone as `[x]` (done)\n"
             f"   - Add an ADR if you made any non-obvious architecture decision\n"
             f"   - Append to Session Log: `Session {step_n}: ✅ Milestone N — <what you built>`\n"
-            f"5. If ALL milestones are `[x]`, say: DONE\n"
+            f"5. End your response:\n"
+            f"   - If milestones still remain `[ ]`: `DONE: Milestone N complete.`\n"
+            f"   - If and ONLY if every milestone is now `[x]`: `ALL MILESTONES COMPLETE`\n"
         )
     else:
         text = (
@@ -311,11 +316,12 @@ def generate_continuation_prompt(
             f"Continue from the existing workspace. Do NOT restart from scratch.\n"
             f"Do NOT rewrite unrelated code.\n\n"
             f"1. Inspect `workspace/{run_id}/main.py` and understand the current state.\n"
-            f"2. Implement only the next missing Tetris milestone.\n"
-            f"3. Validate with: `python workspace/{run_id}/main.py`\n"
+            f"2. Implement only the next missing Tetris milestone (exactly one).\n"
+            f"3. Validate headlessly (a `timeout` is NOT success):\n"
+            f'   `BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python workspace/{run_id}/main.py; echo "exit=$?"`\n'
             f"4. Stop after ONE verifiable increment.\n"
             f"5. State clearly what you implemented and what the next recommended increment is.\n"
-            f"6. If the game is complete (all milestones done), say: DONE\n"
+            f"6. If and ONLY if the game is fully complete, end with: ALL MILESTONES COMPLETE\n"
         )
     path = steps_dir / f"step-{step_n}-prompt.md"
     path.write_text(text)

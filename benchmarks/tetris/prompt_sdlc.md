@@ -5,7 +5,18 @@ All files go inside `workspace/{run_id}/`. Entry point: `workspace/{run_id}/main
 
 ---
 
-## Phase 1 — Plan (do this FIRST, before any code)
+## Phase 0 — Ground (do this BEFORE planning)
+
+Read for context — do not skip, do not modify these files:
+
+- Governance: `.github/architecture.md`, `.github/standards.md`, `.github/domain-boundaries.md`
+- Memory: `memory/context.md`, `memory/learnings.md`
+
+Keep them in mind while you work.
+
+---
+
+## Phase 1 — Plan (before any code)
 
 Create `workspace/{run_id}/PLAN.md` with the following structure:
 
@@ -39,15 +50,29 @@ Create `workspace/{run_id}/PLAN.md` with the following structure:
 
 ---
 
-## Phase 2 — Implement Milestone 1
+## Phase 2 — Implement Milestone 1 ONLY
 
 After writing PLAN.md, implement **only Milestone 1**:
 - Empty pygame window, 300×600 pixels
 - Runs at 60fps
 - Closes cleanly on QUIT event
-- Entry point: `python workspace/{run_id}/main.py`
 
-Validate: `python workspace/{run_id}/main.py` — window must open and close without error.
+**STOP after Milestone 1.** Do NOT start Milestone 2 — later milestones happen in
+later sessions, one per session. Implementing more than Milestone 1 now is a failure.
+
+### Validate headlessly (a hanging window or a timeout is NOT success)
+
+So validation is deterministic and does not block on an open window:
+
+- Make `main.py` support a smoke mode: when env `BENCH_SMOKE=1`, run ~120 frames
+  then exit cleanly with code 0. Normal `python main.py` stays interactive.
+- Run and check the exit code:
+
+  ```bash
+  BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python workspace/{run_id}/main.py; echo "exit=$?"
+  ```
+
+- A correct build prints `exit=0`. Do NOT interpret a `timeout` as success.
 
 ---
 
@@ -63,9 +88,8 @@ After validating Milestone 1:
 
 ## Signal completion
 
-End your response with:
+End your response with EXACTLY this line (and nothing claiming the game is finished):
 
 ```
-DONE: Milestone 1 complete — empty pygame window opens, runs at 60fps, closes cleanly.
-PLAN.md created. Next: Milestone 2 (board grid + static piece).
+DONE: Milestone 1 complete — window opens at 60fps, quits cleanly, smoke check exits 0. Next: Milestone 2.
 ```

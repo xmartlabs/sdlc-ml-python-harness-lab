@@ -226,6 +226,42 @@ El modelo auditor también se puede fijar con `AUDITOR_MODEL` en `.env`.
 
 ---
 
+## Correr con Antigravity (human-driven) — Celda N
+
+Ciclo aparte para correr la tarea con **Google Antigravity** (IDE o panel) y mejorar las reglas
+del caso Google (`.agents/rules/GEMINI.md` + skills). Antigravity es human-driven: no hay CLI
+headless, la ejecución la maneja una persona. **No toca el flujo opencode.** Detalle completo en
+[`harnesses/antigravity.md`](../../harnesses/antigravity.md).
+
+```bash
+# 1. Preparar: registra, workspace, prompt, plantillas transcript.md/notes.md
+make bench-antigravity RUN=tetris-v1-N-001
+
+# 2. (a mano) Abrir Antigravity, pegar el prompt, trabajar en workspace/<id>/,
+#    pegar el transcript en data/runs/<id>/transcript.md y completar notes.md
+
+# 3. Cerrar (genérico, igual que opencode)
+make bench-close RUN=tetris-v1-N-001 SCORE=<0-10> INTERVENTIONS=<N>
+
+# 4. Auditar las reglas .agents (prescriptivo)
+make bench-agents-audit RUN=tetris-v1-N-001
+```
+
+### Auditar las reglas .agents (prescriptivo)
+
+A diferencia de `make bench-audit` (descriptivo, sobre opencode), `make bench-agents-audit` es
+**prescriptivo**: un LLM lee la evidencia de la corrida (`diff.patch`, `transcript.md`,
+`notes.md`, score) contra las reglas actuales (`.agents/rules/GEMINI.md` + skills) y propone
+ediciones concretas a `GEMINI.md` y a las skills, citando evidencia. Escribe
+`data/runs/<id>/agents_audit.md`. Degrada elegante: usa lo que esté presente.
+
+```bash
+make bench-agents-audit RUN=tetris-v1-N-001 DRY_RUN=1   # ver qué detecta, sin gastar tokens
+make bench-agents-audit RUN=tetris-v1-N-001 AUDITOR_MODEL=claude-sonnet-4.6
+```
+
+---
+
 ## Archivos de referencia
 
 | Archivo | Rol |

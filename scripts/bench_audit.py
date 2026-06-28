@@ -49,7 +49,14 @@ from create_run import (
 LOG_CLIP_CHARS = 60_000
 DIFF_CLIP_CHARS = 40_000
 RULES_CLIP_CHARS = 20_000
-DEFAULT_AUDITOR_MODEL = "gateway/gpt-5.5"
+# LiteLLM model name (no opencode "gateway/" prefix — that's opencode-only).
+DEFAULT_AUDITOR_MODEL = "gpt-5.5"
+# Cloudflare in front of the gateway bans the default urllib user-agent
+# (HTTP 1010 browser_signature_banned). Override with a real browser UA.
+GATEWAY_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 SYSTEM_PROMPT = """\
 Sos un auditor de harness de agentes de código. Tu trabajo es leer los artefactos
@@ -87,6 +94,40 @@ Bullets cortos con lo más relevante del comportamiento de esta corrida.
 Escribí en español. Sé concreto y conciso; cada observación debe poder rastrearse
 a la evidencia.
 """
+
+
+def normalize_model_name(model: str) -> str:
+    """Strip the opencode-only "gateway/" prefix so LiteLLM gets its real name.
+
+    opencode addresses models as "<provider>/<model>" (e.g. gateway/gpt-5.5), but
+    LiteLLM's /chat/completions expects the registered name without that provider
+    prefix (e.g. gpt-5.5). Other prefixes (openai/...) are left untouched.
+    """
+    if model.startswith("gateway/"):
+        return model[len("gateway/") :]
+    return model
+
+
+def list_gateway_models() -> list[str]:
+    """Best-effort fetch of available model names from the gateway."""
+    base = os.environ.get("GATEWAY_BASE_URL", "").rstrip("/")
+    token = os.environ.get("GATEWAY_TOKEN", "")
+    if not base or not token:
+        return []
+    req = urllib.request.Request(
+        f"{base}/models",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": GATEWAY_USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
+            data = json.loads(resp.read())
+        return sorted(m["id"] for m in data.get("data", []))
+    except Exception:
+        return []
 
 
 def resolve_runs_path(run_id: str) -> Path:
@@ -213,7 +254,7 @@ def call_gateway(model: str, system: str, user: str) -> str:
         )
     url = f"{base}/chat/completions"
     payload = {
-        "model": model,
+        "model": normalize_model_name(model),
         "temperature": 0.2,
         "messages": [
             {"role": "system", "content": system},
@@ -227,6 +268,9 @@ def call_gateway(model: str, system: str, user: str) -> str:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            # The gateway sits behind Cloudflare, which bans the default
+            # "Python-urllib/x.y" user-agent (error 1010). Send a normal UA.
+            "User-Agent": GATEWAY_USER_AGENT,
         },
         method="POST",
     )
@@ -235,7 +279,13 @@ def call_gateway(model: str, system: str, user: str) -> str:
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
-        sys.exit(f"❌ Gateway HTTP {e.code}: {body}")
+        msg = f"❌ Gateway HTTP {e.code}: {body}"
+        if e.code == 400 and "model" in body.lower():
+            available = list_gateway_models()
+            if available:
+                msg += "\n\nAvailable models (use the name without 'gateway/'):\n"
+                msg += "\n".join(f"  {m}" for m in available)
+        sys.exit(msg)
     except Exception as e:
         sys.exit(f"❌ Gateway request failed: {e}")
     try:
