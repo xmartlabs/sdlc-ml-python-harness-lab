@@ -78,7 +78,9 @@ def detect_package() -> tuple[str, str]:
             p.name for p in src.iterdir() if p.is_dir() and (p / "__init__.py").exists()
         ]
         if pkgs:
-            pkg = pkgs[0]
+            # Prefer the package that ships the skills_sync engine (if multiple exist)
+            with_engine = [p for p in pkgs if (src / p / "skills_sync").is_dir()]
+            pkg = with_engine[0] if with_engine else pkgs[0]
     return pkg, dist
 
 
