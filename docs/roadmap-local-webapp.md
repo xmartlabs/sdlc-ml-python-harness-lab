@@ -20,12 +20,17 @@ future SWE-bench-style instances.
       the run is still active, instead of only after it exits.
 - [x] Run detail view polls logs while `running` and renders them as a
       chronological console, plus exit code, started/ended timestamps.
+- [x] Execution backend replaced by Celery + Redis + one Docker container per
+      run (SWE-bench style) — see `docs/adr/0002-celery-docker-per-run-execution.md`.
+      The `Dockerfile.runner` image bundles opencode + node + uv; runner
+      containers reach the host LiteLLM/LM Studio via `host.docker.internal`.
 
 ## Guiding Decisions
 
 - [x] Keep `scripts/bench_run.py` and `make bench-*` as the first execution backend
-      (`BenchRunAdapter`/`worker.py` always shell out to `bench_run.py`; `make
-      bench-*` targets are untouched and still pass `make check`).
+      (`BenchRunAdapter`/`tasks.py` always run `bench_run.py` — now inside a
+      per-run Docker container; `make bench-*` targets are untouched and still
+      pass `make check`).
 - [x] Keep `benchmarks/*/task.yaml`, `runs.yaml`, `results.csv`, and `data/runs/`
       compatible with the current CLI workflow (the app imports/syncs
       `task.yaml` and reads `data/runs/`, but never writes `runs.yaml` or
@@ -259,21 +264,30 @@ Acceptance criteria:
 
 Goal: run benchmarks without blocking the web server.
 
-- [ ] Add a local run queue.
-- [ ] Persist queue jobs in DB.
-- [x] Add a worker process.
-- [x] Stream process stdout and stderr to run events (incremental, via
-      `subprocess.Popen` + line-reader threads, not just at exit).
+- [x] Add a local run queue (Celery + Redis broker; `celery_app.py`, queue
+      `runs`, worker concurrency 1).
+- [x] Persist queue jobs in DB (the `run` table is the single source of truth;
+      Celery uses `task_ignore_result` — no result backend).
+- [x] Add a worker process (`celery -A harness_lab_app.celery_app worker`,
+      its own compose service with the docker socket mounted).
+- [x] Execute each run in its own Docker container (`Dockerfile.runner` image
+      with opencode + conductor plugin; `DockerRunExecutor` launches sibling
+      containers via the host daemon and bind-mounts the host repo rw).
+- [x] Stream run output to run events (container logs → `RunEvent`, incremental).
 - [ ] Tail `data/runs/<run_id>/steps/*.log` when available.
 - [x] Expose live logs through polling (`GET /api/runs/{run_id}/logs?ascending=true`).
       SSE/WebSocket deferred — polling is sufficient for a single local user.
 - [x] Support cancellation when the process is still running (DB `cancel_requested`
-      flag polled by the worker, which then calls `Popen.terminate()`).
+      flag polled by the task, which then stops the run container).
 - [x] Support retry for failed runs (frontend action wired to `POST
-      /api/runs/{run_id}/retry`).
-- [x] Support resume when `bench_run.py --resume` applies (retry rebuilds the
-      command with `--resume` forced).
+      /api/runs/{run_id}/retry`; re-publishes the Celery task).
+- [x] Support resume when `bench_run.py --resume` applies (retry persists
+      `resume=True` on the config; the task rebuilds the command from config).
 - [x] Record run start time, end time, duration, exit code, and failure reason.
+- [x] Reconcile orphaned `running` runs on worker startup (stop leftover
+      containers, mark `failed`, suggest retry/resume).
+- [x] Enforce a run timeout inside the task (`HARNESS_LAB_RUN_TIMEOUT_SECONDS`,
+      default 7200) with a clean container stop.
 
 Run states (all declared in `RunState`, `src/harness_lab_app/models.py`; checked
 items are also reachable through an actual `RunService` transition today):
@@ -388,10 +402,9 @@ Acceptance criteria:
 - [x] Frontend: React with Vite (`frontend/`).
 - [x] MVP database: SQLite (`config.py` default `sqlite:///data/app/harness_lab.db`).
 - [ ] Later database: PostgreSQL (not needed yet — single local user).
-- [x] MVP queue: local DB-backed worker (`worker.py` polls `Run.state ==
-      pending`; no real queue depth yet — see Phase 4).
-- [ ] Later queue: Celery and Redis (deferred, matches "Growth Path" in the
-      design spec).
+- [x] Queue: Celery and Redis (broker only), one Docker container per run —
+      replaced the initial DB-polling `worker.py` (removed). See
+      `docs/adr/0002-celery-docker-per-run-execution.md`.
 - [x] Auth: local username and password (`POST /api/auth/login` checks
       `settings.local_username`/`local_password`; not yet gated in the
       frontend — see Phase 3).
@@ -405,8 +418,11 @@ Acceptance criteria:
 - [x] Run API unit tests for case CRUD (`tests/harness_lab_app/test_cases.py`).
 - [x] Run API unit tests for run creation (`tests/harness_lab_app/test_runs.py`).
 - [x] Run API tests for artifact indexing (`tests/harness_lab_app/test_artifacts.py`).
-- [x] Run worker tests for valid lifecycle transitions (`test_runs.py` covers
-      worker/`RunService` transitions including cancel and retry).
+- [x] Run worker tests for valid lifecycle transitions (`test_tasks.py` covers
+      the Celery task body — success, failure, cancel, timeout, idempotency,
+      reconciliation — and `test_runs.py` covers `RunService` transitions;
+      `test_executors.py` covers both execution backends with a fake docker
+      client).
 - [ ] Run UI tests for login, case management, new run, run detail, and
       artifacts (no frontend test suite exists yet).
 - [x] Run a dry-run path with `DRY_RUN=1` (`RunConfigCreate.dry_run` /
@@ -435,9 +451,10 @@ Acceptance criteria:
 - [ ] Decide whether login is required in local dev by default (endpoints
       exist but nothing in the frontend enforces a session yet — still open).
 - [x] Decide whether the first queue implementation should use an in-process
-      worker or a separate worker command (decided: separate worker command —
-      `worker` is its own Docker Compose service running
-      `python -m harness_lab_app.worker`, not in-process with the API).
+      worker or a separate worker command (decided: separate Celery worker
+      service in Docker Compose running
+      `celery -A harness_lab_app.celery_app worker -Q runs`, not in-process
+      with the API).
 
 ## Definition of Done for MVP
 

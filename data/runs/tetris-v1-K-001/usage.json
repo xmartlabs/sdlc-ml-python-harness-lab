@@ -1,0 +1,14 @@
+{
+  "turns": null,
+  "tool_calls": null,
+  "steps": 8,
+  "input_tokens": 204981,
+  "output_tokens": 1980,
+  "cost_usd": null,
+  "time_minutes": 1.0,
+  "files_modified": [],
+  "diff_lines": null,
+  "detected_model": null,
+  "detected_session": null,
+  "tokens_reasoning": 1399
+}

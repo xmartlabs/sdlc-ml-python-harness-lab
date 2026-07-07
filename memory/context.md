@@ -10,14 +10,20 @@ frozen task + repo/base commit + harness strategy + validation + score + cost.
 ## Active focus
 
 Building the Docker-first local web app for Agentic Harness Lab.
-The MVP now has backend case/run/artifact services, Tetris seeding, a frontend
-with case and run creation forms, and a worker that streams run stdout/stderr
-into `RunEvent` incrementally (polling-based live logs, no SSE/WebSocket yet).
-Cancel now actually terminates a live worker subprocess (DB-flag signal +
-`Popen.terminate()`), retry rebuilds the command with `--resume` forced, and
-both actions are exposed as buttons in the run detail inspector.
-Next concrete step is a real run queue (currently one-pending-at-a-time,
-sequential across the whole app).
+Execution backend is now Celery + Redis (broker only) with **one Docker
+container per run** (SWE-bench style, ADR-0002): `Dockerfile.runner` bundles
+opencode + conductor plugin + uv; the Celery worker (compose service with the
+docker socket mounted, concurrency 1) launches sibling runner containers that
+bind-mount the host repo rw and reach the host LiteLLM/LM Studio via
+`host.docker.internal` (env rewritten from `.env` by `build_run_environment`).
+Container logs stream into `RunEvent`; cancel stops the container; retry
+persists `resume=True` and re-publishes; orphaned `running` runs are
+reconciled to `failed` at worker startup. The old polling `worker.py` was
+removed. Web runs are `score_mode=manual` only and finish in
+`awaiting_manual_score`.
+Pending validation: a real (non-dry-run) Tetris run from the UI against a live
+LM Studio + LiteLLM gateway with a populated `.env` (dry-run E2E through
+API → Redis → Celery → runner container verified 2026-07-07).
 
 ## Constraints and decisions in force
 
@@ -39,8 +45,11 @@ sequential across the whole app).
 
 ## Open threads / next steps
 
-- Worker still processes one pending run per poll cycle (`run_pending_once`);
-  no queue depth or concurrency yet — next Phase 4 item.
+- Validate a real Tetris run from the UI end-to-end (needs: `.env` with
+  `GATEWAY_BASE_URL`/`GATEWAY_TOKEN`, LiteLLM on :4000, LM Studio on :1234
+  serving the qwen model — none of these were present on the host on
+  2026-07-07; opencode is also not installed on the host, only in the runner
+  image now).
 - Tail `data/runs/<run_id>/steps/*.log` when available (still open in Phase 4).
 - Add richer run detail tabs for artifacts, diff, score, and audit (Phase 5).
   Backend artifact indexing already exists (`ArtifactService.index_run`); the

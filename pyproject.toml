@@ -13,6 +13,11 @@ dependencies = [
     "sqlmodel>=0.0.22",
     "pydantic-settings>=2.6.0",
     "python-multipart>=0.0.12",
+    # Imported directly by scripts/bench_run.py and case_service.py; declare it
+    # explicitly instead of relying on the uvicorn[standard] transitive dep.
+    "pyyaml>=6.0",
+    "celery[redis]>=5.4",
+    "docker>=7.1",
 ]
 
 [build-system]
@@ -74,6 +79,9 @@ unfixable = []
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "F403"]
+# FastAPI resolves endpoint annotations at runtime (request-body parsing), so
+# schema imports must stay outside TYPE_CHECKING blocks here.
+"src/harness_lab_app/api.py" = ["TC001"]
 "tests/**/*.py" = [
     "ARG001",
     "ARG002",  # Fixtures de pytest pueden parecer no usados

@@ -61,6 +61,8 @@ from create_run import (
     update_results_csv,
 )
 
+from harness_lab_app.provenance import enrich_metadata
+
 try:
     import yaml
 except ImportError:
@@ -330,7 +332,13 @@ def generate_continuation_prompt(
 
 
 def write_metadata(
-    out_dir: Path, args: argparse.Namespace, task: dict, run: dict, prompt_short: str
+    out_dir: Path,
+    args: argparse.Namespace,
+    task: dict,
+    run: dict,
+    prompt_short: str,
+    prompt_source: Path | None = None,
+    task_path: Path | None = None,
 ) -> Path:
     meta = {
         "project": "ai-sdlc-lab",
@@ -352,6 +360,19 @@ def write_metadata(
         "workspace": f"workspace/{args.run}",
         "created_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+    # Add the hashable trial condition manifest (condition_hash, harness
+    # fingerprint, model condition, prompt/case hashes). Best-effort: if
+    # provenance can't be computed the base metadata is still written.
+    enrich_metadata(
+        meta,
+        repo_root=REPO_ROOT,
+        run=run,
+        executor_model=args.executor_model,
+        planner_model=args.planner_model,
+        prompt_source=prompt_source,
+        task_path=task_path,
+        runner_image=os.environ.get("HARNESS_LAB_RUNNER_IMAGE"),
+    )
     path = out_dir / "metadata.json"
     path.write_text(json.dumps(meta, indent=2))
     return path
@@ -1058,7 +1079,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"  Prompt:      {prompt_path.relative_to(REPO_ROOT)}")
 
-    write_metadata(out_dir, args, task, run, prompt_short)
+    write_metadata(
+        out_dir,
+        args,
+        task,
+        run,
+        prompt_short,
+        prompt_source=prompt_source,
+        task_path=runs_path.parent / "task.yaml",
+    )
     print(f"  Metadata:    {(out_dir / 'metadata.json').relative_to(REPO_ROOT)}")
 
     write_run_env(out_dir, args, session_id)

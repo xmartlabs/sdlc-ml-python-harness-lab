@@ -32,7 +32,7 @@ class RunConfigCreate(BaseModel):
     score_mode: str = "manual"
     max_steps: int = 1
     resume: bool = False
-    dry_run: bool = True
+    dry_run: bool = False
 
     @field_validator("score_mode")
     @classmethod
@@ -42,8 +42,10 @@ class RunConfigCreate(BaseModel):
             raise ValueError(
                 "score_mode=interactive is not supported from the web API; use score_mode=manual and submit via POST /api/runs/{run_id}/score"
             )
-        if normalized not in {"manual", "auto"}:
-            raise ValueError("score_mode must be one of: manual, auto")
+        # bench_run.py argparse accepts manual|interactive|none; the web flow
+        # standardizes on manual + POST /api/runs/{run_id}/score afterwards.
+        if normalized != "manual":
+            raise ValueError("score_mode must be: manual")
         return normalized
 
 

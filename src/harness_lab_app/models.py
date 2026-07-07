@@ -83,7 +83,7 @@ class RunConfig(SQLModel, table=True):
     score_mode: str = "manual"
     max_steps: int = 1
     resume: bool = False
-    dry_run: bool = True
+    dry_run: bool = False
     runner_adapter: str = "bench_run"
     tracking: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)

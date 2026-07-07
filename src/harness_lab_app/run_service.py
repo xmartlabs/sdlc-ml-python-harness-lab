@@ -10,7 +10,13 @@ from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.schemas import RunConfigCreate
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from harness_lab_app.schemas import RunCreate
+
+
+class RunAlreadyExistsError(ValueError):
+    """Raised when creating a run whose run_id is already in the database."""
 
 
 def _resume_config(config: RunConfig) -> RunConfigCreate:
@@ -28,9 +34,31 @@ def _resume_config(config: RunConfig) -> RunConfigCreate:
 
 
 class RunService:
-    def __init__(self, session: Session):
+    def __init__(
+        self,
+        session: Session,
+        enqueue: Callable[[str], None] | None = None,
+    ):
         self.session = session
         self.adapter = BenchRunAdapter()
+        # Queue publisher injected by the API layer (celery_app.enqueue_run);
+        # None (tests, read paths) means runs are created but not published.
+        self.enqueue = enqueue
+
+    def _publish(self, run_id: str) -> None:
+        if self.enqueue is None:
+            return
+        try:
+            self.enqueue(run_id)
+        except Exception as exc:
+            self.session.add(
+                RunEvent(
+                    run_id=run_id,
+                    level="error",
+                    message=f"Failed to enqueue run (broker unavailable?): {exc!r}",
+                )
+            )
+            self.session.commit()
 
     def list_runs(self) -> list[Run]:
         statement = select(Run).order_by(desc(cast("Any", Run.created_at)))
@@ -54,6 +82,14 @@ class RunService:
         return self.adapter.build_command(run_id, config)
 
     def create_run(self, data: RunCreate) -> Run:
+        existing = self.session.exec(
+            select(Run).where(Run.run_id == data.run_id)
+        ).first()
+        if existing is not None:
+            raise RunAlreadyExistsError(
+                f"Run '{data.run_id}' already exists (state: {existing.state}). "
+                "Use retry to re-run it, or pick a different run id."
+            )
         config = RunConfig(**data.config.model_dump())
         self.session.add(config)
         self.session.commit()
@@ -70,6 +106,7 @@ class RunService:
         self.session.add(RunEvent(run_id=data.run_id, message="Run queued"))
         self.session.commit()
         self.session.refresh(run)
+        self._publish(run.run_id)
         return run
 
     def mark_running(self, run_id: str) -> Run:
@@ -154,6 +191,10 @@ class RunService:
     def retry_run(self, run_id: str) -> Run:
         run = self.get_run(run_id)
         config = self.get_run_config(run.run_config_id)
+        # Persist resume on the config: the Celery task rebuilds the command
+        # from RunConfig at execution time, so the flag must survive there.
+        config.resume = True
+        self.session.add(config)
         run.command = self.adapter.build_command(
             run_id,
             _resume_config(config),
@@ -168,6 +209,7 @@ class RunService:
         self.session.add(RunEvent(run_id=run_id, level="info", message="Run retried"))
         self.session.commit()
         self.session.refresh(run)
+        self._publish(run_id)
         return run
 
     def list_events(self, run_id: str, ascending: bool = False) -> list[RunEvent]:

@@ -355,14 +355,37 @@ build-fresh:
 	@docker build --no-cache --platform=linux/amd64 -t ${IMG_NAME}:${IMAGE_TAG} -f Dockerfile.api .
 	@echo "✅ Docker image built successfully!"
 
-# Local web app stack
+# Local web app stack: builds the per-run runner image first, then starts
+# api + celery worker + redis + frontend.
 app-up:
 	@echo "🚀 Starting local web app stack..."
-	@docker compose --profile worker up --build api worker frontend
+	@docker compose build runner
+	@docker compose up --build api worker redis frontend
 
-app-worker-once:
-	@echo "🔁 Running one worker pass..."
-	@docker compose --profile worker run --rm worker uv run python -m harness_lab_app.worker --once
+# Smoke-test the runner image directly against the host gateway (no Celery):
+# proves opencode-in-container can reach LiteLLM/LM Studio on the host.
+# Usage: make app-runner-smoke RUN=tetris-v1-K-001 [PROMPT=sdlc] [MAX_STEPS=10] \
+#          [EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build] [DRY_RUN=1]
+app-runner-smoke:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-K-001"; exit 1; }
+	@[ -f .env ] || echo "⚠️  no .env found — gateway env vars will be empty inside the container."
+	@docker compose build runner
+	@tmp_env=$$(mktemp); \
+	  [ -f .env ] && sed -e 's/localhost/host.docker.internal/g' -e 's/127\.0\.0\.1/host.docker.internal/g' .env > $$tmp_env; \
+	  docker run --rm -v "$$PWD":/app -w /app \
+	    $$( [ -s $$tmp_env ] && echo --env-file $$tmp_env ) \
+	    -e PYTHONUNBUFFERED=1 \
+	    --add-host host.docker.internal:host-gateway \
+	    harness-lab-runner:latest \
+	    /opt/venv/bin/python scripts/bench_run.py \
+	      --case $(if $(CASE),$(CASE),tetris-v1) \
+	      --run $(RUN) \
+	      $(if $(PROMPT),--prompt $(PROMPT),) \
+	      $(if $(EXECUTOR_MODEL),--executor-model $(EXECUTOR_MODEL),) \
+	      $(if $(MAX_STEPS),--max-steps $(MAX_STEPS),) \
+	      --score-mode manual \
+	      $(if $(DRY_RUN),--dry-run,); \
+	  status=$$?; rm -f $$tmp_env; exit $$status
 
 app-test:
 	@echo "🧪 Running frontend type/build validation..."
@@ -611,9 +634,9 @@ help:
 	@echo "  make run-api             Start FastAPI server"
 	@echo "  make run-question        Test with a predefined question"
 	@echo "  make run-interactive     Start interactive CLI mode"
-	@echo "  make app-up              Start the local web app API + worker + frontend"
+	@echo "  make app-up              Start the local web app (api + celery worker + redis + frontend)"
 	@echo "  make app-smoke-test      Verify Docker stack health and run lifecycle"
-	@echo "  make app-worker-once     Run the local web app worker profile once"
+	@echo "  make app-runner-smoke    Run one benchmark inside the runner container (RUN=...)"
 	@echo "  make app-test            Build the frontend app"
 	@echo ""
 	@echo "OpenCode (self-hosted / cloud, via .env):"
@@ -660,4 +683,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-smoke-test app-worker-once app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills
+.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills

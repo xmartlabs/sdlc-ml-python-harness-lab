@@ -39,10 +39,10 @@ export function Runs({
   const [harness, setHarness] = useState("opencode");
   const [plannerModel, setPlannerModel] = useState("");
   const [executorModel, setExecutorModel] = useState("gateway/lmstudio-qwen3.6-35b-build");
-  const [scoreMode, setScoreMode] = useState("manual");
+  const scoreMode = "manual";
   const [maxSteps, setMaxSteps] = useState(10);
   const [resume, setResume] = useState(false);
-  const [dryRun, setDryRun] = useState(true);
+  const [dryRun, setDryRun] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [caseRunIds, setCaseRunIds] = useState<string[]>([]);
@@ -111,7 +111,6 @@ export function Runs({
     if (resume) {
       parts.push("RESUME=1");
     }
-     return parts.join(" \\\n+  ");
     return parts.join(" \\\n+  ");
   }, [caseId, dryRun, executorModel, maxSteps, plannerModel, promptVariant, resume, runId]);
 
@@ -122,7 +121,6 @@ export function Runs({
     setPlannerModel("");
     setExecutorModel("gateway/lmstudio-qwen3.6-35b-build");
     setMaxSteps(10);
-    setScoreMode("manual");
   };
 
   const handleCreateRun = async () => {
@@ -248,11 +246,12 @@ export function Runs({
           </label>
           <label>
             <span>Score mode</span>
-            <select value={scoreMode} onChange={(event) => setScoreMode(event.target.value)}>
+            <select value={scoreMode} disabled>
               <option value="manual">Manual</option>
-              <option value="auto">Auto</option>
             </select>
-            <small className="muted">Interactive is CLI-only; web flow uses manual scoring.</small>
+            <small className="muted">
+              Interactive is CLI-only; web runs finish in awaiting_manual_score and are scored from run detail.
+            </small>
           </label>
           <label>
             <span>Max steps</span>

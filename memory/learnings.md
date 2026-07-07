@@ -96,4 +96,42 @@ between the `BEGIN/END GENERATED SKILLS` sentinels in adapter files — run
 break the CI drift gate.
 **How to apply:** edit `.github/skills/*.md` (source) and regenerate.
 
+## bench_run.py fails open without opencode — 2026-07-07
+
+When the `opencode` binary is missing, `bench_run.py` does NOT fail: it prints a
+manual-paste fallback and exits 0. A worker environment without opencode makes
+runs look successful while the agent never executed. The Makefile guards this
+with `command -v opencode || exit 1`; any new execution backend must guarantee
+opencode is present (it is baked into `Dockerfile.runner`) or check explicitly.
+
+**Why it matters:** this silent fallback was the root cause of "web runs succeed
+but do nothing" while the CLI worked.
+**How to apply:** treat opencode availability as part of the runner contract;
+never run `bench_run.py` in an environment where its presence is unverified.
+
+## Docker-out-of-docker bind mounts use host paths — 2026-07-07
+
+The Celery worker runs in a container but launches runner containers through the
+host daemon (`/var/run/docker.sock`). Bind-mount sources in `containers.run` are
+resolved by the HOST daemon, so they must be host paths — the worker's `/app` is
+meaningless there. Compose passes `HARNESS_LAB_HOST_REPO_ROOT: ${PWD}` for this.
+
+**Why it matters:** using the container-local path silently mounts an empty or
+wrong directory and the run fails confusingly.
+**How to apply:** any DooD `volumes=` argument must come from
+`settings.host_repo_root`, never from `settings.repo_root`.
+
+## Env injection beats the mounted .env (setdefault) — 2026-07-07
+
+`scripts/create_run.py:_load_env` populates `os.environ` with `setdefault`, so
+env vars injected into the runner container win over the repo `.env` bind-mounted
+inside it. `build_run_environment()` exploits this to rewrite
+`localhost`/`127.0.0.1` gateway URLs to `host.docker.internal` without touching
+the host `.env`.
+
+**Why it matters:** it is the clean seam for host-vs-container networking; no
+file rewriting or duplicated config needed.
+**How to apply:** put per-environment overrides in the container env, keep
+`.env` as the host-truth file.
+
 <!-- Add new learnings above this line -->

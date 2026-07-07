@@ -1,0 +1,47 @@
+# opencode run started 2026-07-07T19:34:15.190250Z
+# cmd: opencode run --dangerously-skip-permissions --print-logs -m gateway/lmstudio-qwen3.6-35b-build <prompt>
+
+timestamp=2026-07-07T19:34:15.537Z level=INFO run=3e7236ee message="creating instance" directory=/app
+timestamp=2026-07-07T19:34:15.548Z level=INFO run=3e7236ee message=fromDirectory directory=/app
+timestamp=2026-07-07T19:34:15.563Z level=INFO run=3e7236ee message=bootstrapping directory=/app
+timestamp=2026-07-07T19:34:15.566Z level=INFO run=3e7236ee message=loading path=/root/.config/opencode/config.json
+timestamp=2026-07-07T19:34:15.566Z level=INFO run=3e7236ee message=loading path=/root/.config/opencode/opencode.json
+timestamp=2026-07-07T19:34:15.566Z level=INFO run=3e7236ee message=loading path=/root/.config/opencode/opencode.jsonc
+timestamp=2026-07-07T19:34:15.571Z level=INFO run=3e7236ee message=loading path=/app/opencode.json
+timestamp=2026-07-07T19:34:15.580Z level=INFO run=3e7236ee message=loading path=/app/.opencode/opencode.json
+timestamp=2026-07-07T19:34:15.581Z level=INFO run=3e7236ee message=loading path=/app/.opencode/opencode.jsonc
+timestamp=2026-07-07T19:34:15.616Z level=INFO run=3e7236ee message="all LSPs are disabled"
+timestamp=2026-07-07T19:34:15.616Z level=INFO run=3e7236ee message="all formatters are disabled"
+timestamp=2026-07-07T19:34:15.616Z level=INFO run=3e7236ee message=init
+timestamp=2026-07-07T19:34:15.682Z level=INFO run=3e7236ee message=created id=ses_0c1ed127dffedkRnoAcXNjFDAa slug=misty-knight version=1.17.15 projectID=6d89c3f1da41b73076fdd9a7410fbb45ac4627d2 directory=/app path="" workspaceID=undefined parentID=undefined title="New session - 2026-07-07T19:34:15.682Z" agent=undefined model=undefined metadata=undefined permission="[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]" cost=0 tokens.input=0 tokens.output=0 tokens.reasoning=0 tokens.cache.read=0 tokens.cache.write=0 time.created=1783452855682 time.updated=1783452855682
+timestamp=2026-07-07T19:34:15.689Z level=INFO run=3e7236ee message="event connected"
+timestamp=2026-07-07T19:34:15.800Z level=INFO run=3e7236ee message=loop session.id=ses_0c1ed127dffedkRnoAcXNjFDAa step=0
+[0m
+> build · lmstudio-qwen3.6-35b-build
+[0m
+timestamp=2026-07-07T19:34:15.811Z level=INFO run=3e7236ee message=stream providerID=gateway modelID=lmstudio-qwen3.6-35b-build session.id=ses_0c1ed127dffedkRnoAcXNjFDAa small=true agent=title mode=primary
+timestamp=2026-07-07T19:34:15.830Z level=INFO run=3e7236ee message="llm runtime selected" llm.runtime=ai-sdk llm.provider=gateway llm.model=lmstudio-qwen3.6-35b-build
+timestamp=2026-07-07T19:34:15.895Z level=INFO run=3e7236ee message=tracking hash=456b2a7f5f84e9386f3b0d63d111139f52623483 cwd=/app git=/root/.local/share/opencode/snapshot/6d89c3f1da41b73076fdd9a7410fbb45ac4627d2/0c35eebf403cf91fe77a64921d76aa1ca6411d20
+timestamp=2026-07-07T19:34:15.898Z level=INFO run=3e7236ee message="shell tool using shell" shell=/usr/bin/bash
+timestamp=2026-07-07T19:34:15.911Z level=WARN run=3e7236ee message="duplicate skill name" name=plan_and_execute_feature existing=/app/.claude/skills/plan_and_execute_feature/SKILL.md duplicate=/app/.agents/skills/plan_and_execute_feature/SKILL.md
+timestamp=2026-07-07T19:34:15.911Z level=WARN run=3e7236ee message="duplicate skill name" name=writing-clearly-and-concisely existing=/app/.claude/skills/writing-clearly-and-concisely/SKILL.md duplicate=/app/.agents/skills/writing-clearly-and-concisely/SKILL.md
+timestamp=2026-07-07T19:34:15.911Z level=WARN run=3e7236ee message="duplicate skill name" name=writing-plans existing=/app/.claude/skills/writing-plans/SKILL.md duplicate=/app/.opencode/skills/writing-plans/SKILL.md
+timestamp=2026-07-07T19:34:15.911Z level=WARN run=3e7236ee message="duplicate skill name" name=bootstrap_project existing=/app/.claude/skills/bootstrap_project/SKILL.md duplicate=/app/.agents/skills/bootstrap_project/SKILL.md
+timestamp=2026-07-07T19:34:15.911Z level=WARN run=3e7236ee message="duplicate skill name" name=requesting-code-review existing=/app/.claude/skills/requesting-code-review/SKILL.md duplicate=/app/.opencode/skills/requesting-code-review/SKILL.md
+timestamp=2026-07-07T19:34:15.911Z level=WARN run=3e7236ee message="duplicate skill name" name=finishing-a-development-branch existing=/app/.claude/skills/finishing-a-development-branch/SKILL.md duplicate=/app/.agents/skills/finishing-a-development-branch/SKILL.md
+timestamp=2026-07-07T19:34:15.911Z level=WARN run=3e7236ee message="duplicate skill name" name=validate_module_structure existing=/app/.claude/skills/validate_module_structure/SKILL.md duplicate=/app/.agents/skills/validate_module_structure/SKILL.md
+timestamp=2026-07-07T19:34:15.911Z level=WARN run=3e7236ee message="duplicate skill name" name=executing-plans existing=/app/.claude/skills/executing-plans/SKILL.md duplicate=/app/.agents/skills/executing-plans/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=test-driven-development existing=/app/.claude/skills/test-driven-development/SKILL.md duplicate=/app/.agents/skills/test-driven-development/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=subagent-driven-development existing=/app/.claude/skills/subagent-driven-development/SKILL.md duplicate=/app/.agents/skills/subagent-driven-development/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=using-git-worktrees existing=/app/.claude/skills/using-git-worktrees/SKILL.md duplicate=/app/.agents/skills/using-git-worktrees/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=generate_migration_plan existing=/app/.claude/skills/generate_migration_plan/SKILL.md duplicate=/app/.agents/skills/generate_migration_plan/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=generate_e2e_tests existing=/app/.agents/skills/generate_e2e_tests/SKILL.md duplicate=/app/.opencode/skills/generate_e2e_tests/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=verify_changes existing=/app/.claude/skills/verify_changes/SKILL.md duplicate=/app/.agents/skills/verify_changes/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=requesting-code-review existing=/app/.opencode/skills/requesting-code-review/SKILL.md duplicate=/app/.agents/skills/requesting-code-review/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=brainstorm_quick existing=/app/.claude/skills/brainstorm_quick/SKILL.md duplicate=/app/.agents/skills/brainstorm_quick/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=retrospective existing=/app/.claude/skills/retrospective/SKILL.md duplicate=/app/.agents/skills/retrospective/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=create_mle_agent_package existing=/app/.claude/skills/create_mle_agent_package/SKILL.md duplicate=/app/.agents/skills/create_mle_agent_package/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=generate_implementation_docs existing=/app/.claude/skills/generate_implementation_docs/SKILL.md duplicate=/app/.agents/skills/generate_implementation_docs/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=test-driven-development existing=/app/.agents/skills/test-driven-development/SKILL.md duplicate=/app/.opencode/skills/test-driven-development/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=refactor_to_clean_architecture existing=/app/.claude/skills/refactor_to_clean_architecture/SKILL.md duplicate=/app/.agents/skills/refactor_to_clean_architecture/SKILL.md
+timestamp=2026-07-07T19:34:15.912Z level=WARN run=3e7236ee message="duplicate skill name" name=using-git-worktrees existing=/app/.agents/skills/using-git-worktrees/SKILL.md duplicate=/app/.opencode/skills/using-git-worktrees/SKILL.md

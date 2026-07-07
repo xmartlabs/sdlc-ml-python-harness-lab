@@ -17,6 +17,17 @@ class Settings(BaseSettings):
     runner_mode: str = "dry_run"
     runner_python: str | None = None
 
+    # Queue / execution backend (Celery + one Docker container per run).
+    redis_url: str = "redis://redis:6379/0"
+    execution_backend: str = "docker"  # "docker" | "subprocess"
+    runner_image: str = "harness-lab-runner:latest"
+    # Host path of the repo, required for docker-out-of-docker bind mounts:
+    # the sibling runner container is created by the HOST daemon, so bind
+    # sources must be host paths, not this container's /app.
+    host_repo_root: str = ""
+    docker_host_alias: str = "host.docker.internal"
+    run_timeout_seconds: int = 7200
+
     @property
     def data_runs_dir(self) -> Path:
         return self.repo_root / "data" / "runs"

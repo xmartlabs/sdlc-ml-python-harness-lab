@@ -34,9 +34,10 @@ class CaseService:
         settings = get_settings()
         case_dir = settings.benchmarks_dir / case_id
         if not case_dir.exists():
-            case_dir = self._find_case_dir_by_task_id(case_id, settings.benchmarks_dir)
-            if case_dir is None:
+            fallback = self._find_case_dir_by_task_id(case_id, settings.benchmarks_dir)
+            if fallback is None:
                 return []
+            case_dir = fallback
 
         runs_path = case_dir / "runs.yaml"
         if not runs_path.exists():

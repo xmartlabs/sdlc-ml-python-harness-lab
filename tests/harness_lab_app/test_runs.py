@@ -5,9 +5,8 @@ from pydantic import ValidationError
 from sqlmodel import Session, SQLModel, create_engine
 
 from harness_lab_app.models import RunEvent, RunState
-from harness_lab_app.run_service import RunService
+from harness_lab_app.run_service import RunAlreadyExistsError, RunService
 from harness_lab_app.schemas import RunConfigCreate, RunCreate
-from harness_lab_app.worker import run_pending_once
 
 
 def make_session() -> Session:
@@ -74,95 +73,71 @@ def test_create_run_rejects_unknown_score_mode():
         )
 
 
-def test_worker_finishes_dry_run():
+def test_create_run_rejects_auto_score_mode():
+    # bench_run.py argparse only accepts manual|interactive|none; the web
+    # flow standardizes on manual.
+    with pytest.raises(ValidationError):
+        RunCreate(
+            run_id="tetris-v1-K-003",
+            config=RunConfigCreate(
+                case_id="tetris-v1",
+                prompt_variant="sdlc",
+                score_mode="auto",
+            ),
+        )
+
+
+def test_create_run_rejects_duplicate_run_id():
     with make_session() as session:
         service = RunService(session)
+        payload = RunCreate(
+            run_id="dup-run-1",
+            config=RunConfigCreate(case_id="tetris-v1", prompt_variant="sdlc"),
+        )
+        service.create_run(payload)
+
+        with pytest.raises(RunAlreadyExistsError):
+            service.create_run(payload)
+
+
+def test_dry_run_defaults_to_false():
+    config = RunConfigCreate(case_id="tetris-v1", prompt_variant="sdlc")
+    assert config.dry_run is False
+
+
+def test_create_run_publishes_to_queue():
+    enqueued: list[str] = []
+    with make_session() as session:
+        service = RunService(session, enqueue=enqueued.append)
         service.create_run(
             RunCreate(
-                run_id="dry-run-1",
-                config=RunConfigCreate(
-                    case_id="tetris-v1", prompt_variant="sdlc", dry_run=True
-                ),
+                run_id="queued-run-1",
+                config=RunConfigCreate(case_id="tetris-v1", prompt_variant="sdlc"),
             )
         )
 
-        processed = run_pending_once(session, execute_process=False)
-        run = service.get_run("dry-run-1")
-
-        assert processed == 1
-        assert run.state == RunState.awaiting_manual_score
-        assert (
-            session.query(RunEvent).filter(RunEvent.run_id == "dry-run-1").count() >= 2
-        )
+    assert enqueued == ["queued-run-1"]
 
 
-def test_worker_streams_process_output_line_by_line():
+def test_create_run_survives_enqueue_failure():
+    def broken_enqueue(run_id: str) -> None:
+        raise ConnectionError("broker down")
+
     with make_session() as session:
-        service = RunService(session)
+        service = RunService(session, enqueue=broken_enqueue)
         run = service.create_run(
             RunCreate(
-                run_id="stream-run-1",
-                config=RunConfigCreate(
-                    case_id="tetris-v1", prompt_variant="sdlc", dry_run=True
-                ),
+                run_id="queued-run-2",
+                config=RunConfigCreate(case_id="tetris-v1", prompt_variant="sdlc"),
             )
         )
-        run.command = [
-            "python3",
-            "-c",
-            "print('line-one'); print('line-two'); print('line-three')",
-        ]
-        session.add(run)
-        session.commit()
 
-        processed = run_pending_once(session, execute_process=True)
-        finished = service.get_run("stream-run-1")
-
-        assert processed == 1
-        assert finished.state == RunState.awaiting_manual_score
-        assert finished.exit_code == 0
-
+        assert run.state == RunState.pending
         messages = [
             event.message
-            for event in service.list_events("stream-run-1", ascending=True)
+            for event in service.list_events("queued-run-2", ascending=True)
         ]
-        assert "line-one" in messages
-        assert "line-two" in messages
-        assert "line-three" in messages
-        assert messages.index("line-one") < messages.index("line-three")
-
-
-def test_cancel_requested_terminates_running_process():
-    with make_session() as session:
-        service = RunService(session)
-        run = service.create_run(
-            RunCreate(
-                run_id="cancel-run-1",
-                config=RunConfigCreate(
-                    case_id="tetris-v1", prompt_variant="sdlc", dry_run=True
-                ),
-            )
-        )
-        run.command = [
-            "python3",
-            "-c",
-            "import time; time.sleep(5); print('should-not-print')",
-        ]
-        run.cancel_requested = True
-        session.add(run)
-        session.commit()
-
-        processed = run_pending_once(session, execute_process=True)
-        finished = service.get_run("cancel-run-1")
-
-        assert processed == 1
-        assert finished.state == RunState.cancelled
-        assert finished.cancel_requested is False
-        messages = [
-            event.message
-            for event in service.list_events("cancel-run-1", ascending=True)
-        ]
-        assert "should-not-print" not in messages
+        assert any("Failed to enqueue" in message for message in messages)
 
 
 def test_cancel_run_signals_running_process_instead_of_overwriting_state():

@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import contextlib
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
+from sqlmodel import Session
 
 from harness_lab_app.artifact_service import ArtifactService
 from harness_lab_app.case_service import CaseService
+from harness_lab_app.celery_app import enqueue_run
 from harness_lab_app.config import get_settings
-from harness_lab_app.db import get_session, init_db
-from harness_lab_app.run_service import RunService
+from harness_lab_app.db import get_engine, get_session, init_db
+from harness_lab_app.run_service import RunAlreadyExistsError, RunService
 from harness_lab_app.schemas import CaseCreate, RunConfigCreate, RunCreate
-
-if TYPE_CHECKING:
-    from sqlmodel import Session
 
 
 class LoginRequest(BaseModel):
@@ -33,6 +32,11 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def startup() -> None:
         init_db()
+        # Ensure the Tetris pilot case always exists on a fresh DB so the run
+        # form never falls back to a non-existent "default" prompt variant.
+        # Seeding must never block startup.
+        with contextlib.suppress(Exception), Session(get_engine()) as session:
+            CaseService(session).seed_tetris_case()
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -117,7 +121,10 @@ def create_app() -> FastAPI:
 
     @app.post("/api/runs")
     def create_run(data: RunCreate, session: Session = Depends(get_session)):
-        return RunService(session).create_run(data)
+        try:
+            return RunService(session, enqueue=enqueue_run).create_run(data)
+        except RunAlreadyExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/runs/{run_id}/score")
     def score_run(
@@ -133,7 +140,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/runs/{run_id}/retry")
     def retry_run(run_id: str, session: Session = Depends(get_session)):
-        return RunService(session).retry_run(run_id)
+        return RunService(session, enqueue=enqueue_run).retry_run(run_id)
 
     @app.get("/api/runs/{run_id}/logs")
     def list_logs(
