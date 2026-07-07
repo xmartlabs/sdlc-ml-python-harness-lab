@@ -1,0 +1,52 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      HARNESS_LAB_REPO_ROOT: /app
+      HARNESS_LAB_DATABASE_URL: sqlite:////app/data/app/harness_lab.db
+      HARNESS_LAB_RUNNER_PYTHON: /opt/venv/bin/python
+    volumes:
+      - .:/app
+    ports:
+      - "8008:8008"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ["python", "-m", "harness_lab_app.worker"]
+    environment:
+      HARNESS_LAB_REPO_ROOT: /app
+      HARNESS_LAB_DATABASE_URL: sqlite:////app/data/app/harness_lab.db
+      HARNESS_LAB_RUNNER_PYTHON: /opt/venv/bin/python
+    volumes:
+      - .:/app
+    profiles:
+      - worker
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import sqlite3; conn = sqlite3.connect('/app/data/app/harness_lab.db'); conn.execute('SELECT 1'); conn.close()\" && [ -f /app/data/app/harness_lab.db ]"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      VITE_API_BASE_URL: /api
+    volumes:
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api

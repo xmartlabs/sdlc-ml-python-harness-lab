@@ -9,9 +9,15 @@ frozen task + repo/base commit + harness strategy + validation + score + cost.
 
 ## Active focus
 
-Executing `tetris-v1` benchmark: 9 experiment cells (A–I) × 3 reps = 27 runs.
-Cells A–E use OpenCode with Qwen 35B / GPT-5.5. Cells F–I add Nemotron 120B.
-Structural files created 2026-06-25: `task.yaml`, `results.csv`, `README.md`, updated report.
+Building the Docker-first local web app for Agentic Harness Lab.
+The MVP now has backend case/run/artifact services, Tetris seeding, a frontend
+with case and run creation forms, and a worker that streams run stdout/stderr
+into `RunEvent` incrementally (polling-based live logs, no SSE/WebSocket yet).
+Cancel now actually terminates a live worker subprocess (DB-flag signal +
+`Popen.terminate()`), retry rebuilds the command with `--resume` forced, and
+both actions are exposed as buttons in the run detail inspector.
+Next concrete step is a real run queue (currently one-pending-at-a-time,
+sequential across the whole app).
 
 ## Constraints and decisions in force
 
@@ -29,15 +35,22 @@ Structural files created 2026-06-25: `task.yaml`, `results.csv`, `README.md`, up
 
 | Run | Status | Score | Interventions |
 |-----|--------|-------|---------------|
-| tetris-v1-A-001 | completed | 3 | 1 |
-| tetris-v1-A-002 | completed | 5 | 0 |
-| tetris-v1-A-003 | running | — | — |
-| tetris-v1-B-001 | running | — | — |
-| tetris-v1-B-002 to I-003 | pending | — | — |
+| local-webapp-mvp | in progress | — | — |
 
 ## Open threads / next steps
 
-- Close A-003 (verify if it stalled or completed).
-- Close B-001 (status=running in runs.yaml).
-- Pull token/cost data from Langfuse for A-001 and A-002 and populate `results.csv`.
-- Begin remaining B–I cells once A-003 is closed.
+- Worker still processes one pending run per poll cycle (`run_pending_once`);
+  no queue depth or concurrency yet — next Phase 4 item.
+- Tail `data/runs/<run_id>/steps/*.log` when available (still open in Phase 4).
+- Add richer run detail tabs for artifacts, diff, score, and audit (Phase 5).
+  Backend artifact indexing already exists (`ArtifactService.index_run`); the
+  gap is entirely frontend (no artifacts list/download UI yet).
+- Expand the case wizard into edit/delete/clone flows (backend endpoints for
+  all three already exist in `CaseService`/`api.py`; only frontend buttons
+  are missing).
+- Add a frontend login flow and session gating (backend `POST
+  /api/auth/login`/`logout` exist; still the main open item under Phase 3).
+- `docs/roadmap-local-webapp.md` was fully audited 2026-07-07 against actual
+  code/tests/frontend — every checkbox now reflects a verified implementation
+  state, with notes distinguishing "backend done, no UI yet" from "declared
+  but never reachable" from "not started." Keep it checked as the MVP grows.

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from harness_lab_app.models import CaseStatus, CaseSyncState, CaseType, RunState
 
@@ -31,7 +31,20 @@ class RunConfigCreate(BaseModel):
     executor_model: str | None = None
     score_mode: str = "manual"
     max_steps: int = 1
+    resume: bool = False
     dry_run: bool = True
+
+    @field_validator("score_mode")
+    @classmethod
+    def validate_score_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized == "interactive":
+            raise ValueError(
+                "score_mode=interactive is not supported from the web API; use score_mode=manual and submit via POST /api/runs/{run_id}/score"
+            )
+        if normalized not in {"manual", "auto"}:
+            raise ValueError("score_mode must be one of: manual, auto")
+        return normalized
 
 
 class RunCreate(BaseModel):
@@ -45,4 +58,5 @@ class RunRead(BaseModel):
     command: list[str]
     score: int | None = None
     interventions: int | None = None
+    notes: str = ""
     failure_reason: str | None = None

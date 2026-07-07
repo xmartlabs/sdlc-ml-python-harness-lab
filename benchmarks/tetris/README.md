@@ -8,6 +8,32 @@ make bench-results       # ver qué corridas están pendientes
 
 ---
 
+## Flujo desde la UI web (paridad con CLI sin bloqueo)
+
+- La UI crea corridas con `score_mode=manual` y no soporta `score_mode=interactive`.
+- Si se intenta crear una corrida por API con `score_mode=interactive`, el backend la rechaza.
+- Al terminar el worker, la corrida queda en `awaiting_manual_score`; el score se carga desde el panel de detalle (`POST /api/runs/{run_id}/score`).
+- Si el servicio `worker` no está corriendo, las corridas quedan en `pending` y no aparecen logs de ejecución.
+- La UI ahora carga `run_id` válidos desde `benchmarks/tetris/runs.yaml` para evitar errores por IDs inventados (por ejemplo, usar `tetris-v1-K-001`).
+- El runtime Docker no depende de la `.venv` del host para ejecutar corridas desde la UI.
+- Para play-test de Tetris antes de puntuar, corré desde el host sobre el workspace compartido:
+
+```bash
+python workspace/<run_id>/main.py
+```
+
+El contenedor del worker no tiene display, por eso pygame no se puede validar dentro de Docker.
+
+Para levantar UI + API + worker juntos:
+
+```bash
+make app-up
+# equivalente directo:
+# docker compose --profile worker up --build api worker frontend
+```
+
+---
+
 ## Corridas end-to-end por modelo
 
 Cada comando prepara el workspace, ejecuta hasta 10 sesiones encadenadas de opencode, y al terminar te pide un score interactivo (0–10). **No hace falta abrir OpenCode ni pegar prompts a mano.**

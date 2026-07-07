@@ -72,6 +72,12 @@ notebooks/data/users.db
 # Logger data
 src/logger/data/*
 
+# Local web app MVP
+data/app/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
 # CI/CD temps
 .venv-ci/
 test-reports/

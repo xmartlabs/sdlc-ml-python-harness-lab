@@ -55,9 +55,13 @@ class Case(SQLModel, table=True):
     tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     subject_repo: str | None = None
     base_commit: str | None = None
-    prompt_variants: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
+    prompt_variants: dict[str, str] = Field(
+        default_factory=dict, sa_column=Column(JSON)
+    )
     step_prompts: list[str] = Field(default_factory=list, sa_column=Column(JSON))
-    success_criteria: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
+    success_criteria: dict[str, str] = Field(
+        default_factory=dict, sa_column=Column(JSON)
+    )
     scoring_rubric: str = ""
     constraints: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     validation_commands: list[str] = Field(default_factory=list, sa_column=Column(JSON))
@@ -95,6 +99,7 @@ class Run(SQLModel, table=True):
     ended_at: datetime | None = None
     exit_code: int | None = None
     failure_reason: str | None = None
+    cancel_requested: bool = False
     score: int | None = None
     interventions: int | None = None
     notes: str = ""

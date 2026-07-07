@@ -1,6 +1,7 @@
 from collections.abc import Generator
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlmodel import Session, SQLModel, create_engine
 
 from harness_lab_app.config import get_settings
@@ -18,7 +19,11 @@ def get_engine():
     sqlite_path = _sqlite_path(settings.database_url)
     if sqlite_path is not None:
         sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-    connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+    connect_args = (
+        {"check_same_thread": False}
+        if settings.database_url.startswith("sqlite")
+        else {}
+    )
     return create_engine(settings.database_url, connect_args=connect_args)
 
 
@@ -27,6 +32,29 @@ engine = get_engine()
 
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)
+    _apply_sqlite_compat_migrations()
+
+
+def _apply_sqlite_compat_migrations() -> None:
+    settings = get_settings()
+    if not settings.database_url.startswith("sqlite"):
+        return
+
+    with engine.begin() as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(text("PRAGMA table_info('run')")).fetchall()
+        }
+        if "cancel_requested" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE run ADD COLUMN cancel_requested BOOLEAN NOT NULL DEFAULT 0"
+                )
+            )
+        if "notes" not in columns:
+            connection.execute(
+                text("ALTER TABLE run ADD COLUMN notes VARCHAR NOT NULL DEFAULT ''")
+            )
 
 
 def get_session() -> Generator[Session, None, None]:

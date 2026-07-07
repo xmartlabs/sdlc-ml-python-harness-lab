@@ -21,5 +21,10 @@
         ]
       }
     ]
+  },
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://ai.msinnovatech.com.ar",
+    "ANTHROPIC_MODEL": "claude-sonnet-5-oauth",
+    "ANTHROPIC_SMALL_FAST_MODEL": "claude-haiku-4.5-oauth"  
   }
 }

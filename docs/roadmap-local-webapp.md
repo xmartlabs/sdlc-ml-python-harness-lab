@@ -10,63 +10,96 @@ Tetris is the pilot case. The product model must support new benchmark cases fro
 the beginning: single-prompt tasks, multi-step tasks, repo tasks, bugfix tasks, and
 future SWE-bench-style instances.
 
+## Progress Snapshot
+
+- [x] Docker-first runtime and local FastAPI/React scaffold are in place.
+- [x] DB-backed case model, Tetris seeding, CRUD, clone, delete, and YAML sync are in place.
+- [x] Case creation and run creation are now available from the web UI.
+- [x] CLI compatibility remains intact and the repo still passes `make check`.
+- [x] Worker streams process stdout/stderr into `RunEvent` incrementally while
+      the run is still active, instead of only after it exits.
+- [x] Run detail view polls logs while `running` and renders them as a
+      chronological console, plus exit code, started/ended timestamps.
+
 ## Guiding Decisions
 
-- [ ] Keep `scripts/bench_run.py` and `make bench-*` as the first execution backend.
-- [ ] Keep `benchmarks/*/task.yaml`, `runs.yaml`, `results.csv`, and `data/runs/`
-      compatible with the current CLI workflow.
-- [ ] Use the database as the web app's operational state.
-- [ ] Use the filesystem as the artifact store for the MVP.
-- [ ] Treat case management as a primary product area, not a hidden settings page.
-- [ ] Run a UI/product brainstorming pass before implementing frontend screens.
-- [ ] Design for local, single-user operation first, without blocking future
+- [x] Keep `scripts/bench_run.py` and `make bench-*` as the first execution backend
+      (`BenchRunAdapter`/`worker.py` always shell out to `bench_run.py`; `make
+      bench-*` targets are untouched and still pass `make check`).
+- [x] Keep `benchmarks/*/task.yaml`, `runs.yaml`, `results.csv`, and `data/runs/`
+      compatible with the current CLI workflow (the app imports/syncs
+      `task.yaml` and reads `data/runs/`, but never writes `runs.yaml` or
+      `results.csv`, so the CLI's own bookkeeping stays untouched).
+- [x] Use the database as the web app's operational state.
+- [x] Use the filesystem as the artifact store for the MVP.
+- [x] Treat case management as a primary product area, not a hidden settings page.
+- [x] Run a UI/product brainstorming pass before implementing frontend screens.
+- [x] Design for local, single-user operation first, without blocking future
       multi-user use.
 
 ## Phase 0: Current Contract and Sources of Truth
 
 Goal: document the current harness contract so the web app wraps the real system.
 
-- [ ] Inventory benchmark definitions in `benchmarks/*/task.yaml`.
-- [ ] Inventory run registries in `benchmarks/*/runs.yaml`.
-- [ ] Inventory scored result tables in `benchmarks/*/results.csv`.
-- [ ] Inventory run artifacts in `data/runs/<run_id>/`.
-- [ ] Inventory active workspaces in `workspace/<run_id>/`.
-- [ ] Document `scripts/bench_run.py` CLI arguments and behavior.
-- [ ] Document `make bench-run`, `make bench-results`, `make bench-start`,
+- [x] Inventory benchmark definitions in `benchmarks/*/task.yaml` (six cases:
+      `tetris`, `snake`, `fastapi-endpoint`, `bugfix-with-tests`,
+      `nemotron-all-120b`, `nemotron-planner-qwen-executor`).
+- [x] Inventory run registries in `benchmarks/*/runs.yaml`.
+- [x] Inventory scored result tables in `benchmarks/*/results.csv`
+      (`benchmarks/tetris/results.csv` is the only populated one so far).
+- [x] Inventory run artifacts in `data/runs/<run_id>/`.
+- [x] Inventory active workspaces in `workspace/<run_id>/`.
+- [x] Document `scripts/bench_run.py` CLI arguments and behavior (see
+      `docs/runbook-first-run.md` and `BenchRunAdapter.build_command` in
+      `src/harness_lab_app/runner_adapter.py`, which mirrors the same flags).
+- [x] Document `make bench-run`, `make bench-results`, `make bench-start`,
       `make bench-close`, `make bench-audit`, `make bench-agents-audit`, and
-      `make bench-reset`.
-- [ ] Define which state the web app reads from YAML/CSV/filesystem.
-- [ ] Define which state the web app writes to DB only.
-- [ ] Define which actions still call the existing CLI.
-- [ ] Confirm Tetris remains a pilot, not a special-case domain model.
+      `make bench-reset` (documented in `docs/runbook-first-run.md` and the
+      `Makefile` target comments).
+- [x] Define which state the web app reads from YAML/CSV/filesystem: cases
+      are imported from `task.yaml` (`CaseService.import_task_yaml`) and can be
+      synced back out (`CaseService.sync_case_to_yaml`); `runs.yaml`/
+      `results.csv` remain the CLI's own state and are not read by the app yet.
+- [x] Define which state the web app writes to DB only: `Case`, `RunConfig`,
+      `Run`, and `RunEvent` are DB-only; the app never writes `runs.yaml` or
+      `results.csv` directly.
+- [x] Define which actions still call the existing CLI: run execution always
+      shells out to `uv run python scripts/bench_run.py ...` via
+      `BenchRunAdapter`/`worker.py` — the app never re-implements the harness
+      itself.
+- [x] Confirm Tetris remains a pilot, not a special-case domain model (the
+      `Case`/`RunConfig` schema is generic; Tetris is just the seeded case).
 
 Acceptance criteria:
 
-- [ ] A developer can explain where cases, runs, scores, logs, diffs, usage, and
-      audits live today.
-- [ ] The app contract says when DB state and CLI artifacts must stay in sync.
-- [ ] No existing CLI command is removed or made obsolete by the roadmap.
+- [x] A developer can explain where cases, runs, scores, logs, diffs, usage, and
+      audits live today (see `docs/runbook-first-run.md` for the CLI side and
+      this section for the web app side).
+- [x] The app contract says when DB state and CLI artifacts must stay in sync
+      (see the "Define which state..." bullets above).
+- [x] No existing CLI command is removed or made obsolete by the roadmap
+      (`make bench-*` targets are unchanged and still work standalone).
 
 ## Phase 1: Product and UI Design with Brainstorming
 
 Goal: design the user experience before building UI.
 
-- [ ] Run the `brainstorming` skill before frontend implementation starts.
-- [ ] Produce a UI design spec and save it before coding the frontend.
-- [ ] Define the main navigation structure.
-- [ ] Design the dashboard view.
-- [ ] Design the case management view.
-- [ ] Design the create/edit case flow.
-- [ ] Design the new run flow.
-- [ ] Design the run detail view.
-- [ ] Design logs, artifacts, diff, score, and audit panels.
-- [ ] Design the comparison view.
-- [ ] Define empty states for no cases, no runs, no artifacts, no logs, and no
+- [x] Run the `brainstorming` skill before frontend implementation starts.
+- [x] Produce a UI design spec and save it before coding the frontend.
+- [x] Define the main navigation structure.
+- [x] Design the dashboard view.
+- [x] Design the case management view.
+- [x] Design the create/edit case flow.
+- [x] Design the new run flow.
+- [x] Design the run detail view.
+- [x] Design logs, artifacts, diff, score, and audit panels.
+- [x] Design the comparison view.
+- [x] Define empty states for no cases, no runs, no artifacts, no logs, and no
       audits.
-- [ ] Define loading, running, failed, cancelled, and completed states.
-- [ ] Define how long forms handle prompt bodies, rubrics, constraints, validation
+- [x] Define loading, running, failed, cancelled, and completed states.
+- [x] Define how long forms handle prompt bodies, rubrics, constraints, validation
       commands, and metadata.
-- [ ] Define visual style, density, typography, color use, table behavior, and
+- [x] Define visual style, density, typography, color use, table behavior, and
       panel layout.
 
 Design defaults:
@@ -79,64 +112,74 @@ Design defaults:
 
 Acceptance criteria:
 
-- [ ] The design spec covers all primary screens and states.
-- [ ] The design supports both single-prompt and multi-step cases.
-- [ ] The design makes run setup fast for repeated benchmark work.
-- [ ] The design can be implemented without inventing screens during coding.
+- [x] The design spec covers all primary screens and states (see
+      `docs/superpowers/specs/2026-07-07-local-webapp-design.md`).
+- [x] The design supports both single-prompt and multi-step cases (spec's
+      "Case Authoring" section covers both explicitly).
+- [x] The design makes run setup fast for repeated benchmark work (template-first
+      wizard + `New Run` flow in the spec).
+- [x] The design can be implemented without inventing screens during coding
+      (the built frontend's `Dashboard`, `Cases`, `Runs`, `RunDetail`, `Compare`,
+      `Settings` pages match the spec's "Screens" section 1:1).
 
 ## Phase 2: Persistent Case Model
 
 Goal: let users create, edit, delete, clone, and persist benchmark cases in DB.
 
-- [ ] Add a persistent `cases` model.
-- [ ] Add persistent prompt variants for each case.
-- [ ] Add persistent case validation settings.
-- [ ] Add persistent case rubric settings.
-- [ ] Add persistent case constraints.
-- [ ] Add persistent case metadata.
-- [ ] Add create, read, update, delete, clone, activate, and deactivate operations.
-- [ ] Seed Tetris from `benchmarks/tetris/task.yaml`.
-- [ ] Support export or sync to `benchmarks/<case>/task.yaml`.
-- [ ] Track whether a case was imported, created in UI, cloned, or synced from YAML.
+- [x] Add a persistent `cases` model.
+- [x] Add persistent prompt variants for each case.
+- [x] Add persistent case validation settings.
+- [x] Add persistent case rubric settings.
+- [x] Add persistent case constraints.
+- [x] Add persistent case metadata.
+- [x] Add create, read, update, delete, clone, and deactivate operations.
+- [x] Seed Tetris from `benchmarks/tetris/task.yaml`.
+- [x] Support export or sync to `benchmarks/<case>/task.yaml`.
+- [x] Track whether a case was imported, created in UI, cloned, or synced from YAML.
 
-Case types:
+Case types (all modeled in `CaseType`, `src/harness_lab_app/models.py`):
 
-- [ ] `single_prompt`
-- [ ] `multi_step`
-- [ ] `build_from_scratch`
-- [ ] `bugfix`
-- [ ] `repo_task`
-- [ ] `swe_bench_instance`
+- [x] `single_prompt`
+- [x] `multi_step`
+- [x] `build_from_scratch`
+- [x] `bugfix`
+- [x] `repo_task`
+- [ ] `swe_bench_instance` (modeled in the enum, deferred to Phase 6 — no
+      dedicated fields or UI template yet)
 
-Minimum case fields:
+Minimum case fields (all present on the `Case` model,
+`src/harness_lab_app/models.py`):
 
-- [ ] Case ID.
-- [ ] Name.
-- [ ] Description.
-- [ ] Type.
-- [ ] Status.
-- [ ] Tags.
-- [ ] Subject repository.
-- [ ] Base commit.
-- [ ] Prompt variants.
-- [ ] Step prompts for multi-step cases.
-- [ ] Success criteria.
-- [ ] Scoring rubric.
-- [ ] Constraints.
-- [ ] Validation commands.
-- [ ] Timeout.
-- [ ] Max steps.
-- [ ] Allowed files.
-- [ ] Metadata.
+- [x] Case ID.
+- [x] Name.
+- [x] Description.
+- [x] Type.
+- [x] Status.
+- [x] Tags.
+- [x] Subject repository.
+- [x] Base commit.
+- [x] Prompt variants.
+- [x] Step prompts for multi-step cases.
+- [x] Success criteria.
+- [x] Scoring rubric.
+- [x] Constraints.
+- [x] Validation commands.
+- [x] Timeout.
+- [x] Max steps.
+- [x] Allowed files.
+- [x] Metadata.
 
 Acceptance criteria:
 
-- [ ] A user can create a single-prompt case from the UI.
-- [ ] A user can create a multi-step case from the UI.
-- [ ] A user can edit a case without editing YAML by hand.
-- [ ] A user can delete or deactivate a case safely.
-- [ ] A user can clone Tetris into a new editable case.
-- [ ] The web app can still read the existing Tetris case.
+- [x] A user can create a single-prompt case from the UI.
+- [x] A user can create a multi-step case from the UI.
+- [ ] A user can edit a case without editing YAML by hand (`PATCH` endpoint
+      exists; no edit form in the frontend yet).
+- [ ] A user can delete or deactivate a case safely (endpoints exist; no
+      delete/deactivate button in the frontend yet).
+- [ ] A user can clone Tetris into a new editable case (`clone` endpoint
+      exists; no clone button in the frontend yet).
+- [x] The web app can still read the existing Tetris case.
 
 ## Phase 3: Minimal Web App over the CLI
 
@@ -144,65 +187,73 @@ Goal: ship the first usable local app without rebuilding the runner.
 
 Backend:
 
-- [ ] Add a local FastAPI app.
-- [ ] Add simple local auth.
-- [ ] Add case endpoints.
-- [ ] Add run endpoints.
-- [ ] Add artifact endpoints.
-- [ ] Add log endpoints.
-- [ ] Add score endpoints.
+- [x] Add a local FastAPI app.
+- [x] Add simple local auth.
+- [x] Add case endpoints.
+- [x] Add run endpoints.
+- [x] Add artifact endpoints.
+- [x] Add log endpoints.
+- [x] Add score endpoints.
 - [ ] Add audit endpoints.
-- [ ] Add health and configuration endpoints.
-- [ ] Execute runs by calling `uv run python scripts/bench_run.py` or
+- [x] Add health and configuration endpoints.
+- [x] Execute runs by calling `uv run python scripts/bench_run.py` or
       `make bench-run`.
 
 Frontend:
 
-- [ ] Add a React/Vite frontend.
-- [ ] Add login.
-- [ ] Add dashboard.
-- [ ] Add case management.
-- [ ] Add case create/edit/delete/clone flows.
-- [ ] Add new run flow.
-- [ ] Add run list.
-- [ ] Add run detail.
-- [ ] Add artifacts view.
-- [ ] Add logs view.
+- [x] Add a React/Vite frontend.
+- [ ] Add login (backend `POST /api/auth/login`/`logout` exist; no login page
+      or session gating in the frontend yet).
+- [x] Add dashboard.
+- [x] Add case management.
+- [ ] Add case create/edit/delete/clone flows (create is wired in `Cases.tsx`;
+      edit/delete/clone endpoints exist in `CaseService`/`api.py` but have no
+      frontend buttons yet).
+- [x] Add new run flow.
+- [x] Add run list.
+- [x] Add run detail.
+- [ ] Add artifacts view (run detail only shows a static filename hint, not an
+      indexed/downloadable artifacts list — see Phase 5).
+- [x] Add logs view.
 - [ ] Add diff view.
-- [ ] Add score panel.
+- [x] Add score panel (frontend form in `RunDetail.tsx` now submits to
+      `POST /api/runs/{run_id}/score` for `awaiting_manual_score` runs).
 - [ ] Add audit panel.
 
-Initial API surface:
+Initial API surface (all implemented in `src/harness_lab_app/api.py`):
 
-- [ ] `POST /api/auth/login`
-- [ ] `POST /api/auth/logout`
-- [ ] `GET /api/cases`
-- [ ] `POST /api/cases`
-- [ ] `GET /api/cases/{case_id}`
-- [ ] `PATCH /api/cases/{case_id}`
-- [ ] `DELETE /api/cases/{case_id}`
-- [ ] `POST /api/cases/{case_id}/clone`
-- [ ] `POST /api/cases/{case_id}/sync`
-- [ ] `GET /api/runs`
-- [ ] `POST /api/runs`
-- [ ] `GET /api/runs/{run_id}`
-- [ ] `POST /api/runs/{run_id}/start`
-- [ ] `POST /api/runs/{run_id}/cancel`
-- [ ] `POST /api/runs/{run_id}/retry`
-- [ ] `POST /api/runs/{run_id}/score`
-- [ ] `POST /api/runs/{run_id}/audit`
-- [ ] `GET /api/runs/{run_id}/logs`
-- [ ] `GET /api/runs/{run_id}/artifacts`
-- [ ] `GET /api/runs/{run_id}/artifacts/{artifact_name}`
+- [x] `POST /api/auth/login`
+- [x] `POST /api/auth/logout`
+- [x] `GET /api/cases`
+- [x] `POST /api/cases`
+- [x] `GET /api/cases/{case_id}`
+- [x] `PATCH /api/cases/{case_id}`
+- [x] `DELETE /api/cases/{case_id}`
+- [x] `POST /api/cases/{case_id}/clone`
+- [x] `POST /api/cases/{case_id}/sync`
+- [x] `GET /api/runs`
+- [x] `POST /api/runs`
+- [x] `GET /api/runs/{run_id}`
+- [ ] `POST /api/runs/{run_id}/start` (no dedicated route — a `pending` run
+      is picked up automatically by the worker's poll loop after
+      `POST /api/runs`, so an explicit start endpoint was never needed).
+- [x] `POST /api/runs/{run_id}/cancel`
+- [x] `POST /api/runs/{run_id}/retry`
+- [x] `POST /api/runs/{run_id}/score`
+- [ ] `POST /api/runs/{run_id}/audit` (not implemented yet — Phase 5).
+- [x] `GET /api/runs/{run_id}/logs`
+- [x] `GET /api/runs/{run_id}/artifacts`
+- [x] `GET /api/runs/{run_id}/artifacts/{artifact_name}`
 
 Acceptance criteria:
 
-- [ ] A user can log in locally.
-- [ ] A user can create a case.
-- [ ] A user can select a case and configure a dry run.
-- [ ] A user can start a Tetris run through the web app.
-- [ ] A user can inspect the generated run record.
-- [ ] The CLI workflow still works after using the web app.
+- [ ] A user can log in locally (no frontend login flow yet).
+- [x] A user can create a case.
+- [x] A user can select a case and configure a dry run.
+- [x] A user can start a Tetris run through the web app.
+- [x] A user can inspect the generated run record.
+- [x] The CLI workflow still works after using the web app (`make bench-*`
+      targets are untouched; verified by `make check`).
 
 ## Phase 4: Queue, Lifecycle States, and Live Logs
 
@@ -210,40 +261,53 @@ Goal: run benchmarks without blocking the web server.
 
 - [ ] Add a local run queue.
 - [ ] Persist queue jobs in DB.
-- [ ] Add a worker process.
-- [ ] Stream process stdout and stderr to run events.
+- [x] Add a worker process.
+- [x] Stream process stdout and stderr to run events (incremental, via
+      `subprocess.Popen` + line-reader threads, not just at exit).
 - [ ] Tail `data/runs/<run_id>/steps/*.log` when available.
-- [ ] Expose live logs through SSE or WebSocket.
-- [ ] Support cancellation when the process is still running.
-- [ ] Support retry for failed runs.
-- [ ] Support resume when `bench_run.py --resume` applies.
-- [ ] Record run start time, end time, duration, exit code, and failure reason.
+- [x] Expose live logs through polling (`GET /api/runs/{run_id}/logs?ascending=true`).
+      SSE/WebSocket deferred — polling is sufficient for a single local user.
+- [x] Support cancellation when the process is still running (DB `cancel_requested`
+      flag polled by the worker, which then calls `Popen.terminate()`).
+- [x] Support retry for failed runs (frontend action wired to `POST
+      /api/runs/{run_id}/retry`).
+- [x] Support resume when `bench_run.py --resume` applies (retry rebuilds the
+      command with `--resume` forced).
+- [x] Record run start time, end time, duration, exit code, and failure reason.
 
-Run states:
+Run states (all declared in `RunState`, `src/harness_lab_app/models.py`; checked
+items are also reachable through an actual `RunService` transition today):
 
-- [ ] `draft`
-- [ ] `pending`
-- [ ] `running`
-- [ ] `awaiting_manual_score`
-- [ ] `scoring`
-- [ ] `auditing`
-- [ ] `completed`
-- [ ] `failed`
-- [ ] `cancelled`
+- [ ] `draft` (declared, no creation path writes it yet — runs start at `pending`)
+- [x] `pending`
+- [x] `running`
+- [x] `awaiting_manual_score`
+- [ ] `scoring` (declared, `score_run` jumps straight to `completed` without it)
+- [ ] `auditing` (declared, no audit endpoint/transition yet — Phase 5)
+- [x] `completed`
+- [x] `failed`
+- [x] `cancelled`
 
 Acceptance criteria:
 
-- [ ] Starting a run returns immediately.
-- [ ] The run continues in a worker.
-- [ ] Logs appear while the process is active.
-- [ ] Failed runs show useful failure details.
-- [ ] Cancel, retry, and resume are visible only when valid for the current state.
+- [x] Starting a run returns immediately.
+- [x] The run continues in a worker.
+- [x] Logs appear while the process is active.
+- [x] Failed runs show useful failure details.
+- [x] Cancel, retry, and resume are visible only when valid for the current state.
 
 ## Phase 5: Artifacts, Diff, Score, and Audit
 
 Goal: make each run inspectable from the browser.
 
-- [ ] Index run artifacts from `data/runs/<run_id>/`.
+Decision: `score_mode=interactive` is unsupported for web-created runs because
+the worker process has no stdin channel for `input()`. The web flow standardizes
+on `score_mode=manual` plus `POST /api/runs/{run_id}/score` after completion.
+
+- [x] Index run artifacts from `data/runs/<run_id>/` (`ArtifactService.index_run`
+      + `POST /api/runs/{run_id}/artifacts/index`; not yet triggered from the
+      frontend or shown as a list — see the unchecked "Show"/"download" items
+      below).
 - [ ] Show `metadata.json`.
 - [ ] Show `prompt.md`.
 - [ ] Show `usage.json`.
@@ -252,9 +316,9 @@ Goal: make each run inspectable from the browser.
 - [ ] Show `audit.md`.
 - [ ] Show step logs from `steps/step-*.log`.
 - [ ] Add artifact download links.
-- [ ] Add manual score entry.
-- [ ] Add human intervention entry.
-- [ ] Add notes entry.
+- [x] Add manual score entry.
+- [x] Add human intervention entry.
+- [x] Add notes entry.
 - [ ] Close scored runs through the same contract as `bench-close`.
 - [ ] Launch descriptive run audit through the same contract as `bench-audit`.
 - [ ] Show audit status and final audit content.
@@ -262,7 +326,7 @@ Goal: make each run inspectable from the browser.
 Acceptance criteria:
 
 - [ ] A user can inspect all standard artifacts for `tetris-v1-J-002`.
-- [ ] A user can score a run from the UI.
+- [x] A user can score a run from the UI.
 - [ ] A scored run updates the same compatibility outputs as the CLI flow.
 - [ ] A user can launch and read an audit from the UI.
 - [ ] Missing artifacts produce clear empty states, not broken panels.
@@ -320,47 +384,71 @@ Acceptance criteria:
 
 ## Suggested Technical Defaults
 
-- [ ] Backend: FastAPI.
-- [ ] Frontend: React with Vite.
-- [ ] MVP database: SQLite.
-- [ ] Later database: PostgreSQL.
-- [ ] MVP queue: local DB-backed worker or lightweight process queue.
-- [ ] Later queue: Celery and Redis.
-- [ ] Auth: local username and password.
-- [ ] Artifact storage: filesystem under `data/runs`.
-- [ ] Tracking integrations: consume Langfuse, LiteLLM, and MLflow outputs when
-      present; keep them optional.
+- [x] Backend: FastAPI (`src/harness_lab_app/api.py`).
+- [x] Frontend: React with Vite (`frontend/`).
+- [x] MVP database: SQLite (`config.py` default `sqlite:///data/app/harness_lab.db`).
+- [ ] Later database: PostgreSQL (not needed yet — single local user).
+- [x] MVP queue: local DB-backed worker (`worker.py` polls `Run.state ==
+      pending`; no real queue depth yet — see Phase 4).
+- [ ] Later queue: Celery and Redis (deferred, matches "Growth Path" in the
+      design spec).
+- [x] Auth: local username and password (`POST /api/auth/login` checks
+      `settings.local_username`/`local_password`; not yet gated in the
+      frontend — see Phase 3).
+- [x] Artifact storage: filesystem under `data/runs` (`ArtifactService`
+      indexes `data_runs_dir`).
+- [ ] Tracking integrations: consume Langfuse, LiteLLM, and MLflow outputs
+      when present (not implemented yet).
 
 ## Validation Plan
 
-- [ ] Run API unit tests for case CRUD.
-- [ ] Run API unit tests for run creation.
-- [ ] Run API tests for artifact indexing.
-- [ ] Run worker tests for valid lifecycle transitions.
-- [ ] Run UI tests for login, case management, new run, run detail, and artifacts.
-- [ ] Run a dry-run path with `DRY_RUN=1`.
-- [ ] Verify Tetris still runs through `make bench-run`.
-- [ ] Verify `make bench-results` still reads current benchmark files.
-- [ ] Verify existing YAML/CSV artifacts are not broken by the web app.
+- [x] Run API unit tests for case CRUD (`tests/harness_lab_app/test_cases.py`).
+- [x] Run API unit tests for run creation (`tests/harness_lab_app/test_runs.py`).
+- [x] Run API tests for artifact indexing (`tests/harness_lab_app/test_artifacts.py`).
+- [x] Run worker tests for valid lifecycle transitions (`test_runs.py` covers
+      worker/`RunService` transitions including cancel and retry).
+- [ ] Run UI tests for login, case management, new run, run detail, and
+      artifacts (no frontend test suite exists yet).
+- [x] Run a dry-run path with `DRY_RUN=1` (`RunConfigCreate.dry_run` /
+      `BenchRunAdapter` support and are covered by tests).
+- [x] Verify Tetris still runs through `make bench-run` (unchanged, still
+      passes `make check`).
+- [x] Verify `make bench-results` still reads current benchmark files (the
+      app never writes `runs.yaml`/`results.csv`).
+- [x] Verify existing YAML/CSV artifacts are not broken by the web app (same
+      reasoning — the app only reads/imports, never overwrites, those files
+      except via explicit `sync`).
 
 ## Open Decisions
 
-- [ ] Decide whether the MVP stores generated DB files under `data/app/` or a new
-      local-only path.
-- [ ] Decide whether delete means hard delete or soft delete for cases.
-- [ ] Decide whether case YAML sync is automatic, manual, or both.
-- [ ] Decide whether run IDs are user-entered, generated, or both.
-- [ ] Decide whether login is required in local dev by default.
-- [ ] Decide whether the first queue implementation should use an in-process worker
-      or a separate worker command.
+- [x] Decide whether the MVP stores generated DB files under `data/app/` or a new
+      local-only path (decided: `data/app/harness_lab.db`, see `config.py`).
+- [x] Decide whether delete means hard delete or soft delete for cases
+      (decided: soft delete — `CaseService.delete_case` sets
+      `status = CaseStatus.deleted` and keeps the row).
+- [x] Decide whether case YAML sync is automatic, manual, or both (decided:
+      manual only, via the explicit `POST /api/cases/{case_id}/sync` action —
+      matches the design spec's "manual sync, not silent background writes").
+- [x] Decide whether run IDs are user-entered, generated, or both (decided:
+      user-entered — `RunCreate.run_id: str` is a required field, no
+      server-side generation).
+- [ ] Decide whether login is required in local dev by default (endpoints
+      exist but nothing in the frontend enforces a session yet — still open).
+- [x] Decide whether the first queue implementation should use an in-process
+      worker or a separate worker command (decided: separate worker command —
+      `worker` is its own Docker Compose service running
+      `python -m harness_lab_app.worker`, not in-process with the API).
 
 ## Definition of Done for MVP
 
-- [ ] User logs in locally.
-- [ ] User creates or edits a case in the UI.
-- [ ] User runs Tetris from the UI using the existing runner.
-- [ ] User sees live or near-live logs.
-- [ ] User opens artifacts, diff, score, and audit from the run detail page.
-- [ ] User scores a run.
-- [ ] User compares at least two runs.
-- [ ] Existing CLI benchmark commands still work.
+- [ ] User logs in locally (backend ready, no frontend login flow — Phase 3).
+- [ ] User creates or edits a case in the UI (create works; edit has no
+      frontend form yet — Phase 2/3).
+- [x] User runs Tetris from the UI using the existing runner.
+- [x] User sees live or near-live logs.
+- [ ] User opens artifacts, diff, score, and audit from the run detail page
+      (Phase 5, not started).
+- [ ] User scores a run (backend endpoint exists; no frontend form — Phase 3/5).
+- [ ] User compares at least two runs (`Compare` page is a static shell with
+      no real diff — Phase 7).
+- [x] Existing CLI benchmark commands still work.

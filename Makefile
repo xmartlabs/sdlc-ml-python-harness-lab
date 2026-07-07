@@ -355,6 +355,24 @@ build-fresh:
 	@docker build --no-cache --platform=linux/amd64 -t ${IMG_NAME}:${IMAGE_TAG} -f Dockerfile.api .
 	@echo "✅ Docker image built successfully!"
 
+# Local web app stack
+app-up:
+	@echo "🚀 Starting local web app stack..."
+	@docker compose --profile worker up --build api worker frontend
+
+app-worker-once:
+	@echo "🔁 Running one worker pass..."
+	@docker compose --profile worker run --rm worker uv run python -m harness_lab_app.worker --once
+
+app-test:
+	@echo "🧪 Running frontend type/build validation..."
+	@cd frontend && npm ci --no-audit --no-fund && npm run build
+
+app-smoke-test:
+	@echo "🧪 Running Docker smoke test..."
+	@chmod +x scripts/smoke_test_docker.sh
+	@./scripts/smoke_test_docker.sh
+
 # Stop Docker container
 stop-docker:
 	@echo "🛑 Stopping Docker container..."
@@ -593,6 +611,10 @@ help:
 	@echo "  make run-api             Start FastAPI server"
 	@echo "  make run-question        Test with a predefined question"
 	@echo "  make run-interactive     Start interactive CLI mode"
+	@echo "  make app-up              Start the local web app API + worker + frontend"
+	@echo "  make app-smoke-test      Verify Docker stack health and run lifecycle"
+	@echo "  make app-worker-once     Run the local web app worker profile once"
+	@echo "  make app-test            Build the frontend app"
 	@echo ""
 	@echo "OpenCode (self-hosted / cloud, via .env):"
 	@echo "  make opencode            Launch opencode TUI with .env loaded"
@@ -638,4 +660,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills
+.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-smoke-test app-worker-once app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills

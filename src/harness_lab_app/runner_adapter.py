@@ -1,0 +1,41 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from harness_lab_app.config import get_settings
+
+if TYPE_CHECKING:
+    from harness_lab_app.schemas import RunConfigCreate
+
+
+class BenchRunAdapter:
+    def build_command(self, run_id: str, config: RunConfigCreate) -> list[str]:
+        settings = get_settings()
+        command = (
+            [settings.runner_python, "scripts/bench_run.py"]
+            if settings.runner_python
+            else ["uv", "run", "python", "scripts/bench_run.py"]
+        )
+        command.extend(
+            [
+                "--case",
+                config.case_id,
+                "--run",
+                run_id,
+                "--prompt",
+                config.prompt_variant,
+                "--score-mode",
+                config.score_mode,
+                "--max-steps",
+                str(config.max_steps),
+            ]
+        )
+        if config.planner_model:
+            command.extend(["--planner-model", config.planner_model])
+        if config.executor_model:
+            command.extend(["--executor-model", config.executor_model])
+        if config.dry_run:
+            command.append("--dry-run")
+        if config.resume:
+            command.append("--resume")
+        return command
