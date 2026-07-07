@@ -7,12 +7,14 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from harness_lab_app.artifact_service import ArtifactService
+from harness_lab_app.attribution_service import AttributionService
 from harness_lab_app.case_service import CaseService
-from harness_lab_app.celery_app import enqueue_run
+from harness_lab_app.celery_app import enqueue_run, enqueue_validation
 from harness_lab_app.config import get_settings
 from harness_lab_app.db import get_engine, get_session, init_db
 from harness_lab_app.run_service import RunAlreadyExistsError, RunService
 from harness_lab_app.schemas import CaseCreate, RunConfigCreate, RunCreate
+from harness_lab_app.validation_service import ValidationService
 
 
 class LoginRequest(BaseModel):
@@ -24,6 +26,7 @@ class ScoreRequest(BaseModel):
     score: int
     interventions: int
     notes: str = ""
+    rubric: dict[str, int] = {}
 
 
 def create_app() -> FastAPI:
@@ -130,9 +133,45 @@ def create_app() -> FastAPI:
     def score_run(
         run_id: str, data: ScoreRequest, session: Session = Depends(get_session)
     ):
+        # Subjective dimension of the multidimensional score; recomputes the
+        # composite against any objective validation already recorded.
+        ValidationService(session).apply_subjective(
+            run_id, data.score, data.interventions, data.rubric, data.notes
+        )
         return RunService(session).score_run(
             run_id, data.score, data.interventions, data.notes
         )
+
+    @app.get("/api/runs/{run_id}/validation")
+    def get_validation(run_id: str, session: Session = Depends(get_session)):
+        validation = ValidationService(session).get_validation(run_id)
+        if validation is None:
+            raise HTTPException(status_code=404, detail="No validation for this run")
+        return validation
+
+    @app.get("/api/runs/{run_id}/attribution")
+    def get_attribution(run_id: str, session: Session = Depends(get_session)):
+        attribution = AttributionService(session).get_attribution(run_id)
+        if attribution is None:
+            raise HTTPException(status_code=404, detail="No attribution for this run")
+        return attribution
+
+    @app.post("/api/runs/{run_id}/attribution/index")
+    def index_attribution(run_id: str, session: Session = Depends(get_session)):
+        # Attribution is pure log parsing (no container), so it runs inline.
+        return AttributionService(session).index_run(run_id)
+
+    @app.post("/api/runs/{run_id}/validate")
+    def validate_run(run_id: str, session: Session = Depends(get_session)):
+        # Validation executes a container, so it must run in the worker (which
+        # owns the docker socket), not in the API process. Enqueue and let the
+        # frontend poll GET /validation.
+        try:
+            RunService(session).get_run(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        enqueue_validation(run_id)
+        return {"status": "queued", "run_id": run_id}
 
     @app.post("/api/runs/{run_id}/cancel")
     def cancel_run(run_id: str, session: Session = Depends(get_session)):

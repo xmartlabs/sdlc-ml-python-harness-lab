@@ -56,9 +56,39 @@ mean **statistical** reproducibility (N reps, mean±spread), not deterministic
 replay.
 
 Pillar order chosen: (1) provenance/fingerprint ✅ DONE, (2) objective
-validation + multidimensional score on existing cases (Tetris headless smoke +
-bugfix test-runner) — NOT SWE-bench yet, (3) structured harness attribution,
-(4) ablation/experiment runner. See `docs/adr/0003-trial-provenance-and-harness-fingerprint.md`.
+validation + multidimensional score ✅ DONE (ADR-0004), (3) structured harness
+attribution ✅ DONE (ADR-0005), (4) ablation/experiment runner (NEXT). See
+ADR-0003/0004/0005.
+
+Pillar 3 delivered: `attribution.py` parses a run's opencode step logs into a
+machine-readable `Attribution` (tools read/edit/bash/shell, files read/edited,
+governance-doc read coverage, bash + agent-mode histograms), cross-referenced
+with the available skills from metadata. Pure log parsing (no container) → runs
+inline in the API and auto-indexed after every run (success or fail).
+`GET/POST /api/runs/{id}/attribution`, panel in RunDetail. Honest limit: skill
+*invocation* isn't file-observable (skills are context-injected), so
+skills_consulted counts only SKILL.md reads (a lower bound); documented in the
+`skills_note` field, not faked. Verified on K-001: read 5/8 governance docs,
+edited only PLAN.md + main.py, python×16 self-tests, agent mode build.
+Fixed a real bug: opencode's `"touching file"` is the watcher (fires on reads),
+not an edit — edits come only from `permission=edit`.
+
+Pillar 2 delivered: a `Validation` per run (`validation.py`,
+`validation_service.py`, `models.Validation`) with separate objective / cost /
+effort / subjective dimensions + an explicit `composite` gated by the objective
+floor. Objective validation runs the case's `validation_commands` (shell with
+`{workspace}` placeholder) in a runner container via the executor — auto after a
+successful run and on demand via `POST /api/runs/{id}/validate` (enqueued to the
+worker, which owns the docker socket). Tetris uses a headless smoke
+(`BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy ... python {workspace}/main.py`); the
+runner image now bundles pygame. Verified E2E on the real K-001 Tetris:
+objective pass, cost 206961 tokens, effort 8 steps, composite 7.0 after a
+manual functional score.
+
+Git hygiene: run artifacts are no longer tracked — `data/runs/**` is git-ignored
+(only `.gitkeep`/`.gitignore` remain); operational run state lives in the DB and
+on disk, never in git. The CLI (`runs.yaml`/`results.csv`) is kept as a
+deprecated legacy path; the scalable target is the DB-only web server.
 
 Provenance delivered: `src/harness_lab_app/provenance.py` +
 `bench_run.write_metadata` now write a hashable trial condition into
@@ -70,15 +100,20 @@ versions + rolled `harness_hash`), `model_condition` (temp/context/alias),
 
 ## Open threads / next steps
 
-- Build pillar 2: per-case validation contract returning structured scores —
-  Tetris headless smoke (`BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python main.py`)
-  + a test-runner for `bugfix-with-tests`; separate objective (tests) from
-  subjective (manual/LLM rubric) from cost (usage.json) from effort (steps,
-  interventions).
-- For rigorous trials, commit the harness first so `harness_git_dirty=false`
-  and trials are attributable to a clean `lab_git_commit`.
+- Pillar 4 (ablation/experiment runner) — NEXT: matrix case×arm varying ONE
+  harness factor, N reps, compare distributions using `condition_hash`
+  (ADR-0003) as the grouping key, with the multidimensional `Validation`
+  (ADR-0004) + `Attribution` (ADR-0005) as the per-trial outcome features.
+- Deeper skill attribution: have the harness emit skill-invocation events so
+  `skills_consulted` stops being a SKILL.md-read lower bound.
+- Add a `bugfix-with-tests` validation_commands (pytest) to exercise the "tests"
+  strategy (only Tetris smoke exists so far).
 - The web app should index `metadata.json` and group runs by `condition_hash`
-  (foundation for the Phase 7 comparison/ablation surface).
+  (foundation for the Phase 7 comparison surface).
+- DB-only migration: make the runner read run definitions from the DB so
+  `runs.yaml`/`results.csv` can leave git entirely (currently kept as legacy CLI
+  state the runner still needs).
+- For rigorous trials, commit the harness first so `harness_git_dirty=false`.
 - Tail `data/runs/<run_id>/steps/*.log` when available (still open in Phase 4).
 - Add richer run detail tabs for artifacts, diff, score, and audit (Phase 5).
   Backend artifact indexing already exists (`ArtifactService.index_run`); the

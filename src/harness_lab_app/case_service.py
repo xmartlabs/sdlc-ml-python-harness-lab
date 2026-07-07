@@ -161,9 +161,17 @@ class CaseService:
             success_criteria=dict(raw.get("success_criteria", {})),
             scoring_rubric=str(raw.get("scoring_rubric", "")),
             constraints=list(raw.get("constraints", [])),
-            validation_commands=[str(raw.get("validation_note", "")).strip()]
-            if raw.get("validation_note")
-            else [],
+            # Prefer executable validation_commands; fall back to the prose
+            # validation_note only as a manual reminder.
+            validation_commands=(
+                [str(cmd) for cmd in raw["validation_commands"]]
+                if raw.get("validation_commands")
+                else (
+                    [str(raw.get("validation_note", "")).strip()]
+                    if raw.get("validation_note")
+                    else []
+                )
+            ),
             max_steps=int(raw.get("target_level", 1)),
             metadata_json={"source_path": str(task_path)},
         )

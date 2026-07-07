@@ -150,14 +150,61 @@ def _execute_run_body(
                 if exit_code != 0:
                     failure = "\n".join(tail)[-1000:] or "Run failed with no output"
                 service.mark_finished(run_id, exit_code, failure)
+                if exit_code == 0:
+                    _run_objective_validation(session, run_id)
+            # Attribution is useful for any run that produced step logs
+            # (including cancelled/failed), so index it regardless of outcome.
+            _index_attribution(session, run_id)
         except Exception as exc:
             service.mark_finished(run_id, -1, f"Executor error: {exc!r}")
+
+
+def _index_attribution(session: Session, run_id: str) -> None:
+    """Best-effort structured harness attribution from the run's logs."""
+    from harness_lab_app.attribution_service import AttributionService
+
+    try:
+        AttributionService(session).index_run(run_id)
+    except Exception as exc:  # attribution must never fail the run
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="error",
+                message=f"Attribution indexing failed: {exc!r}",
+            )
+        )
+        session.commit()
+
+
+def _run_objective_validation(session: Session, run_id: str) -> None:
+    """Best-effort objective validation after a successful run."""
+    from harness_lab_app.validation_service import ValidationService
+
+    try:
+        ValidationService(session).validate_run(run_id)
+    except Exception as exc:  # validation must never fail the run
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="error",
+                message=f"Objective validation could not run: {exc!r}",
+            )
+        )
+        session.commit()
 
 
 @celery_app.task(name="harness_lab_app.tasks.execute_run", acks_late=True)
 def execute_run(run_id: str) -> None:
     init_db()
     _execute_run_body(run_id, get_executor())
+
+
+@celery_app.task(name="harness_lab_app.tasks.validate_run", acks_late=True)
+def validate_run(run_id: str) -> None:
+    """Objective validation on demand (runs in the worker, which has docker)."""
+    init_db()
+    with Session(engine) as session:
+        _run_objective_validation(session, run_id)
 
 
 def _stop_orphan_container(client: Any, run_id: str) -> None:

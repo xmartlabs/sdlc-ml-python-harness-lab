@@ -122,3 +122,46 @@ class Artifact(SQLModel, table=True):
     media_type: str = "text/plain"
     size_bytes: int = 0
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class Validation(SQLModel, table=True):
+    """Multidimensional result of validating a completed run.
+
+    Dimensions are kept separate on purpose (never collapsed prematurely):
+    - objective: automated checks (smoke / tests) — did the produced code run/pass?
+    - cost: tokens and money spent (from usage.json).
+    - effort: steps and human interventions.
+    - subjective: manual/LLM functional score (0-10) and optional rubric.
+    - composite: an explicit, documented roll-up of the above.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True, unique=True)
+    objective: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    cost: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    effort: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    subjective: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    composite: float | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class Attribution(SQLModel, table=True):
+    """Machine-readable record of which harness surface a run actually used.
+
+    Extracted from the run's opencode step logs: tool usage, files, bash
+    commands, agent modes, and — the key signal — coverage of the governance
+    docs / memory the harness provides ("harness applied?").
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True, unique=True)
+    tools: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    files: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    bash_commands: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    agent_modes: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    harness_usage: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    summary: str = ""
+    steps_parsed: int = 0
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

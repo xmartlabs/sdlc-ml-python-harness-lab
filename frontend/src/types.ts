@@ -55,6 +55,50 @@ export type RunEventRecord = {
   created_at: string;
 };
 
+export type ValidationCheck = {
+  name: string;
+  passed: boolean;
+  exit_code: number | null;
+  detail: string;
+};
+
+export type ValidationRecord = {
+  run_id: string;
+  objective: {
+    strategy?: string;
+    passed?: boolean | null;
+    summary?: string;
+    checks?: ValidationCheck[];
+  };
+  cost: {
+    available?: boolean;
+    total_tokens?: number | null;
+    cost_usd?: number | null;
+    time_minutes?: number | null;
+  };
+  effort: { steps?: number | null; interventions?: number | null };
+  subjective: { functional_score?: number | null; notes?: string };
+  composite: number | null;
+};
+
+export type AttributionRecord = {
+  run_id: string;
+  tools: Record<string, number>;
+  files: { read?: string[]; edited?: string[] };
+  bash_commands: Record<string, number>;
+  agent_modes: Record<string, number>;
+  harness_usage: {
+    governance_docs_available?: string[];
+    governance_docs_read?: string[];
+    governance_coverage?: string;
+    skills_available?: string[];
+    skills_consulted?: string[];
+    skills_note?: string;
+  };
+  summary: string;
+  steps_parsed: number;
+};
+
 export type RunConfigPayload = {
   case_id: string;
   prompt_variant: string;

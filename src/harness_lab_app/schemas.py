@@ -62,3 +62,12 @@ class RunRead(BaseModel):
     interventions: int | None = None
     notes: str = ""
     failure_reason: str | None = None
+
+
+class ValidationRead(BaseModel):
+    run_id: str
+    objective: dict = Field(default_factory=dict)
+    cost: dict = Field(default_factory=dict)
+    effort: dict = Field(default_factory=dict)
+    subjective: dict = Field(default_factory=dict)
+    composite: float | None = None

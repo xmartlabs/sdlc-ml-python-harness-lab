@@ -160,4 +160,56 @@ the run is later killed mid-execution — useful for verifying provenance withou
 paying for a full multi-step LLM run. But note: `--dry-run` returns BEFORE
 metadata is written, so dry-run does not produce metadata.json.
 
+## Validation runs in the worker, not the API — 2026-07-07
+
+Objective validation executes a container (via the same `RunExecutor` as runs),
+so it must run where the docker socket is mounted: the **worker**. The API
+process has no socket (ADR-0002), so `POST /api/runs/{id}/validate` enqueues a
+`validate_run` Celery task and the frontend polls `GET /validation`. Running it
+inline in the API fails with `DockerException: ... /var/run/docker.sock ... No
+such file or directory`.
+
+**Why it matters:** any feature that spawns a container belongs in the worker.
+**How to apply:** API endpoints that need docker must enqueue, never call the
+executor inline.
+
+## Runner container: sh -c, not sh -lc; pygame via uv pip — 2026-07-07
+
+Validation commands run with `sh -c`. A login shell (`sh -lc`) re-sources
+profile and drops the runner image's `/opt/venv/bin` from PATH, so `python`
+resolves to a system interpreter without the installed deps (pygame not found).
+Also: the uv-created `/opt/venv` has no `pip`; install extra runtime deps with
+`uv pip install --python /opt/venv/bin/python <pkg>`, not `/opt/venv/bin/pip`.
+
+**Why it matters:** both bugs made the Tetris smoke fail spuriously.
+**How to apply:** run in-container commands with `sh -c`; manage the venv with uv.
+
+## Composite score gates subjective by objective — 2026-07-07
+
+The multidimensional score keeps objective/cost/effort/subjective separate and
+only combines them in `composite`, which caps the manual functional score at 1.0
+when objective validation FAILED (a high manual score is not credible when the
+code does not run). Dimensions are never collapsed before that.
+
+**Why it matters:** preserves the signal an ablation needs; prevents a
+misleading single number.
+**How to apply:** new metrics go in as their own dimension; only `compute_composite`
+merges them, explicitly.
+
+## opencode log signals for harness attribution — 2026-07-07
+
+The opencode step logs (`data/runs/<id>/steps/step-*.log`) expose tool/file
+behavior in a stable `key=value` format: `permission=<read|edit|bash> pattern=…`
+(tool + target), `"shell tool using shell"` (shell), `agent=<mode>` (build /
+plan / title / undefined). There is NO explicit skill-invocation event — skills
+are injected into context, so file-based skill attribution is a lower bound
+(only counts `SKILL.md` reads). `"touching file"` is the file-watcher and fires
+on reads too, so it is NOT an edit signal — edits come only from
+`permission=edit`.
+
+**Why it matters:** these are the ground-truth signals for pillar 3 attribution;
+misreading "touching file" as an edit wrongly flags read-only governance docs.
+**How to apply:** count edits from `permission=edit`; treat skills_consulted as a
+documented lower bound; parse step logs, fall back to opencode.log.
+
 <!-- Add new learnings above this line -->

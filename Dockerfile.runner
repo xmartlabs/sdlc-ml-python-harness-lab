@@ -26,6 +26,10 @@ COPY README.md ./README.md
 COPY src ./src
 RUN uv sync --no-dev --frozen || uv sync --no-dev
 
+# pygame is not an app dependency; it is the runtime the build_from_scratch
+# (Tetris) case needs for its headless objective validation (SDL dummy driver).
+RUN uv pip install --python /opt/venv/bin/python --no-cache pygame
+
 # opencode CLI (host equivalent: brew install anomalyco/tap/opencode) and the
 # conductor plugin the Makefile installs into ~/.config/opencode.
 ARG OPENCODE_VERSION=latest

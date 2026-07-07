@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { RunEventRecord, RunRecord } from "../types";
+import type {
+  AttributionRecord,
+  RunEventRecord,
+  RunRecord,
+  ValidationRecord
+} from "../types";
 
 type RunDetailProps = {
   run: RunRecord | null;
@@ -20,6 +25,8 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
   const [scoreValue, setScoreValue] = useState(0);
   const [interventionsValue, setInterventionsValue] = useState(0);
   const [notesValue, setNotesValue] = useState("");
+  const [validation, setValidation] = useState<ValidationRecord | null>(null);
+  const [attribution, setAttribution] = useState<AttributionRecord | null>(null);
   const consoleRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -75,6 +82,38 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
     setNotesValue(run.notes ?? "");
   }, [run?.run_id, run?.score, run?.interventions, run?.notes]);
 
+  useEffect(() => {
+    setValidation(null);
+    setAttribution(null);
+    if (run === null) {
+      return;
+    }
+    let active = true;
+    api
+      .getValidation(run.run_id)
+      .then((result) => {
+        if (active) {
+          setValidation(result);
+        }
+      })
+      .catch(() => {
+        // No validation yet (404) is expected until a run finishes.
+      });
+    api
+      .getAttribution(run.run_id)
+      .then((result) => {
+        if (active) {
+          setAttribution(result);
+        }
+      })
+      .catch(() => {
+        // No attribution yet (404) is expected until a run finishes.
+      });
+    return () => {
+      active = false;
+    };
+  }, [run?.run_id, run?.state]);
+
   if (run === null) {
     return (
       <section className="inspector-stack">
@@ -109,9 +148,58 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
     setActionPending(true);
     setActionError(null);
     onScoreRun(run.run_id, clampedScore, normalizedInterventions, notesValue)
+      .then(() => api.getValidation(run.run_id).then(setValidation).catch(() => {}))
       .catch((error: Error) => setActionError(error.message))
       .finally(() => setActionPending(false));
   };
+
+  const handleRevalidate = () => {
+    const runId = run.run_id;
+    setActionPending(true);
+    setActionError(null);
+    api
+      .validateRun(runId)
+      .then(() => {
+        // Validation runs asynchronously in the worker; poll for the result.
+        let tries = 0;
+        const poll = () => {
+          api
+            .getValidation(runId)
+            .then((result) => setValidation(result))
+            .catch(() => {});
+          tries += 1;
+          if (tries < 8) {
+            window.setTimeout(poll, 3000);
+          }
+        };
+        window.setTimeout(poll, 3000);
+      })
+      .catch((error: Error) => setActionError(error.message))
+      .finally(() => setActionPending(false));
+  };
+
+  const objectiveBadge = (passed: boolean | null | undefined) => {
+    if (passed === true) return <span className="badge ok">objective: pass</span>;
+    if (passed === false) return <span className="badge error">objective: fail</span>;
+    return <span className="badge">objective: manual</span>;
+  };
+
+  const handleIndexAttribution = () => {
+    const runId = run.run_id;
+    setActionPending(true);
+    setActionError(null);
+    api
+      .indexAttribution(runId)
+      .then((result) => setAttribution(result))
+      .catch((error: Error) => setActionError(error.message))
+      .finally(() => setActionPending(false));
+  };
+
+  const countEntries = (counts: Record<string, number>) =>
+    Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => `${name}×${count}`)
+      .join("  ");
 
   return (
     <section className="inspector-stack">
@@ -195,13 +283,139 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
       ) : null}
       <div className="panel subtle">
         <div className="panel-head">
-          <h3>Play-test note</h3>
-          <span className="muted">Tetris GUI</span>
+          <h3>Validation & score</h3>
+          <div className="run-actions">
+            {validation ? objectiveBadge(validation.objective?.passed) : null}
+            <button disabled={actionPending} onClick={handleRevalidate} type="button">
+              Re-validate
+            </button>
+          </div>
         </div>
+        {validation === null ? (
+          <p className="muted">
+            No validation yet. Objective validation runs automatically when a run
+            finishes; use Re-validate to run it now.
+          </p>
+        ) : (
+          <>
+            <div className="detail-grid">
+              <div>
+                <span>Composite</span>
+                <strong>{validation.composite ?? "—"}</strong>
+              </div>
+              <div>
+                <span>Functional</span>
+                <strong>{validation.subjective?.functional_score ?? "—"}</strong>
+              </div>
+              <div>
+                <span>Objective</span>
+                <strong>{validation.objective?.summary ?? "—"}</strong>
+              </div>
+              <div>
+                <span>Tokens</span>
+                <strong>{validation.cost?.total_tokens ?? "—"}</strong>
+              </div>
+              <div>
+                <span>Cost (USD)</span>
+                <strong>{validation.cost?.cost_usd ?? "—"}</strong>
+              </div>
+              <div>
+                <span>Steps</span>
+                <strong>{validation.effort?.steps ?? "—"}</strong>
+              </div>
+              <div>
+                <span>Interventions</span>
+                <strong>{validation.effort?.interventions ?? "—"}</strong>
+              </div>
+              <div>
+                <span>Time (min)</span>
+                <strong>{validation.cost?.time_minutes ?? "—"}</strong>
+              </div>
+            </div>
+            {validation.objective?.checks && validation.objective.checks.length > 0 ? (
+              <div className="run-console">
+                {validation.objective.checks.map((check, index) => (
+                  <div
+                    className={`run-console-line ${check.passed ? "info" : "error"}`}
+                    key={index}
+                  >
+                    <span>{check.passed ? "✓" : "✗"}</span>
+                    <span>
+                      {check.name} (exit {check.exit_code ?? "?"}) {check.detail}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </>
+        )}
         <p className="muted">
-          Run play-tests from the host on workspace/{run.run_id}/ (example: python workspace/{run.run_id}/main.py). The
-          worker container has no display, so pygame cannot be validated inside Docker.
+          Objective validation runs a headless smoke of workspace/{run.run_id}/ in the
+          runner container (SDL dummy driver). The functional level below is the
+          subjective dimension; the composite gates it by the objective floor.
         </p>
+      </div>
+      <div className="panel subtle">
+        <div className="panel-head">
+          <h3>Harness attribution</h3>
+          <div className="run-actions">
+            {attribution ? (
+              <span className="badge">
+                governance {attribution.harness_usage?.governance_coverage ?? "—"}
+              </span>
+            ) : null}
+            <button disabled={actionPending} onClick={handleIndexAttribution} type="button">
+              Re-index
+            </button>
+          </div>
+        </div>
+        {attribution === null ? (
+          <p className="muted">
+            No attribution yet. It is computed automatically after a run from the
+            opencode step logs; use Re-index to compute it now.
+          </p>
+        ) : (
+          <>
+            <div className="detail-grid">
+              <div>
+                <span>Tools</span>
+                <strong>{countEntries(attribution.tools) || "—"}</strong>
+              </div>
+              <div>
+                <span>Agent modes</span>
+                <strong>{countEntries(attribution.agent_modes) || "—"}</strong>
+              </div>
+              <div>
+                <span>Governance read</span>
+                <strong>{attribution.harness_usage?.governance_coverage ?? "—"}</strong>
+              </div>
+              <div>
+                <span>Skills consulted</span>
+                <strong>
+                  {(attribution.harness_usage?.skills_consulted?.length ?? 0)}/
+                  {attribution.harness_usage?.skills_available?.length ?? 0}
+                </strong>
+              </div>
+              <div>
+                <span>Bash</span>
+                <strong>{countEntries(attribution.bash_commands) || "—"}</strong>
+              </div>
+              <div>
+                <span>Steps parsed</span>
+                <strong>{attribution.steps_parsed}</strong>
+              </div>
+            </div>
+            {attribution.harness_usage?.governance_docs_read &&
+            attribution.harness_usage.governance_docs_read.length > 0 ? (
+              <p className="muted">
+                Governance read: {attribution.harness_usage.governance_docs_read.join(", ")}
+              </p>
+            ) : (
+              <p className="muted">No governance docs were read in this run.</p>
+            )}
+            <p className="muted">{attribution.harness_usage?.skills_note}</p>
+          </>
+        )}
       </div>
       <div>
         <p className="sidebar-label">Command preview</p>

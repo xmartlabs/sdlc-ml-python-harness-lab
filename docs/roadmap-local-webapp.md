@@ -318,6 +318,14 @@ Decision: `score_mode=interactive` is unsupported for web-created runs because
 the worker process has no stdin channel for `input()`. The web flow standardizes
 on `score_mode=manual` plus `POST /api/runs/{run_id}/score` after completion.
 
+Objective validation + multidimensional score delivered (ADR-0004): a
+`Validation` per run records objective (automated smoke/tests), cost, effort,
+subjective (manual 0-10 + rubric), and an explicit `composite` (gated by the
+objective floor). Objective validation runs the case's `validation_commands` in
+a runner container in the worker — triggered automatically after a successful
+run and on demand via `POST /api/runs/{id}/validate`; shown in the RunDetail
+"Validation & score" panel. Tetris uses a headless SDL-dummy smoke.
+
 - [x] Index run artifacts from `data/runs/<run_id>/` (`ArtifactService.index_run`
       + `POST /api/runs/{run_id}/artifacts/index`; not yet triggered from the
       frontend or shown as a list — see the unchecked "Show"/"download" items
@@ -333,6 +341,15 @@ on `score_mode=manual` plus `POST /api/runs/{run_id}/score` after completion.
 - [x] Add manual score entry.
 - [x] Add human intervention entry.
 - [x] Add notes entry.
+- [x] Objective validation of the produced code (case `validation_commands` run
+      in a runner container; Tetris headless smoke) — `validation.py` /
+      `ValidationService` / `POST /api/runs/{id}/validate`.
+- [x] Multidimensional score (objective + cost + effort + subjective + composite)
+      stored in the `Validation` table and shown in RunDetail.
+- [x] Structured harness attribution (ADR-0005): `attribution.py` parses the run's
+      opencode step logs into tool usage, files read/edited, governance-doc read
+      coverage, bash/agent-mode histograms — stored in the `Attribution` table,
+      auto-indexed after every run, `GET`/`POST …/attribution`, shown in RunDetail.
 - [ ] Close scored runs through the same contract as `bench-close`.
 - [ ] Launch descriptive run audit through the same contract as `bench-audit`.
 - [ ] Show audit status and final audit content.

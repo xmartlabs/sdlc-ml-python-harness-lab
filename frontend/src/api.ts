@@ -1,9 +1,11 @@
 import type {
+  AttributionRecord,
   CaseCreatePayload,
   CaseRecord,
   RunCreatePayload,
   RunEventRecord,
-  RunRecord
+  RunRecord,
+  ValidationRecord
 } from "./types";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -60,5 +62,17 @@ export const api = {
     request<RunRecord>(`/api/runs/${runId}/score`, {
       method: "POST",
       body: JSON.stringify({ score, interventions, notes })
+    }),
+  getValidation: (runId: string) =>
+    request<ValidationRecord>(`/api/runs/${runId}/validation`),
+  validateRun: (runId: string) =>
+    request<{ status: string; run_id: string }>(`/api/runs/${runId}/validate`, {
+      method: "POST"
+    }),
+  getAttribution: (runId: string) =>
+    request<AttributionRecord>(`/api/runs/${runId}/attribution`),
+  indexAttribution: (runId: string) =>
+    request<AttributionRecord>(`/api/runs/${runId}/attribution/index`, {
+      method: "POST"
     })
 };

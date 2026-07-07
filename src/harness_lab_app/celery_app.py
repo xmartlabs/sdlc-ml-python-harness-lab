@@ -27,3 +27,14 @@ def enqueue_run(run_id: str) -> None:
         queue="runs",
         retry=False,
     )
+
+
+def enqueue_validation(run_id: str) -> None:
+    """Publish an objective-validation task (runs in the worker, which owns the
+    docker socket); raises if the broker is unreachable."""
+    celery_app.send_task(
+        "harness_lab_app.tasks.validate_run",
+        args=[run_id],
+        queue="runs",
+        retry=False,
+    )
