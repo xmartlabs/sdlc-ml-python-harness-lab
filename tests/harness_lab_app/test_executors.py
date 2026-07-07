@@ -132,9 +132,20 @@ class FakeContainers:
         raise RuntimeError(f"No such container: {name}")
 
 
+class FakeImages:
+    def __init__(self, known: bool = True):
+        self.known = known
+
+    def get(self, name: str) -> Any:
+        if not self.known:
+            raise RuntimeError(f"No such image: {name}")
+        return object()
+
+
 class FakeDockerClient:
-    def __init__(self, container: FakeContainer):
+    def __init__(self, container: FakeContainer, image_known: bool = True):
         self.containers = FakeContainers(container)
+        self.images = FakeImages(image_known)
 
 
 def test_docker_executor_configures_container(
@@ -163,6 +174,17 @@ def test_docker_executor_configures_container(
     assert messages == ["step one", "step two"]
     assert exit_code == 0
     assert container.removed is True
+
+
+def test_docker_executor_raises_clear_error_when_image_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+    client = FakeDockerClient(FakeContainer([]), image_known=False)
+    executor = DockerRunExecutor(client_factory=lambda: client)
+
+    with pytest.raises(RuntimeError, match="was not found locally"):
+        executor.start("tetris-v1-K-001", ["python", "scripts/bench_run.py"])
 
 
 def test_docker_executor_stop_stops_container(

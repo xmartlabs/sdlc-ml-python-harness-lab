@@ -195,6 +195,7 @@ class DockerRunExecutor:
                 "HARNESS_LAB_HOST_REPO_ROOT must be set for the docker backend"
             )
         client = self._client()
+        self._require_local_image(client, settings.runner_image)
         name = container_name_for_run(run_id)
         self._remove_stale_container(client, name)
         container = client.containers.run(
@@ -209,6 +210,24 @@ class DockerRunExecutor:
             labels={"harness-lab.run-id": run_id},
         )
         return _DockerHandle(container)
+
+    @staticmethod
+    def _require_local_image(client: Any, image: str) -> None:
+        """Fail fast and clearly if the runner image was never built.
+
+        `client.containers.run()` auto-pulls from the registry when an image
+        is missing locally, which for a local-only image like
+        `harness-lab-runner` fails with a confusing 404 ImageNotFound. Check
+        first so the error tells the operator exactly what to run.
+        """
+        try:
+            client.images.get(image)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Runner image '{image}' was not found locally. Build it with "
+                "`make app-up` (or `docker compose build runner`) before "
+                "starting the worker."
+            ) from exc
 
     @staticmethod
     def _remove_stale_container(client: Any, name: str) -> None:
