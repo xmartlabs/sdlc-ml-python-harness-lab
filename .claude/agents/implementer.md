@@ -1,7 +1,7 @@
 ---
 name: implementer
 description: Use to implement an approved, scoped plan with clean-architecture boundaries and English-only code artifacts.
-model: sonnet
+model: "claude-sonnet-5-oauth"
 tools: Read, Grep, Edit, Bash, Skill
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: tester
 description: Use to design and write tests that prove a change works and to make the read-only quality gate pass.
-model: sonnet
+model: "claude-sonnet-5-oauth"
 tools: Read, Grep, Edit, Bash, Skill
 ---
 

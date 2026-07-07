@@ -14,6 +14,7 @@ is documented in ``.github/portability.md`` and intentionally NOT hardcoded here
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from ml_python_base.skills_sync.models import (
@@ -41,10 +42,11 @@ _CLAUDE_TOOLS = {
 # "whatever opus/sonnet/haiku is current". This makes planning/review run on the
 # flagship model while execution runs on Sonnet to save tokens. The same tier
 # vocabulary maps to other runtimes in `.github/portability.md`.
+# Overridable via ANTHROPIC_MODEL_PLANNER / ANTHROPIC_MODEL_EXECUTOR / ANTHROPIC_MODEL_FAST.
 _CLAUDE_TIER_MODEL = {
-    "planner": "opus",
-    "executor": "sonnet",
-    "fast": "haiku",
+    "planner": os.getenv("ANTHROPIC_MODEL_PLANNER", "claude-opus-4.8"),
+    "executor": os.getenv("ANTHROPIC_MODEL_EXECUTOR", "claude-sonnet-5-oauth"),
+    "fast": os.getenv("ANTHROPIC_MODEL_FAST", "claude-fable-5"),
 }
 
 # OpenCode governs tool access via a `permission` map (`tools` is deprecated). We
@@ -149,7 +151,9 @@ def _render_claude(agent: Agent) -> str:
     ]
     model = _CLAUDE_TIER_MODEL.get(agent.tier)
     if model:
-        front.append(f"model: {model}")
+        # Wrap model in quotes to handle version numbers (dots) and hyphens,
+        # ensuring the IDE and YAML parsers treat it as a literal string.
+        front.append(f'model: "{model}"')
     if tools:
         front.append(f"tools: {', '.join(tools)}")
     front.append("---")

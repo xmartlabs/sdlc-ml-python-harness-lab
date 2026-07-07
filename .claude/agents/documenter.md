@@ -1,7 +1,7 @@
 ---
 name: documenter
 description: Use to create or update implementation documentation under docs/ whenever src or tests change.
-model: haiku
+model: "claude-fable-5"
 tools: Read, Grep, Edit, Skill
 ---
 

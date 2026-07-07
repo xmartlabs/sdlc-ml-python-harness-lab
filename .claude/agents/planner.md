@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Use to turn a feature request into an explicit, phased implementation plan grounded in the repository's governance.
-model: opus
+model: "claude-opus-4.8"
 tools: Read, Grep, Skill
 ---
 
