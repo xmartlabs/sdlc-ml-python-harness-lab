@@ -396,6 +396,13 @@ app-smoke-test:
 	@chmod +x scripts/smoke_test_docker.sh
 	@./scripts/smoke_test_docker.sh
 
+# Reset the application SQLite database and reseed the Tetris pilot case
+app-reset-db:
+	@echo "🧹 Resetting application database..."
+	@if [ ! -d .venv ]; then make install; fi
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/reset_db.py
+
 # Stop Docker container
 stop-docker:
 	@echo "🛑 Stopping Docker container..."
