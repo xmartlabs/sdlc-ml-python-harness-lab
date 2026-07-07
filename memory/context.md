@@ -43,13 +43,42 @@ API → Redis → Celery → runner container verified 2026-07-07).
 |-----|--------|-------|---------------|
 | local-webapp-mvp | in progress | — | — |
 
+## Scientific-lab direction (agreed 2026-07-07)
+
+The lab is being shaped into an instrument to evaluate the *engineering harness*
+(skills + docs + hooks + agents) as the **independent variable**, across
+cases/prompts/models incl. future SWE-bench. Vocabulary: case (frozen task),
+arm/condition (harness fingerprint + prompt + model + params), trial (one run),
+cell (case×condition, N reps), experiment (matrix varying ONE factor). Two
+method pillars: causal attribution needs **ablation** (toggle one factor,
+re-run, compare distributions), not observation; and local models at temp>0
+mean **statistical** reproducibility (N reps, mean±spread), not deterministic
+replay.
+
+Pillar order chosen: (1) provenance/fingerprint ✅ DONE, (2) objective
+validation + multidimensional score on existing cases (Tetris headless smoke +
+bugfix test-runner) — NOT SWE-bench yet, (3) structured harness attribution,
+(4) ablation/experiment runner. See `docs/adr/0003-trial-provenance-and-harness-fingerprint.md`.
+
+Provenance delivered: `src/harness_lab_app/provenance.py` +
+`bench_run.write_metadata` now write a hashable trial condition into
+`metadata.json`: `condition_hash` (arm id), `harness_fingerprint`
+(skills-lock hashes + agents + governance docs + hooks + opencode/plugin
+versions + rolled `harness_hash`), `model_condition` (temp/context/alias),
+`prompt_hash`, `case_hash`, `lab_git_commit`, `harness_git_dirty`,
+`runner_image`. Verified on a real run: K-002 metadata carried a full manifest.
+
 ## Open threads / next steps
 
-- Validate a real Tetris run from the UI end-to-end (needs: `.env` with
-  `GATEWAY_BASE_URL`/`GATEWAY_TOKEN`, LiteLLM on :4000, LM Studio on :1234
-  serving the qwen model — none of these were present on the host on
-  2026-07-07; opencode is also not installed on the host, only in the runner
-  image now).
+- Build pillar 2: per-case validation contract returning structured scores —
+  Tetris headless smoke (`BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python main.py`)
+  + a test-runner for `bugfix-with-tests`; separate objective (tests) from
+  subjective (manual/LLM rubric) from cost (usage.json) from effort (steps,
+  interventions).
+- For rigorous trials, commit the harness first so `harness_git_dirty=false`
+  and trials are attributable to a clean `lab_git_commit`.
+- The web app should index `metadata.json` and group runs by `condition_hash`
+  (foundation for the Phase 7 comparison/ablation surface).
 - Tail `data/runs/<run_id>/steps/*.log` when available (still open in Phase 4).
 - Add richer run detail tabs for artifacts, diff, score, and audit (Phase 5).
   Backend artifact indexing already exists (`ArtifactService.index_run`); the

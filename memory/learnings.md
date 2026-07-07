@@ -134,4 +134,30 @@ file rewriting or duplicated config needed.
 **How to apply:** put per-environment overrides in the container env, keep
 `.env` as the host-truth file.
 
+## Trial condition_hash: identity vs provenance — 2026-07-07
+
+`metadata.json` now carries a hashable trial condition (`provenance.py`). The
+`condition_hash` (the experimental "arm" id) is computed over ONLY the
+agent-facing harness (skills/agents/docs/hooks hashes), model settings
+(temp/context/models), prompt-template hash, and case hash. Provenance-only
+fields — `lab_git_commit`, `harness_git_dirty`, `runner_image` — are recorded
+but deliberately EXCLUDED from the hash: they say *how* a trial was produced,
+not *which arm* it is. So two reps of the same arm share a `condition_hash`
+even across lab-code commits, while an ablation (one skill edited) flips it.
+
+**Why it matters:** this is what makes runs groupable into cells/arms and makes
+"a diff of two fingerprints = the description of the ablation" true.
+**How to apply:** when adding a field, decide if it changes the *arm* (→ into
+`compute_condition_hash`) or just documents provenance (→ manifest only).
+Prompt hash uses the template (`prompt_source`), NOT the generated `prompt.md`,
+which embeds per-run ids and would break arm stability.
+
+## bench_run writes metadata before executing — 2026-07-07
+
+`write_metadata` runs in phase "[1/5] Preparing", before the agent executes. So
+`data/runs/<id>/metadata.json` (incl. the provenance manifest) exists even if
+the run is later killed mid-execution — useful for verifying provenance without
+paying for a full multi-step LLM run. But note: `--dry-run` returns BEFORE
+metadata is written, so dry-run does not produce metadata.json.
+
 <!-- Add new learnings above this line -->
