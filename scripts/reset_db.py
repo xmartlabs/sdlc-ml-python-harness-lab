@@ -1,13 +1,16 @@
+# ruff: noqa: E402
+
 import sys
 from pathlib import Path
+
 from sqlmodel import Session, SQLModel
 
 # Add src to sys.path
 src_dir = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(src_dir))
 
-from harness_lab_app.db import get_engine, init_db
 from harness_lab_app.case_service import CaseService
+from harness_lab_app.db import get_engine, init_db
 
 
 def reset_database() -> None:

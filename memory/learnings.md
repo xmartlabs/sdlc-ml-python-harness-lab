@@ -3,6 +3,20 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## Claude Code gateway model names must match native alias resolution — 2026-07-07
+
+Claude Code reads the generated `.claude/agents/*.md` `model:` frontmatter for
+subagents. To make gateway-routed Claude Code behave like direct Claude Code, use
+Claude Code's native aliases in agent frontmatter (`opus`, `sonnet`, `haiku`,
+`fable`) and pin them with `ANTHROPIC_DEFAULT_OPUS_MODEL`,
+`ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, and
+`ANTHROPIC_DEFAULT_FABLE_MODEL`. The gateway must expose the exact full model IDs
+Claude Code resolves to (`claude-opus-4-8`, `claude-sonnet-5`,
+`claude-haiku-4-5-20251001`, `claude-fable-5`). Nonstandard local aliases such as
+`claude-opus-4.8-oauth` may work as legacy LiteLLM names, but they bypass Claude
+Code's native alias/capability model and can produce misleading entitlement or
+model-selection behavior.
+
 ## Roadmap checkboxes need a three-way done-ness distinction, not binary — 2026-07-07
 
 Auditing `docs/roadmap-local-webapp.md` against real code (not memory or

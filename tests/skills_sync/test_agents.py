@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from ml_python_base.skills_sync.agents import (
     discover_agents,
     project_agents,
@@ -59,13 +61,30 @@ def test_render_claude_maps_tools_and_adds_skill() -> None:
     assert "Runtime model mapping: see `.github/portability.md`." in out
 
 
-def test_render_claude_assigns_model_by_tier() -> None:
-    # planner tier -> opus (flagship for planning/review); executor -> sonnet
-    # (cheaper execution); fast -> haiku. Aliases, not pinned ids.
+def test_render_claude_assigns_native_alias_by_tier() -> None:
+    # Use Claude Code's native aliases so its own model entitlement and gateway
+    # model-resolution logic match direct Claude Code behavior.
     agents = {a.name: a for a in discover_agents(REPO_ROOT)}
-    assert "model: opus" in render_agent(_claude_tool(), agents["planner"])
-    assert "model: sonnet" in render_agent(_claude_tool(), agents["implementer"])
-    assert "model: haiku" in render_agent(_claude_tool(), agents["documenter"])
+    assert 'model: "opus"' in render_agent(_claude_tool(), agents["planner"])
+    assert 'model: "sonnet"' in render_agent(_claude_tool(), agents["implementer"])
+    assert 'model: "haiku"' in render_agent(_claude_tool(), agents["documenter"])
+
+
+def test_render_claude_allows_gateway_model_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agents = {a.name: a for a in discover_agents(REPO_ROOT)}
+    monkeypatch.setenv("ANTHROPIC_MODEL_PLANNER", "fable")
+    monkeypatch.setenv("ANTHROPIC_MODEL_EXECUTOR", "claude-sonnet-5")
+    monkeypatch.setenv("ANTHROPIC_MODEL_FAST", "claude-haiku-4-5-20251001")
+
+    assert 'model: "fable"' in render_agent(_claude_tool(), agents["planner"])
+    assert 'model: "claude-sonnet-5"' in render_agent(
+        _claude_tool(), agents["implementer"]
+    )
+    assert 'model: "claude-haiku-4-5-20251001"' in render_agent(
+        _claude_tool(), agents["documenter"]
+    )
 
 
 def test_render_opencode_uses_mode() -> None:

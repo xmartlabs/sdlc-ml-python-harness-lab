@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Use to review a diff for correctness, boundary violations, and governance compliance before finalizing.
-model: "claude-opus-4.8"
+model: "opus"
 tools: Read, Grep, Bash, Skill
 ---
 

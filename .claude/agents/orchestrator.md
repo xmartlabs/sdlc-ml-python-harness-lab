@@ -1,7 +1,7 @@
 ---
 name: orchestrator
 description: Use to deliver a non-trivial feature end-to-end by driving the governed SDLC phases and delegating each phase to a specialist agent.
-model: "claude-opus-4.8"
+model: "opus"
 tools: Read, Grep, Agent, Skill
 ---
 
