@@ -71,8 +71,15 @@ def _write_case_spec(
         case = CaseService(session).get_case(case_id)
     except ValueError:
         return
-    is_repo_task = case.type == CaseType.swe_bench_instance or bool(case.subject_repo)
-    if not is_repo_task:
+    run_dir = get_settings().data_runs_dir / run_id
+    stale_spec = run_dir / "case_spec.json"
+    # Only SWE-bench cases provision a repo. NOTE: other cases (e.g. Tetris) may
+    # carry a subject_repo field for provenance that is NOT a cloneable
+    # owner/repo, so type — not subject_repo — is the gate.
+    if case.type != CaseType.swe_bench_instance:
+        # Remove any spec left over from a prior run reusing this id, so the
+        # runner does not mistake this for a repo task.
+        stale_spec.unlink(missing_ok=True)
         return
     meta = case.metadata_json or {}
     spec = {
@@ -89,9 +96,8 @@ def _write_case_spec(
         "prompt_variant": prompt_variant,
         "prompt": case.prompt_variants.get(prompt_variant, ""),
     }
-    run_dir = get_settings().data_runs_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "case_spec.json").write_text(json.dumps(spec, indent=2))
+    stale_spec.write_text(json.dumps(spec, indent=2))
 
 
 def _cancel_requested(session: Session, run_id: str) -> bool:

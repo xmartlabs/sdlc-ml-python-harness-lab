@@ -502,7 +502,10 @@ def _load_case_spec(out_dir: Path) -> dict | None:
         spec = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
-    return spec if spec.get("repo") else None
+    # Guard: only treat as a repo task when `repo` looks like a cloneable
+    # "owner/repo" (a bare name like a provenance subject_repo is not).
+    repo = spec.get("repo", "")
+    return spec if "/" in repo else None
 
 
 def provision_workspace(workspace: Path, spec: dict) -> None:

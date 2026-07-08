@@ -164,3 +164,35 @@ def test_write_case_spec_noop_for_missing_case(tmp_path, monkeypatch):
         # Unknown case → no spec written, no crash.
         tasks._write_case_spec(session, "run-y", "does-not-exist", "swe_default")
     assert not (tmp_path / "run-y").exists()
+
+
+def test_write_case_spec_skips_non_swe_case_with_subject_repo(tmp_path, monkeypatch):
+    # Regression: Tetris carries subject_repo for provenance but is NOT a repo
+    # task — it must not get a case_spec.json (which would try to clone it).
+    from types import SimpleNamespace
+
+    from harness_lab_app import tasks
+    from harness_lab_app.models import Case, CaseType
+
+    monkeypatch.setattr(
+        tasks, "get_settings", lambda: SimpleNamespace(data_runs_dir=tmp_path)
+    )
+    # A stale spec from a prior run reusing this id must be cleaned up.
+    run_dir = tmp_path / "tetris-run-1"
+    run_dir.mkdir()
+    (run_dir / "case_spec.json").write_text("{}")
+
+    with _session() as session:
+        session.add(
+            Case(
+                case_id="tetris-v1",
+                name="Tetris",
+                type=CaseType.build_from_scratch,
+                subject_repo="ml-python-base",
+                base_commit="deadbeef",
+            )
+        )
+        session.commit()
+        tasks._write_case_spec(session, "tetris-run-1", "tetris-v1", "sdlc")
+
+    assert not (run_dir / "case_spec.json").exists()
