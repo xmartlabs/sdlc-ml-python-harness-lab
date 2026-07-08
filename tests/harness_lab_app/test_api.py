@@ -93,3 +93,30 @@ def test_run_audit_endpoint_404_when_run_missing():
         with pytest.raises(HTTPException) as exc:
             run_audit("ghost", None, session)
         assert exc.value.status_code == 404
+
+
+def test_get_sandbox_endpoint_404_when_missing():
+    app = create_app()
+    get_sandbox = _route_endpoint(app, "/api/runs/{run_id}/sandbox", method="GET")
+    with _session() as session:
+        with pytest.raises(HTTPException) as exc:
+            get_sandbox("ghost", "terminal", session)
+        assert exc.value.status_code == 404
+
+
+def test_start_sandbox_endpoint_422_on_bad_kind():
+    app = create_app()
+    start = _route_endpoint(app, "/api/runs/{run_id}/sandbox", method="POST")
+    with _session() as session:
+        with pytest.raises(HTTPException) as exc:
+            start("run-x", "banana", session)
+        assert exc.value.status_code == 422
+
+
+def test_start_sandbox_endpoint_409_without_workspace():
+    app = create_app()
+    start = _route_endpoint(app, "/api/runs/{run_id}/sandbox", method="POST")
+    with _session() as session:
+        with pytest.raises(HTTPException) as exc:
+            start("no-such-run-workspace", "terminal", session)
+        assert exc.value.status_code == 409

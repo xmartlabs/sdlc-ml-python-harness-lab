@@ -12,10 +12,12 @@ from harness_lab_app.config import get_settings, read_env_file_value
 from harness_lab_app.models import (
     Artifact,
     Attribution,
+    Audit,
     Run,
     RunConfig,
     RunEvent,
     RunState,
+    Sandbox,
     Validation,
     utc_now,
 )
@@ -350,7 +352,7 @@ class RunService:
             raise RunDeleteConflictError(
                 f"Run '{run_id}' is running. Cancel it first, or delete with force."
             )
-        for model in (Validation, Attribution, Artifact, RunEvent):
+        for model in (Validation, Attribution, Audit, Sandbox, Artifact, RunEvent):
             rows = self.session.exec(select(model).where(model.run_id == run_id)).all()
             for row in rows:
                 self.session.delete(row)

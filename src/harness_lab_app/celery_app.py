@@ -51,6 +51,26 @@ def enqueue_audit(run_id: str, auditor_model: str | None = None) -> None:
     )
 
 
+def enqueue_sandbox_start(run_id: str, kind: str) -> None:
+    """Publish a task to launch a validation sandbox (runs in the worker)."""
+    celery_app.send_task(
+        "harness_lab_app.tasks.start_sandbox",
+        args=[run_id, kind],
+        queue="runs",
+        retry=False,
+    )
+
+
+def enqueue_sandbox_stop(run_id: str, kind: str) -> None:
+    """Publish a task to stop + clean up a validation sandbox."""
+    celery_app.send_task(
+        "harness_lab_app.tasks.stop_sandbox",
+        args=[run_id, kind],
+        queue="runs",
+        retry=False,
+    )
+
+
 def enqueue_container_cleanup(run_id: str) -> None:
     """Publish a container-teardown task after a run is deleted (worker owns the
     docker socket); raises if the broker is unreachable."""

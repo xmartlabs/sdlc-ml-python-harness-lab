@@ -38,6 +38,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0007 — Run deletion semantics](0007-run-deletion-semantics.md)
 - [0008 — LLM audit exposed in the web app](0008-llm-audit-in-web.md)
 - [0009 — SWE-bench case type](0009-swebench-case-type.md)
+- [0010 — In-platform validation sandboxes](0010-in-platform-sandboxes.md)
 
 ## Why ADRs exist
 

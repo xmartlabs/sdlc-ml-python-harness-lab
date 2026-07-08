@@ -74,6 +74,16 @@ services:
     profiles:
       - build-only
 
+  # Build-only entry for the per-run validation sandbox image (web terminal /
+  # noVNC desktop). Launched on demand by the worker, never started here.
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    image: harness-lab-sandbox:latest
+    profiles:
+      - build-only
+
   frontend:
     build:
       context: .

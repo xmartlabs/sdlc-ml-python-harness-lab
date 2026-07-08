@@ -359,8 +359,13 @@ build-fresh:
 # api + celery worker + redis + frontend.
 app-up:
 	@echo "🚀 Starting local web app stack..."
-	@docker compose build runner
+	@docker compose build runner sandbox
 	@docker compose up -d --build api worker redis frontend
+
+# Build only the per-run validation sandbox image (web terminal / noVNC desktop).
+sandbox-build:
+	@echo "🧰 Building sandbox image (ttyd + Xvfb + noVNC)..."
+	@docker compose build sandbox
 
 # Smoke-test the runner image directly against the host gateway (no Celery):
 # proves opencode-in-container can reach LiteLLM/LM Studio on the host.

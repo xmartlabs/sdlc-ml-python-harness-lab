@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { SandboxPanel } from "../components/SandboxPanel";
 import { StateBadge } from "../components/StateBadge";
 import type {
   AttributionRecord,
@@ -33,6 +34,7 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
   const [attribution, setAttribution] = useState<AttributionRecord | null>(null);
   const [audit, setAudit] = useState<AuditRecord | null>(null);
   const [auditModel, setAuditModel] = useState("");
+  const [tab, setTab] = useState<"detail" | "terminal" | "desktop">("detail");
   const consoleRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -281,6 +283,21 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
         </div>
         {actionError !== null ? <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} /> : null}
       </div>
+      <div className="run-tabs">
+        {(["detail", "terminal", "desktop"] as const).map((name) => (
+          <button
+            className={tab === name ? "run-tab active" : "run-tab"}
+            key={name}
+            onClick={() => setTab(name)}
+            type="button"
+          >
+            {name === "detail" ? "Detail" : name === "terminal" ? "Terminal" : "Desktop"}
+          </button>
+        ))}
+      </div>
+      {tab !== "detail" ? <SandboxPanel key={tab} kind={tab} runId={run.run_id} /> : null}
+      {tab === "detail" ? (
+        <>
       <div className="detail-grid">
         <div>
           <span>Score</span>
@@ -547,6 +564,8 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
         <p className="muted">metadata.json, prompt.md, report.md, audit.md, diff.patch</p>
       </div>
       </div>
+        </>
+      ) : null}
     </section>
   );
 }

@@ -6,6 +6,7 @@ import type {
   RunCreatePayload,
   RunEventRecord,
   RunRecord,
+  SandboxRecord,
   ValidationRecord
 } from "./types";
 
@@ -106,5 +107,16 @@ export const api = {
     return request<{ status: string; run_id: string }>(`/api/runs/${runId}/audit${query}`, {
       method: "POST"
     });
-  }
+  },
+  getSandbox: (runId: string, kind: string) =>
+    request<SandboxRecord>(`/api/runs/${runId}/sandbox?kind=${kind}`),
+  startSandbox: (runId: string, kind: string) =>
+    request<{ status: string; run_id: string; kind: string }>(
+      `/api/runs/${runId}/sandbox?kind=${kind}`,
+      { method: "POST" }
+    ),
+  stopSandbox: (runId: string, kind: string) =>
+    request<{ status: string }>(`/api/runs/${runId}/sandbox?kind=${kind}`, {
+      method: "DELETE"
+    })
 };

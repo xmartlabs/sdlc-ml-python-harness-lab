@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -28,9 +29,11 @@ from harness_lab_app.executors import (
 from harness_lab_app.models import CaseType, Run, RunEvent, RunState
 from harness_lab_app.run_service import RunService
 from harness_lab_app.runner_adapter import BenchRunAdapter
+from harness_lab_app.sandbox_service import SandboxService
 from harness_lab_app.schemas import RunConfigCreate
 
 _AUDIT_TIMEOUT_SECONDS = 300
+_SANDBOX_PORTS = {"terminal": "7681/tcp", "desktop": "6080/tcp"}
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
@@ -318,6 +321,113 @@ def audit_run(run_id: str, auditor_model: str | None = None) -> None:
             service.store_error(run_id, tail or "Audit failed (no output)")
 
 
+def _sandbox_container_name(run_id: str, kind: str) -> str:
+    safe = "".join(c if (c.isalnum() or c in "-_.") else "-" for c in run_id)
+    return f"harness-sandbox-{kind}-{safe}"
+
+
+def _launch_sandbox(client: Any, run_id: str, kind: str) -> tuple[str, int, str]:
+    """Copy the run's workspace and launch a sandbox container (worker-side).
+
+    Returns (container_name, host_port, url). The bind mount uses the HOST path
+    (docker-out-of-docker), and the port is docker-assigned then read back.
+    """
+    settings = get_settings()
+    host_repo_root = settings.host_repo_root or str(settings.repo_root)
+    workspace = settings.data_runs_dir / run_id / "workspace"
+    if not workspace.exists():
+        raise RuntimeError(f"No workspace to sandbox at {workspace}")
+
+    sandbox_dir = settings.sandbox_dir(run_id, kind)
+    if sandbox_dir.exists():
+        shutil.rmtree(sandbox_dir)
+    shutil.copytree(workspace, sandbox_dir)
+    host_sandbox = os.path.join(
+        host_repo_root, "data", "runs", run_id, f"sandbox-{kind}"
+    )
+
+    name = _sandbox_container_name(run_id, kind)
+    with contextlib.suppress(Exception):
+        client.containers.get(name).remove(force=True)
+
+    port_key = _SANDBOX_PORTS[kind]
+    container = client.containers.run(
+        image=settings.sandbox_image,
+        detach=True,
+        name=name,
+        environment={"MODE": kind},
+        volumes={host_sandbox: {"bind": "/work", "mode": "rw"}},
+        ports={port_key: None},
+        labels={"harness-lab.sandbox": run_id, "harness-lab.sandbox-kind": kind},
+    )
+    # The host port mapping may take a moment to appear; poll briefly.
+    host_port = 0
+    for _ in range(20):
+        container.reload()
+        mapping = (container.ports or {}).get(port_key) or []
+        if mapping and mapping[0].get("HostPort"):
+            host_port = int(mapping[0]["HostPort"])
+            break
+        time.sleep(0.25)
+    if not host_port:
+        raise RuntimeError("Sandbox container did not expose a host port")
+
+    path = "/vnc.html?autoconnect=1&resize=remote" if kind == "desktop" else "/"
+    return name, host_port, f"http://localhost:{host_port}{path}"
+
+
+@celery_app.task(name="harness_lab_app.tasks.start_sandbox", acks_late=True)
+def start_sandbox(run_id: str, kind: str) -> None:
+    """Launch a validation sandbox (terminal/desktop) for a run (worker-side)."""
+    init_db()
+    settings = get_settings()
+    if settings.execution_backend != "docker":
+        with Session(engine) as session:
+            SandboxService(session).mark_error(
+                run_id, kind, "Sandboxes require the docker execution backend."
+            )
+        return
+    import docker  # local import: only the worker needs the socket
+
+    client = docker.from_env()
+    with Session(engine) as session:
+        service = SandboxService(session)
+        try:
+            client.images.get(settings.sandbox_image)
+        except Exception:
+            service.mark_error(
+                run_id,
+                kind,
+                "Sandbox image not found. Build it with `make sandbox-build`.",
+            )
+            return
+        try:
+            name, port, url = _launch_sandbox(client, run_id, kind)
+            service.mark_running(run_id, kind, name, port, url)
+        except Exception as exc:
+            service.mark_error(run_id, kind, repr(exc)[:800])
+
+
+@celery_app.task(name="harness_lab_app.tasks.stop_sandbox", acks_late=True)
+def stop_sandbox(run_id: str, kind: str) -> None:
+    """Stop + remove a sandbox container and its ephemeral workspace copy."""
+    init_db()
+    settings = get_settings()
+    if settings.execution_backend == "docker":
+        with contextlib.suppress(Exception):
+            import docker
+
+            client = docker.from_env()
+            container = client.containers.get(_sandbox_container_name(run_id, kind))
+            with contextlib.suppress(Exception):
+                container.stop(timeout=5)
+            container.remove(force=True)
+    with contextlib.suppress(Exception):
+        shutil.rmtree(settings.sandbox_dir(run_id, kind))
+    with Session(engine) as session:
+        SandboxService(session).mark_stopped(run_id, kind)
+
+
 @celery_app.task(name="harness_lab_app.tasks.cleanup_run_container", acks_late=True)
 def cleanup_run_container(run_id: str) -> None:
     """Best-effort teardown of a deleted run's leftover container.
@@ -330,7 +440,17 @@ def cleanup_run_container(run_id: str) -> None:
         return
     import docker  # local import: only the worker needs the socket
 
-    _stop_orphan_container(docker.from_env(), run_id)
+    client = docker.from_env()
+    _stop_orphan_container(client, run_id)
+    # Also tear down any validation sandboxes the run left running.
+    for kind in ("terminal", "desktop"):
+        with contextlib.suppress(Exception):
+            container = client.containers.get(_sandbox_container_name(run_id, kind))
+            with contextlib.suppress(Exception):
+                container.stop(timeout=5)
+            container.remove(force=True)
+        with contextlib.suppress(Exception):
+            shutil.rmtree(settings.sandbox_dir(run_id, kind))
 
 
 def _stop_orphan_container(client: Any, run_id: str) -> None:

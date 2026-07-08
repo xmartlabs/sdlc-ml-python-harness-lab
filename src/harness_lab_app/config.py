@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     host_repo_root: str = ""
     docker_host_alias: str = "host.docker.internal"
     run_timeout_seconds: int = 7200
+    # In-platform validation sandboxes (web terminal / noVNC desktop per run).
+    sandbox_image: str = "harness-lab-sandbox:latest"
+    sandbox_idle_seconds: int = 3600
 
     @property
     def data_runs_dir(self) -> Path:
@@ -38,6 +41,11 @@ class Settings(BaseSettings):
         # (workspace/<run_id>/). Mirrors WORKSPACE_ROOT in scripts/bench_start.py
         # so deletion/cleanup paths are centralized on the settings object.
         return self.repo_root / "workspace"
+
+    def sandbox_dir(self, run_id: str, kind: str) -> Path:
+        # Ephemeral, isolated copy of a run's workspace that a sandbox container
+        # mounts (so exploring/running the code never mutates the artifact).
+        return self.data_runs_dir / run_id / f"sandbox-{kind}"
 
     @property
     def benchmarks_dir(self) -> Path:

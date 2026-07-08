@@ -14,6 +14,8 @@ from harness_lab_app.celery_app import (
     enqueue_audit,
     enqueue_container_cleanup,
     enqueue_run,
+    enqueue_sandbox_start,
+    enqueue_sandbox_stop,
     enqueue_validation,
 )
 from harness_lab_app.config import get_settings
@@ -24,6 +26,7 @@ from harness_lab_app.run_service import (
     RunPreflightError,
     RunService,
 )
+from harness_lab_app.sandbox_service import VALID_KINDS, SandboxService
 from harness_lab_app.schemas import CaseCreate, RunConfigCreate, RunCreate
 from harness_lab_app.validation_service import ValidationService
 
@@ -196,6 +199,38 @@ def create_app() -> FastAPI:
         AuditService(session).mark_running(run_id, auditor_model or "")
         enqueue_audit(run_id, auditor_model)
         return {"status": "queued", "run_id": run_id}
+
+    @app.get("/api/runs/{run_id}/sandbox")
+    def get_sandbox(
+        run_id: str, kind: str = "terminal", session: Session = Depends(get_session)
+    ):
+        sandbox = SandboxService(session).get_sandbox(run_id, kind)
+        if sandbox is None:
+            raise HTTPException(status_code=404, detail="No sandbox for this run")
+        return sandbox
+
+    @app.post("/api/runs/{run_id}/sandbox")
+    def start_sandbox(
+        run_id: str, kind: str = "terminal", session: Session = Depends(get_session)
+    ):
+        if kind not in VALID_KINDS:
+            raise HTTPException(
+                status_code=422, detail=f"kind must be one of {VALID_KINDS}"
+            )
+        workspace = get_settings().data_runs_dir / run_id / "workspace"
+        if not workspace.exists():
+            raise HTTPException(
+                status_code=409,
+                detail="No workspace to sandbox yet — the run must finish first.",
+            )
+        SandboxService(session).mark_starting(run_id, kind)
+        enqueue_sandbox_start(run_id, kind)
+        return {"status": "queued", "run_id": run_id, "kind": kind}
+
+    @app.delete("/api/runs/{run_id}/sandbox", status_code=202)
+    def stop_sandbox(run_id: str, kind: str = "terminal"):
+        enqueue_sandbox_stop(run_id, kind)
+        return {"status": "stopping", "run_id": run_id, "kind": kind}
 
     @app.post("/api/runs/{run_id}/validate")
     def validate_run(run_id: str, session: Session = Depends(get_session)):

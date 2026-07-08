@@ -146,6 +146,27 @@ class Validation(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class Sandbox(SQLModel, table=True):
+    """An in-platform validation sandbox container for a run.
+
+    Per run + kind (`terminal` = ttyd web shell, `desktop` = Xvfb+noVNC), the
+    worker launches a container mounting an ephemeral copy of the run's
+    workspace and maps a host port; the frontend iframes `url`. `status` tracks
+    the lifecycle for polling.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    kind: str = "terminal"  # terminal | desktop
+    status: str = "starting"  # starting | running | stopped | failed
+    container_name: str = ""
+    host_port: int | None = None
+    url: str = ""
+    error: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Audit(SQLModel, table=True):
     """Qualitative LLM audit of a run (descriptive behavior diagnostic).
 

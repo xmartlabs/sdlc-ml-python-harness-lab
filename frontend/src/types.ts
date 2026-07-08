@@ -109,6 +109,16 @@ export type AuditRecord = {
   updated_at: string;
 };
 
+export type SandboxRecord = {
+  run_id: string;
+  kind: "terminal" | "desktop";
+  status: "starting" | "running" | "stopped" | "failed";
+  container_name: string;
+  host_port: number | null;
+  url: string;
+  error: string | null;
+};
+
 export type RunConfigPayload = {
   case_id: string;
   prompt_variant: string;

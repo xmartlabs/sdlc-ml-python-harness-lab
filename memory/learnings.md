@@ -3,6 +3,30 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## In-platform sandboxes: worker-launched containers with dynamic host ports — 2026-07-08
+
+Per-run validation sandboxes (ADR-0010) let the user run/inspect a run's code in
+the browser: a `terminal` (ttyd) and a `desktop` (Xvfb+x11vnc+noVNC, to SEE a
+pygame/Tetris window). Key mechanics:
+- **One image, two modes** (`Dockerfile.sandbox`, ~870 MB, build-only) selected by
+  `MODE` env in `scripts/sandbox_entrypoint.sh`. ttyd needs an arch-aware static
+  binary (`ttyd.aarch64` on Apple Silicon). Xvfb screen size = what pygame's
+  `display.init()` reports (proved the display works even without xdpyinfo).
+- **Worker owns the socket** (ADR-0002): API can't launch; `POST /sandbox` marks a
+  `Sandbox` row `starting` + enqueues `start_sandbox`; frontend polls `GET`; iframes
+  `url`. Launch uses `containers.run(ports={'7681/tcp': None})` then
+  `reload()` + read `container.ports[...]['HostPort']` — **docker-out-of-docker maps
+  the port on the HOST**, so the browser reaches `localhost:<dynamic-port>`.
+- **Isolation**: mount a COPY at `data/runs/<id>/sandbox-<kind>/` (host path), never
+  the archived workspace, so exploring doesn't mutate the artifact.
+- **Cleanup**: explicit Stop + `cleanup_run_container` (extended to also kill sandbox
+  containers) + `delete_run` deletes `Sandbox`/`Audit` rows. Startup reaper + idle
+  TTL are still-open hardening.
+
+**Gotcha**: in zsh `status` is a read-only special var — don't use it as a loop
+variable in test scripts (use `st`). Security: ttyd/noVNC have no auth — fine only
+because it's local single-user on localhost.
+
 ## SWE-bench generic runtime needs per-repo env pinning (Python + dep constraints) — 2026-07-08
 
 Running a SWE-bench instance with a generic `git clone + uv pip install -e . +
