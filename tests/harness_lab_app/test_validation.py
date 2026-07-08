@@ -57,13 +57,55 @@ def test_collect_effort_falls_back_to_step_logs(tmp_path: Path):
     assert effort["steps"] == 2
 
 
-def test_build_validation_spec_substitutes_workspace():
+def test_build_validation_spec_substitutes_live_workspace(tmp_path, monkeypatch):
+    # No archived copy on disk → the live workspace path is used.
+    monkeypatch.setattr(
+        "harness_lab_app.validation.get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path),
+    )
     case = _case(validation_commands=["BENCH_SMOKE=1 python {workspace}/main.py"])
     spec = build_validation_spec(case, "tetris-v1-K-001")
     assert spec["strategy"] == "smoke"
     assert spec["commands"] == [
         ["sh", "-c", "BENCH_SMOKE=1 python workspace/tetris-v1-K-001/main.py"]
     ]
+
+
+def test_build_validation_spec_prefers_archived_workspace(tmp_path, monkeypatch):
+    # --fresh runs archive + remove the live workspace; validation must target
+    # the archived copy under data/runs/<id>/workspace when it exists.
+    (tmp_path / "tetris-v1-K-001" / "workspace").mkdir(parents=True)
+    monkeypatch.setattr(
+        "harness_lab_app.validation.get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path),
+    )
+    case = _case(validation_commands=["BENCH_SMOKE=1 python {workspace}/main.py"])
+    spec = build_validation_spec(case, "tetris-v1-K-001")
+    assert spec["commands"] == [
+        [
+            "sh",
+            "-c",
+            "BENCH_SMOKE=1 python data/runs/tetris-v1-K-001/workspace/main.py",
+        ]
+    ]
+
+
+def test_parse_objective_surfaces_swebench_verdict():
+    results = [
+        {
+            "command": "python /app/scripts/swebench_validate.py --run r1",
+            "exit_code": 0,
+            "output": (
+                "→ Running F2P (1) + P2P (18) …\n"
+                "SWEBENCH: resolved=True F2P=1/1 P2P=18/18\n"
+                "PASSED tests/test_config.py::test_config_from_file_toml\n"
+            ),
+        }
+    ]
+    objective = parse_objective(results, "tests")
+    assert objective["passed"] is True
+    assert objective["summary"] == "resolved=True F2P=1/1 P2P=18/18"
+    assert objective["checks"][0]["detail"] == "resolved=True F2P=1/1 P2P=18/18"
 
 
 def test_build_validation_spec_skips_prose_notes():

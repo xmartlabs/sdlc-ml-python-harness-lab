@@ -1,7 +1,19 @@
 # Design note: SWE-bench cases in the run → test → audit cycle
 
-Status: exploratory (not yet implemented). Captures how SWE-bench instances fit
-the existing lab so we can build them incrementally.
+Status: **Phase 1 + 2 delivered** (ADR-0009). Import + generic provision + test-subset
+validation work end-to-end in the runner container, verified with zero model tokens
+(golden patch → resolved; no-agent run → `resolved=False F2P=0/1 P2P=18/18`). What
+remains is a real agent run with an open-source model (Phase 3). Flagship instance:
+`pallets__flask-4992`.
+
+Quick start:
+```
+make swebench-selftest INSTANCE=pallets__flask-4992   # prove the harness, no tokens
+make swebench-import   INSTANCE=pallets__flask-4992   # create the Case
+# then create a run from the UI: Case = pallets__flask-4992, executor = <your model>
+```
+
+The original design reasoning is kept below.
 
 ## Why it fits almost for free
 

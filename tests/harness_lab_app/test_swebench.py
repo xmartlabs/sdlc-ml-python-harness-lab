@@ -128,3 +128,39 @@ def test_import_swebench_instance_is_idempotent():
         first_id = first.id
         again = service.import_swebench_instance(_spec())
         assert again.id == first_id
+
+
+def test_write_case_spec_for_swe_case(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from harness_lab_app import tasks
+
+    monkeypatch.setattr(
+        tasks, "get_settings", lambda: SimpleNamespace(data_runs_dir=tmp_path)
+    )
+    with _session() as session:
+        CaseService(session).import_swebench_instance(_spec())
+        tasks._write_case_spec(session, "run-x", "pallets__flask-4992", "swe_default")
+
+    spec_path = tmp_path / "run-x" / "case_spec.json"
+    assert spec_path.exists()
+    written = json.loads(spec_path.read_text())
+    assert written["repo"] == "pallets/flask"
+    assert written["repo_url"] == "https://github.com/pallets/flask.git"
+    assert written["fail_to_pass"] == _spec()["fail_to_pass"]
+    assert written["install_pins"] == ["Werkzeug<3"]
+    assert "flask.Config.from_file" in written["prompt"]
+
+
+def test_write_case_spec_noop_for_missing_case(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from harness_lab_app import tasks
+
+    monkeypatch.setattr(
+        tasks, "get_settings", lambda: SimpleNamespace(data_runs_dir=tmp_path)
+    )
+    with _session() as session:
+        # Unknown case → no spec written, no crash.
+        tasks._write_case_spec(session, "run-y", "does-not-exist", "swe_default")
+    assert not (tmp_path / "run-y").exists()

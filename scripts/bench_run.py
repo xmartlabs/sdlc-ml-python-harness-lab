@@ -474,9 +474,14 @@ def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
     print(f"  Copied workspace → data/runs/{run_id}/workspace/ ({file_count} files)")
 
     diff_path = out_dir / "diff.patch"
-    result = _run_git(
-        ["git", "diff", "--no-index", "/dev/null", str(dest)], cwd=REPO_ROOT
-    )
+    if (dest / ".git").exists():
+        # Repo task: the meaningful diff is the agent's changes vs the
+        # provisioned commit (base_commit + test_patch), not diff-vs-empty.
+        result = _run_git(["git", "-C", str(dest), "diff", "HEAD"], cwd=REPO_ROOT)
+    else:
+        result = _run_git(
+            ["git", "diff", "--no-index", "/dev/null", str(dest)], cwd=REPO_ROOT
+        )
     diff_path.write_text(result.stdout)
     diff_lines = result.stdout.count("\n")
     print(f"  diff.patch: {diff_lines} lines")
@@ -486,6 +491,77 @@ def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
         WORKSPACE_ROOT.rmdir()
     print(f"  Removed workspace/{run_id}/")
     return diff_lines
+
+
+def _load_case_spec(out_dir: Path) -> dict | None:
+    """Return the repo-task provisioning spec written by the worker, or None."""
+    path = out_dir / "case_spec.json"
+    if not path.exists():
+        return None
+    try:
+        spec = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    return spec if spec.get("repo") else None
+
+
+def provision_workspace(workspace: Path, spec: dict) -> None:
+    """Clone + set up a subject repo in the workspace before the agent runs.
+
+    Repo-task / SWE-bench flow (ADR-0009): clone @ base_commit, apply the
+    test_patch (so the failing test is present and the agent can self-check),
+    commit that provisioned state (so the agent's later `git diff HEAD` is only
+    its own changes), and editable-install the repo + test deps into the runner
+    interpreter. Fails the run loudly if the install fails.
+    """
+    import swebench_common as swe
+
+    if (workspace / ".git").exists():
+        print(f"  workspace/{workspace.name}/ already provisioned — skipping clone.")
+        return
+    if workspace.exists() and any(workspace.iterdir()):
+        sys.exit(f"❌ workspace/{workspace.name}/ is not empty; cannot provision repo.")
+    if workspace.exists():
+        workspace.rmdir()  # let git clone create it
+
+    repo = spec.get("repo", "")
+    repo_url = spec.get("repo_url") or swe.repo_url_from(repo)
+    base_commit = spec.get("base_commit", "")
+    print(f"  Provisioning {repo} @ {base_commit[:10]} …")
+    swe.clone_checkout(workspace, repo_url, base_commit)
+
+    if spec.get("apply_test_patch", True) and spec.get("test_patch"):
+        print("  Applying test_patch (adds the failing test) …")
+        swe.apply_patch(workspace, spec["test_patch"])
+
+    # Commit the provisioned state so finalize's `git diff HEAD` isolates the
+    # agent's edits from base_commit + test_patch.
+    _run_git(["git", "-C", str(workspace), "add", "-A"], cwd=REPO_ROOT)
+    _run_git(
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "-c",
+            "user.email=lab@harness.local",
+            "-c",
+            "user.name=harness-lab",
+            "commit",
+            "-q",
+            "-m",
+            "swebench: provisioned (base + test_patch)",
+        ],
+        cwd=REPO_ROOT,
+    )
+
+    python = spec.get("python", "3.11")
+    print(f"  Installing repo + test deps (python={python}) …")
+    installed = swe.install_repo(workspace, sys.executable, spec.get("install_pins"))
+    if installed.returncode != 0:
+        print(installed.stdout[-1500:])
+        print(installed.stderr[-1500:])
+        sys.exit(f"❌ repo install failed (rc={installed.returncode}).")
+    print("  ✓ Repo provisioned and installed.")
 
 
 def find_next_run(runs_path: Path, current_run_id: str) -> dict | None:
@@ -1025,17 +1101,43 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     _load_env()
 
-    runs_path = RUNS_FILES.get(args.case)
-    if runs_path is None:
-        sys.exit(f"Unknown case '{args.case}'. Known cases: {list(RUNS_FILES.keys())}")
+    out_dir = DATA_DIR / args.run
+    case_spec = _load_case_spec(out_dir)
 
-    task = load_task_yaml(runs_path)
-    run = resolve_or_synthesize_run(runs_path, args.run, args)
+    if case_spec is not None:
+        # Repo-task / SWE-bench lane (ADR-0009): everything the runner needs is
+        # in case_spec.json — no benchmarks/<case>/ task.yaml/prompts required.
+        runs_path = None
+        task = {
+            "subject_repo": case_spec.get("repo", ""),
+            "base_commit": case_spec.get("base_commit", ""),
+            "prompts": {},
+        }
+        run = {
+            "run_id": args.run,
+            "status": "pending",
+            "prompt_variant": case_spec.get("prompt_variant", "swe_default"),
+            "langfuse_session_id": f"bench-{args.run}",
+            "executor_model": args.executor_model or "",
+            "planner_model": args.planner_model or "",
+            "harness": "opencode",
+        }
+        prompt_short = run["prompt_variant"]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        prompt_source = out_dir / "_prompt_source.md"
+        prompt_source.write_text(case_spec.get("prompt", ""))
+    else:
+        runs_path = RUNS_FILES.get(args.case)
+        if runs_path is None:
+            sys.exit(
+                f"Unknown case '{args.case}'. Known cases: {list(RUNS_FILES.keys())}"
+            )
+        task = load_task_yaml(runs_path)
+        run = resolve_or_synthesize_run(runs_path, args.run, args)
+        if run.get("status") == "completed":
+            sys.exit(f"Run {args.run} is already completed. Use a new run_id.")
+        prompt_short, prompt_source = resolve_prompt_file(task, args.prompt, run)
 
-    if run.get("status") == "completed":
-        sys.exit(f"Run {args.run} is already completed. Use a new run_id.")
-
-    prompt_short, prompt_source = resolve_prompt_file(task, args.prompt, run)
     session_id = run.get("langfuse_session_id", f"bench-{args.run}")
 
     # Resolve models: CLI args override runs.yaml values
@@ -1121,6 +1223,9 @@ def main(argv: list[str] | None = None) -> int:
     validate_workspace(workspace, args.run, args.resume, fresh=args.fresh)
     workspace.mkdir(parents=True, exist_ok=True)
 
+    if case_spec is not None:
+        provision_workspace(workspace, case_spec)
+
     prompt_path = generate_prompt(
         args.run,
         prompt_short,
@@ -1139,7 +1244,11 @@ def main(argv: list[str] | None = None) -> int:
         run,
         prompt_short,
         prompt_source=prompt_source,
-        task_path=runs_path.parent / "task.yaml",
+        task_path=(
+            runs_path.parent / "task.yaml"
+            if runs_path is not None
+            else out_dir / "case_spec.json"
+        ),
     )
     print(f"  Metadata:    {(out_dir / 'metadata.json').relative_to(REPO_ROOT)}")
 
@@ -1151,7 +1260,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Report:      {(out_dir / 'report.md').relative_to(REPO_ROOT)}")
 
     write_bench_context(args.run)
-    set_status_running(runs_path, args.run)
+    if runs_path is not None:
+        set_status_running(runs_path, args.run)
 
     # Virtual key (optional)
     run_key: str | None = None
@@ -1395,7 +1505,7 @@ def main(argv: list[str] | None = None) -> int:
     # -----------------------------------------------------------------------
     # PHASE 5 — CLOSE
     # -----------------------------------------------------------------------
-    if score_data:
+    if score_data and runs_path is not None:
         print()
         print("  [5/5] Closing run...")
         s, i, n = score_data
@@ -1429,7 +1539,7 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print("  Next:")
     print("    make bench-results")
-    next_run = find_next_run(runs_path, args.run)
+    next_run = find_next_run(runs_path, args.run) if runs_path is not None else None
     if next_run:
         nr_id = next_run["run_id"]
         nr_models = next_run.get("gateway_models", [])

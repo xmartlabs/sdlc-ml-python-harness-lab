@@ -25,6 +25,21 @@ Pending validation: a real (non-dry-run) Tetris run from the UI against a live
 LM Studio + LiteLLM gateway with a populated `.env` (dry-run E2E through
 API → Redis → Celery → runner container verified 2026-07-07).
 
+SWE-bench case type landed 2026-07-08 (ADR-0009, branch `feature/web-ui`):
+generic image-free runtime (clone + `uv pip install -e .` + pytest) with a
+per-repo `_ENV_SPECS` pin map in `scripts/swebench_common.py`. Import a Case with
+`make swebench-import INSTANCE=pallets__flask-4992` (fetches HF datasets-server,
+stdlib only). Provisioning: worker writes `data/runs/<id>/case_spec.json`
+(`tasks._write_case_spec`); `bench_run.py` takes a repo-task branch (clone @
+base_commit, apply test_patch, commit, install) bypassing tetris `RUNS_FILES`.
+Objective validation runs `scripts/swebench_validate.py` (reinstall archived repo
++ F2P/P2P → `SWEBENCH: resolved=…`); `build_validation_spec` now targets the
+archived `data/runs/<id>/workspace` (also fixes Tetris under `--fresh`).
+Verified E2E in the runner container with **zero tokens** (golden→resolved;
+no-agent→`resolved=False F2P=0/1 P2P=18/18` rc=1). Phase 3 (real open-source
+agent run) is the next step. Prove the harness first:
+`make swebench-selftest INSTANCE=pallets__flask-4992`.
+
 Usability/reliability pass landed 2026-07-07 (branch `feature/web-ui`): fixed the
 "set RESUME=1" stale-workspace trap (managed `--fresh` runs + `finalize_workspace`,
 ADR-0006), loud preflight (empty executor / placeholder gateway token → 422) and

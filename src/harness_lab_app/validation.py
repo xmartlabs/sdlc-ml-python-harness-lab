@@ -21,6 +21,8 @@ import json
 import shlex
 from typing import TYPE_CHECKING, Any
 
+from harness_lab_app.config import get_settings
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -70,7 +72,13 @@ def build_validation_spec(case: Case, run_id: str) -> dict[str, Any]:
     ``{run_id}`` placeholders. Prose-only entries (no placeholder and not a
     runnable command) are treated as manual notes and skipped.
     """
-    workspace = f"workspace/{run_id}"
+    # Managed (--fresh) runs archive + remove the live workspace, so prefer the
+    # archived copy under data/runs/<id>/workspace when it exists (also the home
+    # of a provisioned SWE-bench repo); fall back to the live path otherwise.
+    archived = get_settings().data_runs_dir / run_id / "workspace"
+    workspace = (
+        f"data/runs/{run_id}/workspace" if archived.exists() else f"workspace/{run_id}"
+    )
     commands: list[list[str]] = []
     for raw in case.validation_commands or []:
         if not _looks_executable(raw):
@@ -89,15 +97,19 @@ def parse_objective(results: list[dict[str, Any]], strategy: str) -> dict[str, A
     Each result is ``{"command": str, "exit_code": int, "output": str}``.
     """
     checks = []
+    swebench_line: str | None = None
     for result in results:
         exit_code = result.get("exit_code")
+        output = result.get("output", "")
+        swebench_line = _swebench_summary(output) or swebench_line
         checks.append(
             {
                 "name": result.get("command", ""),
                 "passed": exit_code == 0,
                 "exit_code": exit_code,
-                "detail": _pytest_summary(result.get("output", ""))
-                or _tail(result.get("output", "")),
+                "detail": _swebench_summary(output)
+                or _pytest_summary(output)
+                or _tail(output),
             }
         )
     if not checks:
@@ -108,11 +120,16 @@ def parse_objective(results: list[dict[str, Any]], strategy: str) -> dict[str, A
             "summary": "No objective validation defined (manual only).",
         }
     passed = all(check["passed"] for check in checks)
+    # Prefer the SWE-bench F2P/P2P verdict as the headline when present.
+    summary = (
+        swebench_line
+        or f"{sum(c['passed'] for c in checks)}/{len(checks)} checks passed"
+    )
     return {
         "strategy": strategy,
         "passed": passed,
         "checks": checks,
-        "summary": f"{sum(c['passed'] for c in checks)}/{len(checks)} checks passed",
+        "summary": summary,
     }
 
 
@@ -181,6 +198,14 @@ def _looks_executable(command: str) -> bool:
     return (
         "=" in first or first in _EXEC_HINTS or first.startswith("./") or "/" in first
     )
+
+
+def _swebench_summary(output: str) -> str | None:
+    """Extract the `SWEBENCH: resolved=… F2P=… P2P=…` verdict line, if present."""
+    for line in reversed(output.splitlines()):
+        if line.strip().startswith("SWEBENCH:"):
+            return line.strip()[len("SWEBENCH:") :].strip()
+    return None
 
 
 def _pytest_summary(output: str) -> str | None:

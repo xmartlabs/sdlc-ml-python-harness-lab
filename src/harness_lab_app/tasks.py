@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import subprocess
 import threading
@@ -15,6 +16,7 @@ from celery.signals import worker_ready
 from sqlmodel import Session, select
 
 from harness_lab_app.audit_service import AuditService
+from harness_lab_app.case_service import CaseService
 from harness_lab_app.celery_app import celery_app
 from harness_lab_app.config import get_settings
 from harness_lab_app.db import engine, init_db
@@ -23,7 +25,7 @@ from harness_lab_app.executors import (
     container_name_for_run,
     get_executor,
 )
-from harness_lab_app.models import Run, RunEvent, RunState
+from harness_lab_app.models import CaseType, Run, RunEvent, RunState
 from harness_lab_app.run_service import RunService
 from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.schemas import RunConfigCreate
@@ -52,6 +54,44 @@ def _config_payload(session: Session, run: Run) -> RunConfigCreate:
         resume=config.resume,
         dry_run=config.dry_run,
     )
+
+
+def _write_case_spec(
+    session: Session, run_id: str, case_id: str, prompt_variant: str
+) -> None:
+    """Stage a repo-task's provisioning spec for the DB-blind runner container.
+
+    For SWE-bench / repo-task cases the runner must clone a subject repo before
+    the agent runs, but the container has no DB access. The worker (which does)
+    writes case_spec.json into the run dir on the host; because the repo is
+    bind-mounted at /app, bench_run.py reads it at data/runs/<id>/case_spec.json
+    (ADR-0009). No-op for non-repo cases (e.g. Tetris).
+    """
+    try:
+        case = CaseService(session).get_case(case_id)
+    except ValueError:
+        return
+    is_repo_task = case.type == CaseType.swe_bench_instance or bool(case.subject_repo)
+    if not is_repo_task:
+        return
+    meta = case.metadata_json or {}
+    spec = {
+        "case_type": str(case.type),
+        "repo": case.subject_repo or "",
+        "repo_url": meta.get("repo_url", ""),
+        "base_commit": case.base_commit or "",
+        "python": meta.get("python", "3.11"),
+        "install_pins": json.loads(meta.get("install_pins", "[]")),
+        "test_patch": meta.get("test_patch", ""),
+        "apply_test_patch": True,
+        "fail_to_pass": json.loads(meta.get("fail_to_pass", "[]")),
+        "pass_to_pass": json.loads(meta.get("pass_to_pass", "[]")),
+        "prompt_variant": prompt_variant,
+        "prompt": case.prompt_variants.get(prompt_variant, ""),
+    }
+    run_dir = get_settings().data_runs_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "case_spec.json").write_text(json.dumps(spec, indent=2))
 
 
 def _cancel_requested(session: Session, run_id: str) -> bool:
@@ -134,12 +174,17 @@ def _execute_run_body(
         try:
             # Rebuild the command at execution time; the stored Run.command is
             # only a preview and may predate config/adapter changes.
-            command = BenchRunAdapter().build_command(
-                run_id, _config_payload(session, run)
-            )
+            config_payload = _config_payload(session, run)
+            command = BenchRunAdapter().build_command(run_id, config_payload)
             run.command = command
             session.add(run)
             session.commit()
+
+            # Stage repo-task provisioning data for the container (no-op for
+            # non-repo cases like Tetris).
+            _write_case_spec(
+                session, run_id, config_payload.case_id, config_payload.prompt_variant
+            )
 
             handle = executor.start(run_id, command)
             cancelled, timed_out, tail = _stream_run(
