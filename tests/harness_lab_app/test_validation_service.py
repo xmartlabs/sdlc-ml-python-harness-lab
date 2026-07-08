@@ -70,7 +70,11 @@ def seed_case_and_run(session: Session, run_id: str, run_dir: Path):
     service.create_run(
         RunCreate(
             run_id=run_id,
-            config=RunConfigCreate(case_id="tetris-v1", prompt_variant="sdlc"),
+            config=RunConfigCreate(
+                case_id="tetris-v1",
+                prompt_variant="sdlc",
+                executor_model="stub-executor",
+            ),
         )
     )
     run_dir.mkdir(parents=True, exist_ok=True)

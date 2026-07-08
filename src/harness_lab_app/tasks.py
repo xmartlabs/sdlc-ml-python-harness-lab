@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+import os
+import subprocess
 import threading
 import time
 from collections import deque
@@ -12,14 +14,21 @@ from typing import TYPE_CHECKING, Any
 from celery.signals import worker_ready
 from sqlmodel import Session, select
 
+from harness_lab_app.audit_service import AuditService
 from harness_lab_app.celery_app import celery_app
 from harness_lab_app.config import get_settings
 from harness_lab_app.db import engine, init_db
-from harness_lab_app.executors import container_name_for_run, get_executor
+from harness_lab_app.executors import (
+    build_run_environment,
+    container_name_for_run,
+    get_executor,
+)
 from harness_lab_app.models import Run, RunEvent, RunState
 from harness_lab_app.run_service import RunService
 from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.schemas import RunConfigCreate
+
+_AUDIT_TIMEOUT_SECONDS = 300
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
@@ -205,6 +214,72 @@ def validate_run(run_id: str) -> None:
     init_db()
     with Session(engine) as session:
         _run_objective_validation(session, run_id)
+
+
+@celery_app.task(name="harness_lab_app.tasks.audit_run", acks_late=True)
+def audit_run(run_id: str, auditor_model: str | None = None) -> None:
+    """Run the qualitative LLM audit for a run (worker-side).
+
+    The audit is an LLM HTTP call to the gateway (no container). We shell out to
+    the existing scripts/bench_audit.py so the CLI stays the single source of
+    truth, with build_run_environment() so localhost gateway URLs are rewritten
+    to the docker host alias (the worker is a container). The result (audit.md)
+    is read back and stored on the Audit row for the frontend to poll.
+    """
+    init_db()
+    settings = get_settings()
+    with Session(engine) as session:
+        service = AuditService(session)
+        service.mark_running(run_id, auditor_model or "")
+
+    python = settings.runner_python or "python"
+    command = [python, "scripts/bench_audit.py", "--run", run_id]
+    if auditor_model:
+        command += ["--auditor-model", auditor_model]
+    env = {**os.environ, **build_run_environment()}
+
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(settings.repo_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=_AUDIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        with Session(engine) as session:
+            AuditService(session).store_error(
+                run_id, f"Audit timed out after {_AUDIT_TIMEOUT_SECONDS}s"
+            )
+        return
+
+    with Session(engine) as session:
+        service = AuditService(session)
+        if result.returncode == 0:
+            markdown = service.read_audit_markdown(run_id)
+            if markdown:
+                service.store_result(run_id, markdown)
+            else:
+                service.store_error(run_id, "Audit finished but wrote no audit.md")
+        else:
+            tail = (result.stderr or result.stdout or "").strip()[-1500:]
+            service.store_error(run_id, tail or "Audit failed (no output)")
+
+
+@celery_app.task(name="harness_lab_app.tasks.cleanup_run_container", acks_late=True)
+def cleanup_run_container(run_id: str) -> None:
+    """Best-effort teardown of a deleted run's leftover container.
+
+    The API cannot touch the docker socket (ADR-0002), so run deletion enqueues
+    this task to the worker to stop/remove any container the run left behind.
+    """
+    settings = get_settings()
+    if settings.execution_backend != "docker":
+        return
+    import docker  # local import: only the worker needs the socket
+
+    _stop_orphan_container(docker.from_env(), run_id)
 
 
 def _stop_orphan_container(client: Any, run_id: str) -> None:

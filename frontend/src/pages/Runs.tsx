@@ -1,14 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
+import type { MouseEvent } from "react";
+import { NavLink, useNavigate, useParams } from "react-router-dom";
 
 import { api } from "../api";
+import { EmptyState } from "../components/EmptyState";
+import { ErrorBanner } from "../components/ErrorBanner";
+import { StateBadge } from "../components/StateBadge";
+import { CANCELLABLE_STATES } from "./RunDetail";
 import type { CaseRecord, RunCreatePayload, RunRecord } from "../types";
 
 type RunsProps = {
   cases: CaseRecord[];
+  onCancelRun: (runId: string) => Promise<RunRecord>;
+  onCloneRun: (runId: string) => Promise<RunRecord>;
   onCreateRun: (payload: RunCreatePayload) => Promise<RunRecord>;
+  onDeleteRun: (runId: string, force?: boolean) => Promise<void>;
   runs: RunRecord[];
-  onSelectRun: (runId: string) => void;
-  selectedRunId: string | null;
 };
 
 const HARNESS_OPTIONS = ["opencode", "antigravity"] as const;
@@ -28,14 +35,18 @@ const MAX_STEPS_OPTIONS = [3, 6, 10] as const;
 
 export function Runs({
   cases,
+  onCancelRun,
+  onCloneRun,
   onCreateRun,
-  runs,
-  onSelectRun,
-  selectedRunId
+  onDeleteRun,
+  runs
 }: RunsProps) {
-  const [runId, setRunId] = useState("new-run");
+  const { runId: activeRunId } = useParams();
+  const navigate = useNavigate();
+  const [runId, setRunId] = useState("");
+  const [label, setLabel] = useState("");
   const [caseId, setCaseId] = useState(cases[0]?.case_id ?? "tetris-v1");
-    const [promptVariant, setPromptVariant] = useState("sdlc");
+  const [promptVariant, setPromptVariant] = useState("sdlc");
   const [harness, setHarness] = useState("opencode");
   const [plannerModel, setPlannerModel] = useState("");
   const [executorModel, setExecutorModel] = useState("gateway/lmstudio-qwen3.6-35b-build");
@@ -46,6 +57,8 @@ export function Runs({
   const [isSaving, setIsSaving] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [caseRunIds, setCaseRunIds] = useState<string[]>([]);
+  const [rowActionError, setRowActionError] = useState<string | null>(null);
+  const [pendingRowId, setPendingRowId] = useState<string | null>(null);
 
   const selectedCase = useMemo(
     () => cases.find((item) => item.case_id === caseId) ?? cases[0] ?? null,
@@ -72,13 +85,8 @@ export function Runs({
     api
       .listCaseRunIds(caseId)
       .then((payload) => {
-        if (!active) {
-          return;
-        }
-        setCaseRunIds(payload.run_ids);
-        if (payload.run_ids.length > 0 && !payload.run_ids.includes(runId)) {
-          const preferred = payload.run_ids.find((item) => item === `${caseId}-K-001`);
-          setRunId(preferred ?? payload.run_ids[0]);
+        if (active) {
+          setCaseRunIds(payload.run_ids);
         }
       })
       .catch(() => {
@@ -92,11 +100,13 @@ export function Runs({
     };
   }, [caseId]);
 
+  const effectiveRunLabel = label.trim() || runId.trim();
+
   const commandPreview = useMemo(() => {
     const parts = [
       "make bench-run",
       `CASE=${caseId}`,
-      `RUN=${runId}`,
+      `RUN=${effectiveRunLabel || `<auto: ${caseId}-K-NNN>`}`,
       `PROMPT=${promptVariant}`,
       `EXECUTOR_MODEL=${executorModel}`,
       `MAX_STEPS=${maxSteps}`,
@@ -112,7 +122,7 @@ export function Runs({
       parts.push("RESUME=1");
     }
     return parts.join(" \\\n+  ");
-  }, [caseId, dryRun, executorModel, maxSteps, plannerModel, promptVariant, resume, runId]);
+  }, [caseId, dryRun, effectiveRunLabel, executorModel, maxSteps, plannerModel, promptVariant, resume]);
 
   const applySdlcQwenPreset = () => {
     setCaseId("tetris-v1");
@@ -132,7 +142,8 @@ export function Runs({
     setIsSaving(true);
     try {
       const created = await onCreateRun({
-        run_id: runId,
+        run_id: runId.trim() || undefined,
+        label: label.trim() || undefined,
         config: {
           case_id: caseId,
           prompt_variant: promptVariant,
@@ -145,12 +156,48 @@ export function Runs({
           dry_run: dryRun
         }
       });
-      onSelectRun(created.run_id);
+      navigate(`/runs/${created.run_id}`);
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : "Unable to create run");
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleCancelRow = (event: MouseEvent, targetRunId: string) => {
+    event.preventDefault();
+    setRowActionError(null);
+    setPendingRowId(targetRunId);
+    onCancelRun(targetRunId)
+      .catch((error: Error) => setRowActionError(error.message))
+      .finally(() => setPendingRowId(null));
+  };
+
+  const handleCloneRow = (event: MouseEvent, targetRunId: string) => {
+    event.preventDefault();
+    setRowActionError(null);
+    setPendingRowId(targetRunId);
+    onCloneRun(targetRunId)
+      .then((created) => navigate(`/runs/${created.run_id}`))
+      .catch((error: Error) => setRowActionError(error.message))
+      .finally(() => setPendingRowId(null));
+  };
+
+  const handleDeleteRow = (event: MouseEvent, targetRunId: string) => {
+    event.preventDefault();
+    if (!window.confirm(`Delete run "${targetRunId}"? This cannot be undone.`)) {
+      return;
+    }
+    setRowActionError(null);
+    setPendingRowId(targetRunId);
+    onDeleteRun(targetRunId)
+      .then(() => {
+        if (activeRunId === targetRunId) {
+          navigate("/runs");
+        }
+      })
+      .catch((error: Error) => setRowActionError(error.message))
+      .finally(() => setPendingRowId(null));
   };
 
   return (
@@ -175,13 +222,13 @@ export function Runs({
         </div>
         <div className="form-grid">
           <label>
-            <span>Run template</span>
+            <span>Run template (optional)</span>
             <select
               disabled={caseRunIds.length === 0}
               value={caseRunIds.includes(runId) ? runId : ""}
               onChange={(event) => setRunId(event.target.value)}
             >
-              {caseRunIds.length === 0 ? <option value="">No run templates found</option> : null}
+              <option value="">None — leave Run ID blank for auto</option>
               {caseRunIds.map((item) => (
                 <option key={item} value={item}>
                   {item}
@@ -190,9 +237,22 @@ export function Runs({
             </select>
           </label>
           <label>
-            <span>Run ID</span>
-            <input value={runId} onChange={(event) => setRunId(event.target.value)} />
-            <small className="muted">Use a run_id present in benchmarks/{caseId}/runs.yaml.</small>
+            <span>Run ID (optional)</span>
+            <input
+              onChange={(event) => setRunId(event.target.value)}
+              placeholder={`auto (${caseId}-K-NNN)`}
+              value={runId}
+            />
+            <small className="muted">Leave blank to auto-generate the next {caseId}-K-NNN id.</small>
+          </label>
+          <label>
+            <span>Custom label (optional)</span>
+            <input
+              onChange={(event) => setLabel(event.target.value)}
+              placeholder="e.g. sdlc-qwen-smoke"
+              value={label}
+            />
+            <small className="muted">Overrides Run ID as the persisted run identifier when set.</small>
           </label>
           <label>
             <span>Case</span>
@@ -277,7 +337,7 @@ export function Runs({
             {isSaving ? "Creating..." : "Create run"}
           </button>
         </div>
-        {createError ? <p className="muted error">{createError}</p> : null}
+        {createError ? <ErrorBanner message={createError} onDismiss={() => setCreateError(null)} /> : null}
         <div>
           <p className="sidebar-label">Equivalent CLI command</p>
           <code className="command-preview">{commandPreview}</code>
@@ -293,33 +353,51 @@ export function Runs({
           <h2>Run list</h2>
           <span className="muted">{runs.length} total</span>
         </div>
+        {rowActionError ? <ErrorBanner message={rowActionError} onDismiss={() => setRowActionError(null)} /> : null}
         {runs.length === 0 ? (
-          <div className="empty-state">
-            <strong>No runs yet.</strong>
-            <p>Create a run from the web app once the API is online.</p>
-          </div>
+          <EmptyState
+            description="Create a run from the web app once the API is online."
+            title="No runs yet."
+          />
         ) : (
-          <div className="table">
+          <div className="table table--runs">
             <div className="table-row table-head">
               <span>Run</span>
               <span>State</span>
               <span>Score</span>
+              <span>Actions</span>
             </div>
-            {runs.map((run) => (
-              <button
-                className={selectedRunId === run.run_id ? "table-row selectable active" : "table-row selectable"}
-                key={run.run_id}
-                onClick={() => onSelectRun(run.run_id)}
-                type="button"
-              >
-                <span>
-                  <strong>{run.run_id}</strong>
-                  <small>{run.command.join(" ")}</small>
-                </span>
-                <span className="badge">{run.state}</span>
-                <span>{run.score ?? "—"}</span>
-              </button>
-            ))}
+            {runs.map((run) => {
+              const isActive = activeRunId === run.run_id;
+              const isPending = pendingRowId === run.run_id;
+              return (
+                <div className={isActive ? "table-row runs-row active" : "table-row runs-row"} key={run.run_id}>
+                  <NavLink className="runs-row-link" to={`/runs/${run.run_id}`}>
+                    <span>
+                      <strong>{run.run_id}</strong>
+                      <small>{run.command.join(" ")}</small>
+                    </span>
+                    <StateBadge state={run.state} />
+                    <span>{run.score ?? "—"}</span>
+                  </NavLink>
+                  <div className="row-actions">
+                    <button
+                      disabled={!CANCELLABLE_STATES.includes(run.state) || isPending}
+                      onClick={(event) => handleCancelRow(event, run.run_id)}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                    <button disabled={isPending} onClick={(event) => handleCloneRow(event, run.run_id)} type="button">
+                      Run again
+                    </button>
+                    <button disabled={isPending} onClick={(event) => handleDeleteRow(event, run.run_id)} type="button">
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </section>

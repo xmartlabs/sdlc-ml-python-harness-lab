@@ -8,11 +8,22 @@ from sqlmodel import Session
 
 from harness_lab_app.artifact_service import ArtifactService
 from harness_lab_app.attribution_service import AttributionService
+from harness_lab_app.audit_service import AuditService
 from harness_lab_app.case_service import CaseService
-from harness_lab_app.celery_app import enqueue_run, enqueue_validation
+from harness_lab_app.celery_app import (
+    enqueue_audit,
+    enqueue_container_cleanup,
+    enqueue_run,
+    enqueue_validation,
+)
 from harness_lab_app.config import get_settings
 from harness_lab_app.db import get_engine, get_session, init_db
-from harness_lab_app.run_service import RunAlreadyExistsError, RunService
+from harness_lab_app.run_service import (
+    RunAlreadyExistsError,
+    RunDeleteConflictError,
+    RunPreflightError,
+    RunService,
+)
 from harness_lab_app.schemas import CaseCreate, RunConfigCreate, RunCreate
 from harness_lab_app.validation_service import ValidationService
 
@@ -126,6 +137,8 @@ def create_app() -> FastAPI:
     def create_run(data: RunCreate, session: Session = Depends(get_session)):
         try:
             return RunService(session, enqueue=enqueue_run).create_run(data)
+        except RunPreflightError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RunAlreadyExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -161,6 +174,29 @@ def create_app() -> FastAPI:
         # Attribution is pure log parsing (no container), so it runs inline.
         return AttributionService(session).index_run(run_id)
 
+    @app.get("/api/runs/{run_id}/audit")
+    def get_audit(run_id: str, session: Session = Depends(get_session)):
+        audit = AuditService(session).get_audit(run_id)
+        if audit is None:
+            raise HTTPException(status_code=404, detail="No audit for this run")
+        return audit
+
+    @app.post("/api/runs/{run_id}/audit")
+    def run_audit(
+        run_id: str,
+        auditor_model: str | None = None,
+        session: Session = Depends(get_session),
+    ):
+        # The audit is an LLM call (up to minutes), so it runs in the worker and
+        # the frontend polls GET /audit. Mark it running now so the UI has state.
+        try:
+            RunService(session).get_run(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        AuditService(session).mark_running(run_id, auditor_model or "")
+        enqueue_audit(run_id, auditor_model)
+        return {"status": "queued", "run_id": run_id}
+
     @app.post("/api/runs/{run_id}/validate")
     def validate_run(run_id: str, session: Session = Depends(get_session)):
         # Validation executes a container, so it must run in the worker (which
@@ -180,6 +216,26 @@ def create_app() -> FastAPI:
     @app.post("/api/runs/{run_id}/retry")
     def retry_run(run_id: str, session: Session = Depends(get_session)):
         return RunService(session, enqueue=enqueue_run).retry_run(run_id)
+
+    @app.post("/api/runs/{run_id}/clone")
+    def clone_run(run_id: str, session: Session = Depends(get_session)):
+        try:
+            return RunService(session, enqueue=enqueue_run).clone_run(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/runs/{run_id}", status_code=204)
+    def delete_run(
+        run_id: str, force: bool = False, session: Session = Depends(get_session)
+    ):
+        try:
+            RunService(session, enqueue_cleanup=enqueue_container_cleanup).delete_run(
+                run_id, force=force
+            )
+        except RunDeleteConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/runs/{run_id}/logs")
     def list_logs(

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 
+import { EmptyState } from "../components/EmptyState";
 import type { CaseCreatePayload, CaseRecord } from "../types";
 
 type CasesProps = {
@@ -166,10 +167,7 @@ export function Cases({
           <span className="muted">{cases.length} total</span>
         </div>
         {cases.length === 0 ? (
-          <div className="empty-state">
-            <strong>No cases yet.</strong>
-            <p>Seed Tetris or create a new case to begin.</p>
-          </div>
+          <EmptyState description="Seed Tetris or create a new case to begin." title="No cases yet." />
         ) : (
           <div className="table">
             <div className="table-row table-head">

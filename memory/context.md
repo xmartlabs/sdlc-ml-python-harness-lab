@@ -25,6 +25,17 @@ Pending validation: a real (non-dry-run) Tetris run from the UI against a live
 LM Studio + LiteLLM gateway with a populated `.env` (dry-run E2E through
 API → Redis → Celery → runner container verified 2026-07-07).
 
+Usability/reliability pass landed 2026-07-07 (branch `feature/web-ui`): fixed the
+"set RESUME=1" stale-workspace trap (managed `--fresh` runs + `finalize_workspace`,
+ADR-0006), loud preflight (empty executor / placeholder gateway token → 422) and
+visible enqueue failure (broker down → run `failed`, not stuck `pending`),
+auto-incremental `<case>-K-NNN` run ids + "Run again"/clone, run **delete**
+(DELETE `/api/runs/{id}` cascading DB+disk+container, ADR-0007), and a frontend
+overhaul (react-router deep-links, collapsible sidebar, state-color chips, dark
+mode, per-run cancel/clone/delete). `make check` 145 pass; frontend `vite build`
+green. `make app-reset-db PURGE=1` now also clears disk. Still needs a real live
+Tetris run from the UI to confirm end-to-end.
+
 ## Constraints and decisions in force
 
 - `runs.yaml` is the authoritative run registry — do not modify between reps of a cell.

@@ -34,6 +34,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from create_run import (
@@ -41,7 +43,6 @@ from create_run import (
     REPO_ROOT,
     RUNS_FILES,
     _load_env,
-    find_run,
 )
 
 # Per-artifact clip budgets (characters). Logs can be large in multi-step runs;
@@ -335,6 +336,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def resolve_or_synthesize_run(runs_path: Path, run_id: str, out_dir: Path) -> dict:
+    """Return the run dict from runs.yaml, or synthesize one from metadata.json.
+
+    Web-lane runs (ADR-0006) are not registered in runs.yaml. The auditor only
+    needs a few optional context fields (executor model, prompt variant, score);
+    the full metadata.json is fed into the prompt anyway, so a minimal dict is
+    enough. Mirrors bench_run.resolve_or_synthesize_run.
+    """
+    if runs_path.exists():
+        data = yaml.safe_load(runs_path.read_text()) or {}
+        for run in data.get("runs", []):
+            if run.get("run_id") == run_id:
+                return run
+    synthesized: dict = {"run_id": run_id}
+    meta_path = out_dir / "metadata.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            meta = {}
+        if isinstance(meta, dict):
+            condition = meta.get("model_condition") or {}
+            synthesized["executor_model"] = condition.get("executor_model") or meta.get(
+                "executor_model"
+            )
+            synthesized["prompt_variant"] = meta.get("prompt_variant")
+    return synthesized
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     _load_env()
@@ -344,9 +374,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     runs_path = resolve_runs_path(args.run)
-    run = find_run(runs_path, args.run)
-
     out_dir = DATA_DIR / args.run
+    run = resolve_or_synthesize_run(runs_path, args.run, out_dir)
     if not out_dir.is_dir():
         sys.exit(
             f"❌ No artifacts found at {out_dir.relative_to(REPO_ROOT)}/\n"

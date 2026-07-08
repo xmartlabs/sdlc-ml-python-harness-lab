@@ -33,6 +33,13 @@ class Settings(BaseSettings):
         return self.repo_root / "data" / "runs"
 
     @property
+    def workspace_dir(self) -> Path:
+        # Live working directory the runner writes into, per run
+        # (workspace/<run_id>/). Mirrors WORKSPACE_ROOT in scripts/bench_start.py
+        # so deletion/cleanup paths are centralized on the settings object.
+        return self.repo_root / "workspace"
+
+    @property
     def benchmarks_dir(self) -> Path:
         return self.repo_root / "benchmarks"
 
@@ -40,3 +47,24 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def read_env_file_value(name: str, default: str = "") -> str:
+    """Read a single KEY=VALUE from the repo `.env`.
+
+    Used for values that are not first-class Settings fields (e.g. GATEWAY_TOKEN,
+    consumed by the runner container). Mirrors the parser in
+    executors.build_run_environment so the API can preflight config without
+    importing worker-only code.
+    """
+    env_file = get_settings().repo_root / ".env"
+    if not env_file.exists():
+        return default
+    for raw in env_file.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        if key.strip() == name:
+            return val.strip()
+    return default

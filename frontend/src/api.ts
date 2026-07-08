@@ -1,5 +1,6 @@
 import type {
   AttributionRecord,
+  AuditRecord,
   CaseCreatePayload,
   CaseRecord,
   RunCreatePayload,
@@ -7,6 +8,16 @@ import type {
   RunRecord,
   ValidationRecord
 } from "./types";
+
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -18,7 +29,17 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(await response.text());
+    const text = await response.text();
+    let message = text || response.statusText;
+    try {
+      const parsed = JSON.parse(text) as { detail?: string };
+      if (parsed.detail) {
+        message = parsed.detail;
+      }
+    } catch {
+      // Response body was not JSON; fall back to the raw text.
+    }
+    throw new ApiError(message, response.status);
   }
 
   if (response.status === 204) {
@@ -58,6 +79,10 @@ export const api = {
     request<RunRecord>(`/api/runs/${runId}/cancel`, { method: "POST" }),
   retryRun: (runId: string) =>
     request<RunRecord>(`/api/runs/${runId}/retry`, { method: "POST" }),
+  cloneRun: (runId: string) =>
+    request<RunRecord>(`/api/runs/${runId}/clone`, { method: "POST" }),
+  deleteRun: (runId: string, force = false) =>
+    request<void>(`/api/runs/${runId}?force=${force ? "true" : "false"}`, { method: "DELETE" }),
   scoreRun: (runId: string, score: number, interventions: number, notes: string) =>
     request<RunRecord>(`/api/runs/${runId}/score`, {
       method: "POST",
@@ -74,5 +99,12 @@ export const api = {
   indexAttribution: (runId: string) =>
     request<AttributionRecord>(`/api/runs/${runId}/attribution/index`, {
       method: "POST"
-    })
+    }),
+  getAudit: (runId: string) => request<AuditRecord>(`/api/runs/${runId}/audit`),
+  runAudit: (runId: string, auditorModel?: string) => {
+    const query = auditorModel ? `?auditor_model=${encodeURIComponent(auditorModel)}` : "";
+    return request<{ status: string; run_id: string }>(`/api/runs/${runId}/audit${query}`, {
+      method: "POST"
+    });
+  }
 };

@@ -55,7 +55,6 @@ from create_run import (
     RUNS_FILES,
     _load_env,
     create_litellm_key,
-    find_run,
     scaffold_report,
     set_status_running,
     update_results_csv,
@@ -176,6 +175,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow running into an existing workspace (skip workspace existence check). "
         "Use when a previous run was interrupted and you want to continue.",
+    )
+    p.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Managed/automated run (used by the web runner): reset a stale "
+        "workspace on start instead of exiting, and archive+clean the workspace "
+        "after a manual-scored run (scoring is owned by the API). CLI manual runs "
+        "omit this so `make bench-close` can still find the workspace.",
     )
     p.add_argument(
         "--create-litellm-key",
@@ -392,18 +399,93 @@ def write_run_env(out_dir: Path, args: argparse.Namespace, session_id: str) -> P
     return path
 
 
-def validate_workspace(workspace: Path, run_id: str, resume: bool) -> None:
-    """Refuse to run into an existing workspace unless --resume is passed."""
+def validate_workspace(
+    workspace: Path, run_id: str, resume: bool, fresh: bool = False
+) -> None:
+    """Guard against clobbering an existing workspace.
+
+    - --resume: keep the existing workspace and continue from it.
+    - --fresh (managed/web run): reset a stale workspace instead of exiting, so
+      an automated run is never blocked by a leftover dir (ADR-0006). With
+      auto-incremental ids this rarely fires; it is a defensive fallback.
+    - neither (interactive CLI): refuse and exit, so the user decides.
+    """
     if workspace.exists() and any(workspace.iterdir()):
-        if not resume:
-            sys.exit(
-                f"❌ workspace/{run_id}/ already exists and is not empty.\n"
-                f"   Pass RESUME=1 to continue from the existing state, or remove it:\n"
-                f"     rm -rf workspace/{run_id}/"
+        if resume:
+            print(
+                f"  ⚠️  workspace/{run_id}/ exists — resuming from current state "
+                "(--resume)."
             )
-        print(
-            f"  ⚠️  workspace/{run_id}/ exists — resuming from current state (--resume)."
+            return
+        if fresh:
+            print(
+                f"  ⚠️  workspace/{run_id}/ exists — resetting for a fresh managed "
+                "run (--fresh)."
+            )
+            shutil.rmtree(workspace)
+            return
+        sys.exit(
+            f"❌ workspace/{run_id}/ already exists and is not empty.\n"
+            f"   Pass RESUME=1 to continue from the existing state, or remove it:\n"
+            f"     rm -rf workspace/{run_id}/"
         )
+
+
+def resolve_or_synthesize_run(
+    runs_path: Path, run_id: str, args: argparse.Namespace
+) -> dict:
+    """Return the run dict from runs.yaml, or synthesize one from CLI args.
+
+    The web lane (ADR-0006) creates runs whose ids are not registered in
+    benchmarks/<case>/runs.yaml. Rather than exit (as find_run does), build a
+    minimal run dict from the CLI args so the runner can proceed. When the id
+    *is* registered, behavior is unchanged. The API never writes to the shared
+    runs.yaml, avoiding write races against the CLI.
+    """
+    data = yaml.safe_load(runs_path.read_text())
+    for run in data.get("runs", []):
+        if run["run_id"] == run_id:
+            return run
+    return {
+        "run_id": run_id,
+        "status": "pending",
+        "prompt_variant": args.prompt or "",
+        "executor_model": args.executor_model or "",
+        "planner_model": args.planner_model or "",
+        "langfuse_session_id": f"bench-{run_id}",
+    }
+
+
+def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
+    """Archive the live workspace into the run's data dir and remove it.
+
+    Returns the diff line count (0 when the workspace is missing). The
+    destructive rmtree runs only after a successful copy. Used both by the CLI
+    close_run and by the managed web/manual flow, which never reaches Phase 5.
+    """
+    if not workspace.exists():
+        print(f"  ⚠️  workspace/{run_id}/ not found — skipping artifact copy.")
+        return 0
+    dest = out_dir / "workspace"
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(workspace, dest)
+    file_count = sum(1 for _ in dest.rglob("*") if _.is_file())
+    print(f"  Copied workspace → data/runs/{run_id}/workspace/ ({file_count} files)")
+
+    diff_path = out_dir / "diff.patch"
+    result = _run_git(
+        ["git", "diff", "--no-index", "/dev/null", str(dest)], cwd=REPO_ROOT
+    )
+    diff_path.write_text(result.stdout)
+    diff_lines = result.stdout.count("\n")
+    print(f"  diff.patch: {diff_lines} lines")
+
+    shutil.rmtree(workspace)
+    if WORKSPACE_ROOT.exists() and not any(WORKSPACE_ROOT.iterdir()):
+        WORKSPACE_ROOT.rmdir()
+    print(f"  Removed workspace/{run_id}/")
+    return diff_lines
 
 
 def find_next_run(runs_path: Path, current_run_id: str) -> dict | None:
@@ -870,42 +952,13 @@ def close_run(
     usage: dict | None = None,
 ) -> None:
     workspace = WORKSPACE_ROOT / args.run
-    diff_lines = 0
-
-    if not workspace.exists():
+    captured = workspace.exists()
+    diff_lines = finalize_workspace(out_dir, workspace, args.run)
+    if captured and score > 3 and diff_lines == 0:
         print(
-            f"  ⚠️  workspace/{args.run}/ not found — skipping artifact copy.\n"
-            f"     Move files manually if needed:\n"
-            f"     mkdir -p workspace/{args.run} && mv <files> workspace/{args.run}/"
+            f"  ⚠️  WARNING: score={score} but diff.patch is empty — "
+            f"workspace/{args.run}/ appears to have no implementation."
         )
-    else:
-        dest = out_dir / "workspace"
-        if dest.exists():
-            shutil.rmtree(dest)
-        shutil.copytree(workspace, dest)
-        file_count = sum(1 for _ in dest.rglob("*") if _.is_file())
-        print(
-            f"  Copied workspace → data/runs/{args.run}/workspace/ ({file_count} files)"
-        )
-
-        diff_path = out_dir / "diff.patch"
-        result = _run_git(
-            ["git", "diff", "--no-index", "/dev/null", str(dest)], cwd=REPO_ROOT
-        )
-        diff_path.write_text(result.stdout)
-        diff_lines = result.stdout.count("\n")
-        print(f"  diff.patch: {diff_lines} lines")
-
-        if score > 3 and diff_lines == 0:
-            print(
-                f"  ⚠️  WARNING: score={score} but diff.patch is empty — "
-                f"workspace/{args.run}/ appears to have no implementation."
-            )
-
-        shutil.rmtree(workspace)
-        if WORKSPACE_ROOT.exists() and not any(WORKSPACE_ROOT.iterdir()):
-            WORKSPACE_ROOT.rmdir()
-        print(f"  Removed workspace/{args.run}/")
 
     BENCH_CONTEXT.write_text(BENCH_CONTEXT_PLACEHOLDER)
     print("  BENCH_CONTEXT.md reset")
@@ -977,7 +1030,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.exit(f"Unknown case '{args.case}'. Known cases: {list(RUNS_FILES.keys())}")
 
     task = load_task_yaml(runs_path)
-    run = find_run(runs_path, args.run)
+    run = resolve_or_synthesize_run(runs_path, args.run, args)
 
     if run.get("status") == "completed":
         sys.exit(f"Run {args.run} is already completed. Use a new run_id.")
@@ -1065,7 +1118,7 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = DATA_DIR / args.run
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    validate_workspace(workspace, args.run, args.resume)
+    validate_workspace(workspace, args.run, args.resume, fresh=args.fresh)
     workspace.mkdir(parents=True, exist_ok=True)
 
     prompt_path = generate_prompt(
@@ -1146,8 +1199,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         _print_manual_fallback(args, executor_model, prompt_path, clipped)
         if args.score_mode == "manual":
+            # A headless (web/manual) run with no executor model produced nothing.
+            # Fail loudly (non-zero) instead of the old silent success so the
+            # worker records it as failed with a clear reason (see ADR-0006).
+            print("  ❌ No executor model — nothing was built. Failing the run.")
             print("=" * 66)
-            return 0
+            return 1
     elif has_run_cmd:
         if max_steps > 1:
             steps_dir.mkdir(exist_ok=True)
@@ -1204,10 +1261,13 @@ def main(argv: list[str] | None = None) -> int:
         print("  ⚠️  `opencode run` not available in this opencode version.")
         _print_manual_fallback(args, executor_model, prompt_path, clipped)
         if args.score_mode == "manual":
+            # Headless run requested but this opencode has no `run` subcommand, so
+            # nothing executed. Fail loudly (non-zero) instead of exiting 0 — a
+            # managed run must not look successful when it did no work (ADR-0006).
             print()
-            print("  Workspace and prompt are ready. Exiting.")
+            print("  ❌ `opencode run` unavailable — nothing was built. Failing.")
             print("=" * 66)
-            return 0
+            return 1
 
     # -----------------------------------------------------------------------
     # PHASE 3 — SCORE
@@ -1236,6 +1296,13 @@ def main(argv: list[str] | None = None) -> int:
         if remote_usage:
             usage.update(remote_usage)
         write_usage_json(out_dir, usage or None)
+        if args.fresh:
+            # Managed web run: the API owns scoring (POST /score), so Phase 5
+            # close_run never runs. Archive the workspace into the run's data dir
+            # and clean it up here so workspaces don't accumulate (ADR-0006).
+            print()
+            print("  [5/5] Archiving workspace (managed run)...")
+            finalize_workspace(out_dir, workspace, args.run)
         print("=" * 66)
         return 0
     else:  # interactive

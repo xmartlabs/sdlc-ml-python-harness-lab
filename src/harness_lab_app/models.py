@@ -146,6 +146,25 @@ class Validation(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class Audit(SQLModel, table=True):
+    """Qualitative LLM audit of a run (descriptive behavior diagnostic).
+
+    A strong auditor model reads the run's artifacts (logs, diff, usage, score,
+    available rules) and writes a Markdown diagnostic: skill/rule usage,
+    efficiency/loops, SDLC adherence, failure points. Runs in the worker (an LLM
+    HTTP call, up to a few minutes), so `status` tracks progress for polling.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True, unique=True)
+    auditor_model: str = ""
+    status: str = "running"  # running | done | failed
+    markdown: str = ""
+    error: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Attribution(SQLModel, table=True):
     """Machine-readable record of which harness surface a run actually used.
 

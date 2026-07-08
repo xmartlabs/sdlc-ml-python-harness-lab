@@ -99,6 +99,16 @@ export type AttributionRecord = {
   steps_parsed: number;
 };
 
+export type AuditRecord = {
+  run_id: string;
+  auditor_model: string;
+  status: "running" | "done" | "failed";
+  markdown: string;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type RunConfigPayload = {
   case_id: string;
   prompt_variant: string;
@@ -112,6 +122,7 @@ export type RunConfigPayload = {
 };
 
 export type RunCreatePayload = {
-  run_id: string;
+  run_id?: string;
+  label?: string;
   config: RunConfigPayload;
 };

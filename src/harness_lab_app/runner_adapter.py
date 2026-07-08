@@ -38,4 +38,8 @@ class BenchRunAdapter:
             command.append("--dry-run")
         if config.resume:
             command.append("--resume")
+        # Web runs are managed: the API owns scoring, so the runner must reset a
+        # stale workspace on start and archive+clean it after a manual-scored run
+        # (ADR-0006). CLI invocations omit --fresh and keep the interactive guard.
+        command.append("--fresh")
         return command

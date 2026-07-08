@@ -50,7 +50,11 @@ class RunConfigCreate(BaseModel):
 
 
 class RunCreate(BaseModel):
-    run_id: str
+    # run_id is optional: when omitted (and no label), the server assigns the
+    # next free <case>-K-NNN id (ADR-0006). An explicit run_id or label is used
+    # verbatim and still 409s on duplicate.
+    run_id: str | None = None
+    label: str | None = None
     config: RunConfigCreate
 
 

@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { api } from "./api";
-import { Shell } from "./components/Shell";
+import { Layout } from "./components/Layout";
+import { RunDetailRoute } from "./components/RunDetailRoute";
 import { Cases } from "./pages/Cases";
 import { Compare } from "./pages/Compare";
 import { Dashboard } from "./pages/Dashboard";
-import { RunDetail } from "./pages/RunDetail";
 import { Runs } from "./pages/Runs";
 import { Settings } from "./pages/Settings";
+import { applyTheme, getStoredTheme } from "./theme";
+import type { ThemeMode } from "./theme";
 import type { CaseCreatePayload, CaseRecord, RunCreatePayload, RunRecord } from "./types";
-
-type PageId = "dashboard" | "runs" | "cases" | "compare" | "settings";
 
 const previewCase: CaseRecord = {
   case_id: "tetris-v1",
@@ -34,12 +34,15 @@ const fallbackCases: CaseRecord[] = [previewCase];
 const fallbackRuns: RunRecord[] = [previewRun];
 
 export default function App() {
-  const [page, setPage] = useState<PageId>("dashboard");
   const [cases, setCases] = useState<CaseRecord[]>(fallbackCases);
   const [runs, setRuns] = useState<RunRecord[]>(fallbackRuns);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(previewCase.case_id);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(previewRun.run_id);
   const [apiStatus, setApiStatus] = useState("Preview mode");
+  const [theme, setTheme] = useState<ThemeMode>(() => getStoredTheme());
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
 
   useEffect(() => {
     let active = true;
@@ -61,7 +64,6 @@ export default function App() {
 
         if (runsResult.status === "fulfilled" && runsResult.value.length > 0) {
           setRuns(runsResult.value);
-          setSelectedRunId((current) => current ?? runsResult.value[0]?.run_id ?? null);
         }
 
         if (
@@ -78,43 +80,6 @@ export default function App() {
       active = false;
     };
   }, []);
-
-  const selectedRun = useMemo(
-    () => runs.find((run) => run.run_id === selectedRunId) ?? runs[0] ?? null,
-    [runs, selectedRunId]
-  );
-
-  useEffect(() => {
-    if (selectedRunId === null) {
-      return;
-    }
-    const tracked = runs.find((run) => run.run_id === selectedRunId);
-    if (!tracked || !["pending", "running", "awaiting_manual_score"].includes(tracked.state)) {
-      return;
-    }
-
-    let active = true;
-    const refresh = () => {
-      api
-        .getRun(selectedRunId)
-        .then((updated) => {
-          if (!active) {
-            return;
-          }
-          updateRun(updated);
-        })
-        .catch(() => {
-          // Keep last known state on transient API errors.
-        });
-    };
-
-    refresh();
-    const timer = window.setInterval(refresh, 1500);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [runs, selectedRunId]);
 
   const selectedCase = useMemo(
     () => cases.find((item) => item.case_id === selectedCaseId) ?? cases[0] ?? null,
@@ -144,7 +109,6 @@ export default function App() {
   const createRun = async (payload: RunCreatePayload) => {
     const created = await api.createRun(payload);
     setRuns((current) => [created, ...current.filter((item) => item.run_id !== created.run_id)]);
-    setSelectedRunId(created.run_id);
     return created;
   };
 
@@ -172,60 +136,72 @@ export default function App() {
     return updated;
   };
 
-  const inspector = (
-    <RunDetail onCancelRun={cancelRun} onRetryRun={retryRun} onScoreRun={scoreRun} run={selectedRun} />
-  );
+  const cloneRun = async (runId: string) => {
+    const created = await api.cloneRun(runId);
+    setRuns((current) => [created, ...current.filter((run) => run.run_id !== created.run_id)]);
+    return created;
+  };
 
-  let content: ReactNode;
-
-  switch (page) {
-    case "dashboard":
-      content = <Dashboard apiStatus={apiStatus} cases={cases} runs={runs} />;
-      break;
-    case "runs":
-      content = (
-        <Runs
-          cases={cases}
-          onCreateRun={createRun}
-          onSelectRun={setSelectedRunId}
-          runs={runs}
-          selectedRunId={selectedRunId}
-        />
-      );
-      break;
-    case "cases":
-      content = (
-        <Cases
-          cases={cases.length > 0 ? cases : [previewCase]}
-          onCreateCase={createCase}
-          onSeedTetris={seedTetris}
-          onSelectCase={setSelectedCaseId}
-          selectedCaseId={selectedCaseId}
-        />
-      );
-      break;
-    case "compare":
-      content = <Compare runs={runs} />;
-      break;
-    case "settings":
-      content = <Settings />;
-      break;
-    default:
-      content = <Dashboard apiStatus={apiStatus} cases={cases} runs={runs} />;
-  }
+  const deleteRun = async (runId: string, force = false) => {
+    await api.deleteRun(runId, force);
+    setRuns((current) => current.filter((run) => run.run_id !== runId));
+  };
 
   return (
-    <Shell activePage={page} inspector={inspector} onNavigate={setPage}>
-      {content}
-      {selectedCase !== null && page === "cases" ? (
-        <section className="panel">
-          <div className="panel-head">
-            <h2>Selected case</h2>
-            <span className="muted">{selectedCase.sync_state}</span>
-          </div>
-          <p>{selectedCase.description}</p>
-        </section>
-      ) : null}
-    </Shell>
+    <Routes>
+      <Route element={<Layout onUpdateRun={updateRun} runs={runs} />}>
+        <Route element={<Dashboard apiStatus={apiStatus} cases={cases} runs={runs} />} path="/" />
+        <Route
+          element={
+            <Runs
+              cases={cases}
+              onCancelRun={cancelRun}
+              onCloneRun={cloneRun}
+              onCreateRun={createRun}
+              onDeleteRun={deleteRun}
+              runs={runs}
+            />
+          }
+          path="/runs"
+        />
+        <Route
+          element={
+            <RunDetailRoute
+              onCancelRun={cancelRun}
+              onRetryRun={retryRun}
+              onScoreRun={scoreRun}
+              runs={runs}
+            />
+          }
+          path="/runs/:runId"
+        />
+        <Route
+          element={
+            <>
+              <Cases
+                cases={cases.length > 0 ? cases : [previewCase]}
+                onCreateCase={createCase}
+                onSeedTetris={seedTetris}
+                onSelectCase={setSelectedCaseId}
+                selectedCaseId={selectedCaseId}
+              />
+              {selectedCase !== null ? (
+                <section className="panel">
+                  <div className="panel-head">
+                    <h2>Selected case</h2>
+                    <span className="muted">{selectedCase.sync_state}</span>
+                  </div>
+                  <p>{selectedCase.description}</p>
+                </section>
+              ) : null}
+            </>
+          }
+          path="/cases"
+        />
+        <Route element={<Compare runs={runs} />} path="/compare" />
+        <Route element={<Settings onThemeChange={setTheme} theme={theme} />} path="/settings" />
+        <Route element={<Navigate replace to="/" />} path="*" />
+      </Route>
+    </Routes>
   );
 }

@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api";
+import { ErrorBanner } from "../components/ErrorBanner";
+import { StateBadge } from "../components/StateBadge";
 import type {
   AttributionRecord,
+  AuditRecord,
   RunEventRecord,
   RunRecord,
   ValidationRecord
@@ -15,8 +19,8 @@ type RunDetailProps = {
 };
 
 const POLL_INTERVAL_MS = 1500;
-const CANCELLABLE_STATES: RunRecord["state"][] = ["pending", "running"];
-const RETRYABLE_STATES: RunRecord["state"][] = ["failed", "cancelled"];
+export const CANCELLABLE_STATES: RunRecord["state"][] = ["pending", "running"];
+export const RETRYABLE_STATES: RunRecord["state"][] = ["failed", "cancelled"];
 
 export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetailProps) {
   const [events, setEvents] = useState<RunEventRecord[]>([]);
@@ -27,6 +31,8 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
   const [notesValue, setNotesValue] = useState("");
   const [validation, setValidation] = useState<ValidationRecord | null>(null);
   const [attribution, setAttribution] = useState<AttributionRecord | null>(null);
+  const [audit, setAudit] = useState<AuditRecord | null>(null);
+  const [auditModel, setAuditModel] = useState("");
   const consoleRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -85,6 +91,7 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
   useEffect(() => {
     setValidation(null);
     setAttribution(null);
+    setAudit(null);
     if (run === null) {
       return;
     }
@@ -109,6 +116,16 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
       .catch(() => {
         // No attribution yet (404) is expected until a run finishes.
       });
+    api
+      .getAudit(run.run_id)
+      .then((result) => {
+        if (active) {
+          setAudit(result);
+        }
+      })
+      .catch(() => {
+        // No audit yet (404) is expected until one is requested.
+      });
     return () => {
       active = false;
     };
@@ -116,8 +133,10 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
 
   if (run === null) {
     return (
-      <section className="inspector-stack">
-        <h2>Inspector</h2>
+      <section className="run-detail-page">
+        <Link className="run-detail-back" to="/runs">
+          ← Runs
+        </Link>
         <p className="muted">Select a run to view status, artifacts, score, and audit.</p>
       </section>
     );
@@ -195,6 +214,48 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
       .finally(() => setActionPending(false));
   };
 
+  const handleRunAudit = () => {
+    const runId = run.run_id;
+    const model = auditModel.trim() || undefined;
+    setActionPending(true);
+    setActionError(null);
+    setAudit({
+      run_id: runId,
+      auditor_model: model ?? "",
+      status: "running",
+      markdown: "",
+      error: null,
+      created_at: "",
+      updated_at: ""
+    });
+    api
+      .runAudit(runId, model)
+      .then(() => {
+        // The audit is an LLM call in the worker; poll until it settles.
+        let tries = 0;
+        const poll = () => {
+          api
+            .getAudit(runId)
+            .then((result) => {
+              setAudit(result);
+              if (result.status === "running" && tries < 40) {
+                tries += 1;
+                window.setTimeout(poll, 3000);
+              }
+            })
+            .catch(() => {
+              if (tries < 40) {
+                tries += 1;
+                window.setTimeout(poll, 3000);
+              }
+            });
+        };
+        window.setTimeout(poll, 3000);
+      })
+      .catch((error: Error) => setActionError(error.message))
+      .finally(() => setActionPending(false));
+  };
+
   const countEntries = (counts: Record<string, number>) =>
     Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
@@ -202,11 +263,14 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
       .join("  ");
 
   return (
-    <section className="inspector-stack">
-      <div>
+    <section className="run-detail-page">
+      <Link className="run-detail-back" to="/runs">
+        ← Runs
+      </Link>
+      <div className="run-detail-header">
         <p className="eyebrow">Run detail</p>
         <h2>{run.run_id}</h2>
-        <p className="muted">{run.state}</p>
+        <StateBadge state={run.state} />
         <div className="run-actions">
           <button disabled={!canCancel || actionPending} onClick={handleCancel} type="button">
             Cancel
@@ -215,7 +279,7 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
             Retry
           </button>
         </div>
-        {actionError !== null ? <p className="muted error">{actionError}</p> : null}
+        {actionError !== null ? <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} /> : null}
       </div>
       <div className="detail-grid">
         <div>
@@ -281,6 +345,7 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
           </div>
         </div>
       ) : null}
+      <div className="run-detail-grid">
       <div className="panel subtle">
         <div className="panel-head">
           <h3>Validation & score</h3>
@@ -417,6 +482,41 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
           </>
         )}
       </div>
+      <div className="panel subtle">
+        <div className="panel-head">
+          <h3>LLM audit</h3>
+          <div className="run-actions">
+            {audit ? <span className="badge">{audit.status}</span> : null}
+            <input
+              className="audit-model-input"
+              onChange={(event) => setAuditModel(event.target.value)}
+              placeholder="auditor model (optional)"
+              type="text"
+              value={auditModel}
+            />
+            <button
+              disabled={actionPending || audit?.status === "running"}
+              onClick={handleRunAudit}
+              type="button"
+            >
+              {audit?.status === "running" ? "Auditing..." : "Run audit"}
+            </button>
+          </div>
+        </div>
+        {audit === null ? (
+          <p className="muted">
+            No audit yet. A strong LLM reads this run's logs, diff, usage and score
+            and writes a qualitative diagnostic (skill/rule usage, efficiency, SDLC
+            adherence, failure points). Runs in the worker; this may take a minute.
+          </p>
+        ) : audit.status === "running" ? (
+          <p className="muted">Auditing with {audit.auditor_model || "default model"}…</p>
+        ) : audit.status === "failed" ? (
+          <ErrorBanner message={audit.error ?? "Audit failed"} />
+        ) : (
+          <div className="audit-body">{audit.markdown}</div>
+        )}
+      </div>
       <div>
         <p className="sidebar-label">Command preview</p>
         <code className="command-preview">{run.command.join(" ")}</code>
@@ -445,6 +545,7 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
           <span className="muted">data/runs/{run.run_id}</span>
         </div>
         <p className="muted">metadata.json, prompt.md, report.md, audit.md, diff.patch</p>
+      </div>
       </div>
     </section>
   );

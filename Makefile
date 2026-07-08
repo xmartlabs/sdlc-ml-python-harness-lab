@@ -360,7 +360,7 @@ build-fresh:
 app-up:
 	@echo "🚀 Starting local web app stack..."
 	@docker compose build runner
-	@docker compose up --build api worker redis frontend
+	@docker compose up -d --build api worker redis frontend
 
 # Smoke-test the runner image directly against the host gateway (no Celery):
 # proves opencode-in-container can reach LiteLLM/LM Studio on the host.
@@ -396,12 +396,29 @@ app-smoke-test:
 	@chmod +x scripts/smoke_test_docker.sh
 	@./scripts/smoke_test_docker.sh
 
-# Reset the application SQLite database and reseed the Tetris pilot case
+# Import a SWE-bench Lite instance as a Case (fetches from HuggingFace).
+# Usage: make swebench-import INSTANCE=pallets__flask-4992
+swebench-import:
+	@[ -n "$(INSTANCE)" ] || { echo "❌ INSTANCE is required. Example: INSTANCE=pallets__flask-4992"; exit 1; }
+	@if [ ! -d .venv ]; then make install; fi
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/import_swebench.py --instance $(INSTANCE)
+
+# Prove the SWE-bench provision+test harness with the golden patch (no tokens).
+# Usage: make swebench-selftest INSTANCE=pallets__flask-4992
+swebench-selftest:
+	@[ -n "$(INSTANCE)" ] || { echo "❌ INSTANCE is required. Example: INSTANCE=pallets__flask-4992"; exit 1; }
+	@if [ ! -d .venv ]; then make install; fi
+	uv run python scripts/swebench_common.py --selftest $(INSTANCE)
+
+# Reset the application SQLite database and reseed the Tetris pilot case.
+# Pass PURGE=1 to also remove on-disk run state (data/runs/*, workspace/*) so a
+# re-created run id cannot collide with a stale workspace. PURGE is destructive.
 app-reset-db:
 	@echo "🧹 Resetting application database..."
 	@if [ ! -d .venv ]; then make install; fi
 	@set -a; [ -f .env ] && . ./.env; set +a; \
-	uv run python scripts/reset_db.py
+	uv run python scripts/reset_db.py $(if $(PURGE),--purge-disk,)
 
 # Stop Docker container
 stop-docker:

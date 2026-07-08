@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import yaml
@@ -174,6 +175,81 @@ class CaseService:
             ),
             max_steps=int(raw.get("target_level", 1)),
             metadata_json={"source_path": str(task_path)},
+        )
+        self.session.add(case)
+        self.session.commit()
+        self.session.refresh(case)
+        return case
+
+    @staticmethod
+    def _build_swebench_prompt(spec: dict) -> str:
+        f2p = spec["fail_to_pass"]
+        repo = spec["repo"]
+        test_hint = f"python -m pytest {' '.join(f2p)}"
+        return (
+            f"# Task: resolve a GitHub issue in {repo}\n\n"
+            f"The repository `{repo}` is checked out at commit "
+            f"`{spec['base_commit'][:12]}` in your working directory. A failing "
+            f"test that encodes the desired behavior has already been added to the "
+            f"test suite.\n\n"
+            f"## Issue\n{spec['problem_statement'].strip()}\n\n"
+            f"## Your goal\n"
+            f"Make the failing test(s) pass **without breaking any currently-passing "
+            f"test**. The target failing test(s):\n"
+            + "\n".join(f"  - {t}" for t in f2p)
+            + f"\n\nRun the target test with:\n    {test_hint}\n\n"
+            f"Work incrementally: plan → locate the relevant source → implement a "
+            f"minimal fix → run the target test → run the surrounding test file to "
+            f"check for regressions. Edit the **library source**, not the test files."
+        )
+
+    def import_swebench_instance(self, spec: dict) -> Case:
+        """Create a Case from a normalized SWE-bench instance spec (no network).
+
+        `spec` keys: instance_id, repo, base_commit, problem_statement,
+        test_patch, fail_to_pass (list), pass_to_pass (list), version, repo_url,
+        python, install_pins (list). The SWE-bench-specific payload is stored in
+        `metadata_json` (JSON-encoded), so no schema migration is needed; the
+        worker reads it to write case_spec.json for the runner (ADR-0009).
+        """
+        instance_id = spec["instance_id"]
+        existing = self.session.exec(
+            select(Case).where(Case.case_id == instance_id)
+        ).first()
+        if existing is not None:
+            return existing
+        case = Case(
+            case_id=instance_id,
+            name=instance_id,
+            description=spec["problem_statement"].strip()[:500],
+            type=CaseType.swe_bench_instance,
+            status=CaseStatus.active,
+            sync_state=CaseSyncState.imported_from_yaml,
+            tags=["swe-bench", spec["repo"]],
+            subject_repo=spec["repo"],
+            base_commit=spec["base_commit"],
+            prompt_variants={"swe_default": self._build_swebench_prompt(spec)},
+            success_criteria={
+                "fail_to_pass": json.dumps(spec["fail_to_pass"]),
+                "pass_to_pass": json.dumps(spec["pass_to_pass"]),
+            },
+            constraints=["Edit library source only; do not modify test files."],
+            # Validation runs in the worker's container; the helper reads
+            # case_spec.json, installs the archived repo and runs the subset.
+            validation_commands=[
+                "python /app/scripts/swebench_validate.py --run {run_id}"
+            ],
+            max_steps=int(spec.get("max_steps", 10)),
+            metadata_json={
+                "instance_id": instance_id,
+                "repo_url": spec["repo_url"],
+                "version": str(spec.get("version", "")),
+                "python": spec.get("python", "3.11"),
+                "install_pins": json.dumps(spec.get("install_pins", [])),
+                "test_patch": spec["test_patch"],
+                "fail_to_pass": json.dumps(spec["fail_to_pass"]),
+                "pass_to_pass": json.dumps(spec["pass_to_pass"]),
+            },
         )
         self.session.add(case)
         self.session.commit()

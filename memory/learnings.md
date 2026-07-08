@@ -3,6 +3,94 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## SWE-bench generic runtime needs per-repo env pinning (Python + dep constraints) — 2026-07-08
+
+Running a SWE-bench instance with a generic `git clone + uv pip install -e . +
+pytest` (instead of the official per-instance Docker images) works for
+pure-Python repos, but **only with the right pinned environment**: (1) the
+correct Python version (SWE-bench flask 2.3 needs **3.11** — under 3.13 old
+werkzeug hits `ast.Str` removal errors), and (2) dependency constraints the
+repo's own `pyproject` doesn't enforce (flask 2.3 declares `Werkzeug>=2.2.2`
+but its code imports `werkzeug.urls.url_quote`, removed in werkzeug 3.0 → must
+pin `Werkzeug<3`). The HF dataset rows carry NO dependency pins, so the lab
+keeps a small `_ENV_SPECS` map (`scripts/swebench_common.py`) of
+`repo -> {python, pins}`; adding a repo = add its entry. Also install the repo's
+compiled `requirements/tests.txt` when present (pins test deps like blinker).
+
+Parsing: `pytest -rA` prints per-test summary lines as `PASSED <nodeid>`
+(status FIRST) — the regex must match status-first, not id-first.
+
+**Why it matters:** without the pin/version the repo won't even import, and the
+F2P/P2P validation silently reports 0/N. The golden-patch self-test
+(`make swebench-selftest INSTANCE=…`) proves the whole harness with **zero model
+tokens** (golden → resolved, empty → not) and is the right first de-risk before
+wiring an agent. Flagship instance: `pallets__flask-4992` (add `text=` to
+`flask.Config.from_file`), F2P=1 P2P=18, installs in seconds.
+
+## LLM audit runs in the worker by shelling out to bench_audit.py — 2026-07-07
+
+The qualitative audit (`scripts/bench_audit.py`, an LLM HTTP call up to minutes)
+is exposed in the web via the same enqueue+poll pattern as validation (ADR-0008).
+`audit_run` (Celery task) shells out to `scripts/bench_audit.py` with
+`env={**os.environ, **build_run_environment()}` so the `.env` gateway URL's
+`localhost` is rewritten to `host.docker.internal` (the worker is a container),
+then reads `data/runs/<id>/audit.md` back and stores it on the new `Audit` row
+(status running→done|failed). `AuditService` owns only DB/status (no gateway/
+subprocess) so the API can import it. `bench_audit.py` got the same
+`resolve_or_synthesize_run` treatment as bench_run so web `K-NNN` runs (absent
+from runs.yaml) can be audited.
+
+**Why it matters:** reuses the battle-tested CLI as the single source of truth,
+avoids an `src → scripts` import coupling, and keeps the worker as the home for
+slow/side-effecting work (ADR-0002).
+**How to apply:** any new "read run artifacts + call an LLM/gateway" feature
+belongs in the worker with `build_run_environment()`, surfaced via a DB status
+row the frontend polls — not inline in the API (would block the request).
+On Linux the worker needs `extra_hosts: host.docker.internal:host-gateway`
+(Docker Desktop/macOS resolves it by default).
+
+## Web runs are "managed": --fresh owns the workspace lifecycle end-to-end — 2026-07-07
+
+The old "set RESUME=1" failure came from `validate_workspace()` (`bench_run.py`)
+`sys.exit`ing on a stale `workspace/<id>/`, combined with the web/manual flow
+`return 0`-ing before Phase 5 `close_run()` (which is interactive-only), so
+workspaces were never cleaned. Fix: the runner adapter always passes `--fresh`
+for web runs (ADR-0006). `--fresh` means "managed/automated run": on start it
+resets a stale workspace instead of exiting; at the manual return (the web happy
+path, after execution) it calls the new `finalize_workspace()` to archive
+`workspace/<id>/` into `data/runs/<id>/workspace/` and remove it. CLI manual
+runs omit `--fresh` so `make bench-close` can still find the live workspace.
+
+**Why it matters:** with auto-incremental unique ids (`<case>-K-NNN`, unique
+across DB *and* disk) the collision can't happen anyway, but `--fresh` +
+`finalize_workspace` are what stop workspaces accumulating and make a fresh web
+run reliable without manual `rm -rf`.
+**How to apply:** any new "the API owns scoring/lifecycle" runner path should key
+destructive workspace behavior off `--fresh`, never off `score_mode=manual`
+alone (the CLI also uses manual). The fail-open branches now `return 1` (not 0)
+so a run that built nothing is recorded `failed`, not falsely `awaiting_manual_score`.
+
+## Preflight + visible enqueue failure turn silent no-ops into actionable errors — 2026-07-07
+
+`RunService.create_run` now runs `_preflight` before persisting: empty
+`executor_model` (non-dry-run) → `RunPreflightError` (HTTP 422); a `gateway/`
+model with `GATEWAY_TOKEN` unset/placeholder → 422 too (token read from `.env`
+via `config.read_env_file_value`, not a Settings field). And `_publish` now marks
+the run `failed` with a reason when enqueue raises, instead of leaving it
+`pending` forever. Consequence for tests: fixtures that create runs must pass a
+non-`gateway/` `executor_model` (e.g. `"stub-executor"`) or `dry_run=True`, else
+preflight rejects them.
+
+## Deleting a run spans 3 stores with no DB cascades — 2026-07-07
+
+`RunService.delete_run` (ADR-0007) removes, explicitly (no FKs/cascades exist):
+`Validation`, `Attribution`, `Artifact`, `RunEvent`, `Run`, then the 1:1
+`RunConfig`. Disk: `data/runs/<id>/` + `workspace/<id>/` via
+`settings.workspace_dir` (new) — path-guarded to resolve under `repo_root` so a
+`run_id` is never a free-text path. Container teardown is worker-only (API has no
+docker socket, ADR-0002): `delete_run` enqueues `cleanup_run_container`. A
+`running` run is refused (409) unless `force=True`.
+
 ## Claude Code gateway model names must match native alias resolution — 2026-07-07
 
 Claude Code reads the generated `.claude/agents/*.md` `model:` frontmatter for

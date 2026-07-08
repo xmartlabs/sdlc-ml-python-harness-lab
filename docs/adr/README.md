@@ -30,6 +30,13 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 ## Index
 
 - [0001 — Record architecture decisions](0001-record-architecture-decisions.md)
+- [0002 — Celery + Docker-per-run execution](0002-celery-docker-per-run-execution.md)
+- [0003 — Trial provenance and harness fingerprint](0003-trial-provenance-and-harness-fingerprint.md)
+- [0004 — Objective validation and multidimensional score](0004-objective-validation-and-multidimensional-score.md)
+- [0005 — Structured harness attribution](0005-structured-harness-attribution.md)
+- [0006 — Auto-incremental run IDs](0006-auto-incremental-run-ids.md)
+- [0007 — Run deletion semantics](0007-run-deletion-semantics.md)
+- [0008 — LLM audit exposed in the web app](0008-llm-audit-in-web.md)
 
 ## Why ADRs exist
 

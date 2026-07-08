@@ -31,7 +31,11 @@ def create_pending_run(engine, run_id: str, command: list[str] | None = None):
         service.create_run(
             RunCreate(
                 run_id=run_id,
-                config=RunConfigCreate(case_id="tetris-v1", prompt_variant="sdlc"),
+                config=RunConfigCreate(
+                    case_id="tetris-v1",
+                    prompt_variant="sdlc",
+                    executor_model="stub-executor",
+                ),
             )
         )
         if command is not None:
