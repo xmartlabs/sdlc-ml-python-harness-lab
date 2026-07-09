@@ -27,7 +27,16 @@ from harness_lab_app.run_service import (
     RunService,
 )
 from harness_lab_app.sandbox_service import VALID_KINDS, SandboxService
-from harness_lab_app.schemas import CaseCreate, RunConfigCreate, RunCreate
+from harness_lab_app.schemas import (
+    CaseCreate,
+    RunConfigCreate,
+    RunCreate,
+    StagedSkillCreate,
+    StagedSkillUpdate,
+    SwebenchImportRequest,
+)
+from harness_lab_app.staged_skill_service import StagedSkillError, StagedSkillService
+from harness_lab_app.swebench_client import SwebenchFetchError, normalize_instance
 from harness_lab_app.validation_service import ValidationService
 
 
@@ -73,6 +82,57 @@ def create_app() -> FastAPI:
     def logout() -> dict[str, bool]:
         return {"authenticated": False}
 
+    @app.get("/api/harness/skills")
+    def list_harness_skills():
+        from harness_lab_app.skills_catalog import list_harness_skills as _list
+
+        return _list()
+
+    @app.get("/api/staged-skills")
+    def list_staged_skills(session: Session = Depends(get_session)):
+        return StagedSkillService(session).list_skills()
+
+    @app.post("/api/staged-skills")
+    def create_staged_skill(
+        data: StagedSkillCreate, session: Session = Depends(get_session)
+    ):
+        try:
+            return StagedSkillService(session).create_skill(
+                data.name, data.description, data.content
+            )
+        except StagedSkillError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.patch("/api/staged-skills/{name}")
+    def update_staged_skill(
+        name: str, data: StagedSkillUpdate, session: Session = Depends(get_session)
+    ):
+        try:
+            return StagedSkillService(session).update_skill(
+                name,
+                description=data.description,
+                content=data.content,
+                status=data.status,
+            )
+        except StagedSkillError as exc:
+            status = 404 if "not found" in str(exc) else 422
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    @app.delete("/api/staged-skills/{name}", status_code=204)
+    def delete_staged_skill(name: str, session: Session = Depends(get_session)):
+        try:
+            StagedSkillService(session).delete_skill(name)
+        except StagedSkillError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/staged-skills/{name}/promote")
+    def promote_staged_skill(name: str, session: Session = Depends(get_session)):
+        try:
+            return StagedSkillService(session).promote_skill(name)
+        except StagedSkillError as exc:
+            status = 404 if "not found" in str(exc) else 422
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+
     @app.get("/api/cases")
     def list_cases(session: Session = Depends(get_session)):
         return CaseService(session).list_cases()
@@ -110,6 +170,21 @@ def create_app() -> FastAPI:
     @app.post("/api/cases/{case_id}/sync")
     def sync_case(case_id: str, session: Session = Depends(get_session)):
         return {"task_path": str(CaseService(session).sync_case_to_yaml(case_id))}
+
+    @app.post("/api/cases/import-swebench")
+    def import_swebench(
+        data: SwebenchImportRequest, session: Session = Depends(get_session)
+    ):
+        # The HF datasets-server fetch is a short HTTP GET, so it runs inline
+        # (sync endpoints execute in the threadpool). Import is idempotent:
+        # an already-imported instance returns the existing Case.
+        try:
+            spec = normalize_instance(data.instance_id)
+        except SwebenchFetchError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return CaseService(session).import_swebench_instance(spec)
 
     @app.post("/api/cases/seed/tetris")
     def seed_tetris(session: Session = Depends(get_session)):

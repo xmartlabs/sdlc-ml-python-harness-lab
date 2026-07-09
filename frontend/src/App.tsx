@@ -8,6 +8,7 @@ import { Compare } from "./pages/Compare";
 import { Dashboard } from "./pages/Dashboard";
 import { Runs } from "./pages/Runs";
 import { Settings } from "./pages/Settings";
+import { Skills } from "./pages/Skills";
 import { applyTheme, getStoredTheme } from "./theme";
 import type { ThemeMode } from "./theme";
 import type { CaseCreatePayload, CaseRecord, RunCreatePayload, RunRecord } from "./types";
@@ -106,6 +107,13 @@ export default function App() {
     return created;
   };
 
+  const importSwebench = async (instanceId: string) => {
+    const imported = await api.importSwebench(instanceId);
+    setCases((current) => [imported, ...current.filter((item) => item.case_id !== imported.case_id)]);
+    setSelectedCaseId(imported.case_id);
+    return imported;
+  };
+
   const createRun = async (payload: RunCreatePayload) => {
     const created = await api.createRun(payload);
     setRuns((current) => [created, ...current.filter((item) => item.run_id !== created.run_id)]);
@@ -181,6 +189,7 @@ export default function App() {
               <Cases
                 cases={cases.length > 0 ? cases : [previewCase]}
                 onCreateCase={createCase}
+                onImportSwebench={importSwebench}
                 onSeedTetris={seedTetris}
                 onSelectCase={setSelectedCaseId}
                 selectedCaseId={selectedCaseId}
@@ -198,6 +207,7 @@ export default function App() {
           }
           path="/cases"
         />
+        <Route element={<Skills />} path="/skills" />
         <Route element={<Compare runs={runs} />} path="/compare" />
         <Route element={<Settings onThemeChange={setTheme} theme={theme} />} path="/settings" />
         <Route element={<Navigate replace to="/" />} path="*" />

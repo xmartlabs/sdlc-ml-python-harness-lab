@@ -9,7 +9,6 @@ normalizes it, and persists a Case via CaseService.import_swebench_instance.
 # ruff: noqa: E402
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -18,28 +17,10 @@ sys.path.insert(0, str(_ROOT / "src"))
 sys.path.insert(0, str(_ROOT / "scripts"))
 
 from sqlmodel import Session
-from swebench_common import env_spec, fetch_instance, repo_url_from
 
 from harness_lab_app.case_service import CaseService
 from harness_lab_app.db import get_engine, init_db
-
-
-def normalize(instance_id: str) -> dict:
-    inst = fetch_instance(instance_id)
-    spec = env_spec(inst["repo"])
-    return {
-        "instance_id": inst["instance_id"],
-        "repo": inst["repo"],
-        "base_commit": inst["base_commit"],
-        "problem_statement": inst["problem_statement"],
-        "test_patch": inst["test_patch"],
-        "fail_to_pass": json.loads(inst["FAIL_TO_PASS"]),
-        "pass_to_pass": json.loads(inst["PASS_TO_PASS"]),
-        "version": inst.get("version", ""),
-        "repo_url": repo_url_from(inst["repo"]),
-        "python": spec["python"],
-        "install_pins": spec["pins"],
-    }
+from harness_lab_app.swebench_client import normalize_instance
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     print(f"→ Fetching {args.instance} from SWE-bench Lite …")
-    spec = normalize(args.instance)
+    spec = normalize_instance(args.instance)
     print(
         f"  repo={spec['repo']} base={spec['base_commit'][:10]} "
         f"F2P={len(spec['fail_to_pass'])} P2P={len(spec['pass_to_pass'])} "

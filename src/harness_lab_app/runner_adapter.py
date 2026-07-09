@@ -34,6 +34,11 @@ class BenchRunAdapter:
             command.extend(["--planner-model", config.planner_model])
         if config.executor_model:
             command.extend(["--executor-model", config.executor_model])
+        # Sorted → deterministic command for identical configs (stable clone/retry).
+        for skill in sorted(set(config.skills_disabled)):
+            command.extend(["--disable-skill", skill])
+        for skill in sorted(set(config.skills_extra)):
+            command.extend(["--extra-skill", skill])
         if config.dry_run:
             command.append("--dry-run")
         if config.resume:

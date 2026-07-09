@@ -56,6 +56,31 @@ def _apply_sqlite_compat_migrations() -> None:
                 text("ALTER TABLE run ADD COLUMN notes VARCHAR NOT NULL DEFAULT ''")
             )
 
+        audit_columns = {
+            row[1]
+            for row in connection.execute(text("PRAGMA table_info('audit')")).fetchall()
+        }
+        if audit_columns and "findings_json" not in audit_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE audit ADD COLUMN findings_json JSON NOT NULL DEFAULT '{}'"
+                )
+            )
+
+        runconfig_columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('runconfig')")
+            ).fetchall()
+        }
+        for column in ("skills_disabled", "skills_extra"):
+            if runconfig_columns and column not in runconfig_columns:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE runconfig ADD COLUMN {column} JSON NOT NULL DEFAULT '[]'"
+                    )
+                )
+
 
 def get_session() -> Generator[Session, None, None]:
     with Session(engine) as session:

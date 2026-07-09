@@ -35,6 +35,50 @@ def test_store_result_sets_done_and_markdown():
         assert audit.status == "done"
         assert "Uso de skills" in audit.markdown
         assert audit.error is None
+        # No findings passed → column keeps its default empty dict.
+        assert audit.findings_json == {}
+
+
+def test_store_result_persists_findings():
+    findings = {
+        "items": [
+            {
+                "name": "verify_changes",
+                "kind": "skill",
+                "used_evidence": "make check en step 3",
+                "verdict": "useful",
+                "note": "Se corrió el gate",
+            }
+        ]
+    }
+    with _session() as session:
+        service = AuditService(session)
+        service.mark_running("run-f", "gpt-5.5")
+        audit = service.store_result("run-f", "body", findings=findings)
+        assert audit.findings_json["items"][0]["verdict"] == "useful"
+
+
+def test_read_audit_findings_tolerates_absence_and_garbage(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from harness_lab_app import audit_service as module
+
+    monkeypatch.setattr(
+        module, "get_settings", lambda: SimpleNamespace(data_runs_dir=tmp_path)
+    )
+    with _session() as session:
+        service = AuditService(session)
+        # Absent file → None (store_result then keeps the default).
+        assert service.read_audit_findings("run-x") is None
+        run_dir = tmp_path / "run-x"
+        run_dir.mkdir()
+        (run_dir / "audit_findings.json").write_text("not json {")
+        garbage = service.read_audit_findings("run-x")
+        assert garbage is not None
+        assert garbage["items"] == []
+        assert "parse_error" in garbage
+        (run_dir / "audit_findings.json").write_text('{"items": [{"name": "a"}]}')
+        assert service.read_audit_findings("run-x") == {"items": [{"name": "a"}]}
 
 
 def test_store_error_sets_failed():

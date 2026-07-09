@@ -84,6 +84,8 @@ class RunConfig(SQLModel, table=True):
     max_steps: int = 1
     resume: bool = False
     dry_run: bool = False
+    skills_disabled: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    skills_extra: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     runner_adapter: str = "bench_run"
     tracking: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
@@ -181,7 +183,30 @@ class Audit(SQLModel, table=True):
     auditor_model: str = ""
     status: str = "running"  # running | done | failed
     markdown: str = ""
+    # Structured per-item verdicts (skills/docs/hooks/subagents) from the
+    # second auditor pass: {"items": [{name, kind, used_evidence, verdict,
+    # note}], "parse_error"?}. Optional — old audits have an empty dict.
+    findings_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
     error: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class StagedSkill(SQLModel, table=True):
+    """A skill under trial: authored in the UI, not yet in the governed catalog.
+
+    Content lives in the DB (source of truth for the UI) AND is materialized to
+    data/skills_staging/<name>/SKILL.md (git-ignored) so the runner can inject
+    it into a run via --extra-skill. Promotion writes it into
+    .github/skills-external/ and re-syncs the native views — committing that
+    result is always a human action.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    description: str = ""
+    content: str = ""
+    status: str = "draft"  # draft | testing | promoted | archived
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

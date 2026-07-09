@@ -180,8 +180,9 @@ def _git(root: Path, *args: str) -> str | None:
     return result.stdout.strip()
 
 
-def _harness_git_dirty(root: Path) -> bool | None:
-    out = _git(root, "status", "--porcelain", "--", *HARNESS_TRACKED_PATHS)
+def _harness_git_dirty(root: Path, exclude: tuple[str, ...] = ()) -> bool | None:
+    tracked = tuple(p for p in HARNESS_TRACKED_PATHS if p not in exclude)
+    out = _git(root, "status", "--porcelain", "--", *tracked)
     if out is None:
         return None
     return bool(out.strip())
@@ -192,9 +193,18 @@ def compute_condition_hash(
     model_condition: dict[str, Any],
     prompt_hash: str | None,
     case_hash: str | None,
+    skills_disabled: tuple[str, ...] = (),
+    skills_extra_hashes: dict[str, str] | None = None,
 ) -> str:
-    """Deterministic id of the experimental arm (excludes provenance-only fields)."""
-    identity = {
+    """Deterministic id of the experimental arm (excludes provenance-only fields).
+
+    Ablation rule: ``skills_disabled`` / ``skills_extra_hashes`` enter the
+    identity ONLY when non-empty. This keeps every historical/default-arm hash
+    unchanged while any skill ablation (or a staged-skill content edit) flips
+    the arm. Do not "simplify" this by always including the keys — it would
+    silently re-bin every existing arm.
+    """
+    identity: dict[str, Any] = {
         "harness_hash": harness_hash,
         "model_condition": {
             key: model_condition.get(key)
@@ -208,6 +218,10 @@ def compute_condition_hash(
         "prompt_hash": prompt_hash,
         "case_hash": case_hash,
     }
+    if skills_disabled:
+        identity["skills_disabled"] = sorted(set(skills_disabled))
+    if skills_extra_hashes:
+        identity["skills_extra"] = dict(sorted(skills_extra_hashes.items()))
     return hash_text(json.dumps(identity, sort_keys=True, separators=(",", ":")))
 
 
@@ -220,22 +234,34 @@ def build_condition(
     prompt_source: Path | None,
     task_path: Path | None,
     runner_image: str | None = None,
+    skills_disabled: tuple[str, ...] = (),
+    skills_extra_hashes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Assemble the full, hashable trial condition manifest."""
     fingerprint = build_harness_fingerprint(repo_root)
     model_condition = build_model_condition(run, executor_model, planner_model)
     prompt_hash = hash_file(prompt_source) if prompt_source is not None else None
     case_hash = hash_file(task_path) if task_path is not None else None
+    ablation_active = bool(skills_disabled or skills_extra_hashes)
+    # During an ablation the runner regenerates OPENCODE.md's managed skills
+    # block (a controlled, recorded mutation), so it must not count as "dirty".
+    dirty_exclude = ("OPENCODE.md",) if ablation_active else ()
     return {
         "condition_hash": compute_condition_hash(
-            fingerprint["harness_hash"], model_condition, prompt_hash, case_hash
+            fingerprint["harness_hash"],
+            model_condition,
+            prompt_hash,
+            case_hash,
+            skills_disabled=skills_disabled,
+            skills_extra_hashes=skills_extra_hashes,
         ),
         "harness_fingerprint": fingerprint,
         "model_condition": model_condition,
         "prompt_hash": prompt_hash,
         "case_hash": case_hash,
+        "skills_ablation": ablation_active,
         "lab_git_commit": _git(repo_root, "rev-parse", "HEAD"),
-        "harness_git_dirty": _harness_git_dirty(repo_root),
+        "harness_git_dirty": _harness_git_dirty(repo_root, exclude=dirty_exclude),
         "runner_image": runner_image,
     }
 
@@ -250,6 +276,8 @@ def enrich_metadata(
     prompt_source: Path | None,
     task_path: Path | None,
     runner_image: str | None = None,
+    skills_disabled: tuple[str, ...] = (),
+    skills_extra_hashes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Add the condition manifest to a metadata dict; never raises."""
     with contextlib.suppress(Exception):
@@ -262,6 +290,8 @@ def enrich_metadata(
                 prompt_source=prompt_source,
                 task_path=task_path,
                 runner_image=runner_image,
+                skills_disabled=skills_disabled,
+                skills_extra_hashes=skills_extra_hashes,
             )
         )
     return meta

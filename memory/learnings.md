@@ -3,6 +3,65 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## SWE-bench score IS the objective validation — and the loop must stop on it — 2026-07-09
+
+First real agent SWE-bench run (pallets__flask-4992-K-001, qwen3.6-35b) resolved
+the issue in STEP 1 (`resolved=True F2P=1/1 P2P=18/18`), then burned 9 more
+steps creating a main.py Flask demo and "fixing" werkzeug deprecations, because
+the continuation prompts (`generate_continuation_prompt`) and `_STOP_RE` were
+Tetris-hardcoded. Fixes: (1) SWE lane now has its own continuation prompt
+(issue + live F2P/P2P status, "library source only, no main.py"), (2) the step
+loop runs `swebench_common.evaluate` after EVERY step and breaks on resolved —
+the stop criterion is objective, never the agent's own claims. (3) The worker
+auto-scores swe_bench_instance runs from the validation verdict (resolved→10,
+else→0, binary like official SWE-bench) and completes them — no manual score.
+Re-validate also triggers auto-score (heals runs parked awaiting_manual_score).
+
+**UI gotcha**: objective validation runs AFTER the state flips to
+awaiting_manual_score and takes ~1 min (repo reinstall), so a single fetch on
+state-change shows "No validation yet" forever — the RunDetail now retries the
+validation/attribution fetch for ~2 min after a terminal state.
+**Runner image gotcha**: jinja2 is a dev-group dep, but bench_run's skill
+ablation imports the skills_sync renderer inside the container → added to
+Dockerfile.runner explicitly (like pygame). Rebuild the runner image
+(`docker compose build` / the runner build target) to pick it up.
+
+## Per-run skill ablation = regenerate the generated views, not move files — 2026-07-08
+
+Skill ablation (ADR-0011) works because the agent-visible skill surfaces
+(`.opencode/skills/` symlinks AND the `BEGIN/END GENERATED SKILLS` block in
+OPENCODE.md) are all *generated* by skills_sync from `.github/skills*`. So
+"disable a skill for one run" = `link_tool(root, tool, filtered_skills)` +
+`render_tool(..., skills=filtered)` per tool, and "restore" = the same call
+with the full list — idempotent, which is what makes restore-at-start a valid
+crash-recovery strategy (plus `atexit` for normal exits; worker concurrency 1
+rules out interleaving). Removing symlinks by hand would have left OPENCODE.md
+still advertising the skill (not a real ablation) and required bespoke cleanup.
+
+Two hash traps: (1) `condition_hash` must include `skills_disabled`/staged
+hashes ONLY when non-empty, or every historical arm re-bins; (2) the harness
+fingerprint hashes skills via `skills-lock.json` (source, unchanged by
+ablation), so without the explicit field an ablated arm would hash identical
+to baseline except via the OPENCODE.md governance hash — too subtle to rely
+on. Also exclude OPENCODE.md from `harness_git_dirty` during ablation.
+
+**How to apply:** any per-run harness variation (agents, hooks) should follow
+the same pattern: mutate only generated artifacts through the engine, record
+the variation explicitly in metadata + condition hash, restore by full re-sync.
+
+## LLM structured output: separate JSON-only call + tolerant parser — 2026-07-08
+
+The audit's per-item verdicts (útil/redundante/mejorar per skill/doc/hook) come
+from a SECOND gateway call with a "respond with ONLY a JSON array" prompt, not
+from parsing a fenced block out of the prose audit. `parse_findings` never
+raises: strips fences, extracts the outermost `[...]` from prose, drops invalid
+items, coerces unknown enums, and returns `{"items": [], "parse_error": ...}`
+on total failure — the audit.md is already written by then, so findings trouble
+can never fail the audit. The UI treats findings as optional garnish.
+
+<!-- Add new learnings above this line -->
+
+
 ## In-platform sandboxes: worker-launched containers with dynamic host ports — 2026-07-08
 
 Per-run validation sandboxes (ADR-0010) let the user run/inspect a run's code in

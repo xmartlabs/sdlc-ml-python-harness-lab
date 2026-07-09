@@ -1,12 +1,16 @@
 import type {
+  ArtifactRecord,
   AttributionRecord,
   AuditRecord,
   CaseCreatePayload,
   CaseRecord,
+  HarnessSkill,
   RunCreatePayload,
   RunEventRecord,
   RunRecord,
   SandboxRecord,
+  StagedSkillPromoteResult,
+  StagedSkillRecord,
   ValidationRecord
 } from "./types";
 
@@ -58,6 +62,27 @@ export const api = {
       body: JSON.stringify({ username, password })
     }),
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
+  listHarnessSkills: () => request<HarnessSkill[]>("/api/harness/skills"),
+  listStagedSkills: () => request<StagedSkillRecord[]>("/api/staged-skills"),
+  createStagedSkill: (name: string, description: string, content: string) =>
+    request<StagedSkillRecord>("/api/staged-skills", {
+      method: "POST",
+      body: JSON.stringify({ name, description, content })
+    }),
+  updateStagedSkill: (
+    name: string,
+    changes: { description?: string; content?: string; status?: string }
+  ) =>
+    request<StagedSkillRecord>(`/api/staged-skills/${name}`, {
+      method: "PATCH",
+      body: JSON.stringify(changes)
+    }),
+  deleteStagedSkill: (name: string) =>
+    request<void>(`/api/staged-skills/${name}`, { method: "DELETE" }),
+  promoteStagedSkill: (name: string) =>
+    request<StagedSkillPromoteResult>(`/api/staged-skills/${name}/promote`, {
+      method: "POST"
+    }),
   listCases: () => request<CaseRecord[]>("/api/cases"),
   createCase: (payload: CaseCreatePayload) =>
     request<CaseRecord>("/api/cases", {
@@ -66,6 +91,11 @@ export const api = {
     }),
   listCaseRunIds: (caseId: string) =>
     request<{ run_ids: string[] }>(`/api/cases/${caseId}/run-ids`),
+  importSwebench: (instanceId: string) =>
+    request<CaseRecord>("/api/cases/import-swebench", {
+      method: "POST",
+      body: JSON.stringify({ instance_id: instanceId })
+    }),
   seedTetris: () => request<CaseRecord>("/api/cases/seed/tetris", { method: "POST" }),
   listRuns: () => request<RunRecord[]>("/api/runs"),
   createRun: (payload: RunCreatePayload) =>
@@ -108,6 +138,12 @@ export const api = {
       method: "POST"
     });
   },
+  indexArtifacts: (runId: string) =>
+    request<ArtifactRecord[]>(`/api/runs/${runId}/artifacts/index`, { method: "POST" }),
+  listArtifacts: (runId: string) =>
+    request<ArtifactRecord[]>(`/api/runs/${runId}/artifacts`),
+  readArtifact: (runId: string, name: string) =>
+    request<{ content: string }>(`/api/runs/${runId}/artifacts/${name}`),
   getSandbox: (runId: string, kind: string) =>
     request<SandboxRecord>(`/api/runs/${runId}/sandbox?kind=${kind}`),
   startSandbox: (runId: string, kind: string) =>

@@ -738,7 +738,6 @@ label {
 }
 
 .audit-body {
-  white-space: pre-wrap;
   word-break: break-word;
   max-height: 28rem;
   overflow-y: auto;
@@ -748,6 +747,279 @@ label {
   background: var(--surface-muted, rgba(127, 127, 127, 0.06));
   font-size: 0.85rem;
   line-height: 1.5;
+}
+
+/* Rendered markdown (audit, report.md, artifact viewer) */
+.markdown-body {
+  font-size: 0.85rem;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  margin: 0.9em 0 0.4em;
+  line-height: 1.25;
+}
+
+.markdown-body h1 {
+  font-size: 1.15rem;
+}
+
+.markdown-body h2 {
+  font-size: 1.02rem;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.25em;
+}
+
+.markdown-body h3 {
+  font-size: 0.92rem;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.45em 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.4em;
+}
+
+.markdown-body li {
+  margin: 0.2em 0;
+}
+
+.markdown-body code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.8em;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+.markdown-body pre {
+  overflow-x: auto;
+  padding: 0.6rem 0.75rem;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+}
+
+.markdown-body pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--line);
+  padding: 0.3em 0.6em;
+}
+
+.markdown-body blockquote {
+  margin: 0.5em 0;
+  padding-left: 0.8em;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+
+/* Log viewer (parsed opencode logfmt) */
+.log-viewer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.log-viewer-toolbar .badge {
+  cursor: pointer;
+}
+
+.log-level {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.68rem;
+  min-width: 3.2em;
+  text-align: center;
+  border-radius: 4px;
+  padding: 0 0.3em;
+  flex-shrink: 0;
+}
+
+.log-level-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.log-level-warn {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.log-level-info {
+  background: var(--panel-soft);
+  color: var(--muted);
+}
+
+.log-level-debug {
+  background: var(--panel-soft);
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.log-message {
+  word-break: break-word;
+}
+
+.log-extras {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+/* Harness catalog (available · observed · verdict) */
+.harness-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.harness-row {
+  align-items: center;
+}
+
+.harness-row.disabled {
+  opacity: 0.55;
+}
+
+/* Staged-skill rows carry several action buttons in the last column. */
+.harness-row .row-actions {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.table--staged .table-row {
+  grid-template-columns: minmax(0, 1.3fr) minmax(90px, 0.4fr) minmax(300px, 1fr);
+}
+
+.harness-name small {
+  color: var(--muted);
+  display: block;
+}
+
+.harness-verdict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.harness-verdict small {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Skills section in the new-run form */
+.skills-section {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.skills-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0;
+}
+
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 6px 16px;
+  margin-top: 8px;
+}
+
+.skills-grid {
+  align-items: start;
+}
+
+/* Keep the enable/disable-all controls next to the checkboxes, not far right. */
+.skills-section .panel-actions {
+  justify-content: flex-start;
+  margin: 8px 0;
+}
+
+/* SKILL.md editor on the Skills page */
+.skill-editor {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.8rem;
+  min-height: 260px;
+  line-height: 1.5;
+}
+
+.skill-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  min-width: 0;
+}
+
+/* The global `input { width: 100%; padding: 10px 12px }` rule is for text
+   fields; a stretched checkbox pushes its label away and overflows the grid. */
+.skill-checkbox input {
+  width: auto;
+  flex: 0 0 auto;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.skill-checkbox span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+.skill-checkbox small {
+  white-space: nowrap;
+}
+
+/* Artifact viewer */
+.artifact-viewer {
+  margin-top: 12px;
+}
+
+.artifact-pre {
+  max-height: 28rem;
+  overflow: auto;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-muted, rgba(127, 127, 127, 0.06));
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 /* Run detail as a full-width page (master–detail: its own route) */

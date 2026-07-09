@@ -185,6 +185,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "omit this so `make bench-close` can still find the workspace.",
     )
     p.add_argument(
+        "--disable-skill",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Hide a governed skill from the agent for this run (repeatable). "
+        "The native skill views and adapter files are regenerated without it "
+        "and restored after the run (ablation lane).",
+    )
+    p.add_argument(
+        "--extra-skill",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Add a staged skill from data/skills_staging/<NAME>/ for this run "
+        "only (repeatable). Restored after the run.",
+    )
+    p.add_argument(
         "--create-litellm-key",
         action="store_true",
         help="Attempt to create a LiteLLM virtual key for this run",
@@ -244,6 +261,91 @@ def discover_skills() -> list[str]:
         if d.is_dir():
             found.extend(p.name for p in d.iterdir() if p.is_dir())
     return sorted(set(found))
+
+
+# ---------------------------------------------------------------------------
+# Per-run skill ablation (--disable-skill / --extra-skill)
+#
+# The agent discovers skills from the repo's native views (.opencode/skills,
+# CLAUDE.md/OPENCODE.md generated blocks, ...), which are GENERATED artifacts of
+# the skills_sync engine. A true ablation therefore regenerates those views
+# (symlinks AND adapter-file skill blocks) from a filtered/extended skill list
+# before launching the agent, and restores the full views afterwards. The
+# source of truth (.github/skills*) is never touched. Sequential-safe because
+# the worker runs one container at a time (ADR-0002); a crash is healed by the
+# restore-at-start guard on the next run (or a manual `make sync-skills`).
+# ---------------------------------------------------------------------------
+
+SKILLS_STAGING_DIR = REPO_ROOT / "data" / "skills_staging"
+
+
+def build_effective_skills(disabled: list[str], extra: list[str]) -> list:
+    """Governed skills minus `disabled`, plus staged `extra`. Fails fast on
+    unknown names or collisions, BEFORE any view is mutated."""
+    from ml_python_base.skills_sync.discovery import (
+        discover_skills as discover_governed,
+    )
+    from ml_python_base.skills_sync.models import KIND_EXTERNAL, Skill
+
+    governed = discover_governed(REPO_ROOT)
+    known = {skill.name for skill in governed}
+    unknown = sorted(set(disabled) - known)
+    if unknown:
+        sys.exit(f"❌ --disable-skill: unknown skill(s): {', '.join(unknown)}")
+    collisions = sorted((set(extra) & known) - set(disabled))
+    if collisions:
+        sys.exit(
+            f"❌ --extra-skill: name(s) collide with governed skills: "
+            f"{', '.join(collisions)} (disable the governed one first)"
+        )
+    effective = [skill for skill in governed if skill.name not in set(disabled)]
+    for name in sorted(set(extra)):
+        source = SKILLS_STAGING_DIR / name
+        if not (source / "SKILL.md").is_file():
+            sys.exit(
+                f"❌ --extra-skill '{name}': no SKILL.md at "
+                f"{source.relative_to(REPO_ROOT)}/"
+            )
+        effective.append(
+            Skill(name=name, kind=KIND_EXTERNAL, source_path=source, description="")
+        )
+    return effective
+
+
+def apply_skill_views(skills: list) -> None:
+    """Project `skills` into every tool's native view + adapter files."""
+    from ml_python_base.skills_sync.config import DEFAULT_REGISTRY_PATH, load_registry
+    from ml_python_base.skills_sync.linker import link_tool
+    from ml_python_base.skills_sync.manifest import write_manifest
+    from ml_python_base.skills_sync.renderer import render_tool
+
+    registry = load_registry(REPO_ROOT / DEFAULT_REGISTRY_PATH)
+    for tool in registry.tools:
+        hashes = link_tool(REPO_ROOT, tool, skills)
+        if tool.needs_manifest and tool.manifest_path:
+            write_manifest(REPO_ROOT / tool.manifest_path, hashes)
+        render_tool(REPO_ROOT, registry, tool, skills=skills)
+
+
+def restore_full_skill_views() -> None:
+    """Re-sync every native view from the governed source (idempotent)."""
+    from ml_python_base.skills_sync.discovery import (
+        discover_skills as discover_governed,
+    )
+
+    apply_skill_views(discover_governed(REPO_ROOT))
+
+
+def staged_skill_hashes(extra: list[str]) -> dict[str, str]:
+    """Content hash per staged skill — a staged-skill edit must flip the arm."""
+    from harness_lab_app.provenance import hash_file
+
+    out: dict[str, str] = {}
+    for name in sorted(set(extra)):
+        digest = hash_file(SKILLS_STAGING_DIR / name / "SKILL.md")
+        if digest is not None:
+            out[name] = digest
+    return out
 
 
 def discover_subagents() -> list[str]:
@@ -338,6 +440,71 @@ def generate_continuation_prompt(
     return path
 
 
+def generate_swe_continuation_prompt(
+    run_id: str,
+    step_n: int,
+    steps_dir: Path,
+    spec: dict,
+    last_eval: dict | None,
+) -> Path:
+    """Continuation prompt for a SWE-bench step (no Tetris/game framing).
+
+    Keeps the agent on the issue: shows the live F2P/P2P status from the
+    previous objective evaluation and forbids scope creep.
+    """
+    f2p = spec.get("fail_to_pass") or []
+    test_cmd = f"python -m pytest {' '.join(f2p)}"
+    status = (
+        f"resolved={last_eval['resolved']} "
+        f"F2P={last_eval['f2p_passed']}/{last_eval['f2p_total']} "
+        f"P2P={last_eval['p2p_passed']}/{last_eval['p2p_total']}"
+        if last_eval
+        else "not evaluated yet"
+    )
+    text = (
+        f"<!-- SWE-bench continuation step {step_n} for RUN_ID={run_id} -->\n\n"
+        f"# Resolve the GitHub issue — continuation (step {step_n})\n\n"
+        f"You are continuing work on the SWE-bench task in "
+        f"`workspace/{run_id}/` (a real library repo — there is NO main.py to "
+        f"build; do NOT create applications or demos).\n\n"
+        f"Objective status after the previous step: {status}\n\n"
+        f"Target failing test(s):\n"
+        + "\n".join(f"  - {t}" for t in f2p)
+        + f"\n\nRun them with:\n    cd workspace/{run_id} && {test_cmd}\n\n"
+        f"Rules:\n"
+        f"1. Make the target test(s) pass by editing the **library source only** "
+        f"(never the test files).\n"
+        f"2. Keep the change minimal — do not refactor, fix deprecations, or "
+        f"touch anything unrelated to the issue.\n"
+        f"3. After your edit, run the target test(s) and the surrounding test "
+        f"file to check for regressions.\n"
+        f"4. Stop after the target test(s) pass.\n"
+    )
+    path = steps_dir / f"step-{step_n}-prompt.md"
+    path.write_text(text)
+    return path
+
+
+def swe_step_evaluation(workspace: Path, spec: dict) -> dict | None:
+    """Objective F2P/P2P check against the provisioned install (never raises).
+
+    This is the SWE-bench resolution criterion evaluated live between steps so
+    the loop can stop as soon as the issue is actually resolved, instead of
+    trusting the agent's own completion claims.
+    """
+    import swebench_common as swe
+
+    f2p = spec.get("fail_to_pass") or []
+    p2p = spec.get("pass_to_pass") or []
+    if not f2p or not workspace.is_dir():
+        return None
+    try:
+        return swe.evaluate(workspace, sys.executable, f2p, p2p)
+    except Exception as exc:
+        print(f"  ⚠️  SWE-bench step evaluation failed: {exc!r}")
+        return None
+
+
 def write_metadata(
     out_dir: Path,
     args: argparse.Namespace,
@@ -361,7 +528,12 @@ def write_metadata(
         "executor_model": args.executor_model,
         "score_mode": args.score_mode,
         "max_steps": args.max_steps,
+        # Exclusions are applied to the native views BEFORE metadata is written,
+        # so discover_skills() already reflects the effective bundle; the
+        # explicit lists below record the ablation itself.
         "skills_bundle": discover_skills(),
+        "skills_disabled": sorted(set(getattr(args, "disable_skill", []) or [])),
+        "skills_experimental": sorted(set(getattr(args, "extra_skill", []) or [])),
         "subagents": discover_subagents(),
         "base_commit": task.get("base_commit", ""),
         "workspace": f"workspace/{args.run}",
@@ -379,6 +551,10 @@ def write_metadata(
         prompt_source=prompt_source,
         task_path=task_path,
         runner_image=os.environ.get("HARNESS_LAB_RUNNER_IMAGE"),
+        skills_disabled=tuple(meta["skills_disabled"]),
+        skills_extra_hashes=staged_skill_hashes(
+            list(getattr(args, "extra_skill", []) or [])
+        ),
     )
     path = out_dir / "metadata.json"
     path.write_text(json.dumps(meta, indent=2))
@@ -1220,6 +1396,28 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print("  [1/5] Preparing run...")
 
+    # Per-run skill ablation. Restore-at-start heals a previous crashed
+    # ablation (native views are generated artifacts, so this is idempotent);
+    # atexit covers every return/sys.exit path of this run. Runs without
+    # ablation flags skip the restore only if it fails (best-effort heal).
+    skills_ablation = bool(args.disable_skill or args.extra_skill)
+    try:
+        restore_full_skill_views()
+    except Exception as exc:
+        if skills_ablation:
+            sys.exit(f"❌ Could not sync skill views before ablation: {exc!r}")
+        print(f"  ⚠️  Skill view sync skipped: {exc!r}")
+    if skills_ablation:
+        effective_skills = build_effective_skills(args.disable_skill, args.extra_skill)
+        apply_skill_views(effective_skills)
+        import atexit
+
+        atexit.register(restore_full_skill_views)
+        print(
+            f"  Skills:      ablation active — disabled={sorted(set(args.disable_skill))} "
+            f"extra={sorted(set(args.extra_skill))}"
+        )
+
     out_dir = DATA_DIR / args.run
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1322,10 +1520,17 @@ def main(argv: list[str] | None = None) -> int:
         if max_steps > 1:
             steps_dir.mkdir(exist_ok=True)
 
+        last_swe_eval: dict | None = None
         for step_n in range(1, max_steps + 1):
             if max_steps > 1:
                 if step_n == 1:
                     step_prompt_path = prompt_path
+                elif case_spec is not None:
+                    # SWE-bench lane: keep the agent on the issue (the generic
+                    # continuation prompt is game-build framed and derails it).
+                    step_prompt_path = generate_swe_continuation_prompt(
+                        args.run, step_n, steps_dir, case_spec, last_swe_eval
+                    )
                 else:
                     step_prompt_path = generate_continuation_prompt(
                         args.run,
@@ -1359,9 +1564,26 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 break
 
+            if case_spec is not None:
+                # SWE-bench lane: the stop criterion is objective — evaluate the
+                # F2P/P2P subset now and stop the loop the moment it resolves.
+                swe_eval = swe_step_evaluation(workspace, case_spec)
+                if swe_eval is not None:
+                    last_swe_eval = swe_eval
+                    print(
+                        f"  SWEBENCH: resolved={swe_eval['resolved']} "
+                        f"F2P={swe_eval['f2p_passed']}/{swe_eval['f2p_total']} "
+                        f"P2P={swe_eval['p2p_passed']}/{swe_eval['p2p_total']}"
+                    )
+                    if swe_eval["resolved"]:
+                        print(
+                            f"  ✅ SWE-bench resolved after step {step_n} — stopping."
+                        )
+                        break
+
             if max_steps > 1:
                 step_text = step_log.read_text()
-                if detect_stop_signal(step_text):
+                if case_spec is None and detect_stop_signal(step_text):
                     print(f"  Agent signaled completion at step {step_n}.")
                     break
                 if step_n < max_steps:

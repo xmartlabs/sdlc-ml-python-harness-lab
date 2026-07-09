@@ -96,6 +96,113 @@ Escribí en español. Sé concreto y conciso; cada observación debe poder rastr
 a la evidencia.
 """
 
+# Second, structured pass: one verdict per harness item (skill/doc/hook/
+# subagent) so the UI can render a clean catalog with useful/redundant marks.
+FINDINGS_SYSTEM_PROMPT = """\
+Sos un auditor de harness de agentes de código. Recibís el catálogo de ítems del
+harness disponibles en una corrida (skills, documentos de governance, hooks,
+subagentes) y el diagnóstico de comportamiento ya escrito para esa corrida.
+
+Emití UN veredicto por ítem del catálogo. Respondé SOLO con un array JSON
+(sin texto antes ni después, sin markdown, sin code fences). Cada elemento:
+
+{"name": "<nombre exacto del ítem del catálogo>",
+ "kind": "skill" | "doc" | "hook" | "subagent",
+ "used_evidence": "<evidencia concreta de uso en esta corrida, o cadena vacía>",
+ "verdict": "useful" | "redundant" | "improve" | "unknown",
+ "note": "<una frase en español justificando el veredicto>"}
+
+Criterio: "useful" = hay evidencia de que el ítem aportó al resultado;
+"redundant" = estuvo disponible pero no se usó y nada sugiere que faltara;
+"improve" = se usó o se necesitó pero funcionó mal, confundió o quedó a medias;
+"unknown" = no hay evidencia suficiente para juzgar (preferí unknown antes que
+inventar). No inventes ítems fuera del catálogo dado.
+"""
+
+VALID_FINDING_KINDS = {"skill", "doc", "hook", "subagent"}
+VALID_FINDING_VERDICTS = {"useful", "redundant", "improve", "unknown"}
+
+
+def harness_catalog_from_metadata(metadata_text: str | None) -> list[dict]:
+    """Build the item catalog (skills/docs/hooks/subagents) from metadata.json."""
+    if not metadata_text:
+        return []
+    try:
+        meta = json.loads(metadata_text)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(meta, dict):
+        return []
+    items: list[dict] = []
+    for name in meta.get("skills_bundle") or []:
+        items.append({"name": str(name), "kind": "skill"})
+    for name in meta.get("subagents") or []:
+        items.append({"name": str(name), "kind": "subagent"})
+    fingerprint = meta.get("harness_fingerprint") or {}
+    for name in fingerprint.get("governance_docs") or {}:
+        items.append({"name": str(name), "kind": "doc"})
+    for name in fingerprint.get("hooks") or {}:
+        items.append({"name": str(name), "kind": "hook"})
+    return items
+
+
+def build_findings_user_message(
+    run_id: str, catalog: list[dict], audit_body: str
+) -> str:
+    catalog_lines = "\n".join(f"- {item['name']} ({item['kind']})" for item in catalog)
+    return (
+        f"# Corrida: {run_id}\n\n"
+        f"## Catálogo de ítems del harness (emití un veredicto por cada uno)\n"
+        f"{catalog_lines}\n\n"
+        f"## Diagnóstico de comportamiento de la corrida\n{audit_body.strip()}"
+    )
+
+
+def parse_findings(text: str) -> dict:
+    """Tolerant parse of the findings response into {"items": [...]}.
+
+    Never raises: strips code fences, accepts a bare list or an {"items": []}
+    wrapper, drops invalid entries, coerces unknown verdicts/kinds. On total
+    failure returns {"items": [], "parse_error": <reason>} so the audit itself
+    is never blocked by a malformed findings response.
+    """
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        # Drop the opening fence line (``` or ```json) and a trailing fence.
+        lines = cleaned.splitlines()
+        lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    # Fall back to the outermost array if the model wrapped it in prose.
+    if not cleaned.startswith(("[", "{")):
+        start, end = cleaned.find("["), cleaned.rfind("]")
+        if start != -1 and end > start:
+            cleaned = cleaned[start : end + 1]
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        return {"items": [], "parse_error": f"invalid JSON: {exc}"}
+    raw_items = parsed.get("items") if isinstance(parsed, dict) else parsed
+    if not isinstance(raw_items, list):
+        return {"items": [], "parse_error": "response is not a JSON array"}
+    items: list[dict] = []
+    for entry in raw_items:
+        if not isinstance(entry, dict) or not str(entry.get("name", "")).strip():
+            continue
+        kind = str(entry.get("kind", "")).strip().lower()
+        verdict = str(entry.get("verdict", "")).strip().lower()
+        items.append(
+            {
+                "name": str(entry["name"]).strip(),
+                "kind": kind if kind in VALID_FINDING_KINDS else "skill",
+                "used_evidence": str(entry.get("used_evidence", "")).strip(),
+                "verdict": verdict if verdict in VALID_FINDING_VERDICTS else "unknown",
+                "note": str(entry.get("note", "")).strip(),
+            }
+        )
+    return {"items": items}
+
 
 def normalize_model_name(model: str) -> str:
     """Strip the opencode-only "gateway/" prefix so LiteLLM gets its real name.
@@ -411,6 +518,30 @@ def main(argv: list[str] | None = None) -> int:
     audit_path = out_dir / "audit.md"
     audit_path.write_text(audit_md)
     print(f"✅ Wrote {audit_path.relative_to(REPO_ROOT)}")
+
+    # Second, structured pass (per-item verdicts). Best-effort by design: the
+    # audit is already written, so findings trouble must never fail the run.
+    catalog = harness_catalog_from_metadata(inp["metadata"])
+    findings: dict = {"items": []}
+    if catalog:
+        try:
+            findings_text = call_gateway(
+                auditor_model,
+                FINDINGS_SYSTEM_PROMPT,
+                build_findings_user_message(args.run, catalog, body),
+            )
+            findings = parse_findings(findings_text)
+        except SystemExit as exc:
+            # call_gateway sys.exit()s on HTTP trouble; downgrade to a note.
+            findings = {"items": [], "parse_error": f"gateway error: {exc}"}
+    else:
+        findings = {"items": [], "parse_error": "no harness catalog in metadata.json"}
+    findings_path = out_dir / "audit_findings.json"
+    findings_path.write_text(json.dumps(findings, ensure_ascii=False, indent=2))
+    print(
+        f"✅ Wrote {findings_path.relative_to(REPO_ROOT)} "
+        f"({len(findings['items'])} item verdicts)"
+    )
     return 0
 
 

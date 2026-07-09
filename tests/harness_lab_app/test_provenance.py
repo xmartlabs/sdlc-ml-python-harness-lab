@@ -140,7 +140,7 @@ def test_condition_hash_ignores_provenance_only_fields(monkeypatch, tmp_path: Pa
     run = {"temperature": 0.2, "executor_context": 32768}
 
     monkeypatch.setattr(provenance, "_git", lambda _root, *_a: "commit-A")
-    monkeypatch.setattr(provenance, "_harness_git_dirty", lambda _root: False)
+    monkeypatch.setattr(provenance, "_harness_git_dirty", lambda _root, **_kw: False)
     cond_a = build_condition(
         repo_root=tmp_path,
         run=run,
@@ -151,7 +151,7 @@ def test_condition_hash_ignores_provenance_only_fields(monkeypatch, tmp_path: Pa
     )
 
     monkeypatch.setattr(provenance, "_git", lambda _root, *_a: "commit-B")
-    monkeypatch.setattr(provenance, "_harness_git_dirty", lambda _root: True)
+    monkeypatch.setattr(provenance, "_harness_git_dirty", lambda _root, **_kw: True)
     cond_b = build_condition(
         repo_root=tmp_path,
         run=run,

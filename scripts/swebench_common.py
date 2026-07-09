@@ -15,54 +15,28 @@ Run the golden-patch self-test (no model tokens spent) with:
 
 from __future__ import annotations
 
+# ruff: noqa: E402
 import argparse
 import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
-import urllib.request
 from pathlib import Path
 
-HF_ROWS_URL = (
-    "https://datasets-server.huggingface.co/rows"
-    "?dataset=princeton-nlp%2FSWE-bench_Lite&config=default&split=test"
-    "&offset={offset}&length={length}"
+_SRC = Path(__file__).resolve().parent.parent / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+# The dataset client + env-spec map live in the app package (single source of
+# truth, also used by the API import endpoint); re-exported here so runner-side
+# callers keep importing them from swebench_common.
+from harness_lab_app.swebench_client import (
+    env_spec,
+    fetch_instance,
+    repo_url_from,
 )
-_DATASET_SIZE = 300
-
-# Per-repo environment recipe (the "SWE-bench install spec"). The HF rows don't
-# carry dependency pins, so we keep a small map of the known-good Python version
-# and extra pip constraints per supported repo. Adding a new repo = add its
-# entry here (that's the price of the generic, image-free runtime).
-_ENV_SPECS: dict[str, dict] = {
-    # flask 2.3 @ base_commit imports werkzeug.urls.url_quote (removed in
-    # werkzeug 3.0), so pin Werkzeug<3; needs Python 3.11.
-    "pallets/flask": {"python": "3.11", "pins": ["Werkzeug<3"]},
-}
-_DEFAULT_ENV = {"python": "3.11", "pins": []}
-
-
-def env_spec(repo: str) -> dict:
-    return _ENV_SPECS.get(repo, _DEFAULT_ENV)
-
-
-def repo_url_from(repo: str) -> str:
-    """`pallets/flask` -> the public GitHub clone URL."""
-    return f"https://github.com/{repo}.git"
-
-
-def fetch_instance(instance_id: str) -> dict:
-    """Fetch one SWE-bench Lite instance from the HF datasets-server (stdlib only)."""
-    for offset in range(0, _DATASET_SIZE, 100):
-        url = HF_ROWS_URL.format(offset=offset, length=100)
-        with urllib.request.urlopen(url, timeout=60) as resp:  # nosec B310
-            data = json.load(resp)
-        for row in data.get("rows", []):
-            record = row["row"]
-            if record["instance_id"] == instance_id:
-                return record
-    raise ValueError(f"Instance not found in SWE-bench Lite: {instance_id}")
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:

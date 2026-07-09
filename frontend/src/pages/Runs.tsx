@@ -7,7 +7,13 @@ import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { StateBadge } from "../components/StateBadge";
 import { CANCELLABLE_STATES } from "./RunDetail";
-import type { CaseRecord, RunCreatePayload, RunRecord } from "../types";
+import type {
+  CaseRecord,
+  HarnessSkill,
+  RunCreatePayload,
+  RunRecord,
+  StagedSkillRecord
+} from "../types";
 
 type RunsProps = {
   cases: CaseRecord[];
@@ -59,6 +65,62 @@ export function Runs({
   const [caseRunIds, setCaseRunIds] = useState<string[]>([]);
   const [rowActionError, setRowActionError] = useState<string | null>(null);
   const [pendingRowId, setPendingRowId] = useState<string | null>(null);
+  const [harnessSkills, setHarnessSkills] = useState<HarnessSkill[]>([]);
+  const [disabledSkills, setDisabledSkills] = useState<Set<string>>(new Set());
+  const [stagedSkills, setStagedSkills] = useState<StagedSkillRecord[]>([]);
+  const [extraSkills, setExtraSkills] = useState<Set<string>>(new Set());
+  const [skillsOpen, setSkillsOpen] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .listHarnessSkills()
+      .then((skills) => {
+        if (active) {
+          setHarnessSkills(skills);
+        }
+      })
+      .catch(() => {
+        // No catalog (API offline) — the section stays hidden.
+      });
+    api
+      .listStagedSkills()
+      .then((skills) => {
+        if (active) {
+          setStagedSkills(skills.filter((skill) => skill.status !== "archived"));
+        }
+      })
+      .catch(() => {
+        // No staged skills endpoint / API offline — group stays hidden.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const toggleExtraSkill = (name: string) => {
+    setExtraSkills((current) => {
+      const next = new Set(current);
+      if (next.has(name)) {
+        next.delete(name);
+      } else {
+        next.add(name);
+      }
+      return next;
+    });
+  };
+
+  const toggleSkill = (name: string) => {
+    setDisabledSkills((current) => {
+      const next = new Set(current);
+      if (next.has(name)) {
+        next.delete(name);
+      } else {
+        next.add(name);
+      }
+      return next;
+    });
+  };
 
   const selectedCase = useMemo(
     () => cases.find((item) => item.case_id === caseId) ?? cases[0] ?? null,
@@ -121,7 +183,7 @@ export function Runs({
     if (resume) {
       parts.push("RESUME=1");
     }
-    return parts.join(" \\\n+  ");
+    return parts.join(" \\\n  ");
   }, [caseId, dryRun, effectiveRunLabel, executorModel, maxSteps, plannerModel, promptVariant, resume]);
 
   const applySdlcQwenPreset = () => {
@@ -153,7 +215,9 @@ export function Runs({
           score_mode: scoreMode,
           max_steps: maxSteps,
           resume,
-          dry_run: dryRun
+          dry_run: dryRun,
+          skills_disabled: [...disabledSkills].sort(),
+          skills_extra: [...extraSkills].sort()
         }
       });
       navigate(`/runs/${created.run_id}`);
@@ -332,6 +396,78 @@ export function Runs({
             <input checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} type="checkbox" />
           </label>
         </div>
+        {harnessSkills.length > 0 ? (
+          <div className="skills-section">
+            <button className="skills-toggle" onClick={() => setSkillsOpen((open) => !open)} type="button">
+              {skillsOpen ? "▾" : "▸"} Skills — {harnessSkills.length - disabledSkills.size}/
+              {harnessSkills.length} enabled
+              {extraSkills.size > 0 ? ` + ${extraSkills.size} experimental` : ""}
+              {disabledSkills.size > 0 || extraSkills.size > 0 ? (
+                <span className="badge error">ablation</span>
+              ) : null}
+            </button>
+            {skillsOpen ? (
+              <>
+                <p className="muted">
+                  Unchecked skills are hidden from the agent for this run only (symlinks and
+                  the adapter-file skill list are regenerated, then restored). A non-empty
+                  ablation changes the run's condition_hash — that is the point: compare
+                  against a full-harness baseline of the same case/model.
+                </p>
+                <div className="panel-actions">
+                  <button onClick={() => setDisabledSkills(new Set())} type="button">
+                    Enable all
+                  </button>
+                  <button
+                    onClick={() => setDisabledSkills(new Set(harnessSkills.map((skill) => skill.name)))}
+                    type="button"
+                  >
+                    Disable all
+                  </button>
+                </div>
+                <div className="skills-grid">
+                  {harnessSkills.map((skill) => (
+                    <label className="skill-checkbox" key={skill.name} title={skill.description}>
+                      <input
+                        checked={!disabledSkills.has(skill.name)}
+                        onChange={() => toggleSkill(skill.name)}
+                        type="checkbox"
+                      />
+                      <span>
+                        {skill.name}
+                        <small className="muted"> {skill.kind}</small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                {stagedSkills.length > 0 ? (
+                  <>
+                    <p className="sidebar-label">Experimental (staged, off by default)</p>
+                    <div className="skills-grid">
+                      {stagedSkills.map((skill) => (
+                        <label
+                          className="skill-checkbox"
+                          key={skill.name}
+                          title={skill.description}
+                        >
+                          <input
+                            checked={extraSkills.has(skill.name)}
+                            onChange={() => toggleExtraSkill(skill.name)}
+                            type="checkbox"
+                          />
+                          <span>
+                            {skill.name}
+                            <small className="muted"> {skill.status}</small>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        ) : null}
         <div className="panel-actions">
           <button className="primary" disabled={isSaving || cases.length === 0} onClick={handleCreateRun} type="button">
             {isSaving ? "Creating..." : "Create run"}
@@ -341,6 +477,12 @@ export function Runs({
         <div>
           <p className="sidebar-label">Equivalent CLI command</p>
           <code className="command-preview">{commandPreview}</code>
+          {selectedCase?.type === "swe_bench_instance" ? (
+            <p className="muted">
+              SWE-bench cases are provisioned by the web worker (case_spec.json + repo
+              checkout); the CLI line above is a reference, not a runnable equivalent.
+            </p>
+          ) : null}
           <p className="muted">
             Web flow always uses manual scoring to avoid worker blocking; submit score in run detail when state is
             awaiting_manual_score.

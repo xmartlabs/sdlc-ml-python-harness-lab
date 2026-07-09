@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: "🏠", end: true },
   { to: "/runs", label: "Runs", icon: "▶", end: false },
   { to: "/cases", label: "Cases", icon: "🗂", end: false },
+  { to: "/skills", label: "Skills", icon: "🧩", end: false },
   { to: "/compare", label: "Compare", icon: "⇄", end: false },
   { to: "/settings", label: "Settings", icon: "⚙", end: false }
 ] as const;

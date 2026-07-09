@@ -17,6 +17,8 @@ export type CaseRecord = {
   sync_state: string;
   description: string;
   prompt_variants?: Record<string, string>;
+  tags?: string[];
+  success_criteria?: Record<string, string>;
 };
 
 export type CaseCreatePayload = {
@@ -99,14 +101,49 @@ export type AttributionRecord = {
   steps_parsed: number;
 };
 
+export type AuditFinding = {
+  name: string;
+  kind: "skill" | "doc" | "hook" | "subagent";
+  used_evidence: string;
+  verdict: "useful" | "redundant" | "improve" | "unknown";
+  note: string;
+};
+
+export type AuditFindings = {
+  items?: AuditFinding[];
+  parse_error?: string;
+};
+
 export type AuditRecord = {
   run_id: string;
   auditor_model: string;
   status: "running" | "done" | "failed";
   markdown: string;
+  findings_json?: AuditFindings;
   error: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type ArtifactRecord = {
+  run_id: string;
+  name: string;
+  path: string;
+  media_type: string;
+  size_bytes: number;
+};
+
+// The slice of data/runs/<id>/metadata.json the harness catalog reads.
+export type RunMetadata = {
+  skills_bundle?: string[];
+  subagents?: string[];
+  skills_disabled?: string[];
+  skills_experimental?: string[];
+  harness_fingerprint?: {
+    governance_docs?: Record<string, string>;
+    hooks?: Record<string, string>;
+  };
+  condition_hash?: string;
 };
 
 export type SandboxRecord = {
@@ -119,6 +156,28 @@ export type SandboxRecord = {
   error: string | null;
 };
 
+export type HarnessSkill = {
+  name: string;
+  kind: string;
+  description: string;
+};
+
+export type StagedSkillRecord = {
+  name: string;
+  description: string;
+  content: string;
+  status: "draft" | "testing" | "promoted" | "archived";
+  created_at: string;
+  updated_at: string;
+};
+
+export type StagedSkillPromoteResult = {
+  name: string;
+  written: string;
+  synced: boolean;
+  next_steps: string;
+};
+
 export type RunConfigPayload = {
   case_id: string;
   prompt_variant: string;
@@ -129,6 +188,8 @@ export type RunConfigPayload = {
   max_steps: number;
   resume: boolean;
   dry_run: boolean;
+  skills_disabled?: string[];
+  skills_extra?: string[];
 };
 
 export type RunCreatePayload = {

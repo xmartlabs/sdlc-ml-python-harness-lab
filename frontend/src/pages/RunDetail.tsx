@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { ArtifactsPanel } from "../components/ArtifactsPanel";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { HarnessCatalog } from "../components/HarnessCatalog";
+import { LogViewer } from "../components/LogViewer";
+import { Markdown } from "../components/Markdown";
 import { SandboxPanel } from "../components/SandboxPanel";
 import { StateBadge } from "../components/StateBadge";
 import type {
   AttributionRecord,
   AuditRecord,
   RunEventRecord,
+  RunMetadata,
   RunRecord,
   ValidationRecord
 } from "../types";
@@ -33,6 +38,7 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
   const [validation, setValidation] = useState<ValidationRecord | null>(null);
   const [attribution, setAttribution] = useState<AttributionRecord | null>(null);
   const [audit, setAudit] = useState<AuditRecord | null>(null);
+  const [metadata, setMetadata] = useState<RunMetadata | null>(null);
   const [auditModel, setAuditModel] = useState("");
   const [tab, setTab] = useState<"detail" | "terminal" | "desktop">("detail");
   const consoleRef = useRef<HTMLDivElement | null>(null);
@@ -76,8 +82,10 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
   }, [run?.run_id, run?.state]);
 
   useEffect(() => {
-    if (consoleRef.current) {
-      consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
+    // The scrollable element is the LogViewer's inner console, not the wrapper.
+    const console = consoleRef.current?.querySelector(".run-console");
+    if (console) {
+      console.scrollTop = console.scrollHeight;
     }
   }, [events]);
 
@@ -94,30 +102,46 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
     setValidation(null);
     setAttribution(null);
     setAudit(null);
+    setMetadata(null);
     if (run === null) {
       return;
     }
     let active = true;
-    api
-      .getValidation(run.run_id)
-      .then((result) => {
-        if (active) {
-          setValidation(result);
+    const timers: number[] = [];
+    // Validation/attribution are computed by the worker AFTER the state flips
+    // to awaiting_manual_score (validation reinstalls the repo — can take a
+    // minute). Retry a few times instead of freezing on "No validation yet".
+    const fetchWithRetry = (
+      fetcher: () => Promise<void>,
+      tries: number,
+      delayMs: number
+    ) => {
+      fetcher().catch(() => {
+        if (active && tries > 0) {
+          timers.push(window.setTimeout(() => fetchWithRetry(fetcher, tries - 1, delayMs), delayMs));
         }
-      })
-      .catch(() => {
-        // No validation yet (404) is expected until a run finishes.
       });
-    api
-      .getAttribution(run.run_id)
-      .then((result) => {
-        if (active) {
-          setAttribution(result);
-        }
-      })
-      .catch(() => {
-        // No attribution yet (404) is expected until a run finishes.
-      });
+    };
+    fetchWithRetry(
+      () =>
+        api.getValidation(run.run_id).then((result) => {
+          if (active) {
+            setValidation(result);
+          }
+        }),
+      run.state === "running" || run.state === "pending" ? 0 : 20,
+      6000
+    );
+    fetchWithRetry(
+      () =>
+        api.getAttribution(run.run_id).then((result) => {
+          if (active) {
+            setAttribution(result);
+          }
+        }),
+      run.state === "running" || run.state === "pending" ? 0 : 5,
+      6000
+    );
     api
       .getAudit(run.run_id)
       .then((result) => {
@@ -128,8 +152,32 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
       .catch(() => {
         // No audit yet (404) is expected until one is requested.
       });
+    const parseMetadata = (content: string) => {
+      if (!active) {
+        return;
+      }
+      try {
+        setMetadata(JSON.parse(content) as RunMetadata);
+      } catch {
+        // Unreadable metadata — the catalog panel shows its empty hint.
+      }
+    };
+    api
+      .readArtifact(run.run_id, "metadata.json")
+      .then((result) => parseMetadata(result.content))
+      .catch(() => {
+        // Not indexed yet (older runs) — index once, then retry the read.
+        api
+          .indexArtifacts(run.run_id)
+          .then(() => api.readArtifact(run.run_id, "metadata.json"))
+          .then((result) => parseMetadata(result.content))
+          .catch(() => {
+            // No metadata.json at all (e.g. dry-run) — leave the hint visible.
+          });
+      });
     return () => {
       active = false;
+      timers.forEach((timer) => window.clearTimeout(timer));
     };
   }, [run?.run_id, run?.state]);
 
@@ -199,7 +247,15 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
       .finally(() => setActionPending(false));
   };
 
+  // SWE-bench validations carry the official verdict in the summary line
+  // ("resolved=True F2P=1/1 P2P=18/18") written by swebench_validate.py.
+  const isSwebench = validation?.objective?.summary?.startsWith("resolved=") ?? false;
+
   const objectiveBadge = (passed: boolean | null | undefined) => {
+    if (isSwebench) {
+      if (passed === true) return <span className="badge ok">SWE-bench: RESOLVED</span>;
+      if (passed === false) return <span className="badge error">SWE-bench: NOT RESOLVED</span>;
+    }
     if (passed === true) return <span className="badge ok">objective: pass</span>;
     if (passed === false) return <span className="badge error">objective: fail</span>;
     return <span className="badge">objective: manual</span>;
@@ -328,7 +384,11 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
         <div className="panel subtle">
           <div className="panel-head">
             <h3>Manual score</h3>
-            <span className="muted">Required to complete run</span>
+            <span className="muted">
+              {isSwebench
+                ? "SWE-bench runs auto-score from validation — use Re-validate below instead"
+                : "Required to complete run"}
+            </span>
           </div>
           <div className="form-grid score-form-grid">
             <label>
@@ -431,11 +491,20 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
             ) : null}
           </>
         )}
-        <p className="muted">
-          Objective validation runs a headless smoke of workspace/{run.run_id}/ in the
-          runner container (SDL dummy driver). The functional level below is the
-          subjective dimension; the composite gates it by the objective floor.
-        </p>
+        {isSwebench ? (
+          <p className="muted">
+            SWE-bench scoring is objective and binary: resolved iff every FAIL_TO_PASS
+            test passes and no PASS_TO_PASS test regresses, evaluated by reinstalling
+            the archived workspace and running the subset (swebench_validate.py). The
+            run is auto-scored from this verdict — no manual score needed.
+          </p>
+        ) : (
+          <p className="muted">
+            Objective validation runs a headless smoke of workspace/{run.run_id}/ in the
+            runner container (SDL dummy driver). The functional level below is the
+            subjective dimension; the composite gates it by the objective floor.
+          </p>
+        )}
       </div>
       <div className="panel subtle">
         <div className="panel-head">
@@ -531,8 +600,17 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
         ) : audit.status === "failed" ? (
           <ErrorBanner message={audit.error ?? "Audit failed"} />
         ) : (
-          <div className="audit-body">{audit.markdown}</div>
+          <div className="audit-body">
+            <Markdown>{audit.markdown}</Markdown>
+          </div>
         )}
+      </div>
+      <div className="panel subtle">
+        <div className="panel-head">
+          <h3>Harness catalog</h3>
+          <span className="muted">available · observed · LLM verdict</span>
+        </div>
+        <HarnessCatalog attribution={attribution} audit={audit} metadata={metadata} />
       </div>
       <div>
         <p className="sidebar-label">Command preview</p>
@@ -543,17 +621,8 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
           <h3>Logs</h3>
           <span className="muted">{run.state === "running" ? "live" : "history"}</span>
         </div>
-        <div className="run-console" ref={consoleRef}>
-          {events.length === 0 ? (
-            <p className="muted">No log events yet.</p>
-          ) : (
-            events.map((event) => (
-              <div className={`run-console-line ${event.level}`} key={event.id}>
-                <span className="run-console-time">{event.created_at}</span>
-                <span>{event.message}</span>
-              </div>
-            ))
-          )}
+        <div ref={consoleRef}>
+          <LogViewer events={events} />
         </div>
       </div>
       <div className="panel subtle">
@@ -561,7 +630,7 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
           <h3>Artifacts</h3>
           <span className="muted">data/runs/{run.run_id}</span>
         </div>
-        <p className="muted">metadata.json, prompt.md, report.md, audit.md, diff.patch</p>
+        <ArtifactsPanel runId={run.run_id} />
       </div>
       </div>
         </>

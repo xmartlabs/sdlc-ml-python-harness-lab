@@ -1,6 +1,25 @@
+import re
+
 from pydantic import BaseModel, Field, field_validator
 
 from harness_lab_app.models import CaseStatus, CaseSyncState, CaseType, RunState
+
+# SWE-bench instance ids look like `pallets__flask-4992` (owner__repo-issue).
+_SWEBENCH_INSTANCE_RE = re.compile(r"^[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+-\d+$")
+
+
+class SwebenchImportRequest(BaseModel):
+    instance_id: str
+
+    @field_validator("instance_id")
+    @classmethod
+    def validate_instance_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not _SWEBENCH_INSTANCE_RE.match(normalized):
+            raise ValueError(
+                "instance_id must look like owner__repo-N (e.g. pallets__flask-4992)"
+            )
+        return normalized
 
 
 class CaseCreate(BaseModel):
@@ -33,6 +52,12 @@ class RunConfigCreate(BaseModel):
     max_steps: int = 1
     resume: bool = False
     dry_run: bool = False
+    # Per-run harness ablation: governed skills to hide from the agent for this
+    # run (empty = full harness, the historical default arm).
+    skills_disabled: list[str] = Field(default_factory=list)
+    # Staged/experimental skills (data/skills_staging/<name>/) to add for this
+    # run only. Unchecked by default in the UI.
+    skills_extra: list[str] = Field(default_factory=list)
 
     @field_validator("score_mode")
     @classmethod
@@ -47,6 +72,18 @@ class RunConfigCreate(BaseModel):
         if normalized != "manual":
             raise ValueError("score_mode must be: manual")
         return normalized
+
+
+class StagedSkillCreate(BaseModel):
+    name: str
+    description: str = ""
+    content: str
+
+
+class StagedSkillUpdate(BaseModel):
+    description: str | None = None
+    content: str | None = None
+    status: str | None = None
 
 
 class RunCreate(BaseModel):

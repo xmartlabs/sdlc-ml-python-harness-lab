@@ -7,6 +7,7 @@ the status lifecycle (running -> done | failed) that the frontend polls.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 from sqlmodel import Session, select
@@ -46,10 +47,14 @@ class AuditService:
         self.session.refresh(audit)
         return audit
 
-    def store_result(self, run_id: str, markdown: str) -> Audit:
+    def store_result(
+        self, run_id: str, markdown: str, findings: dict | None = None
+    ) -> Audit:
         audit = self._upsert(run_id)
         audit.status = "done"
         audit.markdown = markdown
+        if findings is not None:
+            audit.findings_json = findings
         audit.error = None
         audit.updated_at = utc_now()
         self.session.add(audit)
@@ -71,3 +76,14 @@ class AuditService:
         """Read the audit.md the worker's bench_audit subprocess wrote."""
         path = self._audit_path(run_id)
         return path.read_text() if path.exists() else ""
+
+    def read_audit_findings(self, run_id: str) -> dict | None:
+        """Read audit_findings.json (structured verdicts), tolerating absence."""
+        path = get_settings().data_runs_dir / run_id / "audit_findings.json"
+        if not path.exists():
+            return None
+        try:
+            parsed = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {"items": [], "parse_error": "unreadable audit_findings.json"}
+        return parsed if isinstance(parsed, dict) else None

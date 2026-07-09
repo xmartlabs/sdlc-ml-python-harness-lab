@@ -119,8 +119,7 @@ class RunService:
     def preview_command(self, run_id: str, config: RunConfigCreate) -> list[str]:
         return self.adapter.build_command(run_id, config)
 
-    @staticmethod
-    def _preflight(config: RunConfigCreate) -> None:
+    def _preflight(self, config: RunConfigCreate) -> None:
         """Reject configs that cannot possibly run, before persisting/enqueuing.
 
         Turns the old silent "fails open" behavior (a run that exits 0 having
@@ -141,6 +140,26 @@ class RunService:
                 raise RunPreflightError(
                     "GATEWAY_TOKEN is not set (still the placeholder value). Set a "
                     "real token in .env before running a gateway/ model."
+                )
+        if config.skills_disabled:
+            from harness_lab_app.skills_catalog import known_skill_names
+
+            unknown = sorted(set(config.skills_disabled) - known_skill_names())
+            if unknown:
+                raise RunPreflightError(
+                    f"Unknown skills in skills_disabled: {', '.join(unknown)}. "
+                    "Use GET /api/harness/skills for the valid names."
+                )
+        if config.skills_extra:
+            from harness_lab_app.staged_skill_service import StagedSkillService
+
+            active = StagedSkillService(self.session).active_names()
+            unknown_extra = sorted(set(config.skills_extra) - active)
+            if unknown_extra:
+                raise RunPreflightError(
+                    f"Unknown/archived staged skills in skills_extra: "
+                    f"{', '.join(unknown_extra)}. Create them on the Skills page "
+                    "first."
                 )
 
     def _next_run_id(self, case_id: str) -> str:

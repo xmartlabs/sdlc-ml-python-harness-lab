@@ -51,6 +51,43 @@ mode, per-run cancel/clone/delete). `make check` 145 pass; frontend `vite build`
 green. `make app-reset-db PURGE=1` now also clears disk. Still needs a real live
 Tetris run from the UI to confirm end-to-end.
 
+Lab-evolution pass landed 2026-07-08 (branch `feature/web-ui`, ADR-0011), four
+shippable phases, all verified (`make check` 204 pass, `make check-sync` clean,
+frontend `tsc && vite build` green):
+- **F1 SWE-bench en la UI**: `POST /api/cases/import-swebench` (inline HF fetch
+  via new adapter `swebench_client.py`; scripts re-import from it), import
+  panel + type badges/filter + F2P/P2P counts in Cases.tsx. SWE-bench cases
+  remain DB-only (a `make app-reset-db` removes them — re-import).
+- **F2 resultados legibles**: audit renders as markdown (react-markdown+gfm),
+  `bench_audit.py` second JSON-only pass → `audit_findings.json` →
+  `Audit.findings_json` (migration in db.py) → "Harness catalog" panel joining
+  metadata (available) + attribution (consulted) + LLM verdicts
+  (útil/redundante/mejorar); LogViewer parses logfmt with level filters;
+  Artifacts panel is real (list + viewer; worker now auto-indexes artifacts
+  post-run so RunDetail can read metadata.json).
+- **F3 ablación por corrida**: `RunConfig.skills_disabled` → `--disable-skill`
+  → bench_run regenerates native views + adapter blocks via skills_sync with
+  the filtered list (restore-at-start + atexit restore); condition_hash gains
+  the sorted list only-when-non-empty; Skills checkbox section in the run form.
+- **F4 staged skills**: `StagedSkill` DB row + `data/skills_staging/` (git-
+  ignored), Skills page (create/edit/archive/delete/promote — promote writes
+  `.github/skills-external/` + sync, never commits), "Experimental" group in
+  the run form → `--extra-skill`; staged content hash flips condition_hash.
+  Guide: `docs/guide-skill-validation.md`.
+Pending E2E (needs live gateway/worker): an ablated run from the UI verifying
+symlinks/OPENCODE.md during execution + clean `git status` after (requires the
+runner image rebuilt with jinja2); an audit run producing findings verdicts in
+the catalog panel.
+
+SWE-bench auto-scoring landed 2026-07-09: first real run
+(pallets__flask-4992-K-001) RESOLVED the issue in step 1 (F2P 1/1, P2P 18/18)
+but drifted for 9 more Tetris-framed steps. Now: SWE continuation prompts,
+objective per-step stop (`swe_step_evaluation` breaks on resolved), worker
+auto-score (resolved→10/else→0, binary like official SWE-bench) completing the
+run without manual score, Re-validate retro-scores parked runs, SWE-aware
+Validation panel + post-run retry polling in RunDetail. K-001 can be completed
+by pressing Re-validate once the worker restarts with this code.
+
 ## Constraints and decisions in force
 
 - `runs.yaml` is the authoritative run registry — do not modify between reps of a cell.

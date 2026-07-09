@@ -166,6 +166,88 @@ def test_write_case_spec_noop_for_missing_case(tmp_path, monkeypatch):
     assert not (tmp_path / "run-y").exists()
 
 
+def test_import_swebench_endpoint_creates_case(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+
+    from harness_lab_app import api as api_module
+    from harness_lab_app.api import create_app
+    from harness_lab_app.schemas import SwebenchImportRequest
+    from harness_lab_app.swebench_client import SwebenchFetchError
+
+    app = create_app()
+    endpoint = None
+    for route in app.router.routes:
+        if getattr(route, "path", None) == "/api/cases/import-swebench":
+            endpoint = route.endpoint
+    assert endpoint is not None
+
+    monkeypatch.setattr(api_module, "normalize_instance", lambda _id: _spec())
+    with _session() as session:
+        case = endpoint(
+            SwebenchImportRequest(instance_id="pallets__flask-4992"), session
+        )
+        assert case.case_id == "pallets__flask-4992"
+        # Idempotent: importing again returns the same case.
+        again = endpoint(
+            SwebenchImportRequest(instance_id="pallets__flask-4992"), session
+        )
+        assert again.id == case.id
+
+    # Network trouble surfaces as 502; unknown instance as 404.
+    def _boom(_id):
+        raise SwebenchFetchError("HF unreachable")
+
+    monkeypatch.setattr(api_module, "normalize_instance", _boom)
+    with _session() as session, pytest.raises(HTTPException) as exc:
+        endpoint(SwebenchImportRequest(instance_id="pallets__flask-4992"), session)
+    assert exc.value.status_code == 502
+
+    def _missing(_id):
+        raise ValueError("Instance not found in SWE-bench Lite: nope__nope-1")
+
+    monkeypatch.setattr(api_module, "normalize_instance", _missing)
+    with _session() as session, pytest.raises(HTTPException) as exc:
+        endpoint(SwebenchImportRequest(instance_id="nope__nope-1"), session)
+    assert exc.value.status_code == 404
+
+
+def test_swebench_import_request_validates_instance_shape():
+    import pytest
+    from pydantic import ValidationError
+
+    from harness_lab_app.schemas import SwebenchImportRequest
+
+    assert (
+        SwebenchImportRequest(instance_id=" pallets__flask-4992 ").instance_id
+        == "pallets__flask-4992"
+    )
+    for bad in ("flask-4992", "pallets__flask", "pallets flask 4992", ""):
+        with pytest.raises(ValidationError):
+            SwebenchImportRequest(instance_id=bad)
+
+
+def test_normalize_instance_shapes_spec(monkeypatch):
+    from harness_lab_app import swebench_client
+
+    record = {
+        "instance_id": "pallets__flask-4992",
+        "repo": "pallets/flask",
+        "base_commit": "4c288bc97ea371817199908d0d9b12de9dae327e",
+        "problem_statement": "Add text mode.",
+        "test_patch": "diff --git a/x b/x\n",
+        "FAIL_TO_PASS": json.dumps(["tests/test_config.py::test_a"]),
+        "PASS_TO_PASS": json.dumps(["tests/test_config.py::test_b"]),
+        "version": "2.3",
+    }
+    monkeypatch.setattr(swebench_client, "fetch_instance", lambda _id, **_kw: record)
+    spec = swebench_client.normalize_instance("pallets__flask-4992")
+    assert spec["fail_to_pass"] == ["tests/test_config.py::test_a"]
+    assert spec["repo_url"] == "https://github.com/pallets/flask.git"
+    assert spec["python"] == "3.11"
+    assert spec["install_pins"] == ["Werkzeug<3"]
+
+
 def test_write_case_spec_skips_non_swe_case_with_subject_repo(tmp_path, monkeypatch):
     # Regression: Tetris carries subject_repo for provenance but is NOT a repo
     # task — it must not get a case_spec.json (which would try to clone it).

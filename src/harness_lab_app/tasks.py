@@ -215,11 +215,30 @@ def _execute_run_body(
                 service.mark_finished(run_id, exit_code, failure)
                 if exit_code == 0:
                     _run_objective_validation(session, run_id)
+                    _autoscore_objective_case(session, run_id)
             # Attribution is useful for any run that produced step logs
             # (including cancelled/failed), so index it regardless of outcome.
             _index_attribution(session, run_id)
+            _index_artifacts(session, run_id)
         except Exception as exc:
             service.mark_finished(run_id, -1, f"Executor error: {exc!r}")
+
+
+def _index_artifacts(session: Session, run_id: str) -> None:
+    """Best-effort artifact indexing so the UI can read metadata.json et al."""
+    from harness_lab_app.artifact_service import ArtifactService
+
+    try:
+        ArtifactService(session).index_run(run_id)
+    except Exception as exc:  # indexing must never fail the run
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="error",
+                message=f"Artifact indexing failed: {exc!r}",
+            )
+        )
+        session.commit()
 
 
 def _index_attribution(session: Session, run_id: str) -> None:
@@ -234,6 +253,60 @@ def _index_attribution(session: Session, run_id: str) -> None:
                 run_id=run_id,
                 level="error",
                 message=f"Attribution indexing failed: {exc!r}",
+            )
+        )
+        session.commit()
+
+
+def _autoscore_objective_case(session: Session, run_id: str) -> None:
+    """Complete objectively-scored cases without a manual score (SWE-bench).
+
+    SWE-bench's official score is binary and fully automatic: resolved iff all
+    FAIL_TO_PASS pass and no PASS_TO_PASS regresses — exactly what the run's
+    objective validation already computed. For swe_bench_instance cases we
+    therefore apply the score ourselves (resolved → 10, else 0) and complete
+    the run, instead of parking it in awaiting_manual_score. Best-effort: any
+    trouble leaves the run awaiting a manual score, never fails it.
+    """
+    from harness_lab_app.models import Validation
+    from harness_lab_app.validation_service import ValidationService
+
+    try:
+        run_service = RunService(session)
+        run = run_service.get_run(run_id)
+        if run.state != RunState.awaiting_manual_score:
+            return
+        config = run_service.get_run_config(run.run_config_id)
+        case = CaseService(session).get_case(config.case_id)
+        if case.type != CaseType.swe_bench_instance:
+            return
+        validation = session.exec(
+            select(Validation).where(Validation.run_id == run_id)
+        ).first()
+        if validation is None:
+            return  # objective validation missing → manual fallback
+        objective = validation.objective or {}
+        passed = objective.get("passed")
+        if passed is None:
+            return  # inconclusive objective result → manual fallback
+        summary = objective.get("summary", "")
+        score = 10 if passed else 0
+        notes = f"auto-scored (SWE-bench objective): {summary}".strip()
+        ValidationService(session).apply_subjective(run_id, score, 0, {}, notes)
+        run_service.score_run(run_id, score, 0, notes)
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                message=f"Auto-scored {score}/10 from SWE-bench validation ({summary})",
+            )
+        )
+        session.commit()
+    except Exception as exc:  # auto-scoring must never fail the run
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="error",
+                message=f"Auto-score failed (score manually): {exc!r}",
             )
         )
         session.commit()
@@ -268,6 +341,9 @@ def validate_run(run_id: str) -> None:
     init_db()
     with Session(engine) as session:
         _run_objective_validation(session, run_id)
+        # Re-validate also completes SWE-bench runs that were parked awaiting a
+        # manual score before auto-scoring existed (or whose validation ran late).
+        _autoscore_objective_case(session, run_id)
 
 
 @celery_app.task(name="harness_lab_app.tasks.audit_run", acks_late=True)
@@ -313,7 +389,9 @@ def audit_run(run_id: str, auditor_model: str | None = None) -> None:
         if result.returncode == 0:
             markdown = service.read_audit_markdown(run_id)
             if markdown:
-                service.store_result(run_id, markdown)
+                service.store_result(
+                    run_id, markdown, findings=service.read_audit_findings(run_id)
+                )
             else:
                 service.store_error(run_id, "Audit finished but wrote no audit.md")
         else:
