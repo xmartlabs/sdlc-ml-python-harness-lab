@@ -119,6 +119,13 @@ def test_import_swebench_instance_builds_case():
         prompt = case.prompt_variants["swe_default"]
         assert "test_config_from_file_toml" in prompt
         assert "pallets/flask" in prompt
+        # The harness variant wraps the same task with the governance preamble
+        # (treatment arm of the harness A/B) — see attribution reading surface.
+        harness_prompt = case.prompt_variants["swe_harness"]
+        assert "test_config_from_file_toml" in harness_prompt
+        assert ".github/architecture.md" in harness_prompt
+        assert "systematic_debugging" in harness_prompt
+        assert harness_prompt.endswith(prompt)
 
 
 def test_import_swebench_instance_is_idempotent():

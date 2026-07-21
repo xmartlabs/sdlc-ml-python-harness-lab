@@ -459,4 +459,31 @@ the template/harness repos, not one-off observations.
 `gh auth` + gateway; see `docs/improvement-cycle.md`; pure fns unit-tested in
 `tests/harness_lab_app/test_lab_improve.py`.
 
+## SWE-bench Pro lane: image-based hard cases — 2026-07-21
+
+The Pro lane (`docs/design-swe-bench-pro-lane.md`, golden-patch-proven on an
+ansible instance) has four non-obvious gotchas learned the hard way:
+
+1. **Pro images default to a bash entrypoint** (upstream issue #6). Passing
+   `bash -lc …` as CMD runs `bash bash …` and dies silently — always use
+   `--entrypoint bash` and pass only `-lc <script>` as args.
+2. **`dockerhub_tag` is not the real tag.** The published tag is *derived*
+   (`helper_code/image_uri.py` port in `swebench_pro_client.image_uri`):
+   `-vnan` stripped, element-web special-cased, truncated to 128 chars.
+3. **Pro list columns are Python-repr strings**, not JSON (`['a', 'b']` with
+   single quotes) — parse with `ast.literal_eval`, not `json.loads`.
+4. **The gold patch rides the normalized spec for self-tests but must never
+   reach `metadata_json`/`case_spec.json`** — that file is bind-mounted where
+   the agent can read it (oracle mode leaks test_patch on purpose; the gold
+   patch would void the bench).
+
+**Why it matters:** silent zero-scores (gotcha 1) look identical to "agent
+failed"; a wrong tag (2) looks like a missing image; and (4) is a validity
+threat to every Pro result.
+**How to apply:** provisioning/validation live in `scripts/swebench_pro_common.py`
+(worker-side in the web lane: runner has no docker socket; validation routes via
+the `local` flag in `build_validation_spec`); smoke with
+`make swebench-pro-selftest INSTANCE=instance_…`. Images are amd64-only — dev
+smokes on Apple Silicon run emulated; real benches belong on the amd64 server.
+
 <!-- Add new learnings above this line -->

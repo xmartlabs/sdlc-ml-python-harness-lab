@@ -14,6 +14,7 @@ import type {
   SandboxRecord,
   StagedSkillPromoteResult,
   StagedSkillRecord,
+  SwebenchProInstance,
   ValidationRecord
 } from "./types";
 
@@ -99,6 +100,13 @@ export const api = {
     request<{ run_ids: string[] }>(`/api/cases/${caseId}/run-ids`),
   importSwebench: (instanceId: string) =>
     request<CaseRecord>("/api/cases/import-swebench", {
+      method: "POST",
+      body: JSON.stringify({ instance_id: instanceId })
+    }),
+  listSwebenchProInstances: () =>
+    request<SwebenchProInstance[]>("/api/swebench-pro/instances"),
+  importSwebenchPro: (instanceId: string) =>
+    request<CaseRecord>("/api/cases/import-swebench-pro", {
       method: "POST",
       body: JSON.stringify({ instance_id: instanceId })
     }),

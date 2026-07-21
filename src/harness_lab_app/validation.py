@@ -24,6 +24,7 @@ import shutil
 from typing import TYPE_CHECKING, Any
 
 from harness_lab_app.config import get_settings
+from harness_lab_app.models import CaseType
 
 # GNU `timeout` exists in the runner container (Linux) but not on a macOS host
 # worker (subprocess backend). Make case commands portable across both.
@@ -108,7 +109,16 @@ def build_validation_spec(case: Case, run_id: str) -> dict[str, Any]:
         # image's /opt/venv/bin, so `python` would miss the installed deps.
         commands.append(["sh", "-c", rendered])
     strategy = _strategy_for(case, commands)
-    return {"strategy": strategy, "commands": commands, "workspace": workspace}
+    # Pro validation shells out to docker; the runner/validation container has
+    # no socket, so those commands must execute where the socket lives (the
+    # worker process / host) — flagged here, honored by ValidationService.
+    local = case.type == CaseType.swe_pro_instance
+    return {
+        "strategy": strategy,
+        "commands": commands,
+        "workspace": workspace,
+        "local": local,
+    }
 
 
 def parse_objective(results: list[dict[str, Any]], strategy: str) -> dict[str, Any]:

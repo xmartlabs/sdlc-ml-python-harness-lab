@@ -8,6 +8,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# git + docker CLI (client only): the SWE-bench Pro lane provisions workspaces
+# from per-instance images and runs containerized validation — the worker
+# shells out to `docker` against the socket mounted on the worker service only
+# (docs/design-swe-bench-pro-lane.md). The api service never uses either.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends git curl ca-certificates; \
+    arch="$(uname -m)"; \
+    curl -fsSL "https://download.docker.com/linux/static/stable/${arch}/docker-27.5.1.tgz" \
+      | tar -xz --strip-components=1 -C /usr/local/bin docker/docker; \
+    apt-get purge -y curl; \
+    apt-get autoremove -y; \
+    rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir uv
 
 COPY pyproject.toml uv.lock ./

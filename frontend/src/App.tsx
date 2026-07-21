@@ -115,6 +115,13 @@ export default function App() {
     return imported;
   };
 
+  const importSwebenchPro = async (instanceId: string) => {
+    const imported = await api.importSwebenchPro(instanceId);
+    setCases((current) => [imported, ...current.filter((item) => item.case_id !== imported.case_id)]);
+    setSelectedCaseId(imported.case_id);
+    return imported;
+  };
+
   const createRun = async (payload: RunCreatePayload) => {
     const created = await api.createRun(payload);
     setRuns((current) => [created, ...current.filter((item) => item.run_id !== created.run_id)]);
@@ -191,6 +198,7 @@ export default function App() {
                 cases={cases.length > 0 ? cases : [previewCase]}
                 onCreateCase={createCase}
                 onImportSwebench={importSwebench}
+                onImportSwebenchPro={importSwebenchPro}
                 onSeedTetris={seedTetris}
                 onSelectCase={setSelectedCaseId}
                 selectedCaseId={selectedCaseId}

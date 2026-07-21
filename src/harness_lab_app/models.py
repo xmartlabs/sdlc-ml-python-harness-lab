@@ -17,6 +17,7 @@ class CaseType(StrEnum):
     bugfix = "bugfix"
     repo_task = "repo_task"
     swe_bench_instance = "swe_bench_instance"
+    swe_pro_instance = "swe_pro_instance"
 
 
 class CaseStatus(StrEnum):

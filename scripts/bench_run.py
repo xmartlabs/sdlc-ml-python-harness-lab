@@ -461,7 +461,17 @@ def generate_swe_continuation_prompt(
     previous objective evaluation and forbids scope creep.
     """
     f2p = spec.get("fail_to_pass") or []
-    test_cmd = f"python -m pytest {' '.join(f2p)}"
+    if spec.get("case_type") == "swe_pro":
+        # Pro lane: the test env only exists inside the instance image.
+        image = spec.get("dockerhub_image", "<instance image>")
+        target_tests = " ".join(f2p[:3])
+        test_cmd = (
+            f'docker run --rm -v "$(pwd)/workspace/{run_id}":/app {image} '
+            f"bash -lc 'cd /app && python -m pytest {target_tests}' "
+            f"# (skip if docker is unavailable)"
+        )
+    else:
+        test_cmd = f"python -m pytest {' '.join(f2p)}"
     status = (
         f"resolved={last_eval['resolved']} "
         f"F2P={last_eval['f2p_passed']}/{last_eval['f2p_total']} "
@@ -478,15 +488,19 @@ def generate_swe_continuation_prompt(
         f"Objective status after the previous step: {status}\n\n"
         f"Target failing test(s):\n"
         + "\n".join(f"  - {t}" for t in f2p)
-        + f"\n\nRun them with:\n    cd workspace/{run_id} && {test_cmd}\n\n"
-        f"Rules:\n"
-        f"1. Make the target test(s) pass by editing the **library source only** "
-        f"(never the test files).\n"
-        f"2. Keep the change minimal — do not refactor, fix deprecations, or "
-        f"touch anything unrelated to the issue.\n"
-        f"3. After your edit, run the target test(s) and the surrounding test "
-        f"file to check for regressions.\n"
-        f"4. Stop after the target test(s) pass.\n"
+        + (
+            f"\n\nRun them with:\n    {test_cmd}\n\n"
+            if spec.get("case_type") == "swe_pro"
+            else f"\n\nRun them with:\n    cd workspace/{run_id} && {test_cmd}\n\n"
+        )
+        + "Rules:\n"
+        "1. Make the target test(s) pass by editing the **library source only** "
+        "(never the test files).\n"
+        "2. Keep the change minimal — do not refactor, fix deprecations, or "
+        "touch anything unrelated to the issue.\n"
+        "3. After your edit, run the target test(s) and the surrounding test "
+        "file to check for regressions.\n"
+        "4. Stop after the target test(s) pass.\n"
     )
     path = steps_dir / f"step-{step_n}-prompt.md"
     path.write_text(text)
@@ -500,12 +514,27 @@ def swe_step_evaluation(workspace: Path, spec: dict) -> dict | None:
     the loop can stop as soon as the issue is actually resolved, instead of
     trusting the agent's own completion claims.
     """
-    import swebench_common as swe
-
     f2p = spec.get("fail_to_pass") or []
     p2p = spec.get("pass_to_pass") or []
     if not f2p or not workspace.is_dir():
         return None
+    if spec.get("case_type") == "swe_pro":
+        # Pro lane: the suite only runs inside the instance image. Without
+        # docker (containerized runner) skip the per-step check — validation
+        # still runs worker-side after the run (design doc, test-execution §).
+        import swebench_pro_common as swe_pro
+
+        if not swe_pro.docker_available():
+            print("  ⚠️  docker unavailable — skipping per-step Pro evaluation.")
+            return None
+        try:
+            return swe_pro.evaluate_containerized(workspace, spec)
+        except Exception as exc:
+            print(f"  ⚠️  SWE-bench Pro step evaluation failed: {exc!r}")
+            return None
+
+    import swebench_common as swe
+
     try:
         return swe.evaluate(workspace, sys.executable, f2p, p2p)
     except Exception as exc:
@@ -708,6 +737,24 @@ def provision_workspace(workspace: Path, spec: dict) -> None:
         return
     if workspace.exists() and any(workspace.iterdir()):
         sys.exit(f"❌ workspace/{workspace.name}/ is not empty; cannot provision repo.")
+
+    if spec.get("case_type") == "swe_pro":
+        # Pro lane: copy the repo out of the instance's prebuilt image (needs
+        # docker). In the web lane the worker pre-provisions before launching
+        # the DB-blind runner, so the .git short-circuit above already fired.
+        import swebench_pro_common as swe_pro
+
+        if not swe_pro.docker_available():
+            sys.exit(
+                "❌ SWE-bench Pro provisioning needs docker, which this "
+                "environment lacks. In the web lane the worker must "
+                "pre-provision the workspace before the runner starts."
+            )
+        print(f"  Provisioning from image {spec.get('dockerhub_image', '?')} …")
+        swe_pro.provision(workspace, spec)
+        print("  ✓ Pro workspace provisioned (repo + test files, committed).")
+        return
+
     if workspace.exists():
         workspace.rmdir()  # let git clone create it
 

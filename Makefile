@@ -489,6 +489,22 @@ swebench-selftest:
 	@if [ ! -d .venv ]; then make install; fi
 	uv run python scripts/swebench_common.py --selftest $(INSTANCE)
 
+# Import a SWE-bench Pro instance as a Case (image-based hard cases; Python only).
+# Usage: make swebench-pro-import INSTANCE=instance_ansible__ansible-<sha>-v<sha>
+swebench-pro-import:
+	@[ -n "$(INSTANCE)" ] || { echo "❌ INSTANCE is required. Example: INSTANCE=instance_ansible__ansible-<sha>-v<sha>"; exit 1; }
+	@if [ ! -d .venv ]; then make install; fi
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/import_swebench_pro.py --instance $(INSTANCE)
+
+# Prove the SWE-bench Pro lane (docker provision + containerized eval) with the
+# golden patch — no tokens. Needs docker; amd64 images (emulated on Apple Silicon).
+# Usage: make swebench-pro-selftest INSTANCE=instance_ansible__ansible-<sha>-v<sha>
+swebench-pro-selftest:
+	@[ -n "$(INSTANCE)" ] || { echo "❌ INSTANCE is required. Example: INSTANCE=instance_ansible__ansible-<sha>-v<sha>"; exit 1; }
+	@if [ ! -d .venv ]; then make install; fi
+	uv run python scripts/swebench_pro_common.py --selftest $(INSTANCE)
+
 # Reset the application SQLite database and reseed the Tetris pilot case.
 # Pass PURGE=1 to also remove on-disk run state (data/runs/*, workspace/*) so a
 # re-created run id cannot collide with a stale workspace. PURGE is destructive.

@@ -37,6 +37,11 @@ from harness_lab_app.schemas import (
 )
 from harness_lab_app.staged_skill_service import StagedSkillError, StagedSkillService
 from harness_lab_app.swebench_client import SwebenchFetchError, normalize_instance
+from harness_lab_app.swebench_pro_client import (
+    SwebenchProFetchError,
+    list_instances as pro_list_instances,
+    normalize_instance as pro_normalize_instance,
+)
 from harness_lab_app.validation_service import ValidationService
 
 
@@ -225,6 +230,34 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return CaseService(session).import_swebench_instance(spec)
+
+    @app.get("/api/swebench-pro/instances")
+    def list_swebench_pro_instances(session: Session = Depends(get_session)):
+        # Browse catalog for the import UI (Python subset, disk-cached daily —
+        # the dataset is static). `imported` marks instances already in the DB.
+        try:
+            catalog = pro_list_instances()
+        except SwebenchProFetchError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        existing = {case.case_id for case in CaseService(session).list_cases()}
+        return [
+            {**entry, "imported": entry["instance_id"] in existing} for entry in catalog
+        ]
+
+    @app.post("/api/cases/import-swebench-pro")
+    def import_swebench_pro(
+        data: SwebenchImportRequest, session: Session = Depends(get_session)
+    ):
+        # SWE-bench Pro lane (docs/design-swe-bench-pro-lane.md): fetches the
+        # instance plus its run_script/parser assets. Python instances only;
+        # idempotent like the Lite/Verified import.
+        try:
+            spec = pro_normalize_instance(data.instance_id)
+        except SwebenchProFetchError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return CaseService(session).import_swebench_pro_instance(spec)
 
     @app.post("/api/cases/seed/tetris")
     def seed_tetris(session: Session = Depends(get_session)):

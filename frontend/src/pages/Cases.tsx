@@ -1,16 +1,26 @@
 import { useMemo, useState } from "react";
 
+import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
-import type { CaseCreatePayload, CaseRecord } from "../types";
+import type { CaseCreatePayload, CaseRecord, SwebenchProInstance } from "../types";
 
 type CasesProps = {
   cases: CaseRecord[];
   onCreateCase: (payload: CaseCreatePayload) => Promise<CaseRecord>;
   onImportSwebench: (instanceId: string) => Promise<CaseRecord>;
+  onImportSwebenchPro: (instanceId: string) => Promise<CaseRecord>;
   onSeedTetris: () => void;
   onSelectCase: (caseId: string) => void;
   selectedCaseId: string | null;
 };
+
+const SWE_CASE_TYPES = new Set(["swe_bench_instance", "swe_pro_instance"]);
+
+function shortInstanceLabel(instanceId: string): string {
+  // instance_ansible__ansible-<40-char sha>-v<sha> → ansible__ansible-5f4e332
+  const bare = instanceId.replace(/^instance_/, "");
+  return bare.replace(/-([0-9a-f]{7})[0-9a-f]{33}(-v.*)?$/, "-$1");
+}
 
 const CASE_TEMPLATES = [
   { value: "single_prompt", label: "Single prompt" },
@@ -44,11 +54,12 @@ function parseTestCount(criteria: Record<string, string> | undefined, key: strin
 }
 
 function caseTypeBadge(item: CaseRecord) {
-  if (item.type === "swe_bench_instance") {
+  if (SWE_CASE_TYPES.has(item.type)) {
     const f2p = parseTestCount(item.success_criteria, "fail_to_pass");
     const p2p = parseTestCount(item.success_criteria, "pass_to_pass");
     const counts = f2p !== null && p2p !== null ? ` · F2P ${f2p} / P2P ${p2p}` : "";
-    return <span className="badge ok">SWE-bench{counts}</span>;
+    const label = item.type === "swe_pro_instance" ? "SWE-bench Pro" : "SWE-bench";
+    return <span className="badge ok">{label}{counts}</span>;
   }
   return <span>{item.type}</span>;
 }
@@ -57,6 +68,7 @@ export function Cases({
   cases,
   onCreateCase,
   onImportSwebench,
+  onImportSwebenchPro,
   onSeedTetris,
   onSelectCase,
   selectedCaseId
@@ -73,6 +85,12 @@ export function Cases({
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [caseFilter, setCaseFilter] = useState<CaseFilter>("all");
+  const [proCatalog, setProCatalog] = useState<SwebenchProInstance[] | null>(null);
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
+  const [proRepoFilter, setProRepoFilter] = useState<string>("all");
+  const [proImportingId, setProImportingId] = useState<string | null>(null);
+  const [proMessage, setProMessage] = useState<string | null>(null);
+  const [proError, setProError] = useState<string | null>(null);
   const templateLabel = useMemo(
     () => CASE_TEMPLATES.find((item) => item.value === template)?.label ?? template,
     [template]
@@ -115,13 +133,58 @@ export function Cases({
 
   const visibleCases = useMemo(() => {
     if (caseFilter === "swe-bench") {
-      return cases.filter((item) => item.type === "swe_bench_instance");
+      return cases.filter((item) => SWE_CASE_TYPES.has(item.type));
     }
     if (caseFilter === "other") {
-      return cases.filter((item) => item.type !== "swe_bench_instance");
+      return cases.filter((item) => !SWE_CASE_TYPES.has(item.type));
     }
     return cases;
   }, [cases, caseFilter]);
+
+  const handleLoadProCatalog = async () => {
+    setIsLoadingCatalog(true);
+    setProError(null);
+    try {
+      setProCatalog(await api.listSwebenchProInstances());
+    } catch (error) {
+      setProError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsLoadingCatalog(false);
+    }
+  };
+
+  const handleImportPro = async (instanceId: string) => {
+    setProImportingId(instanceId);
+    setProMessage(null);
+    setProError(null);
+    try {
+      const imported = await onImportSwebenchPro(instanceId);
+      setProMessage(`Imported ${shortInstanceLabel(imported.case_id)} — ready to run.`);
+      setProCatalog((current) =>
+        current
+          ? current.map((item) =>
+              item.instance_id === instanceId ? { ...item, imported: true } : item
+            )
+          : current
+      );
+    } catch (error) {
+      setProError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setProImportingId(null);
+    }
+  };
+
+  const proRepos = useMemo(() => {
+    const repos = new Set((proCatalog ?? []).map((item) => item.repo));
+    return ["all", ...Array.from(repos).sort()];
+  }, [proCatalog]);
+
+  const visibleProInstances = useMemo(() => {
+    const items = proCatalog ?? [];
+    return proRepoFilter === "all"
+      ? items
+      : items.filter((item) => item.repo === proRepoFilter);
+  }, [proCatalog, proRepoFilter]);
 
   const handleCreate = async () => {
     setIsSaving(true);
@@ -204,6 +267,87 @@ export function Cases({
 
       <section className="panel">
         <div className="panel-head">
+          <h2>Import SWE-bench Pro instance</h2>
+          <span className="muted">Hard cases · Python subset (ScaleAI)</span>
+        </div>
+        <p className="muted">
+          Long-horizon, multi-file tasks evaluated inside prebuilt per-instance Docker
+          images. Browse the catalog and import — no need to know the instance id.
+          Equivalent CLI: <code>make swebench-pro-import INSTANCE=&lt;id&gt;</code>; prove the
+          lane first with <code>make swebench-pro-selftest INSTANCE=&lt;id&gt;</code>.
+        </p>
+        {proCatalog === null ? (
+          <div className="panel-actions">
+            <button
+              className="primary"
+              disabled={isLoadingCatalog}
+              onClick={handleLoadProCatalog}
+              type="button"
+            >
+              {isLoadingCatalog ? "Loading catalog..." : "Browse instances"}
+            </button>
+            {proError ? <span className="badge error">{proError}</span> : null}
+          </div>
+        ) : (
+          <>
+            <div className="toolbar" style={{ marginBottom: "0.75rem" }}>
+              {proRepos.map((repo) => (
+                <button
+                  className={proRepoFilter === repo ? "badge neutral" : "badge"}
+                  key={repo}
+                  onClick={() => setProRepoFilter(repo)}
+                  type="button"
+                >
+                  {repo === "all"
+                    ? `All (${(proCatalog ?? []).length})`
+                    : `${repo} (${(proCatalog ?? []).filter((item) => item.repo === repo).length})`}
+                </button>
+              ))}
+            </div>
+            <div className="panel-actions" style={{ marginBottom: "0.5rem" }}>
+              {proMessage ? <span className="badge ok">{proMessage}</span> : null}
+              {proError ? <span className="badge error">{proError}</span> : null}
+            </div>
+            <div className="table" style={{ maxHeight: "24rem", overflowY: "auto" }}>
+              <div className="table-row table-head">
+                <span>Instance</span>
+                <span>Tests</span>
+                <span></span>
+              </div>
+              {visibleProInstances.map((item) => (
+                <div className="table-row" key={item.instance_id}>
+                  <span>
+                    <strong title={item.instance_id}>
+                      {shortInstanceLabel(item.instance_id)}
+                    </strong>
+                    <small>{item.title || item.repo}</small>
+                  </span>
+                  <span className="muted">
+                    F2P {item.f2p_count} / P2P {item.p2p_count}
+                  </span>
+                  <span>
+                    {item.imported ? (
+                      <span className="badge ok">Imported</span>
+                    ) : (
+                      <button
+                        className="badge"
+                        disabled={proImportingId !== null}
+                        onClick={() => handleImportPro(item.instance_id)}
+                        type="button"
+                      >
+                        {proImportingId === item.instance_id ? "Importing..." : "Import"}
+                      </button>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
           <h2>New case</h2>
           <span className="muted">{templateLabel}</span>
         </div>
@@ -260,11 +404,11 @@ export function Cases({
                 { value: "all", label: `All (${cases.length})` },
                 {
                   value: "swe-bench",
-                  label: `SWE-bench (${cases.filter((item) => item.type === "swe_bench_instance").length})`
+                  label: `SWE-bench (${cases.filter((item) => SWE_CASE_TYPES.has(item.type)).length})`
                 },
                 {
                   value: "other",
-                  label: `Other (${cases.filter((item) => item.type !== "swe_bench_instance").length})`
+                  label: `Other (${cases.filter((item) => !SWE_CASE_TYPES.has(item.type)).length})`
                 }
               ] as { value: CaseFilter; label: string }[]
             ).map((option) => (

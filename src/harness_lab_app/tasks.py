@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -79,28 +80,80 @@ def _write_case_spec(
     # Only SWE-bench cases provision a repo. NOTE: other cases (e.g. Tetris) may
     # carry a subject_repo field for provenance that is NOT a cloneable
     # owner/repo, so type — not subject_repo — is the gate.
-    if case.type != CaseType.swe_bench_instance:
+    if case.type not in (CaseType.swe_bench_instance, CaseType.swe_pro_instance):
         # Remove any spec left over from a prior run reusing this id, so the
         # runner does not mistake this for a repo task.
         stale_spec.unlink(missing_ok=True)
         return
     meta = case.metadata_json or {}
-    spec = {
-        "case_type": str(case.type),
-        "repo": case.subject_repo or "",
-        "repo_url": meta.get("repo_url", ""),
-        "base_commit": case.base_commit or "",
-        "python": meta.get("python", "3.11"),
-        "install_pins": json.loads(meta.get("install_pins", "[]")),
-        "test_patch": meta.get("test_patch", ""),
-        "apply_test_patch": True,
-        "fail_to_pass": json.loads(meta.get("fail_to_pass", "[]")),
-        "pass_to_pass": json.loads(meta.get("pass_to_pass", "[]")),
-        "prompt_variant": prompt_variant,
-        "prompt": case.prompt_variants.get(prompt_variant, ""),
-    }
+    if case.type == CaseType.swe_pro_instance:
+        # Pro lane (docs/design-swe-bench-pro-lane.md): docker-image
+        # provisioning + containerized validation. NOTE: the gold patch is
+        # deliberately absent — this file is agent-readable via the bind mount.
+        spec = {
+            "case_type": "swe_pro",
+            "repo": case.subject_repo or "",
+            "base_commit": case.base_commit or "",
+            "dockerhub_image": meta.get("dockerhub_image", ""),
+            "before_repo_set_cmd": meta.get("before_repo_set_cmd", ""),
+            "run_script": meta.get("run_script", ""),
+            "parser": meta.get("parser", ""),
+            "fail_to_pass": json.loads(meta.get("fail_to_pass", "[]")),
+            "pass_to_pass": json.loads(meta.get("pass_to_pass", "[]")),
+            "selected_test_files_to_run": json.loads(
+                meta.get("selected_test_files_to_run", "[]")
+            ),
+            "prompt_variant": prompt_variant,
+            "prompt": case.prompt_variants.get(prompt_variant, ""),
+        }
+    else:
+        spec = {
+            "case_type": str(case.type),
+            "repo": case.subject_repo or "",
+            "repo_url": meta.get("repo_url", ""),
+            "base_commit": case.base_commit or "",
+            "python": meta.get("python", "3.11"),
+            "install_pins": json.loads(meta.get("install_pins", "[]")),
+            "test_patch": meta.get("test_patch", ""),
+            "apply_test_patch": True,
+            "fail_to_pass": json.loads(meta.get("fail_to_pass", "[]")),
+            "pass_to_pass": json.loads(meta.get("pass_to_pass", "[]")),
+            "prompt_variant": prompt_variant,
+            "prompt": case.prompt_variants.get(prompt_variant, ""),
+        }
     run_dir.mkdir(parents=True, exist_ok=True)
     stale_spec.write_text(json.dumps(spec, indent=2))
+
+
+def _provision_pro_workspace(session: Session, run_id: str, case_id: str) -> None:
+    """Pre-provision a SWE-bench Pro workspace (worker side — docker access).
+
+    The DB-blind runner container has no docker socket, so the image-based
+    provisioning must happen before it starts (docs/design-swe-bench-pro-lane.md).
+    No-op for non-Pro cases; raises on failure so the run is marked failed with
+    the reason instead of the runner dying on an unprovisioned workspace.
+    """
+    try:
+        case = CaseService(session).get_case(case_id)
+    except ValueError:
+        return
+    if case.type != CaseType.swe_pro_instance:
+        return
+    script = get_settings().repo_root / "scripts" / "swebench_pro_common.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--provision-run", run_id],
+        capture_output=True,
+        text=True,
+        timeout=1800,
+    )
+    for line in (result.stdout + "\n" + result.stderr).splitlines():
+        if line.strip():
+            session.add(RunEvent(run_id=run_id, message=line[:500]))
+    session.commit()
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"SWE-bench Pro provisioning failed (rc={result.returncode})"
+        )
 
 
 def _cancel_requested(session: Session, run_id: str) -> bool:
@@ -194,6 +247,9 @@ def _execute_run_body(
             _write_case_spec(
                 session, run_id, config_payload.case_id, config_payload.prompt_variant
             )
+            # Pro lane only: image-based provisioning needs docker, which the
+            # runner lacks — do it here before the container starts.
+            _provision_pro_workspace(session, run_id, config_payload.case_id)
 
             handle = executor.start(run_id, command)
             cancelled, timed_out, tail = _stream_run(
