@@ -270,6 +270,27 @@ bench-audit:
 		$(if $(AUDITOR_MODEL),--auditor-model $(AUDITOR_MODEL),) \
 		$(if $(DRY_RUN),--dry-run,)
 
+# Continuous-improvement cycle: synthesize GitHub improvement issues from a run's
+# audit. Default is dry-run (writes an editable proposals file); CREATE=1 files
+# them via gh. Requires an audit for the run + gh authenticated.
+# Usage: make improve RUN=tetris-v1-K-004 [CREATE=1] [IMPROVE_MODEL=gateway/gpt-5.5]
+improve:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-K-004"; exit 1; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/lab_improve.py \
+		--run $(RUN) \
+		$(if $(IMPROVE_MODEL),--model $(IMPROVE_MODEL),) \
+		$(if $(CREATE),--create,)
+
+# Reconcile opencode.json's gateway models from the live LiteLLM gateway, so a
+# model added to the gateway becomes selectable and routable without editing
+# opencode.json by hand. Preserves labels/order; appends new, drops removed.
+# Usage: make sync-gateway-models [DRY_RUN=1]
+sync-gateway-models:
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/sync_gateway_models.py \
+		$(if $(DRY_RUN),--dry-run,)
+
 # Prepare a human-driven Antigravity run: register, workspace, prompt, capture
 # templates. Does NOT touch the opencode flow. Open Antigravity by hand, then close.
 # Usage: make bench-antigravity RUN=tetris-v1-N-001 [PROMPT=sdlc] [BENCHMARK=tetris-v1]
@@ -362,6 +383,51 @@ app-up:
 	@docker compose build runner sandbox
 	@docker compose up -d --build api worker redis frontend
 
+# Host mode for the codex/claude harnesses: they drive their host CLIs (native
+# auth), so the worker (and API, for preflight) must run on the HOST with the
+# subprocess backend, not in the runner container. opencode/SWE-bench keep using
+# `make app-up`. See docs/harness-adapters.md.
+#
+# One command: `make app-host` (worker + API + frontend + redis together).
+# Or run each piece in its own terminal:
+#   1. make app-worker-host      # Celery worker on the host (+ a local redis)
+#   2. make app-api-host         # web API on the host, subprocess backend
+#   3. cd frontend && VITE_API_TARGET=http://localhost:8008 npm run dev
+_HOST_ENV = HARNESS_LAB_REPO_ROOT=$(PWD) \
+	HARNESS_LAB_DATABASE_URL=sqlite:///$(PWD)/data/app/harness_lab.db \
+	HARNESS_LAB_REDIS_URL=redis://localhost:6379/0 \
+	HARNESS_LAB_EXECUTION_BACKEND=subprocess
+
+app-worker-host:
+	@if [ ! -d .venv ]; then make install; fi
+	@docker ps --format '{{.Names}}' | grep -q '^harness-lab-redis-host$$' || \
+		docker run -d --rm --name harness-lab-redis-host -p 6379:6379 redis:7-alpine >/dev/null
+	@echo "🧑‍💻 Celery worker on host (subprocess backend — codex/claude ready)…"
+	@. $(VENV_DIR)/bin/activate && $(_HOST_ENV) \
+		celery -A harness_lab_app.celery_app worker -Q runs --loglevel=info --concurrency=1
+
+app-api-host:
+	@if [ ! -d .venv ]; then make install; fi
+	@echo "🧑‍💻 Web API on host (subprocess backend) at :8008…"
+	@. $(VENV_DIR)/bin/activate && $(_HOST_ENV) \
+		uvicorn harness_lab_app.api:app --host 0.0.0.0 --port 8008 --reload
+
+# One command for host mode: redis + worker + API + frontend together, so the
+# codex/claude harnesses run against your host CLIs. Ctrl-C stops everything.
+app-host:
+	@if [ ! -d .venv ]; then make install; fi
+	@[ -d frontend/node_modules ] || (cd frontend && npm install)
+	@docker ps --format '{{.Names}}' | grep -q '^harness-lab-redis-host$$' || \
+		docker run -d --rm --name harness-lab-redis-host -p 6379:6379 redis:7-alpine >/dev/null
+	@echo "🧑‍💻 Host mode (codex/claude ready): worker + API + frontend. Ctrl-C stops all."
+	@. $(VENV_DIR)/bin/activate; \
+		$(_HOST_ENV) celery -A harness_lab_app.celery_app worker -Q runs --loglevel=info --concurrency=1 & \
+		worker_pid=$$!; \
+		$(_HOST_ENV) uvicorn harness_lab_app.api:app --host 0.0.0.0 --port 8008 & \
+		api_pid=$$!; \
+		trap "kill $$worker_pid $$api_pid 2>/dev/null" EXIT INT TERM; \
+		cd frontend && VITE_API_TARGET=http://localhost:8008 npm run dev
+
 # Build only the per-run validation sandbox image (web terminal / noVNC desktop).
 sandbox-build:
 	@echo "🧰 Building sandbox image (ttyd + Xvfb + noVNC)..."
@@ -401,7 +467,14 @@ app-smoke-test:
 	@chmod +x scripts/smoke_test_docker.sh
 	@./scripts/smoke_test_docker.sh
 
-# Import a SWE-bench Lite instance as a Case (fetches from HuggingFace).
+# Import a hand-authored benchmark case from its task.yaml (idempotent).
+# Usage: make case-import TASK=benchmarks/cli-textstats/task.yaml
+case-import:
+	@[ -n "$(TASK)" ] || { echo "❌ TASK is required. Example: TASK=benchmarks/cli-textstats/task.yaml"; exit 1; }
+	@if [ ! -d .venv ]; then make install; fi
+	@uv run python scripts/import_case.py --task $(TASK)
+
+# Import a SWE-bench Lite/Verified instance as a Case (fetches from HuggingFace).
 # Usage: make swebench-import INSTANCE=pallets__flask-4992
 swebench-import:
 	@[ -n "$(INSTANCE)" ] || { echo "❌ INSTANCE is required. Example: INSTANCE=pallets__flask-4992"; exit 1; }
@@ -712,4 +785,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills
+.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models case-import app-worker-host app-api-host app-host improve

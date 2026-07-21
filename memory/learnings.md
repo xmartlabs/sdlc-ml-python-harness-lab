@@ -397,4 +397,66 @@ misreading "touching file" as an edit wrongly flags read-only governance docs.
 **How to apply:** count edits from `permission=edit`; treat skills_consulted as a
 documented lower bound; parse step logs, fall back to opencode.log.
 
+## SWE-bench generic runtime runs only a narrow slice — 2026-07-20
+
+The image-free runtime (clone → `uv pip install -e .` on Python 3.11 → pytest the
+F2P/P2P nodeids, ADR-0009) works for a *narrow* slice, proven via
+`make swebench-selftest` (golden-patch, zero tokens). Three hard boundaries found
+while curating SWE-bench Verified: (1) **Py3.11** — pre-3.11 code fails at import
+(every `psf/requests` Verified instance vendors an old urllib3 doing
+`from collections import Mapping`); prefer 2022+ releases. (2) **Standard pytest
+nodeids only** — F2P ids with spaces/params like `test_x[NOT AND SELF]` don't
+match under the generic runner (`pytest-10081/10356` fail; clean-nodeid
+`pytest-10051` passes). (3) **pytest-collectable only** — `sympy` names tests by
+bare function (`test_homomorphism`) for its own runner; `pylint` tests fail
+collection. Reliable slice today: modern `flask` + `pytest` (7.x). Validated set
+lives in `docs/swebench-curated-set.md`.
+
+**Why it matters:** picking instances by "looks pure-Python" wastes runs; most
+Verified repos (django/sympy/matplotlib/sklearn/pylint) don't run here.
+**How to apply:** never trust an instance until `make swebench-selftest` passes;
+`fetch_instance` searches both Lite+Verified (`swebench_client._DATASETS`); for
+dataset-free objective tasks author a `build_from_scratch` case with exit-code
+`validation_commands` (see `benchmarks/cli-textstats/`).
+
+## Harness is an executable dimension via per-CLI adapters — 2026-07-20
+
+The New-run `harness` field used to be cosmetic: the runner always called
+opencode (`build_opencode_cmd`), and the runner image installs only opencode.
+codex/claude are now real harnesses (`build_codex_cmd` / `build_claude_cmd`,
+dispatched by `build_harness_cmd` in `bench_run.py`, threaded via `--harness`).
+Key facts: the workspace path lives in the *prompt* (`workspace/<run_id>/`), so
+all harnesses share `cwd=REPO_ROOT` — only the CLI differs. codex/claude run on
+the **host** (their CLIs + native auth live there, not in the container), so they
+require the subprocess backend; a `RunService._preflight` guard rejects them
+under the docker backend. The gateway model dropdown (`gateway/…`) doesn't map to
+native Codex/Claude ids, so `_native_model` ignores it → CLI default.
+
+**Why it matters:** adding a harness = a builder + install location, not a whole
+new runner; and codex/claude only work in host mode (make app-worker-host /
+app-api-host), never under `make app-up`.
+**How to apply:** see `docs/harness-adapters.md`; builders are unit-tested in
+`tests/harness_lab_app/test_harness_adapters.py`; real headless completion on
+tetris still needs first-run verification per environment.
+
+## Continuous-improvement cycle: audit findings → GitHub issues — 2026-07-20
+
+`scripts/lab_improve.py` (`make improve RUN=<id>`) closes the lab's feedback loop:
+it reads a run's LLM audit (`audit.md` + `audit_findings.json`, verdicts
+useful|redundant|improve|unknown), runs a *dedicated* LLM synthesis pass
+(reusing `bench_audit.call_gateway`) to turn the "improve" signals into concrete
+GitHub issue proposals, and files them via `gh` on the host. Two steps: default
+dry-run writes an editable `data/runs/<id>/improvements.json` (+ `.md` preview);
+`CREATE=1` files the issues (idempotent — created URLs are written back).
+Approval = running the create step. Routing (`route_repo`, editable in the JSON):
+skills/governance-docs/subagents/hooks → `IMPROVE_REPO_TEMPLATE`
+(marcosdh1987/ml-python-base); process/harness-hint → `IMPROVE_REPO_HARNESS`
+(marcosdh1987/harness-engineering-guide).
+
+**Why it matters:** this is how lab experiments become durable improvements to
+the template/harness repos, not one-off observations.
+**How to apply:** needs an audit first (`make bench-audit` or Run audit button) +
+`gh auth` + gateway; see `docs/improvement-cycle.md`; pure fns unit-tested in
+`tests/harness_lab_app/test_lab_improve.py`.
+
 <!-- Add new learnings above this line -->

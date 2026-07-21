@@ -13,6 +13,38 @@ if str(_SCRIPTS) not in sys.path:
 import bench_audit  # noqa: E402
 
 
+def test_harness_from_metadata():
+    assert bench_audit.harness_from_metadata('{"harness": "claude"}') == "claude"
+    assert bench_audit.harness_from_metadata('{"harness": ""}') == ""
+    assert bench_audit.harness_from_metadata(None) == ""
+    assert bench_audit.harness_from_metadata("not json") == ""
+
+
+def test_detect_harness_falls_back_to_log_header():
+    # Metadata missing the harness (older runs) → read the run-log header.
+    assert bench_audit.harness_from_log("# claude run started 2026\nx") == "claude"
+    assert bench_audit.detect_harness("{}", "# codex run started\n") == "codex"
+    # Metadata wins when present.
+    assert bench_audit.detect_harness('{"harness":"opencode"}', "# claude run") == (
+        "opencode"
+    )
+    assert bench_audit.detect_harness(None, None) == ""
+
+
+def test_harness_preamble_is_harness_aware():
+    claude = bench_audit.harness_preamble("claude")
+    # Names the right governance source and forgives summary-only logs.
+    assert "CLAUDE.md" in claude
+    assert "NO OPENCODE.md" in claude
+    assert "LIMITACIÓN" in claude  # missing tool traces are not agent failure
+    opencode = bench_audit.harness_preamble("opencode")
+    assert "OPENCODE.md" in opencode
+    assert "POR-TOOL" in opencode
+    # Unknown harness still gets a safe, non-opencode-specific preamble.
+    other = bench_audit.harness_preamble("weird")
+    assert "weird" in other
+
+
 def _item(**overrides) -> dict:
     base = {
         "name": "verify_changes",

@@ -149,6 +149,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--executor-model", default=None, help="Gateway model alias for executor"
     )
     p.add_argument(
+        "--harness",
+        default="opencode",
+        choices=["opencode", "codex", "claude"],
+        help="Agent CLI that drives the run. opencode runs in the runner "
+        "container; codex/claude run on the host (subprocess backend, native "
+        "auth). See docs/harness-adapters.md.",
+    )
+    p.add_argument(
         "--score-mode",
         choices=["manual", "interactive", "none"],
         default="manual",
@@ -778,7 +786,7 @@ def detect_run_subcommand() -> bool:
 
 
 def build_opencode_cmd(
-    executor_model: str, agent: str | None, message: str
+    executor_model: str | None, agent: str | None, message: str
 ) -> list[str]:
     """Assemble the non-interactive `opencode run` command.
 
@@ -792,6 +800,60 @@ def build_opencode_cmd(
         cmd += ["--agent", agent]
     cmd.append(message)
     return cmd
+
+
+def _native_model(model: str | None) -> str | None:
+    """Return a native model id for codex/claude, or None to use the CLI default.
+
+    The web form's executor models are gateway-namespaced (``gateway/…``) and do
+    not map to native Codex/Claude model ids, so those are ignored (the CLI uses
+    its configured default). A bare id (no ``gateway/`` prefix) is treated as an
+    explicit native override.
+    """
+    if not model or model.startswith("gateway/"):
+        return None
+    return model
+
+
+def build_codex_cmd(executor_model: str | None, message: str) -> list[str]:
+    """Assemble a non-interactive OpenAI Codex CLI command (host, native auth).
+
+    --quiet prints only the final output; --full-auto auto-approves edits and
+    commands in the sandbox so a headless run does not block on approvals. The
+    prompt carries the ``workspace/<run_id>/`` path, so cwd stays REPO_ROOT like
+    opencode.
+    """
+    cmd = ["codex", "--quiet", "--full-auto"]
+    native = _native_model(executor_model)
+    if native:
+        cmd += ["-m", native]
+    cmd.append(message)
+    return cmd
+
+
+def build_claude_cmd(executor_model: str | None, message: str) -> list[str]:
+    """Assemble a non-interactive Claude Code CLI command (host, native auth).
+
+    -p is print/non-interactive; --dangerously-skip-permissions avoids blocking
+    on tool approvals in a headless run.
+    """
+    cmd = ["claude", "-p", "--dangerously-skip-permissions"]
+    native = _native_model(executor_model)
+    if native:
+        cmd += ["--model", native]
+    cmd.append(message)
+    return cmd
+
+
+def build_harness_cmd(
+    harness: str, executor_model: str | None, agent: str | None, message: str
+) -> list[str]:
+    """Dispatch to the per-harness command builder (opencode | codex | claude)."""
+    if harness == "codex":
+        return build_codex_cmd(executor_model, message)
+    if harness == "claude":
+        return build_claude_cmd(executor_model, message)
+    return build_opencode_cmd(executor_model, agent, message)
 
 
 def _print_manual_fallback(
@@ -814,15 +876,19 @@ def _print_manual_fallback(
 
 
 def run_opencode(
-    cmd: list[str], log_path: Path, also_append: Path | None = None
+    cmd: list[str],
+    log_path: Path,
+    also_append: Path | None = None,
+    label: str = "opencode",
 ) -> int:
-    """Run opencode, streaming output to terminal and capturing to log_path.
+    """Run the harness CLI, streaming output to terminal and capturing to log_path.
 
     If also_append is given, output is also appended to that file (combined log).
+    `label` names the harness in the log header (used by the step counter).
     """
     import datetime as _dt
 
-    header = f"# opencode run started {_dt.datetime.utcnow().isoformat()}Z\n"
+    header = f"# {label} run started {_dt.datetime.utcnow().isoformat()}Z\n"
     cmd_line = "# cmd: " + " ".join(cmd[:-1]) + " <prompt>\n\n"
 
     append_fh = None
@@ -876,8 +942,8 @@ def parse_log_usage(log_path: Path) -> dict | None:
     text = log_path.read_text(errors="replace")
     result: dict = {}
 
-    # Step count (count our own header markers)
-    steps = len(re.findall(r"^# opencode run started", text, re.MULTILINE))
+    # Step count (count our own header markers, any harness label)
+    steps = len(re.findall(r"^# \w+ run started", text, re.MULTILINE))
     if steps > 1:
         result["steps"] = steps
 
@@ -1299,7 +1365,7 @@ def main(argv: list[str] | None = None) -> int:
             "langfuse_session_id": f"bench-{args.run}",
             "executor_model": args.executor_model or "",
             "planner_model": args.planner_model or "",
-            "harness": "opencode",
+            "harness": args.harness,
         }
         prompt_short = run["prompt_variant"]
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -1328,6 +1394,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     args.executor_model = executor_model
     args.planner_model = planner_model
+    # Web/CLI runs pass the harness on the command line; runs.yaml rarely carries
+    # it, so record the actual harness in metadata (used by the improvement cycle).
+    if not run.get("harness"):
+        run["harness"] = args.harness
 
     workspace = WORKSPACE_ROOT / args.run
 
@@ -1371,8 +1441,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    {out_dir.relative_to(REPO_ROOT)}/steps/step-{s}.log{extra}")
         print(f"    workspace/{args.run}/")
         print()
-        if detect_run_subcommand():
-            preview = build_opencode_cmd(executor_model, None, "<prompt>")
+        preview = build_harness_cmd(args.harness, executor_model, None, "<prompt>")
+        if args.harness != "opencode" or detect_run_subcommand():
             print("  Execution: " + " ".join(preview))
             if args.max_steps > 1:
                 print(
@@ -1497,14 +1567,21 @@ def main(argv: list[str] | None = None) -> int:
     print("  [2/5] Executing...")
 
     opencode_log = out_dir / "opencode.log"
-    has_run_cmd = detect_run_subcommand()
+    if args.harness == "opencode":
+        has_run_cmd = detect_run_subcommand()
+    else:
+        # codex/claude are host CLIs; availability = the binary is on PATH.
+        has_run_cmd = shutil.which(args.harness) is not None
+    # codex/claude can run against their CLI's default model, so a missing
+    # executor model is only fatal for opencode (gateway-routed).
+    needs_model = args.harness == "opencode"
     max_steps = max(1, args.max_steps)
     steps_dir = out_dir / "steps"
     completed_steps = 0
 
     if args.score_mode == "none":
         print("  score-mode=none: skipping execution.")
-    elif not executor_model:
+    elif needs_model and not executor_model:
         print(
             "  ⚠️  No executor model set — cannot run headless. Pass EXECUTOR_MODEL=..."
         )
@@ -1547,20 +1624,23 @@ def main(argv: list[str] | None = None) -> int:
                 step_log = opencode_log
 
             prompt_text = step_prompt_path.read_text()
-            cmd = build_opencode_cmd(executor_model, None, prompt_text)
-            print(f"  Model:       {executor_model}")
+            cmd = build_harness_cmd(args.harness, executor_model, None, prompt_text)
+            print(f"  Harness:     {args.harness}")
+            print(f"  Model:       {executor_model or '(harness default)'}")
             print(f"  Log:         {step_log.relative_to(REPO_ROOT)}")
             print("-" * 66)
 
             # For multi-step, each step log is primary; combined goes to opencode.log
             also_append = opencode_log if max_steps > 1 else None
-            rc = run_opencode(cmd, step_log, also_append=also_append)
+            rc = run_opencode(
+                cmd, step_log, also_append=also_append, label=args.harness
+            )
             completed_steps += 1
 
             print("-" * 66)
             if rc != 0:
                 print(
-                    f"  ⚠️  opencode exited with code {rc} — see {step_log.relative_to(REPO_ROOT)}"
+                    f"  ⚠️  {args.harness} exited with code {rc} — see {step_log.relative_to(REPO_ROOT)}"
                 )
                 break
 
@@ -1593,14 +1673,20 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print("  opencode run finished.")
     else:
-        print("  ⚠️  `opencode run` not available in this opencode version.")
+        if args.harness == "opencode":
+            print("  ⚠️  `opencode run` not available in this opencode version.")
+        else:
+            print(
+                f"  ⚠️  `{args.harness}` CLI not found on PATH — host mode required "
+                "(run `make app-host`)."
+            )
         _print_manual_fallback(args, executor_model, prompt_path, clipped)
         if args.score_mode == "manual":
-            # Headless run requested but this opencode has no `run` subcommand, so
-            # nothing executed. Fail loudly (non-zero) instead of exiting 0 — a
-            # managed run must not look successful when it did no work (ADR-0006).
+            # Headless run requested but the harness CLI is unavailable, so nothing
+            # executed. Fail loudly (non-zero) instead of exiting 0 — a managed run
+            # must not look successful when it did no work (ADR-0006).
             print()
-            print("  ❌ `opencode run` unavailable — nothing was built. Failing.")
+            print(f"  ❌ `{args.harness}` unavailable — nothing was built. Failing.")
             print("=" * 66)
             return 1
 

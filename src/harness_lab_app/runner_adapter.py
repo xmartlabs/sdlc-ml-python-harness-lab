@@ -24,6 +24,8 @@ class BenchRunAdapter:
                 run_id,
                 "--prompt",
                 config.prompt_variant,
+                "--harness",
+                config.harness,
                 "--score-mode",
                 config.score_mode,
                 "--max-steps",

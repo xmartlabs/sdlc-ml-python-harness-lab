@@ -1,10 +1,14 @@
-"""SWE-bench Lite dataset client + per-repo environment specs.
+"""SWE-bench dataset client + per-repo environment specs.
 
 Single source of truth for fetching instances from the HuggingFace
 datasets-server (stdlib only, no `datasets` dependency) and for the small
 per-repo install recipe the generic image-free runtime needs (ADR-0009).
 Used by the API import endpoint, `scripts/import_swebench.py`, and the
 runner/validation helpers in `scripts/swebench_common.py`.
+
+Both the Lite (300) and Verified (500, human-validated) subsets are supported;
+`fetch_instance` searches them in order, so any curated instance id resolves
+regardless of which split it belongs to (instance ids are globally unique).
 """
 
 from __future__ import annotations
@@ -15,10 +19,14 @@ import urllib.request
 
 HF_ROWS_URL = (
     "https://datasets-server.huggingface.co/rows"
-    "?dataset=princeton-nlp%2FSWE-bench_Lite&config=default&split=test"
+    "?dataset={dataset}&config=default&split=test"
     "&offset={offset}&length={length}"
 )
-_DATASET_SIZE = 300
+# (url-encoded dataset id, row count), searched in this order.
+_DATASETS: tuple[tuple[str, int], ...] = (
+    ("princeton-nlp%2FSWE-bench_Lite", 300),
+    ("princeton-nlp%2FSWE-bench_Verified", 500),
+)
 
 # Per-repo environment recipe (the "SWE-bench install spec"). The HF rows don't
 # carry dependency pins, so we keep a small map of the known-good Python version
@@ -46,25 +54,26 @@ def repo_url_from(repo: str) -> str:
 
 
 def fetch_instance(instance_id: str, timeout: float = 30.0) -> dict:
-    """Fetch one SWE-bench Lite instance from the HF datasets-server.
+    """Fetch one SWE-bench instance (Lite or Verified) from the HF datasets-server.
 
     Raises SwebenchFetchError on network/server trouble and ValueError when the
-    dataset was readable but the instance does not exist in it.
+    datasets were readable but the instance does not exist in any of them.
     """
-    for offset in range(0, _DATASET_SIZE, 100):
-        url = HF_ROWS_URL.format(offset=offset, length=100)
-        try:
-            with urllib.request.urlopen(url, timeout=timeout) as resp:  # nosec B310
-                data = json.load(resp)
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise SwebenchFetchError(
-                f"SWE-bench Lite fetch failed ({url}): {exc}"
-            ) from exc
-        for row in data.get("rows", []):
-            record = row["row"]
-            if record["instance_id"] == instance_id:
-                return record
-    raise ValueError(f"Instance not found in SWE-bench Lite: {instance_id}")
+    for dataset, size in _DATASETS:
+        for offset in range(0, size, 100):
+            url = HF_ROWS_URL.format(dataset=dataset, offset=offset, length=100)
+            try:
+                with urllib.request.urlopen(url, timeout=timeout) as resp:  # nosec B310
+                    data = json.load(resp)
+            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                raise SwebenchFetchError(
+                    f"SWE-bench fetch failed ({url}): {exc}"
+                ) from exc
+            for row in data.get("rows", []):
+                record = row["row"]
+                if record["instance_id"] == instance_id:
+                    return record
+    raise ValueError(f"Instance not found in SWE-bench Lite/Verified: {instance_id}")
 
 
 def normalize_instance(instance_id: str, timeout: float = 30.0) -> dict:

@@ -5,11 +5,13 @@ import { NavLink, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { HelpPanel } from "../components/HelpPanel";
 import { StateBadge } from "../components/StateBadge";
 import { CANCELLABLE_STATES } from "./RunDetail";
 import type {
   CaseRecord,
   HarnessSkill,
+  ModelOption,
   RunCreatePayload,
   RunRecord,
   StagedSkillRecord
@@ -24,20 +26,40 @@ type RunsProps = {
   runs: RunRecord[];
 };
 
-const HARNESS_OPTIONS = ["opencode", "antigravity"] as const;
-const PLANNER_MODEL_OPTIONS = [
-  "",
-  "gateway/nim-nemotron-super-120b",
-  "gateway/gpt-5.5"
-] as const;
-const EXECUTOR_MODEL_OPTIONS = [
-  "gateway/lmstudio-qwen3.6-35b-build",
-  "gateway/nim-nemotron-super-120b",
-  "gateway/gpt-5.5",
-  "openai/gpt-4o-mini",
-  "openai/moonshotai/kimi-k2.6"
-] as const;
+const HARNESS_OPTIONS = ["opencode", "codex", "claude", "antigravity"] as const;
+// Harnesses that run via the host CLI (native auth) instead of the runner
+// container — they need the host worker (subprocess backend).
+const HOST_HARNESSES = new Set(["codex", "claude"]);
+const FALLBACK_EXECUTOR_MODEL = "gateway/lmstudio-qwen3.6-35b-build";
 const MAX_STEPS_OPTIONS = [3, 6, 10] as const;
+
+// Native model menus for the host-CLI harnesses. Values are passed straight to
+// the CLI's --model, so keep them to ids the CLI accepts. Edit these as new
+// versions ship — this is the systematic-lab knob for host harnesses.
+const HARNESS_NATIVE_MODELS: Record<string, ModelOption[]> = {
+  claude: [
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
+    { id: "claude-opus-4-8", label: "Claude Opus 4.8" },
+    { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" }
+  ],
+  // Only the confirmed CLI default is listed — add your codex model ids here.
+  codex: [{ id: "codex-mini-latest", label: "Codex Mini (latest)" }]
+};
+
+// The model menu for a harness: its native CLI models, else the live gateway list.
+function modelsForHarness(harness: string, gatewayModels: ModelOption[]): ModelOption[] {
+  return HARNESS_NATIVE_MODELS[harness] ?? gatewayModels;
+}
+
+// Ensure the currently-selected model always renders as an option even if the
+// live gateway list does not contain it (e.g. a preset value, or the API is
+// offline in preview mode), so the select never shows a blank selection.
+function withCurrent(options: ModelOption[], current: string): ModelOption[] {
+  if (!current || options.some((option) => option.id === current)) {
+    return options;
+  }
+  return [...options, { id: current, label: current }];
+}
 
 export function Runs({
   cases,
@@ -55,7 +77,11 @@ export function Runs({
   const [promptVariant, setPromptVariant] = useState("sdlc");
   const [harness, setHarness] = useState("opencode");
   const [plannerModel, setPlannerModel] = useState("");
-  const [executorModel, setExecutorModel] = useState("gateway/lmstudio-qwen3.6-35b-build");
+  const [executorModel, setExecutorModel] = useState(FALLBACK_EXECUTOR_MODEL);
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [modelSource, setModelSource] = useState<string | null>(null);
+  // Remember the gateway default so switching back to opencode restores it.
+  const [gatewayDefault, setGatewayDefault] = useState(FALLBACK_EXECUTOR_MODEL);
   const scoreMode = "manual";
   const [maxSteps, setMaxSteps] = useState(10);
   const [resume, setResume] = useState(false);
@@ -93,10 +119,49 @@ export function Runs({
       .catch(() => {
         // No staged skills endpoint / API offline — group stays hidden.
       });
+    api
+      .listModels()
+      .then((catalog) => {
+        if (!active) {
+          return;
+        }
+        setModelOptions(catalog.models);
+        setModelSource(catalog.source);
+        if (catalog.default_executor) {
+          setGatewayDefault(catalog.default_executor);
+          // Adopt the gateway's default only while the form is untouched and the
+          // harness uses gateway models; never clobber a value the user picked.
+          if (!HARNESS_NATIVE_MODELS[harness]) {
+            setExecutorModel((current) =>
+              current === FALLBACK_EXECUTOR_MODEL ? catalog.default_executor : current
+            );
+          }
+        }
+      })
+      .catch(() => {
+        // Gateway/API offline — the selects fall back to the current value.
+      });
     return () => {
       active = false;
     };
   }, []);
+
+  const plannerOptions = useMemo(
+    () => withCurrent(modelOptions, plannerModel),
+    [modelOptions, plannerModel]
+  );
+  const executorOptions = useMemo(
+    () => withCurrent(modelsForHarness(harness, modelOptions), executorModel),
+    [harness, modelOptions, executorModel]
+  );
+
+  // Switching harness swaps the executor menu (native CLI models vs gateway), so
+  // reset the executor to that harness's default to avoid a stale/invalid pick.
+  const handleHarnessChange = (next: string) => {
+    setHarness(next);
+    const native = HARNESS_NATIVE_MODELS[next];
+    setExecutorModel(native ? native[0].id : gatewayDefault);
+  };
 
   const toggleExtraSkill = (name: string) => {
     setExtraSkills((current) => {
@@ -191,7 +256,7 @@ export function Runs({
     setPromptVariant("sdlc");
     setHarness("opencode");
     setPlannerModel("");
-    setExecutorModel("gateway/lmstudio-qwen3.6-35b-build");
+    setExecutorModel(FALLBACK_EXECUTOR_MODEL);
     setMaxSteps(10);
   };
 
@@ -274,6 +339,21 @@ export function Runs({
         </div>
       </header>
 
+      <HelpPanel title="How to launch and compare a run" docHref="docs/guide-web-ui.md">
+        <ol className="skills-howto">
+          <li>Pick a <strong>Case</strong> (the task), then a <strong>Prompt
+            variant</strong> and a <strong>Harness</strong>.</li>
+          <li><strong>Executor / Planner model</strong> come live from your LiteLLM
+            gateway. Added a model there? Run <code>make sync-gateway-models</code>
+            and it shows up here.</li>
+          <li>Optionally toggle <strong>Skills</strong> to A/B the harness for this
+            run only (a distinct arm).</li>
+          <li><strong>Create run</strong>, watch it stream, then score it (SWE-bench
+            auto-scores). Open <strong>Compare</strong> to line runs up across
+            models.</li>
+        </ol>
+      </HelpPanel>
+
       <section className="panel">
         <div className="panel-head">
           <h2>New run</h2>
@@ -340,20 +420,29 @@ export function Runs({
           </label>
           <label>
             <span>Harness</span>
-            <select value={harness} onChange={(event) => setHarness(event.target.value)}>
+            <select value={harness} onChange={(event) => handleHarnessChange(event.target.value)}>
               {HARNESS_OPTIONS.map((item) => (
                 <option key={item} value={item}>
                   {item}
                 </option>
               ))}
             </select>
+            {HOST_HARNESSES.has(harness) ? (
+              <small className="muted">
+                Runs the {harness} CLI with its native auth; pick the model below.{" "}
+                {harness === "claude"
+                  ? "Works in Docker (put CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host)."
+                  : "Needs host mode — run make app-host."}
+              </small>
+            ) : null}
           </label>
           <label>
             <span>Planner model</span>
             <select value={plannerModel} onChange={(event) => setPlannerModel(event.target.value)}>
-              {PLANNER_MODEL_OPTIONS.map((item) => (
-                <option key={item || "none"} value={item}>
-                  {item || "None"}
+              <option value="">None</option>
+              {plannerOptions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
                 </option>
               ))}
             </select>
@@ -361,12 +450,21 @@ export function Runs({
           <label>
             <span>Executor model</span>
             <select value={executorModel} onChange={(event) => setExecutorModel(event.target.value)}>
-              {EXECUTOR_MODEL_OPTIONS.map((item) => (
-                <option key={item} value={item}>
-                  {item}
+              {executorOptions.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
                 </option>
               ))}
             </select>
+            <small className="muted">
+              {HARNESS_NATIVE_MODELS[harness]
+                ? `Native ${harness} CLI models (passed to --model). Edit the list in Runs.tsx as versions ship.`
+                : modelSource === "opencode.json"
+                  ? "Gateway unreachable — showing opencode.json models."
+                  : modelSource === "gateway"
+                    ? "Live from your gateway (LiteLLM). Run make sync-gateway-models after adding models."
+                    : "Loading models from the gateway…"}
+            </small>
           </label>
           <label>
             <span>Score mode</span>

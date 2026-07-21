@@ -128,6 +128,32 @@ class RunService:
         """
         if config.dry_run:
             return
+        if config.harness in ("codex", "claude"):
+            # These harnesses drive their own CLI with native auth (no gateway
+            # model/token). Host/subprocess mode uses your host login directly.
+            # See docs/harness-adapters.md.
+            if get_settings().execution_backend == "subprocess":
+                return
+            # Docker mode: the CLI must be baked into the runner image with
+            # credentials supplied via .env. claude is wired for Docker; codex is
+            # host-only for now.
+            if config.harness == "claude":
+                token = read_env_file_value(
+                    "CLAUDE_CODE_OAUTH_TOKEN"
+                ) or read_env_file_value("ANTHROPIC_API_KEY")
+                if token:
+                    return
+                raise RunPreflightError(
+                    "The 'claude' harness in Docker needs credentials in .env: "
+                    "CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, uses your "
+                    "subscription) or ANTHROPIC_API_KEY. Or run host mode "
+                    "(make app-host)."
+                )
+            raise RunPreflightError(
+                "The 'codex' harness runs the host CLI — start host mode "
+                "(make app-host) or set HARNESS_LAB_EXECUTION_BACKEND=subprocess. "
+                "(codex-in-Docker is not wired yet.)"
+            )
         if config.score_mode != "none" and not (config.executor_model or "").strip():
             raise RunPreflightError(
                 "Executor model is required for a headless run — pick an executor "

@@ -4,7 +4,10 @@ import type {
   AuditRecord,
   CaseCreatePayload,
   CaseRecord,
+  DocContent,
+  DocEntry,
   HarnessSkill,
+  ModelCatalog,
   RunCreatePayload,
   RunEventRecord,
   RunRecord,
@@ -63,6 +66,9 @@ export const api = {
     }),
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
   listHarnessSkills: () => request<HarnessSkill[]>("/api/harness/skills"),
+  listModels: () => request<ModelCatalog>("/api/models"),
+  listDocs: () => request<DocEntry[]>("/api/docs"),
+  getDoc: (slug: string) => request<DocContent>(`/api/docs/${slug}`),
   listStagedSkills: () => request<StagedSkillRecord[]>("/api/staged-skills"),
   createStagedSkill: (name: string, description: string, content: string) =>
     request<StagedSkillRecord>("/api/staged-skills", {

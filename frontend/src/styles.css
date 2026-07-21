@@ -684,6 +684,164 @@ label {
   gap: 16px;
 }
 
+.guide-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.guide-index {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 16px;
+}
+
+.guide-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.guide-group-title {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  margin: 0 0 2px;
+}
+
+.guide-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.guide-link--active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.guide-link-title {
+  font-weight: 600;
+}
+
+.guide-link-desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.guide-content {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .guide-layout {
+    grid-template-columns: 1fr;
+  }
+  .guide-index {
+    position: static;
+  }
+}
+
+.help-panel {
+  margin-bottom: 16px;
+  padding: 0;
+}
+
+.help-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 14px 16px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.help-body {
+  padding: 0 16px 12px;
+}
+
+.help-body .skills-howto {
+  margin: 0;
+}
+
+.compare-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+
+.compare-picker-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+}
+
+button.ghost {
+  background: transparent;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.table-scroll {
+  overflow-x: auto;
+  width: 100%;
+}
+
+.compare-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14px;
+}
+
+.compare-table th,
+.compare-table td {
+  border: 1px solid var(--line);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.compare-table thead th {
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.compare-table tbody th[scope="row"] {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.compare-col-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.compare-best {
+  background: var(--accent-soft);
+  font-weight: 600;
+  color: var(--text);
+}
+
 .settings-list {
   display: grid;
   gap: 8px;
@@ -895,8 +1053,44 @@ label {
   gap: 12px;
 }
 
+/* Row is a vertical stack: a head line (name/observed/verdict) then the full
+   verdict note + evidence, wrapped so long text stays readable. */
 .harness-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.harness-row-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(110px, 0.6fr) minmax(110px, 0.6fr);
+  gap: 12px;
   align-items: center;
+}
+
+.harness-note {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.harness-evidence {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.harness-evidence-label {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
 }
 
 .harness-row.disabled {

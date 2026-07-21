@@ -598,7 +598,7 @@ runs:
   langfuse_session_id: bench-tetris-v1-L-001
   virtual_key: null
   branch: bench/tetris-v1-L-001
-  status: pending
+  status: running
   result_level: null
   human_interventions: null
   notes: GPT-4o-mini via gateway

@@ -197,3 +197,29 @@ export type RunCreatePayload = {
   label?: string;
   config: RunConfigPayload;
 };
+
+export type ModelOption = {
+  id: string;
+  label: string;
+};
+
+export type ModelCatalog = {
+  // "gateway" when the list came live from LiteLLM; "opencode.json" when the
+  // gateway was unreachable and the routing map was used as a fallback.
+  source: string;
+  models: ModelOption[];
+  default_executor: string;
+};
+
+export type DocEntry = {
+  slug: string;
+  title: string;
+  description: string;
+  group: string;
+};
+
+export type DocContent = {
+  slug: string;
+  title: string;
+  content: string;
+};

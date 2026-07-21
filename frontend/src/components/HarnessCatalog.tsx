@@ -138,34 +138,42 @@ export function HarnessCatalog({ metadata, attribution, audit }: HarnessCatalogP
                   className={row.disabled ? "table-row harness-row disabled" : "table-row harness-row"}
                   key={`${row.kind}:${row.name}`}
                 >
-                  <span className="harness-name">
-                    <strong>{row.name}</strong>
-                    {row.disabled ? <small> (disabled this run)</small> : null}
-                    {row.experimental ? <small> (experimental)</small> : null}
-                  </span>
-                  <span>
-                    {row.disabled ? (
-                      <span className="badge">off</span>
-                    ) : row.observed === "consulted" ? (
-                      <span className="badge ok">consulted</span>
-                    ) : row.observed === "not-observed" ? (
-                      <span className="badge">not observed</span>
-                    ) : (
-                      <span className="badge">—</span>
-                    )}
-                  </span>
-                  <span className="harness-verdict">
-                    {row.finding ? (
-                      <>
+                  <div className="harness-row-head">
+                    <span className="harness-name">
+                      <strong>{row.name}</strong>
+                      {row.disabled ? <small> (disabled this run)</small> : null}
+                      {row.experimental ? <small> (experimental)</small> : null}
+                    </span>
+                    <span>
+                      {row.disabled ? (
+                        <span className="badge">off</span>
+                      ) : row.observed === "consulted" ? (
+                        <span className="badge ok">consulted</span>
+                      ) : row.observed === "not-observed" ? (
+                        <span className="badge">not observed</span>
+                      ) : (
+                        <span className="badge">—</span>
+                      )}
+                    </span>
+                    <span className="harness-verdict">
+                      {row.finding ? (
                         <span className={verdictBadgeClass(row.finding.verdict)}>
                           {VERDICT_LABEL[row.finding.verdict]}
                         </span>
-                        {row.finding.note ? <small title={row.finding.used_evidence}>{row.finding.note}</small> : null}
-                      </>
-                    ) : (
-                      <span className="muted">no verdict</span>
-                    )}
-                  </span>
+                      ) : (
+                        <span className="muted">no verdict</span>
+                      )}
+                    </span>
+                  </div>
+                  {row.finding?.note ? (
+                    <p className="harness-note">{row.finding.note}</p>
+                  ) : null}
+                  {row.finding?.used_evidence ? (
+                    <p className="harness-evidence">
+                      <span className="harness-evidence-label">evidence:</span>{" "}
+                      {row.finding.used_evidence}
+                    </p>
+                  ) : null}
                 </div>
               ))}
             </div>

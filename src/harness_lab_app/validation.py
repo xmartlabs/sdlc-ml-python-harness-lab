@@ -18,10 +18,30 @@ run executor so it runs in the same container isolation as a run.
 from __future__ import annotations
 
 import json
+import re
 import shlex
+import shutil
 from typing import TYPE_CHECKING, Any
 
 from harness_lab_app.config import get_settings
+
+# GNU `timeout` exists in the runner container (Linux) but not on a macOS host
+# worker (subprocess backend). Make case commands portable across both.
+_TIMEOUT_RE = re.compile(r"\btimeout\s+(\d+)\s+")
+
+
+def _portable_timeout(command: str) -> str:
+    """Rewrite a `timeout <N>` prefix so it runs where GNU timeout is absent.
+
+    Prefers `gtimeout` (brew coreutils); otherwise drops the wrapper — the smoke
+    commands self-exit (e.g. tetris under BENCH_SMOKE), so the guard is optional.
+    """
+    if shutil.which("timeout"):
+        return command
+    if shutil.which("gtimeout"):
+        return _TIMEOUT_RE.sub(lambda m: f"gtimeout {m.group(1)} ", command)
+    return _TIMEOUT_RE.sub("", command)
+
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -83,7 +103,7 @@ def build_validation_spec(case: Case, run_id: str) -> dict[str, Any]:
     for raw in case.validation_commands or []:
         if not _looks_executable(raw):
             continue
-        rendered = raw.format(workspace=workspace, run_id=run_id)
+        rendered = _portable_timeout(raw.format(workspace=workspace, run_id=run_id))
         # sh -c (not -lc): a login shell resets PATH and would drop the runner
         # image's /opt/venv/bin, so `python` would miss the installed deps.
         commands.append(["sh", "-c", rendered])

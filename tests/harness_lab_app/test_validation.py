@@ -4,13 +4,35 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import harness_lab_app.validation as validation
 from harness_lab_app.validation import (
+    _portable_timeout,
     build_validation_spec,
     collect_cost,
     collect_effort,
     compute_composite,
     parse_objective,
 )
+
+
+def test_portable_timeout_keeps_gnu_timeout_when_present(monkeypatch):
+    monkeypatch.setattr(validation.shutil, "which", lambda _name: "/usr/bin/timeout")
+    cmd = "BENCH_SMOKE=1 timeout 45 python main.py"
+    assert _portable_timeout(cmd) == cmd
+
+
+def test_portable_timeout_uses_gtimeout_fallback(monkeypatch):
+    monkeypatch.setattr(
+        validation.shutil, "which", lambda name: None if name == "timeout" else "/x"
+    )
+    assert (
+        _portable_timeout("timeout 45 python main.py") == "gtimeout 45 python main.py"
+    )
+
+
+def test_portable_timeout_drops_when_absent(monkeypatch):
+    monkeypatch.setattr(validation.shutil, "which", lambda _name: None)
+    assert _portable_timeout("a=1 timeout 45 python main.py") == "a=1 python main.py"
 
 
 def _case(**kwargs):

@@ -28,7 +28,19 @@ const POLL_INTERVAL_MS = 1500;
 export const CANCELLABLE_STATES: RunRecord["state"][] = ["pending", "running"];
 export const RETRYABLE_STATES: RunRecord["state"][] = ["failed", "cancelled"];
 
+// Harnesses whose host CLI emits final summaries, not opencode-style per-tool
+// step logs — so file/tool/governance attribution can't be parsed from them.
+const SUMMARY_ONLY_HARNESSES = new Set(["claude", "codex"]);
+
+function harnessFromCommand(command: string[] | undefined): string {
+  if (!command) return "opencode";
+  const i = command.indexOf("--harness");
+  return i >= 0 && i + 1 < command.length ? command[i + 1] : "opencode";
+}
+
 export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetailProps) {
+  const harness = harnessFromCommand(run?.command);
+  const summaryOnlyHarness = SUMMARY_ONLY_HARNESSES.has(harness);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -510,17 +522,36 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
         <div className="panel-head">
           <h3>Harness attribution</h3>
           <div className="run-actions">
-            {attribution ? (
+            {attribution && !summaryOnlyHarness ? (
               <span className="badge">
                 governance {attribution.harness_usage?.governance_coverage ?? "—"}
               </span>
             ) : null}
-            <button disabled={actionPending} onClick={handleIndexAttribution} type="button">
-              Re-index
-            </button>
+            {!summaryOnlyHarness ? (
+              <button disabled={actionPending} onClick={handleIndexAttribution} type="button">
+                Re-index
+              </button>
+            ) : null}
           </div>
         </div>
-        {attribution === null ? (
+        {summaryOnlyHarness ? (
+          <>
+            <p className="muted">
+              Tool-level attribution isn't available for the <strong>{harness}</strong>{" "}
+              harness: its CLI reports a final summary per step, not the per-tool logs
+              (<code>permission=edit</code>, <code>read</code>, <code>bash</code>…) that
+              opencode emits. Counts would all read 0 — not because the agent did
+              nothing, but because the harness doesn't expose them. Only the step count
+              is observable; judge behavior from the LLM audit below.
+            </p>
+            <div className="detail-grid">
+              <div>
+                <span>Steps parsed</span>
+                <strong>{attribution?.steps_parsed ?? "—"}</strong>
+              </div>
+            </div>
+          </>
+        ) : attribution === null ? (
           <p className="muted">
             No attribution yet. It is computed automatically after a run from the
             opencode step logs; use Re-index to compute it now.

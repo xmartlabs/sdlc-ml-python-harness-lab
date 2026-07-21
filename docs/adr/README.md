@@ -39,6 +39,8 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0008 — LLM audit exposed in the web app](0008-llm-audit-in-web.md)
 - [0009 — SWE-bench case type](0009-swebench-case-type.md)
 - [0010 — In-platform validation sandboxes](0010-in-platform-sandboxes.md)
+- [0011 — Per-run skill ablation and staged-skill trials](0011-per-run-skill-ablation-and-staging.md)
+- [0012 — Dynamic gateway model list and opencode.json sync](0012-dynamic-gateway-model-list.md)
 
 ## Why ADRs exist
 

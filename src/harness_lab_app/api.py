@@ -18,7 +18,7 @@ from harness_lab_app.celery_app import (
     enqueue_sandbox_stop,
     enqueue_validation,
 )
-from harness_lab_app.config import get_settings
+from harness_lab_app.config import get_settings, read_env_file_value
 from harness_lab_app.db import get_engine, get_session, init_db
 from harness_lab_app.run_service import (
     RunAlreadyExistsError,
@@ -87,6 +87,46 @@ def create_app() -> FastAPI:
         from harness_lab_app.skills_catalog import list_harness_skills as _list
 
         return _list()
+
+    @app.get("/api/docs")
+    def list_docs():
+        from harness_lab_app.docs_catalog import list_docs as _list
+
+        return _list()
+
+    @app.get("/api/docs/{slug}")
+    def get_doc(slug: str):
+        from harness_lab_app.docs_catalog import read_doc
+
+        doc = read_doc(slug)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"Unknown doc: {slug}")
+        return doc
+
+    @app.get("/api/models")
+    def list_models():
+        # Live model discovery from LiteLLM so the run form stays in sync with
+        # the gateway (the single place the user updates). Falls back to the
+        # opencode.json routing map when the gateway is unreachable.
+        from pathlib import Path
+
+        from harness_lab_app.executors import rewrite_localhost
+        from harness_lab_app.gateway_models import (
+            build_model_catalog,
+            list_gateway_models,
+            read_opencode_gateway_models,
+        )
+
+        settings = get_settings()
+        base = read_env_file_value("GATEWAY_BASE_URL")
+        token = read_env_file_value("GATEWAY_TOKEN")
+        # Inside a container "localhost" is the container itself; rewrite it to
+        # the docker host alias so the API can reach the host-side gateway.
+        if base and Path("/.dockerenv").exists():
+            base = rewrite_localhost(base, settings.docker_host_alias)
+        live = list_gateway_models(base_url=base, token=token)
+        opencode_models = read_opencode_gateway_models(settings.repo_root)
+        return build_model_catalog(live, opencode_models)
 
     @app.get("/api/staged-skills")
     def list_staged_skills(session: Session = Depends(get_session)):
