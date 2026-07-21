@@ -1,0 +1,99 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      HARNESS_LAB_REPO_ROOT: /app
+      HARNESS_LAB_DATABASE_URL: sqlite:////app/data/app/harness_lab.db
+      HARNESS_LAB_RUNNER_PYTHON: /opt/venv/bin/python
+      HARNESS_LAB_REDIS_URL: redis://redis:6379/0
+    volumes:
+      - .:/app
+    ports:
+      - "8008:8008"
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    # Concurrency is deliberately 1: bench_run.py mutates repo-root shared
+    # state (BENCH_CONTEXT.md, benchmarks/*/runs.yaml), same as the CLI flow.
+    command:
+      [
+        "celery",
+        "-A",
+        "harness_lab_app.celery_app",
+        "worker",
+        "-Q",
+        "runs",
+        "--loglevel=info",
+        "--concurrency=1",
+      ]
+    environment:
+      HARNESS_LAB_REPO_ROOT: /app
+      HARNESS_LAB_DATABASE_URL: sqlite:////app/data/app/harness_lab.db
+      HARNESS_LAB_RUNNER_PYTHON: /opt/venv/bin/python
+      HARNESS_LAB_REDIS_URL: redis://redis:6379/0
+      HARNESS_LAB_EXECUTION_BACKEND: docker
+      HARNESS_LAB_RUNNER_IMAGE: harness-lab-runner:latest
+      # Host path of the repo: runner containers are siblings created through
+      # the host daemon, so their bind mounts must use host paths.
+      HARNESS_LAB_HOST_REPO_ROOT: ${PWD}
+    volumes:
+      - .:/app
+      # Docker-out-of-docker: the worker launches one runner container per
+      # run through the host daemon. Root-equivalent host access — keep this
+      # mount on the worker service only.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+
+  # Build-only entry so `docker compose build runner` produces the image the
+  # worker launches per run; it is never started as a service.
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    image: harness-lab-runner:latest
+    profiles:
+      - build-only
+
+  # Build-only entry for the per-run validation sandbox image (web terminal /
+  # noVNC desktop). Launched on demand by the worker, never started here.
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    image: harness-lab-sandbox:latest
+    profiles:
+      - build-only
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      VITE_API_BASE_URL: /api
+    volumes:
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api

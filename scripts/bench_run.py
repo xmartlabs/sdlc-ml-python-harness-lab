@@ -55,11 +55,12 @@ from create_run import (
     RUNS_FILES,
     _load_env,
     create_litellm_key,
-    find_run,
     scaffold_report,
     set_status_running,
     update_results_csv,
 )
+
+from harness_lab_app.provenance import enrich_metadata
 
 try:
     import yaml
@@ -148,6 +149,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--executor-model", default=None, help="Gateway model alias for executor"
     )
     p.add_argument(
+        "--harness",
+        default="opencode",
+        choices=["opencode", "codex", "claude"],
+        help="Agent CLI that drives the run. opencode runs in the runner "
+        "container; codex/claude run on the host (subprocess backend, native "
+        "auth). See docs/harness-adapters.md.",
+    )
+    p.add_argument(
         "--score-mode",
         choices=["manual", "interactive", "none"],
         default="manual",
@@ -174,6 +183,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow running into an existing workspace (skip workspace existence check). "
         "Use when a previous run was interrupted and you want to continue.",
+    )
+    p.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Managed/automated run (used by the web runner): reset a stale "
+        "workspace on start instead of exiting, and archive+clean the workspace "
+        "after a manual-scored run (scoring is owned by the API). CLI manual runs "
+        "omit this so `make bench-close` can still find the workspace.",
+    )
+    p.add_argument(
+        "--disable-skill",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Hide a governed skill from the agent for this run (repeatable). "
+        "The native skill views and adapter files are regenerated without it "
+        "and restored after the run (ablation lane).",
+    )
+    p.add_argument(
+        "--extra-skill",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Add a staged skill from data/skills_staging/<NAME>/ for this run "
+        "only (repeatable). Restored after the run.",
     )
     p.add_argument(
         "--create-litellm-key",
@@ -235,6 +269,91 @@ def discover_skills() -> list[str]:
         if d.is_dir():
             found.extend(p.name for p in d.iterdir() if p.is_dir())
     return sorted(set(found))
+
+
+# ---------------------------------------------------------------------------
+# Per-run skill ablation (--disable-skill / --extra-skill)
+#
+# The agent discovers skills from the repo's native views (.opencode/skills,
+# CLAUDE.md/OPENCODE.md generated blocks, ...), which are GENERATED artifacts of
+# the skills_sync engine. A true ablation therefore regenerates those views
+# (symlinks AND adapter-file skill blocks) from a filtered/extended skill list
+# before launching the agent, and restores the full views afterwards. The
+# source of truth (.github/skills*) is never touched. Sequential-safe because
+# the worker runs one container at a time (ADR-0002); a crash is healed by the
+# restore-at-start guard on the next run (or a manual `make sync-skills`).
+# ---------------------------------------------------------------------------
+
+SKILLS_STAGING_DIR = REPO_ROOT / "data" / "skills_staging"
+
+
+def build_effective_skills(disabled: list[str], extra: list[str]) -> list:
+    """Governed skills minus `disabled`, plus staged `extra`. Fails fast on
+    unknown names or collisions, BEFORE any view is mutated."""
+    from ml_python_base.skills_sync.discovery import (
+        discover_skills as discover_governed,
+    )
+    from ml_python_base.skills_sync.models import KIND_EXTERNAL, Skill
+
+    governed = discover_governed(REPO_ROOT)
+    known = {skill.name for skill in governed}
+    unknown = sorted(set(disabled) - known)
+    if unknown:
+        sys.exit(f"❌ --disable-skill: unknown skill(s): {', '.join(unknown)}")
+    collisions = sorted((set(extra) & known) - set(disabled))
+    if collisions:
+        sys.exit(
+            f"❌ --extra-skill: name(s) collide with governed skills: "
+            f"{', '.join(collisions)} (disable the governed one first)"
+        )
+    effective = [skill for skill in governed if skill.name not in set(disabled)]
+    for name in sorted(set(extra)):
+        source = SKILLS_STAGING_DIR / name
+        if not (source / "SKILL.md").is_file():
+            sys.exit(
+                f"❌ --extra-skill '{name}': no SKILL.md at "
+                f"{source.relative_to(REPO_ROOT)}/"
+            )
+        effective.append(
+            Skill(name=name, kind=KIND_EXTERNAL, source_path=source, description="")
+        )
+    return effective
+
+
+def apply_skill_views(skills: list) -> None:
+    """Project `skills` into every tool's native view + adapter files."""
+    from ml_python_base.skills_sync.config import DEFAULT_REGISTRY_PATH, load_registry
+    from ml_python_base.skills_sync.linker import link_tool
+    from ml_python_base.skills_sync.manifest import write_manifest
+    from ml_python_base.skills_sync.renderer import render_tool
+
+    registry = load_registry(REPO_ROOT / DEFAULT_REGISTRY_PATH)
+    for tool in registry.tools:
+        hashes = link_tool(REPO_ROOT, tool, skills)
+        if tool.needs_manifest and tool.manifest_path:
+            write_manifest(REPO_ROOT / tool.manifest_path, hashes)
+        render_tool(REPO_ROOT, registry, tool, skills=skills)
+
+
+def restore_full_skill_views() -> None:
+    """Re-sync every native view from the governed source (idempotent)."""
+    from ml_python_base.skills_sync.discovery import (
+        discover_skills as discover_governed,
+    )
+
+    apply_skill_views(discover_governed(REPO_ROOT))
+
+
+def staged_skill_hashes(extra: list[str]) -> dict[str, str]:
+    """Content hash per staged skill — a staged-skill edit must flip the arm."""
+    from harness_lab_app.provenance import hash_file
+
+    out: dict[str, str] = {}
+    for name in sorted(set(extra)):
+        digest = hash_file(SKILLS_STAGING_DIR / name / "SKILL.md")
+        if digest is not None:
+            out[name] = digest
+    return out
 
 
 def discover_subagents() -> list[str]:
@@ -329,8 +448,79 @@ def generate_continuation_prompt(
     return path
 
 
+def generate_swe_continuation_prompt(
+    run_id: str,
+    step_n: int,
+    steps_dir: Path,
+    spec: dict,
+    last_eval: dict | None,
+) -> Path:
+    """Continuation prompt for a SWE-bench step (no Tetris/game framing).
+
+    Keeps the agent on the issue: shows the live F2P/P2P status from the
+    previous objective evaluation and forbids scope creep.
+    """
+    f2p = spec.get("fail_to_pass") or []
+    test_cmd = f"python -m pytest {' '.join(f2p)}"
+    status = (
+        f"resolved={last_eval['resolved']} "
+        f"F2P={last_eval['f2p_passed']}/{last_eval['f2p_total']} "
+        f"P2P={last_eval['p2p_passed']}/{last_eval['p2p_total']}"
+        if last_eval
+        else "not evaluated yet"
+    )
+    text = (
+        f"<!-- SWE-bench continuation step {step_n} for RUN_ID={run_id} -->\n\n"
+        f"# Resolve the GitHub issue — continuation (step {step_n})\n\n"
+        f"You are continuing work on the SWE-bench task in "
+        f"`workspace/{run_id}/` (a real library repo — there is NO main.py to "
+        f"build; do NOT create applications or demos).\n\n"
+        f"Objective status after the previous step: {status}\n\n"
+        f"Target failing test(s):\n"
+        + "\n".join(f"  - {t}" for t in f2p)
+        + f"\n\nRun them with:\n    cd workspace/{run_id} && {test_cmd}\n\n"
+        f"Rules:\n"
+        f"1. Make the target test(s) pass by editing the **library source only** "
+        f"(never the test files).\n"
+        f"2. Keep the change minimal — do not refactor, fix deprecations, or "
+        f"touch anything unrelated to the issue.\n"
+        f"3. After your edit, run the target test(s) and the surrounding test "
+        f"file to check for regressions.\n"
+        f"4. Stop after the target test(s) pass.\n"
+    )
+    path = steps_dir / f"step-{step_n}-prompt.md"
+    path.write_text(text)
+    return path
+
+
+def swe_step_evaluation(workspace: Path, spec: dict) -> dict | None:
+    """Objective F2P/P2P check against the provisioned install (never raises).
+
+    This is the SWE-bench resolution criterion evaluated live between steps so
+    the loop can stop as soon as the issue is actually resolved, instead of
+    trusting the agent's own completion claims.
+    """
+    import swebench_common as swe
+
+    f2p = spec.get("fail_to_pass") or []
+    p2p = spec.get("pass_to_pass") or []
+    if not f2p or not workspace.is_dir():
+        return None
+    try:
+        return swe.evaluate(workspace, sys.executable, f2p, p2p)
+    except Exception as exc:
+        print(f"  ⚠️  SWE-bench step evaluation failed: {exc!r}")
+        return None
+
+
 def write_metadata(
-    out_dir: Path, args: argparse.Namespace, task: dict, run: dict, prompt_short: str
+    out_dir: Path,
+    args: argparse.Namespace,
+    task: dict,
+    run: dict,
+    prompt_short: str,
+    prompt_source: Path | None = None,
+    task_path: Path | None = None,
 ) -> Path:
     meta = {
         "project": "ai-sdlc-lab",
@@ -346,12 +536,34 @@ def write_metadata(
         "executor_model": args.executor_model,
         "score_mode": args.score_mode,
         "max_steps": args.max_steps,
+        # Exclusions are applied to the native views BEFORE metadata is written,
+        # so discover_skills() already reflects the effective bundle; the
+        # explicit lists below record the ablation itself.
         "skills_bundle": discover_skills(),
+        "skills_disabled": sorted(set(getattr(args, "disable_skill", []) or [])),
+        "skills_experimental": sorted(set(getattr(args, "extra_skill", []) or [])),
         "subagents": discover_subagents(),
         "base_commit": task.get("base_commit", ""),
         "workspace": f"workspace/{args.run}",
         "created_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
+    # Add the hashable trial condition manifest (condition_hash, harness
+    # fingerprint, model condition, prompt/case hashes). Best-effort: if
+    # provenance can't be computed the base metadata is still written.
+    enrich_metadata(
+        meta,
+        repo_root=REPO_ROOT,
+        run=run,
+        executor_model=args.executor_model,
+        planner_model=args.planner_model,
+        prompt_source=prompt_source,
+        task_path=task_path,
+        runner_image=os.environ.get("HARNESS_LAB_RUNNER_IMAGE"),
+        skills_disabled=tuple(meta["skills_disabled"]),
+        skills_extra_hashes=staged_skill_hashes(
+            list(getattr(args, "extra_skill", []) or [])
+        ),
+    )
     path = out_dir / "metadata.json"
     path.write_text(json.dumps(meta, indent=2))
     return path
@@ -371,18 +583,172 @@ def write_run_env(out_dir: Path, args: argparse.Namespace, session_id: str) -> P
     return path
 
 
-def validate_workspace(workspace: Path, run_id: str, resume: bool) -> None:
-    """Refuse to run into an existing workspace unless --resume is passed."""
+def validate_workspace(
+    workspace: Path, run_id: str, resume: bool, fresh: bool = False
+) -> None:
+    """Guard against clobbering an existing workspace.
+
+    - --resume: keep the existing workspace and continue from it.
+    - --fresh (managed/web run): reset a stale workspace instead of exiting, so
+      an automated run is never blocked by a leftover dir (ADR-0006). With
+      auto-incremental ids this rarely fires; it is a defensive fallback.
+    - neither (interactive CLI): refuse and exit, so the user decides.
+    """
     if workspace.exists() and any(workspace.iterdir()):
-        if not resume:
-            sys.exit(
-                f"❌ workspace/{run_id}/ already exists and is not empty.\n"
-                f"   Pass RESUME=1 to continue from the existing state, or remove it:\n"
-                f"     rm -rf workspace/{run_id}/"
+        if resume:
+            print(
+                f"  ⚠️  workspace/{run_id}/ exists — resuming from current state "
+                "(--resume)."
             )
-        print(
-            f"  ⚠️  workspace/{run_id}/ exists — resuming from current state (--resume)."
+            return
+        if fresh:
+            print(
+                f"  ⚠️  workspace/{run_id}/ exists — resetting for a fresh managed "
+                "run (--fresh)."
+            )
+            shutil.rmtree(workspace)
+            return
+        sys.exit(
+            f"❌ workspace/{run_id}/ already exists and is not empty.\n"
+            f"   Pass RESUME=1 to continue from the existing state, or remove it:\n"
+            f"     rm -rf workspace/{run_id}/"
         )
+
+
+def resolve_or_synthesize_run(
+    runs_path: Path, run_id: str, args: argparse.Namespace
+) -> dict:
+    """Return the run dict from runs.yaml, or synthesize one from CLI args.
+
+    The web lane (ADR-0006) creates runs whose ids are not registered in
+    benchmarks/<case>/runs.yaml. Rather than exit (as find_run does), build a
+    minimal run dict from the CLI args so the runner can proceed. When the id
+    *is* registered, behavior is unchanged. The API never writes to the shared
+    runs.yaml, avoiding write races against the CLI.
+    """
+    data = yaml.safe_load(runs_path.read_text())
+    for run in data.get("runs", []):
+        if run["run_id"] == run_id:
+            return run
+    return {
+        "run_id": run_id,
+        "status": "pending",
+        "prompt_variant": args.prompt or "",
+        "executor_model": args.executor_model or "",
+        "planner_model": args.planner_model or "",
+        "langfuse_session_id": f"bench-{run_id}",
+    }
+
+
+def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
+    """Archive the live workspace into the run's data dir and remove it.
+
+    Returns the diff line count (0 when the workspace is missing). The
+    destructive rmtree runs only after a successful copy. Used both by the CLI
+    close_run and by the managed web/manual flow, which never reaches Phase 5.
+    """
+    if not workspace.exists():
+        print(f"  ⚠️  workspace/{run_id}/ not found — skipping artifact copy.")
+        return 0
+    dest = out_dir / "workspace"
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(workspace, dest)
+    file_count = sum(1 for _ in dest.rglob("*") if _.is_file())
+    print(f"  Copied workspace → data/runs/{run_id}/workspace/ ({file_count} files)")
+
+    diff_path = out_dir / "diff.patch"
+    if (dest / ".git").exists():
+        # Repo task: the meaningful diff is the agent's changes vs the
+        # provisioned commit (base_commit + test_patch), not diff-vs-empty.
+        result = _run_git(["git", "-C", str(dest), "diff", "HEAD"], cwd=REPO_ROOT)
+    else:
+        result = _run_git(
+            ["git", "diff", "--no-index", "/dev/null", str(dest)], cwd=REPO_ROOT
+        )
+    diff_path.write_text(result.stdout)
+    diff_lines = result.stdout.count("\n")
+    print(f"  diff.patch: {diff_lines} lines")
+
+    shutil.rmtree(workspace)
+    if WORKSPACE_ROOT.exists() and not any(WORKSPACE_ROOT.iterdir()):
+        WORKSPACE_ROOT.rmdir()
+    print(f"  Removed workspace/{run_id}/")
+    return diff_lines
+
+
+def _load_case_spec(out_dir: Path) -> dict | None:
+    """Return the repo-task provisioning spec written by the worker, or None."""
+    path = out_dir / "case_spec.json"
+    if not path.exists():
+        return None
+    try:
+        spec = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    # Guard: only treat as a repo task when `repo` looks like a cloneable
+    # "owner/repo" (a bare name like a provenance subject_repo is not).
+    repo = spec.get("repo", "")
+    return spec if "/" in repo else None
+
+
+def provision_workspace(workspace: Path, spec: dict) -> None:
+    """Clone + set up a subject repo in the workspace before the agent runs.
+
+    Repo-task / SWE-bench flow (ADR-0009): clone @ base_commit, apply the
+    test_patch (so the failing test is present and the agent can self-check),
+    commit that provisioned state (so the agent's later `git diff HEAD` is only
+    its own changes), and editable-install the repo + test deps into the runner
+    interpreter. Fails the run loudly if the install fails.
+    """
+    import swebench_common as swe
+
+    if (workspace / ".git").exists():
+        print(f"  workspace/{workspace.name}/ already provisioned — skipping clone.")
+        return
+    if workspace.exists() and any(workspace.iterdir()):
+        sys.exit(f"❌ workspace/{workspace.name}/ is not empty; cannot provision repo.")
+    if workspace.exists():
+        workspace.rmdir()  # let git clone create it
+
+    repo = spec.get("repo", "")
+    repo_url = spec.get("repo_url") or swe.repo_url_from(repo)
+    base_commit = spec.get("base_commit", "")
+    print(f"  Provisioning {repo} @ {base_commit[:10]} …")
+    swe.clone_checkout(workspace, repo_url, base_commit)
+
+    if spec.get("apply_test_patch", True) and spec.get("test_patch"):
+        print("  Applying test_patch (adds the failing test) …")
+        swe.apply_patch(workspace, spec["test_patch"])
+
+    # Commit the provisioned state so finalize's `git diff HEAD` isolates the
+    # agent's edits from base_commit + test_patch.
+    _run_git(["git", "-C", str(workspace), "add", "-A"], cwd=REPO_ROOT)
+    _run_git(
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "-c",
+            "user.email=lab@harness.local",
+            "-c",
+            "user.name=harness-lab",
+            "commit",
+            "-q",
+            "-m",
+            "swebench: provisioned (base + test_patch)",
+        ],
+        cwd=REPO_ROOT,
+    )
+
+    python = spec.get("python", "3.11")
+    print(f"  Installing repo + test deps (python={python}) …")
+    installed = swe.install_repo(workspace, sys.executable, spec.get("install_pins"))
+    if installed.returncode != 0:
+        print(installed.stdout[-1500:])
+        print(installed.stderr[-1500:])
+        sys.exit(f"❌ repo install failed (rc={installed.returncode}).")
+    print("  ✓ Repo provisioned and installed.")
 
 
 def find_next_run(runs_path: Path, current_run_id: str) -> dict | None:
@@ -420,7 +786,7 @@ def detect_run_subcommand() -> bool:
 
 
 def build_opencode_cmd(
-    executor_model: str, agent: str | None, message: str
+    executor_model: str | None, agent: str | None, message: str
 ) -> list[str]:
     """Assemble the non-interactive `opencode run` command.
 
@@ -434,6 +800,60 @@ def build_opencode_cmd(
         cmd += ["--agent", agent]
     cmd.append(message)
     return cmd
+
+
+def _native_model(model: str | None) -> str | None:
+    """Return a native model id for codex/claude, or None to use the CLI default.
+
+    The web form's executor models are gateway-namespaced (``gateway/…``) and do
+    not map to native Codex/Claude model ids, so those are ignored (the CLI uses
+    its configured default). A bare id (no ``gateway/`` prefix) is treated as an
+    explicit native override.
+    """
+    if not model or model.startswith("gateway/"):
+        return None
+    return model
+
+
+def build_codex_cmd(executor_model: str | None, message: str) -> list[str]:
+    """Assemble a non-interactive OpenAI Codex CLI command (host, native auth).
+
+    --quiet prints only the final output; --full-auto auto-approves edits and
+    commands in the sandbox so a headless run does not block on approvals. The
+    prompt carries the ``workspace/<run_id>/`` path, so cwd stays REPO_ROOT like
+    opencode.
+    """
+    cmd = ["codex", "--quiet", "--full-auto"]
+    native = _native_model(executor_model)
+    if native:
+        cmd += ["-m", native]
+    cmd.append(message)
+    return cmd
+
+
+def build_claude_cmd(executor_model: str | None, message: str) -> list[str]:
+    """Assemble a non-interactive Claude Code CLI command (host, native auth).
+
+    -p is print/non-interactive; --dangerously-skip-permissions avoids blocking
+    on tool approvals in a headless run.
+    """
+    cmd = ["claude", "-p", "--dangerously-skip-permissions"]
+    native = _native_model(executor_model)
+    if native:
+        cmd += ["--model", native]
+    cmd.append(message)
+    return cmd
+
+
+def build_harness_cmd(
+    harness: str, executor_model: str | None, agent: str | None, message: str
+) -> list[str]:
+    """Dispatch to the per-harness command builder (opencode | codex | claude)."""
+    if harness == "codex":
+        return build_codex_cmd(executor_model, message)
+    if harness == "claude":
+        return build_claude_cmd(executor_model, message)
+    return build_opencode_cmd(executor_model, agent, message)
 
 
 def _print_manual_fallback(
@@ -456,15 +876,19 @@ def _print_manual_fallback(
 
 
 def run_opencode(
-    cmd: list[str], log_path: Path, also_append: Path | None = None
+    cmd: list[str],
+    log_path: Path,
+    also_append: Path | None = None,
+    label: str = "opencode",
 ) -> int:
-    """Run opencode, streaming output to terminal and capturing to log_path.
+    """Run the harness CLI, streaming output to terminal and capturing to log_path.
 
     If also_append is given, output is also appended to that file (combined log).
+    `label` names the harness in the log header (used by the step counter).
     """
     import datetime as _dt
 
-    header = f"# opencode run started {_dt.datetime.utcnow().isoformat()}Z\n"
+    header = f"# {label} run started {_dt.datetime.utcnow().isoformat()}Z\n"
     cmd_line = "# cmd: " + " ".join(cmd[:-1]) + " <prompt>\n\n"
 
     append_fh = None
@@ -518,8 +942,8 @@ def parse_log_usage(log_path: Path) -> dict | None:
     text = log_path.read_text(errors="replace")
     result: dict = {}
 
-    # Step count (count our own header markers)
-    steps = len(re.findall(r"^# opencode run started", text, re.MULTILINE))
+    # Step count (count our own header markers, any harness label)
+    steps = len(re.findall(r"^# \w+ run started", text, re.MULTILINE))
     if steps > 1:
         result["steps"] = steps
 
@@ -849,42 +1273,13 @@ def close_run(
     usage: dict | None = None,
 ) -> None:
     workspace = WORKSPACE_ROOT / args.run
-    diff_lines = 0
-
-    if not workspace.exists():
+    captured = workspace.exists()
+    diff_lines = finalize_workspace(out_dir, workspace, args.run)
+    if captured and score > 3 and diff_lines == 0:
         print(
-            f"  ⚠️  workspace/{args.run}/ not found — skipping artifact copy.\n"
-            f"     Move files manually if needed:\n"
-            f"     mkdir -p workspace/{args.run} && mv <files> workspace/{args.run}/"
+            f"  ⚠️  WARNING: score={score} but diff.patch is empty — "
+            f"workspace/{args.run}/ appears to have no implementation."
         )
-    else:
-        dest = out_dir / "workspace"
-        if dest.exists():
-            shutil.rmtree(dest)
-        shutil.copytree(workspace, dest)
-        file_count = sum(1 for _ in dest.rglob("*") if _.is_file())
-        print(
-            f"  Copied workspace → data/runs/{args.run}/workspace/ ({file_count} files)"
-        )
-
-        diff_path = out_dir / "diff.patch"
-        result = _run_git(
-            ["git", "diff", "--no-index", "/dev/null", str(dest)], cwd=REPO_ROOT
-        )
-        diff_path.write_text(result.stdout)
-        diff_lines = result.stdout.count("\n")
-        print(f"  diff.patch: {diff_lines} lines")
-
-        if score > 3 and diff_lines == 0:
-            print(
-                f"  ⚠️  WARNING: score={score} but diff.patch is empty — "
-                f"workspace/{args.run}/ appears to have no implementation."
-            )
-
-        shutil.rmtree(workspace)
-        if WORKSPACE_ROOT.exists() and not any(WORKSPACE_ROOT.iterdir()):
-            WORKSPACE_ROOT.rmdir()
-        print(f"  Removed workspace/{args.run}/")
 
     BENCH_CONTEXT.write_text(BENCH_CONTEXT_PLACEHOLDER)
     print("  BENCH_CONTEXT.md reset")
@@ -951,17 +1346,43 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     _load_env()
 
-    runs_path = RUNS_FILES.get(args.case)
-    if runs_path is None:
-        sys.exit(f"Unknown case '{args.case}'. Known cases: {list(RUNS_FILES.keys())}")
+    out_dir = DATA_DIR / args.run
+    case_spec = _load_case_spec(out_dir)
 
-    task = load_task_yaml(runs_path)
-    run = find_run(runs_path, args.run)
+    if case_spec is not None:
+        # Repo-task / SWE-bench lane (ADR-0009): everything the runner needs is
+        # in case_spec.json — no benchmarks/<case>/ task.yaml/prompts required.
+        runs_path = None
+        task = {
+            "subject_repo": case_spec.get("repo", ""),
+            "base_commit": case_spec.get("base_commit", ""),
+            "prompts": {},
+        }
+        run = {
+            "run_id": args.run,
+            "status": "pending",
+            "prompt_variant": case_spec.get("prompt_variant", "swe_default"),
+            "langfuse_session_id": f"bench-{args.run}",
+            "executor_model": args.executor_model or "",
+            "planner_model": args.planner_model or "",
+            "harness": args.harness,
+        }
+        prompt_short = run["prompt_variant"]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        prompt_source = out_dir / "_prompt_source.md"
+        prompt_source.write_text(case_spec.get("prompt", ""))
+    else:
+        runs_path = RUNS_FILES.get(args.case)
+        if runs_path is None:
+            sys.exit(
+                f"Unknown case '{args.case}'. Known cases: {list(RUNS_FILES.keys())}"
+            )
+        task = load_task_yaml(runs_path)
+        run = resolve_or_synthesize_run(runs_path, args.run, args)
+        if run.get("status") == "completed":
+            sys.exit(f"Run {args.run} is already completed. Use a new run_id.")
+        prompt_short, prompt_source = resolve_prompt_file(task, args.prompt, run)
 
-    if run.get("status") == "completed":
-        sys.exit(f"Run {args.run} is already completed. Use a new run_id.")
-
-    prompt_short, prompt_source = resolve_prompt_file(task, args.prompt, run)
     session_id = run.get("langfuse_session_id", f"bench-{args.run}")
 
     # Resolve models: CLI args override runs.yaml values
@@ -973,6 +1394,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     args.executor_model = executor_model
     args.planner_model = planner_model
+    # Web/CLI runs pass the harness on the command line; runs.yaml rarely carries
+    # it, so record the actual harness in metadata (used by the improvement cycle).
+    if not run.get("harness"):
+        run["harness"] = args.harness
 
     workspace = WORKSPACE_ROOT / args.run
 
@@ -1016,8 +1441,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    {out_dir.relative_to(REPO_ROOT)}/steps/step-{s}.log{extra}")
         print(f"    workspace/{args.run}/")
         print()
-        if detect_run_subcommand():
-            preview = build_opencode_cmd(executor_model, None, "<prompt>")
+        preview = build_harness_cmd(args.harness, executor_model, None, "<prompt>")
+        if args.harness != "opencode" or detect_run_subcommand():
             print("  Execution: " + " ".join(preview))
             if args.max_steps > 1:
                 print(
@@ -1041,11 +1466,36 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print("  [1/5] Preparing run...")
 
+    # Per-run skill ablation. Restore-at-start heals a previous crashed
+    # ablation (native views are generated artifacts, so this is idempotent);
+    # atexit covers every return/sys.exit path of this run. Runs without
+    # ablation flags skip the restore only if it fails (best-effort heal).
+    skills_ablation = bool(args.disable_skill or args.extra_skill)
+    try:
+        restore_full_skill_views()
+    except Exception as exc:
+        if skills_ablation:
+            sys.exit(f"❌ Could not sync skill views before ablation: {exc!r}")
+        print(f"  ⚠️  Skill view sync skipped: {exc!r}")
+    if skills_ablation:
+        effective_skills = build_effective_skills(args.disable_skill, args.extra_skill)
+        apply_skill_views(effective_skills)
+        import atexit
+
+        atexit.register(restore_full_skill_views)
+        print(
+            f"  Skills:      ablation active — disabled={sorted(set(args.disable_skill))} "
+            f"extra={sorted(set(args.extra_skill))}"
+        )
+
     out_dir = DATA_DIR / args.run
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    validate_workspace(workspace, args.run, args.resume)
+    validate_workspace(workspace, args.run, args.resume, fresh=args.fresh)
     workspace.mkdir(parents=True, exist_ok=True)
+
+    if case_spec is not None:
+        provision_workspace(workspace, case_spec)
 
     prompt_path = generate_prompt(
         args.run,
@@ -1058,7 +1508,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"  Prompt:      {prompt_path.relative_to(REPO_ROOT)}")
 
-    write_metadata(out_dir, args, task, run, prompt_short)
+    write_metadata(
+        out_dir,
+        args,
+        task,
+        run,
+        prompt_short,
+        prompt_source=prompt_source,
+        task_path=(
+            runs_path.parent / "task.yaml"
+            if runs_path is not None
+            else out_dir / "case_spec.json"
+        ),
+    )
     print(f"  Metadata:    {(out_dir / 'metadata.json').relative_to(REPO_ROOT)}")
 
     write_run_env(out_dir, args, session_id)
@@ -1069,7 +1531,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Report:      {(out_dir / 'report.md').relative_to(REPO_ROOT)}")
 
     write_bench_context(args.run)
-    set_status_running(runs_path, args.run)
+    if runs_path is not None:
+        set_status_running(runs_path, args.run)
 
     # Virtual key (optional)
     run_key: str | None = None
@@ -1104,29 +1567,47 @@ def main(argv: list[str] | None = None) -> int:
     print("  [2/5] Executing...")
 
     opencode_log = out_dir / "opencode.log"
-    has_run_cmd = detect_run_subcommand()
+    if args.harness == "opencode":
+        has_run_cmd = detect_run_subcommand()
+    else:
+        # codex/claude are host CLIs; availability = the binary is on PATH.
+        has_run_cmd = shutil.which(args.harness) is not None
+    # codex/claude can run against their CLI's default model, so a missing
+    # executor model is only fatal for opencode (gateway-routed).
+    needs_model = args.harness == "opencode"
     max_steps = max(1, args.max_steps)
     steps_dir = out_dir / "steps"
     completed_steps = 0
 
     if args.score_mode == "none":
         print("  score-mode=none: skipping execution.")
-    elif not executor_model:
+    elif needs_model and not executor_model:
         print(
             "  ⚠️  No executor model set — cannot run headless. Pass EXECUTOR_MODEL=..."
         )
         _print_manual_fallback(args, executor_model, prompt_path, clipped)
         if args.score_mode == "manual":
+            # A headless (web/manual) run with no executor model produced nothing.
+            # Fail loudly (non-zero) instead of the old silent success so the
+            # worker records it as failed with a clear reason (see ADR-0006).
+            print("  ❌ No executor model — nothing was built. Failing the run.")
             print("=" * 66)
-            return 0
+            return 1
     elif has_run_cmd:
         if max_steps > 1:
             steps_dir.mkdir(exist_ok=True)
 
+        last_swe_eval: dict | None = None
         for step_n in range(1, max_steps + 1):
             if max_steps > 1:
                 if step_n == 1:
                     step_prompt_path = prompt_path
+                elif case_spec is not None:
+                    # SWE-bench lane: keep the agent on the issue (the generic
+                    # continuation prompt is game-build framed and derails it).
+                    step_prompt_path = generate_swe_continuation_prompt(
+                        args.run, step_n, steps_dir, case_spec, last_swe_eval
+                    )
                 else:
                     step_prompt_path = generate_continuation_prompt(
                         args.run,
@@ -1143,26 +1624,46 @@ def main(argv: list[str] | None = None) -> int:
                 step_log = opencode_log
 
             prompt_text = step_prompt_path.read_text()
-            cmd = build_opencode_cmd(executor_model, None, prompt_text)
-            print(f"  Model:       {executor_model}")
+            cmd = build_harness_cmd(args.harness, executor_model, None, prompt_text)
+            print(f"  Harness:     {args.harness}")
+            print(f"  Model:       {executor_model or '(harness default)'}")
             print(f"  Log:         {step_log.relative_to(REPO_ROOT)}")
             print("-" * 66)
 
             # For multi-step, each step log is primary; combined goes to opencode.log
             also_append = opencode_log if max_steps > 1 else None
-            rc = run_opencode(cmd, step_log, also_append=also_append)
+            rc = run_opencode(
+                cmd, step_log, also_append=also_append, label=args.harness
+            )
             completed_steps += 1
 
             print("-" * 66)
             if rc != 0:
                 print(
-                    f"  ⚠️  opencode exited with code {rc} — see {step_log.relative_to(REPO_ROOT)}"
+                    f"  ⚠️  {args.harness} exited with code {rc} — see {step_log.relative_to(REPO_ROOT)}"
                 )
                 break
 
+            if case_spec is not None:
+                # SWE-bench lane: the stop criterion is objective — evaluate the
+                # F2P/P2P subset now and stop the loop the moment it resolves.
+                swe_eval = swe_step_evaluation(workspace, case_spec)
+                if swe_eval is not None:
+                    last_swe_eval = swe_eval
+                    print(
+                        f"  SWEBENCH: resolved={swe_eval['resolved']} "
+                        f"F2P={swe_eval['f2p_passed']}/{swe_eval['f2p_total']} "
+                        f"P2P={swe_eval['p2p_passed']}/{swe_eval['p2p_total']}"
+                    )
+                    if swe_eval["resolved"]:
+                        print(
+                            f"  ✅ SWE-bench resolved after step {step_n} — stopping."
+                        )
+                        break
+
             if max_steps > 1:
                 step_text = step_log.read_text()
-                if detect_stop_signal(step_text):
+                if case_spec is None and detect_stop_signal(step_text):
                     print(f"  Agent signaled completion at step {step_n}.")
                     break
                 if step_n < max_steps:
@@ -1172,13 +1673,22 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print("  opencode run finished.")
     else:
-        print("  ⚠️  `opencode run` not available in this opencode version.")
+        if args.harness == "opencode":
+            print("  ⚠️  `opencode run` not available in this opencode version.")
+        else:
+            print(
+                f"  ⚠️  `{args.harness}` CLI not found on PATH — host mode required "
+                "(run `make app-host`)."
+            )
         _print_manual_fallback(args, executor_model, prompt_path, clipped)
         if args.score_mode == "manual":
+            # Headless run requested but the harness CLI is unavailable, so nothing
+            # executed. Fail loudly (non-zero) instead of exiting 0 — a managed run
+            # must not look successful when it did no work (ADR-0006).
             print()
-            print("  Workspace and prompt are ready. Exiting.")
+            print(f"  ❌ `{args.harness}` unavailable — nothing was built. Failing.")
             print("=" * 66)
-            return 0
+            return 1
 
     # -----------------------------------------------------------------------
     # PHASE 3 — SCORE
@@ -1207,6 +1717,13 @@ def main(argv: list[str] | None = None) -> int:
         if remote_usage:
             usage.update(remote_usage)
         write_usage_json(out_dir, usage or None)
+        if args.fresh:
+            # Managed web run: the API owns scoring (POST /score), so Phase 5
+            # close_run never runs. Archive the workspace into the run's data dir
+            # and clean it up here so workspaces don't accumulate (ADR-0006).
+            print()
+            print("  [5/5] Archiving workspace (managed run)...")
+            finalize_workspace(out_dir, workspace, args.run)
         print("=" * 66)
         return 0
     else:  # interactive
@@ -1299,7 +1816,7 @@ def main(argv: list[str] | None = None) -> int:
     # -----------------------------------------------------------------------
     # PHASE 5 — CLOSE
     # -----------------------------------------------------------------------
-    if score_data:
+    if score_data and runs_path is not None:
         print()
         print("  [5/5] Closing run...")
         s, i, n = score_data
@@ -1333,7 +1850,7 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print("  Next:")
     print("    make bench-results")
-    next_run = find_next_run(runs_path, args.run)
+    next_run = find_next_run(runs_path, args.run) if runs_path is not None else None
     if next_run:
         nr_id = next_run["run_id"]
         nr_models = next_run.get("gateway_models", [])

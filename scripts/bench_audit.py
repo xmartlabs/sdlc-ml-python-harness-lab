@@ -29,10 +29,13 @@ import argparse
 import datetime as _dt
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -41,7 +44,12 @@ from create_run import (
     REPO_ROOT,
     RUNS_FILES,
     _load_env,
-    find_run,
+)
+
+from harness_lab_app.gateway_models import (
+    GATEWAY_USER_AGENT,
+    list_gateway_models,
+    normalize_model_name,
 )
 
 # Per-artifact clip budgets (characters). Logs can be large in multi-step runs;
@@ -51,12 +59,6 @@ DIFF_CLIP_CHARS = 40_000
 RULES_CLIP_CHARS = 20_000
 # LiteLLM model name (no opencode "gateway/" prefix — that's opencode-only).
 DEFAULT_AUDITOR_MODEL = "gpt-5.5"
-# Cloudflare in front of the gateway bans the default urllib user-agent
-# (HTTP 1010 browser_signature_banned). Override with a real browser UA.
-GATEWAY_USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
 
 SYSTEM_PROMPT = """\
 Sos un auditor de harness de agentes de código. Tu trabajo es leer los artefactos
@@ -73,8 +75,8 @@ Estructurá la salida en Markdown EXACTAMENTE con estas cuatro secciones (en est
 orden), más un cierre:
 
 ## Uso de skills/reglas
-Qué skills/reglas del corpus disponible (OPENCODE.md y el prompt) el agente
-realmente invocó o siguió, y cuáles ignoró o nunca tocó.
+Qué skills/reglas del corpus de governance del harness indicado (ver CONTEXTO DEL
+HARNESS) y del prompt el agente realmente invocó o siguió, y cuáles ignoró.
 
 ## Eficiencia / loops
 Ediciones repetidas al mismo archivo, pasos desperdiciados, thrashing, vueltas en
@@ -95,39 +97,184 @@ Escribí en español. Sé concreto y conciso; cada observación debe poder rastr
 a la evidencia.
 """
 
+# Second, structured pass: one verdict per harness item (skill/doc/hook/
+# subagent) so the UI can render a clean catalog with useful/redundant marks.
+FINDINGS_SYSTEM_PROMPT = """\
+Sos un auditor de harness de agentes de código. Recibís el catálogo de ítems del
+harness disponibles en una corrida (skills, documentos de governance, hooks,
+subagentes) y el diagnóstico de comportamiento ya escrito para esa corrida.
 
-def normalize_model_name(model: str) -> str:
-    """Strip the opencode-only "gateway/" prefix so LiteLLM gets its real name.
+Emití UN veredicto por ítem del catálogo. Respondé SOLO con un array JSON
+(sin texto antes ni después, sin markdown, sin code fences). Cada elemento:
 
-    opencode addresses models as "<provider>/<model>" (e.g. gateway/gpt-5.5), but
-    LiteLLM's /chat/completions expects the registered name without that provider
-    prefix (e.g. gpt-5.5). Other prefixes (openai/...) are left untouched.
-    """
-    if model.startswith("gateway/"):
-        return model[len("gateway/") :]
-    return model
+{"name": "<nombre exacto del ítem del catálogo>",
+ "kind": "skill" | "doc" | "hook" | "subagent",
+ "used_evidence": "<evidencia concreta de uso en esta corrida, o cadena vacía>",
+ "verdict": "useful" | "redundant" | "improve" | "unknown",
+ "note": "<una frase en español justificando el veredicto>"}
+
+Criterio: "useful" = hay evidencia de que el ítem aportó al resultado;
+"redundant" = estuvo disponible pero no se usó y nada sugiere que faltara;
+"improve" = se usó o se necesitó pero funcionó mal, confundió o quedó a medias;
+"unknown" = no hay evidencia suficiente para juzgar (preferí unknown antes que
+inventar). No inventes ítems fuera del catálogo dado.
+"""
+
+# Per-harness governance source + log characteristics, injected into the auditor
+# system prompt so it judges the run against the RIGHT harness (not always
+# opencode) and does not penalize thin logs from summary-only CLIs.
+_HARNESS_PROFILE: dict[str, str] = {
+    "opencode": (
+        "opencode (opencode CLI). Corpus de governance: OPENCODE.md + el bloque de "
+        "skills generado, .opencode/skills/*/SKILL.md, .github/{architecture,"
+        "standards,domain-boundaries}.md y memory/*. Los logs son TRAZAS POR-TOOL "
+        "(permission=read|edit|bash, agent=<modo>), así que la evidencia de "
+        "tools/archivos/ediciones ES observable — su ausencia es señal real."
+    ),
+    "claude": (
+        "claude (Claude Code CLI, auth nativa). Corpus de governance: CLAUDE.md + "
+        ".claude/skills/*/SKILL.md + .github/* + memory/* (NO OPENCODE.md — eso es de "
+        "opencode). IMPORTANTE: Claude Code emite un RESUMEN FINAL en lenguaje "
+        "natural por paso, NO trazas por-tool ni diff, y usage.json trae "
+        "tool_calls/turns/files_modified/diff_lines en null por diseño. Tratá la "
+        "falta de trazas de tools, diffs y listas de archivos como una LIMITACIÓN "
+        "DE LOGGING DEL HARNESS, nunca como evidencia de que el agente no trabajó; "
+        "juzgá el comportamiento por los resúmenes."
+    ),
+    "codex": (
+        "codex (OpenAI Codex CLI, auth nativa). Corpus de governance: AGENTS.md + sus "
+        "skills + .github/* (NO OPENCODE.md). Igual que claude, codex emite salida "
+        "tipo resumen, no trazas por-tool; la falta de tool_calls/diff en usage.json "
+        "es una limitación de logging del harness, no una falla del agente."
+    ),
+}
 
 
-def list_gateway_models() -> list[str]:
-    """Best-effort fetch of available model names from the gateway."""
-    base = os.environ.get("GATEWAY_BASE_URL", "").rstrip("/")
-    token = os.environ.get("GATEWAY_TOKEN", "")
-    if not base or not token:
-        return []
-    req = urllib.request.Request(
-        f"{base}/models",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "User-Agent": GATEWAY_USER_AGENT,
-        },
-    )
+def harness_from_metadata(metadata_text: str | None) -> str:
+    """The harness id recorded in metadata.json (empty if absent)."""
+    if not metadata_text:
+        return ""
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
-            data = json.loads(resp.read())
-        return sorted(m["id"] for m in data.get("data", []))
-    except Exception:
+        return str(json.loads(metadata_text).get("harness", "") or "")
+    except json.JSONDecodeError:
+        return ""
+
+
+def harness_from_log(log_text: str | None) -> str:
+    """Fallback: read the harness from the run-log header (`# <harness> run started`).
+
+    Covers runs whose metadata predates harness recording.
+    """
+    if not log_text:
+        return ""
+    match = re.search(r"^# (\w+) run started", log_text, re.MULTILINE)
+    return match.group(1) if match else ""
+
+
+def detect_harness(metadata_text: str | None, log_text: str | None) -> str:
+    """Harness id from metadata, falling back to the run-log header."""
+    return harness_from_metadata(metadata_text) or harness_from_log(log_text)
+
+
+def harness_preamble(harness: str) -> str:
+    """Harness-aware preamble prepended to the auditor system prompts."""
+    profile = _HARNESS_PROFILE.get(harness) or (
+        f"'{harness or 'desconocido'}'. Juzgalo contra el corpus de governance "
+        "visible en los artefactos; si el log es sólo-resumen, no trates la falta "
+        "de trazas de tools/diffs como prueba de que no hubo trabajo."
+    )
+    return (
+        "CONTEXTO DEL HARNESS (crítico): la corrida fue conducida por el harness "
+        f"{profile}\n\nEvaluá SOLO contra el corpus de governance de ESTE harness. "
+        "Ítems del catálogo que pertenecen a otro harness (p. ej. OPENCODE.md en una "
+        "corrida claude/codex) NO son aplicables: marcalos 'unknown' o 'redundant', "
+        "nunca 'improve'.\n\n"
+    )
+
+
+VALID_FINDING_KINDS = {"skill", "doc", "hook", "subagent"}
+VALID_FINDING_VERDICTS = {"useful", "redundant", "improve", "unknown"}
+
+
+def harness_catalog_from_metadata(metadata_text: str | None) -> list[dict]:
+    """Build the item catalog (skills/docs/hooks/subagents) from metadata.json."""
+    if not metadata_text:
         return []
+    try:
+        meta = json.loads(metadata_text)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(meta, dict):
+        return []
+    items: list[dict] = []
+    for name in meta.get("skills_bundle") or []:
+        items.append({"name": str(name), "kind": "skill"})
+    for name in meta.get("subagents") or []:
+        items.append({"name": str(name), "kind": "subagent"})
+    fingerprint = meta.get("harness_fingerprint") or {}
+    for name in fingerprint.get("governance_docs") or {}:
+        items.append({"name": str(name), "kind": "doc"})
+    for name in fingerprint.get("hooks") or {}:
+        items.append({"name": str(name), "kind": "hook"})
+    return items
+
+
+def build_findings_user_message(
+    run_id: str, catalog: list[dict], audit_body: str
+) -> str:
+    catalog_lines = "\n".join(f"- {item['name']} ({item['kind']})" for item in catalog)
+    return (
+        f"# Corrida: {run_id}\n\n"
+        f"## Catálogo de ítems del harness (emití un veredicto por cada uno)\n"
+        f"{catalog_lines}\n\n"
+        f"## Diagnóstico de comportamiento de la corrida\n{audit_body.strip()}"
+    )
+
+
+def parse_findings(text: str) -> dict:
+    """Tolerant parse of the findings response into {"items": [...]}.
+
+    Never raises: strips code fences, accepts a bare list or an {"items": []}
+    wrapper, drops invalid entries, coerces unknown verdicts/kinds. On total
+    failure returns {"items": [], "parse_error": <reason>} so the audit itself
+    is never blocked by a malformed findings response.
+    """
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        # Drop the opening fence line (``` or ```json) and a trailing fence.
+        lines = cleaned.splitlines()
+        lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    # Fall back to the outermost array if the model wrapped it in prose.
+    if not cleaned.startswith(("[", "{")):
+        start, end = cleaned.find("["), cleaned.rfind("]")
+        if start != -1 and end > start:
+            cleaned = cleaned[start : end + 1]
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        return {"items": [], "parse_error": f"invalid JSON: {exc}"}
+    raw_items = parsed.get("items") if isinstance(parsed, dict) else parsed
+    if not isinstance(raw_items, list):
+        return {"items": [], "parse_error": "response is not a JSON array"}
+    items: list[dict] = []
+    for entry in raw_items:
+        if not isinstance(entry, dict) or not str(entry.get("name", "")).strip():
+            continue
+        kind = str(entry.get("kind", "")).strip().lower()
+        verdict = str(entry.get("verdict", "")).strip().lower()
+        items.append(
+            {
+                "name": str(entry["name"]).strip(),
+                "kind": kind if kind in VALID_FINDING_KINDS else "skill",
+                "used_evidence": str(entry.get("used_evidence", "")).strip(),
+                "verdict": verdict if verdict in VALID_FINDING_VERDICTS else "unknown",
+                "note": str(entry.get("note", "")).strip(),
+            }
+        )
+    return {"items": items}
 
 
 def resolve_runs_path(run_id: str) -> Path:
@@ -335,6 +482,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def resolve_or_synthesize_run(runs_path: Path, run_id: str, out_dir: Path) -> dict:
+    """Return the run dict from runs.yaml, or synthesize one from metadata.json.
+
+    Web-lane runs (ADR-0006) are not registered in runs.yaml. The auditor only
+    needs a few optional context fields (executor model, prompt variant, score);
+    the full metadata.json is fed into the prompt anyway, so a minimal dict is
+    enough. Mirrors bench_run.resolve_or_synthesize_run.
+    """
+    if runs_path.exists():
+        data = yaml.safe_load(runs_path.read_text()) or {}
+        for run in data.get("runs", []):
+            if run.get("run_id") == run_id:
+                return run
+    synthesized: dict = {"run_id": run_id}
+    meta_path = out_dir / "metadata.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            meta = {}
+        if isinstance(meta, dict):
+            condition = meta.get("model_condition") or {}
+            synthesized["executor_model"] = condition.get("executor_model") or meta.get(
+                "executor_model"
+            )
+            synthesized["prompt_variant"] = meta.get("prompt_variant")
+    return synthesized
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     _load_env()
@@ -344,9 +520,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     runs_path = resolve_runs_path(args.run)
-    run = find_run(runs_path, args.run)
-
     out_dir = DATA_DIR / args.run
+    run = resolve_or_synthesize_run(runs_path, args.run, out_dir)
     if not out_dir.is_dir():
         sys.exit(
             f"❌ No artifacts found at {out_dir.relative_to(REPO_ROOT)}/\n"
@@ -376,12 +551,38 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Would write:   {(out_dir / 'audit.md').relative_to(REPO_ROOT)}")
         return 0
 
-    print(f"🔎 Auditing {args.run} with {auditor_model} ...")
-    body = call_gateway(auditor_model, SYSTEM_PROMPT, user_msg)
+    harness = detect_harness(inp["metadata"], inp["log_text"])
+    preamble = harness_preamble(harness)
+    print(f"🔎 Auditing {args.run} ({harness or 'harness?'}) with {auditor_model} ...")
+    body = call_gateway(auditor_model, preamble + SYSTEM_PROMPT, user_msg)
     audit_md = render_audit(args.run, inp, auditor_model, body)
     audit_path = out_dir / "audit.md"
     audit_path.write_text(audit_md)
     print(f"✅ Wrote {audit_path.relative_to(REPO_ROOT)}")
+
+    # Second, structured pass (per-item verdicts). Best-effort by design: the
+    # audit is already written, so findings trouble must never fail the run.
+    catalog = harness_catalog_from_metadata(inp["metadata"])
+    findings: dict = {"items": []}
+    if catalog:
+        try:
+            findings_text = call_gateway(
+                auditor_model,
+                preamble + FINDINGS_SYSTEM_PROMPT,
+                build_findings_user_message(args.run, catalog, body),
+            )
+            findings = parse_findings(findings_text)
+        except SystemExit as exc:
+            # call_gateway sys.exit()s on HTTP trouble; downgrade to a note.
+            findings = {"items": [], "parse_error": f"gateway error: {exc}"}
+    else:
+        findings = {"items": [], "parse_error": "no harness catalog in metadata.json"}
+    findings_path = out_dir / "audit_findings.json"
+    findings_path.write_text(json.dumps(findings, ensure_ascii=False, indent=2))
+    print(
+        f"✅ Wrote {findings_path.relative_to(REPO_ROOT)} "
+        f"({len(findings['items'])} item verdicts)"
+    )
     return 0
 
 

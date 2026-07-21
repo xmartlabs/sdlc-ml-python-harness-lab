@@ -270,6 +270,27 @@ bench-audit:
 		$(if $(AUDITOR_MODEL),--auditor-model $(AUDITOR_MODEL),) \
 		$(if $(DRY_RUN),--dry-run,)
 
+# Continuous-improvement cycle: synthesize GitHub improvement issues from a run's
+# audit. Default is dry-run (writes an editable proposals file); CREATE=1 files
+# them via gh. Requires an audit for the run + gh authenticated.
+# Usage: make improve RUN=tetris-v1-K-004 [CREATE=1] [IMPROVE_MODEL=gateway/gpt-5.5]
+improve:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-K-004"; exit 1; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/lab_improve.py \
+		--run $(RUN) \
+		$(if $(IMPROVE_MODEL),--model $(IMPROVE_MODEL),) \
+		$(if $(CREATE),--create,)
+
+# Reconcile opencode.json's gateway models from the live LiteLLM gateway, so a
+# model added to the gateway becomes selectable and routable without editing
+# opencode.json by hand. Preserves labels/order; appends new, drops removed.
+# Usage: make sync-gateway-models [DRY_RUN=1]
+sync-gateway-models:
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/sync_gateway_models.py \
+		$(if $(DRY_RUN),--dry-run,)
+
 # Prepare a human-driven Antigravity run: register, workspace, prompt, capture
 # templates. Does NOT touch the opencode flow. Open Antigravity by hand, then close.
 # Usage: make bench-antigravity RUN=tetris-v1-N-001 [PROMPT=sdlc] [BENCHMARK=tetris-v1]
@@ -354,6 +375,128 @@ build-fresh:
 	@echo "🔨 Building Docker image without cache..."
 	@docker build --no-cache --platform=linux/amd64 -t ${IMG_NAME}:${IMAGE_TAG} -f Dockerfile.api .
 	@echo "✅ Docker image built successfully!"
+
+# Local web app stack: builds the per-run runner image first, then starts
+# api + celery worker + redis + frontend.
+app-up:
+	@echo "🚀 Starting local web app stack..."
+	@docker compose build runner sandbox
+	@docker compose up -d --build api worker redis frontend
+
+# Host mode for the codex/claude harnesses: they drive their host CLIs (native
+# auth), so the worker (and API, for preflight) must run on the HOST with the
+# subprocess backend, not in the runner container. opencode/SWE-bench keep using
+# `make app-up`. See docs/harness-adapters.md.
+#
+# One command: `make app-host` (worker + API + frontend + redis together).
+# Or run each piece in its own terminal:
+#   1. make app-worker-host      # Celery worker on the host (+ a local redis)
+#   2. make app-api-host         # web API on the host, subprocess backend
+#   3. cd frontend && VITE_API_TARGET=http://localhost:8008 npm run dev
+_HOST_ENV = HARNESS_LAB_REPO_ROOT=$(PWD) \
+	HARNESS_LAB_DATABASE_URL=sqlite:///$(PWD)/data/app/harness_lab.db \
+	HARNESS_LAB_REDIS_URL=redis://localhost:6379/0 \
+	HARNESS_LAB_EXECUTION_BACKEND=subprocess
+
+app-worker-host:
+	@if [ ! -d .venv ]; then make install; fi
+	@docker ps --format '{{.Names}}' | grep -q '^harness-lab-redis-host$$' || \
+		docker run -d --rm --name harness-lab-redis-host -p 6379:6379 redis:7-alpine >/dev/null
+	@echo "🧑‍💻 Celery worker on host (subprocess backend — codex/claude ready)…"
+	@. $(VENV_DIR)/bin/activate && $(_HOST_ENV) \
+		celery -A harness_lab_app.celery_app worker -Q runs --loglevel=info --concurrency=1
+
+app-api-host:
+	@if [ ! -d .venv ]; then make install; fi
+	@echo "🧑‍💻 Web API on host (subprocess backend) at :8008…"
+	@. $(VENV_DIR)/bin/activate && $(_HOST_ENV) \
+		uvicorn harness_lab_app.api:app --host 0.0.0.0 --port 8008 --reload
+
+# One command for host mode: redis + worker + API + frontend together, so the
+# codex/claude harnesses run against your host CLIs. Ctrl-C stops everything.
+app-host:
+	@if [ ! -d .venv ]; then make install; fi
+	@[ -d frontend/node_modules ] || (cd frontend && npm install)
+	@docker ps --format '{{.Names}}' | grep -q '^harness-lab-redis-host$$' || \
+		docker run -d --rm --name harness-lab-redis-host -p 6379:6379 redis:7-alpine >/dev/null
+	@echo "🧑‍💻 Host mode (codex/claude ready): worker + API + frontend. Ctrl-C stops all."
+	@. $(VENV_DIR)/bin/activate; \
+		$(_HOST_ENV) celery -A harness_lab_app.celery_app worker -Q runs --loglevel=info --concurrency=1 & \
+		worker_pid=$$!; \
+		$(_HOST_ENV) uvicorn harness_lab_app.api:app --host 0.0.0.0 --port 8008 & \
+		api_pid=$$!; \
+		trap "kill $$worker_pid $$api_pid 2>/dev/null" EXIT INT TERM; \
+		cd frontend && VITE_API_TARGET=http://localhost:8008 npm run dev
+
+# Build only the per-run validation sandbox image (web terminal / noVNC desktop).
+sandbox-build:
+	@echo "🧰 Building sandbox image (ttyd + Xvfb + noVNC)..."
+	@docker compose build sandbox
+
+# Smoke-test the runner image directly against the host gateway (no Celery):
+# proves opencode-in-container can reach LiteLLM/LM Studio on the host.
+# Usage: make app-runner-smoke RUN=tetris-v1-K-001 [PROMPT=sdlc] [MAX_STEPS=10] \
+#          [EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build] [DRY_RUN=1]
+app-runner-smoke:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-K-001"; exit 1; }
+	@[ -f .env ] || echo "⚠️  no .env found — gateway env vars will be empty inside the container."
+	@docker compose build runner
+	@tmp_env=$$(mktemp); \
+	  [ -f .env ] && sed -e 's/localhost/host.docker.internal/g' -e 's/127\.0\.0\.1/host.docker.internal/g' .env > $$tmp_env; \
+	  docker run --rm -v "$$PWD":/app -w /app \
+	    $$( [ -s $$tmp_env ] && echo --env-file $$tmp_env ) \
+	    -e PYTHONUNBUFFERED=1 \
+	    --add-host host.docker.internal:host-gateway \
+	    harness-lab-runner:latest \
+	    /opt/venv/bin/python scripts/bench_run.py \
+	      --case $(if $(CASE),$(CASE),tetris-v1) \
+	      --run $(RUN) \
+	      $(if $(PROMPT),--prompt $(PROMPT),) \
+	      $(if $(EXECUTOR_MODEL),--executor-model $(EXECUTOR_MODEL),) \
+	      $(if $(MAX_STEPS),--max-steps $(MAX_STEPS),) \
+	      --score-mode manual \
+	      $(if $(DRY_RUN),--dry-run,); \
+	  status=$$?; rm -f $$tmp_env; exit $$status
+
+app-test:
+	@echo "🧪 Running frontend type/build validation..."
+	@cd frontend && npm ci --no-audit --no-fund && npm run build
+
+app-smoke-test:
+	@echo "🧪 Running Docker smoke test..."
+	@chmod +x scripts/smoke_test_docker.sh
+	@./scripts/smoke_test_docker.sh
+
+# Import a hand-authored benchmark case from its task.yaml (idempotent).
+# Usage: make case-import TASK=benchmarks/cli-textstats/task.yaml
+case-import:
+	@[ -n "$(TASK)" ] || { echo "❌ TASK is required. Example: TASK=benchmarks/cli-textstats/task.yaml"; exit 1; }
+	@if [ ! -d .venv ]; then make install; fi
+	@uv run python scripts/import_case.py --task $(TASK)
+
+# Import a SWE-bench Lite/Verified instance as a Case (fetches from HuggingFace).
+# Usage: make swebench-import INSTANCE=pallets__flask-4992
+swebench-import:
+	@[ -n "$(INSTANCE)" ] || { echo "❌ INSTANCE is required. Example: INSTANCE=pallets__flask-4992"; exit 1; }
+	@if [ ! -d .venv ]; then make install; fi
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/import_swebench.py --instance $(INSTANCE)
+
+# Prove the SWE-bench provision+test harness with the golden patch (no tokens).
+# Usage: make swebench-selftest INSTANCE=pallets__flask-4992
+swebench-selftest:
+	@[ -n "$(INSTANCE)" ] || { echo "❌ INSTANCE is required. Example: INSTANCE=pallets__flask-4992"; exit 1; }
+	@if [ ! -d .venv ]; then make install; fi
+	uv run python scripts/swebench_common.py --selftest $(INSTANCE)
+
+# Reset the application SQLite database and reseed the Tetris pilot case.
+# Pass PURGE=1 to also remove on-disk run state (data/runs/*, workspace/*) so a
+# re-created run id cannot collide with a stale workspace. PURGE is destructive.
+app-reset-db:
+	@echo "🧹 Resetting application database..."
+	@if [ ! -d .venv ]; then make install; fi
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/reset_db.py $(if $(PURGE),--purge-disk,)
 
 # Stop Docker container
 stop-docker:
@@ -593,6 +736,10 @@ help:
 	@echo "  make run-api             Start FastAPI server"
 	@echo "  make run-question        Test with a predefined question"
 	@echo "  make run-interactive     Start interactive CLI mode"
+	@echo "  make app-up              Start the local web app (api + celery worker + redis + frontend)"
+	@echo "  make app-smoke-test      Verify Docker stack health and run lifecycle"
+	@echo "  make app-runner-smoke    Run one benchmark inside the runner container (RUN=...)"
+	@echo "  make app-test            Build the frontend app"
 	@echo ""
 	@echo "OpenCode (self-hosted / cloud, via .env):"
 	@echo "  make opencode            Launch opencode TUI with .env loaded"
@@ -638,4 +785,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills
+.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models case-import app-worker-host app-api-host app-host improve

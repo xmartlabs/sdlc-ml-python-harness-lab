@@ -14,6 +14,7 @@ is documented in ``.github/portability.md`` and intentionally NOT hardcoded here
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from ml_python_base.skills_sync.models import (
@@ -37,11 +38,11 @@ _CLAUDE_TOOLS = {
     "web": "WebFetch",
 }
 
-# Tier -> Claude model alias. Aliases (not pinned ids) so each agent always uses
-# "whatever opus/sonnet/haiku is current". This makes planning/review run on the
-# flagship model while execution runs on Sonnet to save tokens. The same tier
-# vocabulary maps to other runtimes in `.github/portability.md`.
-_CLAUDE_TIER_MODEL = {
+# Tier -> Claude Code model alias. Use native aliases by default so Claude Code
+# applies the same model entitlement and gateway-resolution behavior as direct
+# usage. Concrete gateway aliases can still be selected explicitly during
+# projection with ANTHROPIC_MODEL_PLANNER / EXECUTOR / FAST.
+_CLAUDE_TIER_DEFAULT_MODEL = {
     "planner": "opus",
     "executor": "sonnet",
     "fast": "haiku",
@@ -147,13 +148,21 @@ def _render_claude(agent: Agent) -> str:
         f"name: {agent.name}",
         f"description: {agent.description}",
     ]
-    model = _CLAUDE_TIER_MODEL.get(agent.tier)
+    model = _claude_model_for_tier(agent.tier)
     if model:
-        front.append(f"model: {model}")
+        # Wrap model in quotes to handle version numbers (dots) and hyphens,
+        # ensuring the IDE and YAML parsers treat it as a literal string.
+        front.append(f'model: "{model}"')
     if tools:
         front.append(f"tools: {', '.join(tools)}")
     front.append("---")
     return "\n".join(front) + "\n\n" + _body_with_footer(agent) + "\n"
+
+
+def _claude_model_for_tier(tier: str) -> str | None:
+    env_name = f"ANTHROPIC_MODEL_{tier.upper()}"
+    override = os.getenv(env_name, "").strip()
+    return override or _CLAUDE_TIER_DEFAULT_MODEL.get(tier)
 
 
 def _render_opencode(agent: Agent) -> str:

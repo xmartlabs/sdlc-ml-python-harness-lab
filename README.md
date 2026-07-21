@@ -2,6 +2,11 @@
 
 A modern Python base project template with best practices for machine learning and data science development.
 
+> **Agentic Harness Lab** — this repo also hosts a local web app for benchmarking
+> agentic coding harnesses and models. Start it with `make app-up`
+> (`http://localhost:5173`). New here? Read the
+> **[Web UI guide](docs/guide-web-ui.md)**.
+
 ## 🚀 Features
 
 - **Modern Python 3.11** setup with `uv` for ultra-fast dependency management

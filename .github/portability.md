@@ -1,8 +1,9 @@
 # Runtime Portability and Model Tiers
 
 > Status: **Both runtimes are LIVE.** Claude Code emits a `model:` alias into each
-> `.claude/agents/<name>.md` by tier (planning/review on the flagship, execution on
-> Sonnet to save tokens). **OpenCode is operational too**: `opencode.json` ships
+> `.claude/agents/<name>.md` by tier. Defaults use Claude Code's native aliases
+> so direct Claude Code and gateway-routed Claude Code resolve models the same
+> way. **OpenCode is operational too**: `opencode.json` ships
 > env-driven providers for Ollama / LM Studio (self-hosted) plus built-in OpenAI and
 > OpenCode Zen, configured entirely through `.env` — no IPs or keys are committed.
 
@@ -19,12 +20,14 @@ Code and to a self-hosted `qwen`/`llama` on OpenCode.
 | `executor` | implementer, tester                      | medium      | `sonnet`                 | `qwen2.5-coder:14b`             |
 | `fast`     | documenter, quick edits                  | small       | `haiku`                  | `llama3.1:8b`                   |
 
-The Claude column uses **aliases** (`opus`/`sonnet`/`haiku`), not pinned ids, so each
-agent always resolves to whatever that tier's current model is — "el que esté
-disponible". The mapping lives in `src/ml_python_base/skills_sync/agents.py`
-(`_CLAUDE_TIER_MODEL`). The exact local models are placeholders — pick what your
-hardware runs. Keep the **tier names** stable; only the right-hand mapping changes
-per runtime.
+The Claude column uses native aliases (`opus`/`sonnet`/`haiku`), not local
+LiteLLM aliases. When routing through the AI Gateway, pin those aliases in
+`.claude/settings.local.json` with `ANTHROPIC_DEFAULT_OPUS_MODEL`,
+`ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, and
+`ANTHROPIC_DEFAULT_FABLE_MODEL`. The mapping lives in
+`src/ml_python_base/skills_sync/agents.py` (`_CLAUDE_TIER_DEFAULT_MODEL`). The
+exact local models are placeholders — pick what your hardware runs. Keep the
+**tier names** stable; only the right-hand mapping changes per runtime.
 
 ## OpenCode config (operational, env-driven)
 

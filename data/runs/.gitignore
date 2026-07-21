@@ -1,1 +1,6 @@
-.gateway_key
+# Run artifacts are operational state: they live in the database and on disk at
+# runtime, never in git. Ignore everything in this directory except this file
+# and the .gitkeep placeholder that keeps the empty dir present on clone.
+*
+!.gitignore
+!.gitkeep

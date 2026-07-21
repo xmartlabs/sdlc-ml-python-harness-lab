@@ -22,6 +22,13 @@ validation_note: >
   operator workflow. Do not automate until level >= 2 is reliably reachable
   across cells.
 
+# Objective validation: a headless smoke run establishes the floor (rubric
+# level_2 "runs without crashing"). The generated main.py honors BENCH_SMOKE=1
+# to start and exit without opening a real window. {workspace} is substituted
+# with workspace/<run_id> at validation time.
+validation_commands:
+  - "BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy timeout 45 python {workspace}/main.py"
+
 constraints:
   - Single Python file: main.py
   - pygame only, no external assets (sprites, sounds)

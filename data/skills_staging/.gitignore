@@ -1,0 +1,5 @@
+# Staged (experimental) skills are operational state: the DB owns them and this
+# directory is their runner-visible materialization. They enter git only when
+# promoted into .github/skills-external/ and committed by a human.
+*
+!.gitignore
