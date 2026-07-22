@@ -516,6 +516,14 @@ def generate_swe_continuation_prompt(
         "3. After your edit, run the target test(s) and the surrounding test "
         "file to check for regressions.\n"
         "4. Stop after the target test(s) pass.\n"
+        + (
+            "5. This sandbox does NOT have the project's dependencies — do NOT "
+            "install packages, build the environment, or hunt for interpreters. "
+            "If the tests cannot run here, verify by reading them; the official "
+            "containerized validation runs after you finish.\n"
+            if spec.get("case_type") == "swe_pro"
+            else ""
+        )
     )
     path = steps_dir / f"step-{step_n}-prompt.md"
     path.write_text(text)

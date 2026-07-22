@@ -346,8 +346,13 @@ class CaseService:
             f"available, run the target tests against your edits with:\n\n"
             f'    docker run --rm -v "$(pwd)/<workspace dir>":/app {image} '
             f"bash -lc 'cd /app && {test_hint}'\n\n"
-            f"If `docker` is not available, work from the code and the failing "
-            f"tests' source — objective validation runs after your changes.\n\n"
+            f"If `docker` is NOT available: this sandbox does **not** have the "
+            f"project's dependencies and cannot run its test suite. Do NOT "
+            f"spend turns installing packages, building the environment, or "
+            f"searching for interpreters — that effort is wasted. Read the "
+            f"failing tests' source and reason about correctness instead; the "
+            f"official containerized validation runs automatically after you "
+            f"finish.\n\n"
             "Work incrementally: plan → locate the relevant source → implement "
             "a minimal fix → verify. Edit the **project source**, not the test "
             "files."
@@ -399,15 +404,21 @@ class CaseService:
             select(Case).where(Case.case_id == instance_id)
         ).first()
         if existing is not None:
+            # Re-import = refresh: prompts are generated deterministically from
+            # the spec, so rebuild them (picks up prompt-template improvements);
+            # display fields refresh only for pre-cleanup imports.
+            existing.prompt_variants = {
+                "swe_default": self._build_swebench_pro_prompt(spec),
+                "swe_harness": self._build_swebench_pro_harness_prompt(spec),
+            }
             if existing.name == existing.case_id:
-                # Imported before display cleanup existed — refresh in place.
                 name, description = self._swebench_pro_display(spec, polish)
                 existing.name = name
                 existing.description = description
-                existing.updated_at = utc_now()
-                self.session.add(existing)
-                self.session.commit()
-                self.session.refresh(existing)
+            existing.updated_at = utc_now()
+            self.session.add(existing)
+            self.session.commit()
+            self.session.refresh(existing)
             return existing
         name, description = self._swebench_pro_display(spec, polish)
         case = Case(

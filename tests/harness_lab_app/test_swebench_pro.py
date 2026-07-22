@@ -237,6 +237,20 @@ def test_import_swebench_pro_instance_is_idempotent():
         assert first.id == again.id
 
 
+def test_reimport_refreshes_prompt_variants():
+    """Re-import rebuilds the prompts from the current templates, so prompt
+    improvements (e.g. the sandbox env contract) reach existing cases."""
+    with _session() as session:
+        service = CaseService(session)
+        case = service.import_swebench_pro_instance(_pro_spec())
+        case.prompt_variants = {"swe_default": "OLD", "swe_harness": "OLD"}
+        session.add(case)
+        session.commit()
+        refreshed = service.import_swebench_pro_instance(_pro_spec())
+        assert "sandbox does **not** have" in refreshed.prompt_variants["swe_default"]
+        assert refreshed.prompt_variants["swe_harness"].startswith("# Engineering")
+
+
 def test_import_swebench_pro_endpoint_creates_case(monkeypatch):
     from harness_lab_app import api as api_module
     from harness_lab_app.api import create_app
