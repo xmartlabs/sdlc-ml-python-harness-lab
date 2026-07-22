@@ -94,3 +94,6 @@ notebooks/data/experiments/*
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints
 .pylintrc
+
+# Harness lifecycle candidate worktrees (isolated; never committed on main)
+.worktrees/

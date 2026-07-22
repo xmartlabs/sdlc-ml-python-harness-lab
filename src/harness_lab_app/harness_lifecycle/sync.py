@@ -100,10 +100,22 @@ def classify_preview(
 
 
 def changed_paths_between(
-    root: Path, base: str, ref: str, runner: Callable = run_git
+    root: Path,
+    base: str,
+    ref: str,
+    paths: list[str] | None = None,
+    runner: Callable = run_git,
 ) -> list[tuple[str, str]]:
-    """Read-only ``git diff --name-status base..ref`` as (status, path) tuples."""
-    out = runner(["diff", "--name-status", f"{base}..{ref}"], root, check=False).stdout
+    """Read-only ``git diff --name-status base..ref`` as (status, path) tuples.
+
+    When ``paths`` is given the diff is limited to them — a governance sync only
+    ever changes the governance allowlist, so callers scope the diff to it rather
+    than comparing whole (often unrelated) trees.
+    """
+    cmd = ["diff", "--name-status", f"{base}..{ref}"]
+    if paths:
+        cmd += ["--", *paths]
+    out = runner(cmd, root, check=False).stdout
     entries: list[tuple[str, str]] = []
     for line in out.splitlines():
         if not line.strip():
@@ -111,3 +123,81 @@ def changed_paths_between(
         parts = line.split("\t")
         entries.append((parts[0][0], parts[-1]))
     return entries
+
+
+# --------------------------------------------------------------------------- #
+# Candidate worktree preparation (mutating, but isolated from main)
+# --------------------------------------------------------------------------- #
+
+WORKTREES_DIR = ".worktrees"
+
+
+def candidate_branch(ref: str) -> str:
+    return f"harness-candidate/{ref}"
+
+
+def candidate_worktree_path(root: Path, ref: str) -> Path:
+    return root / WORKTREES_DIR / f"harness-candidate-{ref}"
+
+
+def main_tree_clean(root: Path, runner: Callable = run_git) -> bool:
+    return not runner(["status", "--porcelain"], root, check=False).stdout.strip()
+
+
+def create_candidate_worktree(root: Path, ref: str, runner: Callable = run_git) -> Path:
+    """Create an isolated worktree + branch off HEAD; main is never touched."""
+    path = candidate_worktree_path(root, ref)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    runner(["worktree", "add", "-b", candidate_branch(ref), str(path), "HEAD"], root)
+    return path
+
+
+def _paths_present_at_ref(
+    root: Path, ref: str, paths: list[str], runner: Callable
+) -> list[str]:
+    present = []
+    for p in paths:
+        if runner(["cat-file", "-e", f"{ref}:{p}"], root, check=False).returncode == 0:
+            present.append(p)
+    return present
+
+
+def apply_governance_sync(
+    worktree: Path, ref: str, governance: list[str], runner: Callable = run_git
+) -> list[str]:
+    """Check out governance paths from ``ref`` into the worktree (index + tree).
+
+    Runs inside the isolated worktree only. Returns the paths actually applied.
+    """
+    applied = _paths_present_at_ref(worktree, ref, governance, runner)
+    for p in applied:
+        runner(["checkout", ref, "--", p], worktree)
+    return applied
+
+
+def worktree_changed_paths(
+    worktree: Path, runner: Callable = run_git
+) -> list[tuple[str, str]]:
+    """(status, path) of everything changed in the worktree vs its HEAD."""
+    out = runner(["status", "--porcelain"], worktree, check=False).stdout
+    entries: list[tuple[str, str]] = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        status = line[:2].strip() or "?"
+        entries.append((status[0], line[3:].strip()))
+    return entries
+
+
+def forbidden_changes(
+    entries: list[tuple[str, str]], forbidden: tuple[str, ...] = FORBIDDEN_PATHS
+) -> list[str]:
+    """Paths in ``entries`` that a governance sync must never have touched."""
+    return [p for _status, p in entries if is_forbidden(p, forbidden)]
+
+
+def remove_candidate_worktree(root: Path, ref: str, runner: Callable = run_git) -> None:
+    """Tear down the candidate worktree and its branch (best-effort cleanup)."""
+    path = candidate_worktree_path(root, ref)
+    runner(["worktree", "remove", "--force", str(path)], root, check=False)
+    runner(["branch", "-D", candidate_branch(ref)], root, check=False)

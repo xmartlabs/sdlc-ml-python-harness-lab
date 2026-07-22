@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 
 from harness_lab_app.harness_lifecycle import (
     errors,
+    locking,
     manifests,
     proposals,
     releases,
@@ -34,6 +35,7 @@ from harness_lab_app.harness_lifecycle import (
     sync,
 )
 from harness_lab_app.harness_lifecycle.models import (
+    CandidateManifest,
     Observation,
     Proposal,
     ProposalSource,
@@ -269,6 +271,24 @@ def cmd_status(_args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _protocol_incompatibility(ref: str) -> tuple[int, int] | None:
+    """Return (current, candidate) if adopting ``ref`` needs a newer sync protocol.
+
+    A protocol bump lives in ``adapters/registry.toml`` (a platform path), so this
+    is the signal that a governance-only sync is not enough — the platform/registry
+    upgrade must be adopted first. Baseline is the installed manifest, else the
+    repo's own current registry protocol.
+    """
+    installed = manifests.read_installed_manifest(REPO_ROOT)
+    current = (
+        installed.sync.protocol
+        if installed is not None
+        else (releases.read_sync_protocol_at_ref(REPO_ROOT, "HEAD") or 0)
+    )
+    candidate = releases.read_sync_protocol_at_ref(REPO_ROOT, ref) or 0
+    return (current, candidate) if candidate > current else None
+
+
 def cmd_sync_preview(args: argparse.Namespace) -> int:
     try:
         releases.validate_release_ref(args.ref)
@@ -285,38 +305,140 @@ def cmd_sync_preview(args: argparse.Namespace) -> int:
         print(f"❌ {exc}")
         return exc.exit_code
 
-    gov = sync.governance_paths(REPO_ROOT)
-    preview = sync.classify_preview(
-        sync.changed_paths_between(REPO_ROOT, "HEAD", args.ref), gov
-    )
+    governance = sync.governance_paths(REPO_ROOT)
+    gov_changes = sync.changed_paths_between(REPO_ROOT, "HEAD", args.ref, governance)
     print(
         f"🔍 Sync preview for {args.ref} ({commit[:12]}) — read-only, nothing written:"
     )
-    print(f"   governance changes: {len(preview.governance)}")
-    for path in preview.governance:
+    print(f"   governance changes: {len(gov_changes)}")
+    for _status, path in gov_changes:
         print(f"      · {path}")
-    if preview.other:
-        print(f"   other (non-governance, ignored): {len(preview.other)}")
-    installed = manifests.read_installed_manifest(REPO_ROOT)
-    protocol = releases.read_sync_protocol_at_ref(REPO_ROOT, args.ref)
-    if (
-        protocol is not None
-        and installed is not None
-        and protocol > installed.sync.protocol
-    ):
+    incompatible = _protocol_incompatibility(args.ref)
+    if incompatible is not None:
+        current, candidate = incompatible
         print(
-            f"   ⚠️  requires sync protocol {protocol} (installed {installed.sync.protocol})."
+            f"   ⛔ sync protocol {candidate} required, but this repo is at {current}. "
+            "Adopt the platform (registry) upgrade before a governance-only sync."
         )
-    if preview.has_blockers:
-        print(
-            "   ⛔ BLOCKERS — these forbidden paths would change; governance sync must not touch them:"
-        )
-        for path in preview.forbidden:
-            print(f"      · {path}")
-        return errors.EXIT_CONFLICT
+        return errors.EXIT_INCOMPATIBLE
     print(
-        "   ✅ governance-only; safe to prepare a candidate (make harness-sync-branch)."
+        "   ✅ governance-only and protocol-compatible; safe to prepare a candidate "
+        "(make harness-sync-branch)."
     )
+    return EXIT_OK
+
+
+def _regenerate_adapters(worktree: Path) -> bool:
+    """Regenerate native adapter/skill views inside the candidate worktree."""
+    result = subprocess.run(
+        ["uv", "run", "python", "-m", "ml_python_base.skills_sync", "sync"],
+        cwd=worktree,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def cmd_sync_branch(args: argparse.Namespace) -> int:
+    try:
+        releases.validate_release_ref(args.ref)
+    except errors.LifecycleError as exc:
+        print(f"❌ {exc}")
+        return exc.exit_code
+    if not releases.template_remote_configured(REPO_ROOT):
+        print("❌ template remote not configured. Run `make template-remote-setup`.")
+        return errors.EXIT_MISSING
+    if not sync.main_tree_clean(REPO_ROOT):
+        print(
+            "❌ Main working tree is not clean. Commit or stash before preparing a candidate."
+        )
+        return errors.EXIT_PRECONDITION
+    releases.fetch_template(REPO_ROOT)
+    try:
+        commit = releases.resolve_ref_commit(REPO_ROOT, args.ref)
+    except errors.LifecycleError as exc:
+        print(f"❌ {exc}")
+        return exc.exit_code
+
+    governance = sync.governance_paths(REPO_ROOT)
+    incompatible = _protocol_incompatibility(args.ref)
+    if incompatible is not None:
+        current, candidate = incompatible
+        print(
+            f"❌ {args.ref} needs sync protocol {candidate} but this repo is at "
+            f"{current}. Adopt the platform (registry) upgrade first."
+        )
+        return errors.EXIT_INCOMPATIBLE
+
+    worktree_path = sync.candidate_worktree_path(REPO_ROOT, args.ref)
+    if worktree_path.exists():
+        print(
+            f"❌ Candidate worktree already exists: {worktree_path.relative_to(REPO_ROOT)}. "
+            f"Remove it with `make harness-sync-clean REF={args.ref}`."
+        )
+        return errors.EXIT_PRECONDITION
+
+    try:
+        with locking.file_lock(REPO_ROOT / sync.WORKTREES_DIR / ".lock"):
+            worktree = sync.create_candidate_worktree(REPO_ROOT, args.ref)
+            try:
+                applied = sync.apply_governance_sync(worktree, args.ref, governance)
+                touched_forbidden = sync.forbidden_changes(
+                    sync.worktree_changed_paths(worktree)
+                )
+                if touched_forbidden:
+                    raise errors.LifecycleError(
+                        "Governance sync unexpectedly changed forbidden paths: "
+                        + ", ".join(touched_forbidden),
+                        errors.EXIT_CONFLICT,
+                    )
+                regenerated = _regenerate_adapters(worktree)
+                manifests.write_candidate_manifest(
+                    worktree,
+                    CandidateManifest(
+                        repository=TEMPLATE_REPOSITORY,
+                        ref=args.ref,
+                        commit=commit,
+                        branch=sync.candidate_branch(args.ref),
+                        worktree=str(worktree),
+                        created_at=_utc_now(),
+                        governance_paths=applied,
+                    ),
+                )
+            except BaseException:
+                sync.remove_candidate_worktree(REPO_ROOT, args.ref)
+                raise
+    except errors.LifecycleError as exc:
+        print(f"❌ {exc}")
+        return exc.exit_code
+
+    rel = worktree.relative_to(REPO_ROOT)
+    print(f"✅ Candidate prepared in an isolated worktree (main untouched): {rel}")
+    print(
+        f"   ref {args.ref} ({commit[:12]})  branch {sync.candidate_branch(args.ref)}"
+    )
+    print(f"   governance paths applied: {len(applied)}")
+    if not regenerated:
+        print(
+            "   ⚠️  adapter regeneration failed — run `make sync-skills` inside the worktree."
+        )
+    print(f"   Review:   git -C {rel} diff HEAD")
+    print(f"   Clean up: make harness-sync-clean REF={args.ref}")
+    return EXIT_OK
+
+
+def cmd_sync_clean(args: argparse.Namespace) -> int:
+    try:
+        releases.validate_release_ref(args.ref)
+    except errors.LifecycleError as exc:
+        print(f"❌ {exc}")
+        return exc.exit_code
+    if not sync.candidate_worktree_path(REPO_ROOT, args.ref).exists():
+        print(f"✅ No candidate worktree for {args.ref} (nothing to clean).")
+        return EXIT_OK
+    sync.remove_candidate_worktree(REPO_ROOT, args.ref)
+    print(f"✅ Removed the candidate worktree and branch for {args.ref}.")
     return EXIT_OK
 
 
@@ -332,6 +454,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     sp = sub.add_parser("sync-preview", help="Read-only diff of a candidate release.")
     sp.add_argument("--ref", required=True)
     sp.set_defaults(func=cmd_sync_preview)
+
+    sb = sub.add_parser(
+        "sync-branch", help="Prepare a candidate in an isolated worktree."
+    )
+    sb.add_argument("--ref", required=True)
+    sb.set_defaults(func=cmd_sync_branch)
+
+    sc = sub.add_parser("sync-clean", help="Remove a candidate worktree and branch.")
+    sc.add_argument("--ref", required=True)
+    sc.set_defaults(func=cmd_sync_clean)
 
     pr = sub.add_parser("proposal", help="Draft a versioned proposal from a run.")
     pr.add_argument("--run", required=True)

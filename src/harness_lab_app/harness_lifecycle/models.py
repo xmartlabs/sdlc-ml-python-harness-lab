@@ -140,3 +140,16 @@ class InstalledManifest(BaseModel):
     installed: InstalledRef
     sync: SyncInfo = Field(default_factory=SyncInfo)
     validation: ValidationRef | None = None
+
+
+class CandidateManifest(BaseModel):
+    """A prepared, not-yet-adopted release candidate in an isolated worktree."""
+
+    schema_version: int = 1
+    repository: str
+    ref: str
+    commit: str
+    branch: str
+    worktree: str
+    created_at: datetime
+    governance_paths: list[str] = Field(default_factory=list)

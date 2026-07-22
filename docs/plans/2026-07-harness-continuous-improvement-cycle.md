@@ -1134,9 +1134,33 @@ pass (`harness-status`, `harness-sync-preview` reject `main` → exit 2 and miss
 remote → exit 7). Delivered: `harness_lifecycle/{errors,releases,sync}.py`,
 installed-manifest + legacy `.template-version` parsing in `models.py`/`manifests.py`,
 `make harness-status` and `make harness-sync-preview REF=`, and
-`docs/harness-lifecycle/lab-sync-workflow.md`. **Remaining (PR 5):** candidate
-branch/worktree creation, dual file/DB locking, dirty-main refusal on the mutating
-sync, and the byte-identity guarantee for forbidden paths.
+`docs/harness-lifecycle/lab-sync-workflow.md`. **(PR 4 merged to `main`.)**
+
+**Status (PR 5 — candidate worktree):** Implemented and locally validated on
+2026-07-24 on branch `feat/harness-candidate-worktree` (uncommitted). `make ci` green
+(346 tests; +11 focused worktree/locking tests exercising real `git worktree`),
+ruff/bandit/mypy clean. Delivered: `harness_lifecycle/locking.py` (advisory
+`fcntl.flock` with stale recovery), worktree engine in `sync.py`
+(`create_candidate_worktree`, `apply_governance_sync`, forbidden-path assertion,
+cleanup), `CandidateManifest` in `models.py`/`manifests.py`, and CLI
+`sync-branch`/`sync-clean` → `make harness-sync-branch REF=` /
+`make harness-sync-clean REF=`. `.worktrees/` is git-ignored. **Deferred:** the DB
+half of the "dual lock" (a `HarnessCandidate` row) lands with the Phase 5 lifecycle
+DB models; PR 5 ships the file lock.
+
+**Cross-repo validation (2026-07-24):** ran the real flow against the published
+`ml-python-base` releases (`template` remote + fetched tags, then removed to leave
+the lab pristine). This surfaced and fixed a design bug: the preview diffed the whole
+`HEAD..REF` tree, which is meaningless between two different projects and spuriously
+flagged forbidden paths. Corrected so the diff is **scoped to the governance
+allowlist**, and the real gate is a **sync-protocol compatibility** check (a
+`registry.toml [template_sync].protocol` bump ⇒ exit 4 "adopt the platform upgrade
+first"); forbidden-path safety remains the post-apply worktree assertion. The run
+then behaved correctly: `harness-sync-preview v0.2.1` showed 2 real governance
+changes and correctly blocked on protocol (lab at 0, release needs 1). **Note:** the
+lab's `adapters/registry.toml` still lacks `[template_sync]` metadata (protocol 0 /
+legacy); adopting that platform metadata is a prerequisite migration step before the
+lab can governance-sync a v0.2.x release.
 
 | Field | Content |
 |---|---|
@@ -1154,15 +1178,16 @@ sync, and the byte-identity guarantee for forbidden paths.
 - [x] Write failing tests for legacy installed-state migration.
 - [x] Write failing tests proving preview is read-only (uses `git diff`; no tree
   mutation, runs on a dirty tree).
-- [ ] Write failing tests proving sync refuses dirty main. *(PR 5 — mutating sync)*
+- [x] Write failing tests proving sync refuses dirty main.
 - [x] Write failing tests for forbidden paths and registry/platform changes.
 - [x] Implement `harness-status`.
-- [x] Implement source diff preview. *(generated/adapter diff lands with PR 5 sync)*
-- [ ] Implement candidate branch/worktree creation without staging or committing. *(PR 5)*
-- [ ] Add dual file/DB lifecycle locking. *(PR 5)*
-- [ ] Verify `src/`, `tests/`, `benchmarks/`, `data/`, `memory/`, `Makefile`,
-  `scripts/`, and `adapters/registry.toml` remain unchanged by governance sync. *(PR 5)*
-- [x] Run lab gates and record evidence *(PR 4 slice: `make ci` green, 335 tests)*.
+- [x] Implement source diff preview. *(generated/adapter diff regenerated in the worktree)*
+- [x] Implement candidate branch/worktree creation without staging or committing.
+- [~] Add dual file/DB lifecycle locking. *(file lock shipped in PR 5; the DB
+  lifecycle lock lands with the Phase 5 `HarnessCandidate` DB model.)*
+- [x] Verify `src/`, `tests/`, `benchmarks/`, `data/`, `memory/`, `Makefile`,
+  `scripts/`, and `adapters/registry.toml` remain unchanged by governance sync.
+- [x] Run lab gates and record evidence *(`make ci` green — PR 4: 335 tests, PR 5: 346)*.
 
 ### Phase 5 — Canonical regression and validation report
 
