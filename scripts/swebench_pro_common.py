@@ -323,9 +323,11 @@ def _provision_run(run_id: str) -> int:
     """Provision workspace/<run_id> from data/runs/<run_id>/case_spec.json.
 
     Worker entry point: the web lane's runner container is docker-less, so the
-    worker (socket + CLI) shells out to this before launching it. Idempotent —
-    an already-provisioned workspace is left untouched, matching bench_run's
-    own short-circuit.
+    worker (socket + CLI) shells out to this before launching it. The worker
+    owns the managed run's freshness guarantee — a leftover workspace (e.g.
+    from a crashed or retried attempt) is reset and re-provisioned, so the
+    runner can trust whatever it finds and must never wipe it (it could not
+    rebuild it without docker).
     """
     spec_path = _REPO_ROOT / "data" / "runs" / run_id / "case_spec.json"
     if not spec_path.exists():
@@ -336,9 +338,9 @@ def _provision_run(run_id: str) -> int:
         print(f"Not a swe_pro case ({spec.get('case_type')}) — nothing to do.")
         return 0
     workspace = _REPO_ROOT / "workspace" / run_id
-    if (workspace / ".git").exists():
-        print(f"workspace/{run_id}/ already provisioned — skipping.")
-        return 0
+    if workspace.exists():
+        print(f"workspace/{run_id}/ exists — resetting for a fresh provision.")
+        shutil.rmtree(workspace)
     print(f"→ Provisioning workspace/{run_id} from {spec.get('dockerhub_image')} …")
     provision(workspace, spec)
     print("✓ Provisioned.")

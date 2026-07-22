@@ -455,6 +455,56 @@ def audit_run(run_id: str, auditor_model: str | None = None) -> None:
             service.store_error(run_id, tail or "Audit failed (no output)")
 
 
+@celery_app.task(name="harness_lab_app.tasks.improve_run", acks_late=True)
+def improve_run(run_id: str, model: str | None = None) -> None:
+    """Synthesize improvement proposals from a run's audit (worker-side).
+
+    Shells out to scripts/lab_improve.py in generate/dry-run mode (the CLI
+    stays the single source of truth): reads audit.md + audit_findings.json,
+    runs the LLM synthesis via the gateway, and writes
+    data/runs/<id>/improvements.json (+ .md preview). Filing the GitHub issues
+    stays a host-side step (`make improve RUN=<id> CREATE=1` — `gh` auth lives
+    on the host, not in the worker). Progress lands in RunEvents; the frontend
+    polls GET /api/runs/<id>/improvements for the artifact.
+    """
+    init_db()
+    settings = get_settings()
+
+    def _event(message: str, level: str = "info") -> None:
+        with Session(engine) as session:
+            session.add(RunEvent(run_id=run_id, level=level, message=message[:500]))
+            session.commit()
+
+    _event(f"Improvement synthesis started (model {model or 'auditor default'})")
+    python = settings.runner_python or "python"
+    command = [python, "scripts/lab_improve.py", "--run", run_id]
+    if model:
+        command += ["--model", model]
+    env = {**os.environ, **build_run_environment()}
+
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(settings.repo_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=_AUDIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        _event(
+            f"Improvement synthesis timed out after {_AUDIT_TIMEOUT_SECONDS}s",
+            level="error",
+        )
+        return
+
+    if result.returncode == 0:
+        _event("Improvement proposals ready (improvements.json)")
+    else:
+        tail = (result.stderr or result.stdout or "").strip()[-500:]
+        _event(f"Improvement synthesis failed: {tail}", level="error")
+
+
 def _sandbox_container_name(run_id: str, kind: str) -> str:
     safe = "".join(c if (c.isalnum() or c in "-_.") else "-" for c in run_id)
     return f"harness-sandbox-{kind}-{safe}"

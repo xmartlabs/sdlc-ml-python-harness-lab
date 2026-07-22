@@ -359,26 +359,61 @@ class CaseService:
         """Harness-governed Pro prompt (variant ``swe_harness``) — treatment arm."""
         return _HARNESS_PREAMBLE + CaseService._build_swebench_pro_prompt(spec)
 
-    def import_swebench_pro_instance(self, spec: dict) -> Case:
-        """Create a Case from a normalized SWE-bench Pro spec (no network).
+    @staticmethod
+    def _swebench_pro_display(spec: dict, polish: bool) -> tuple[str, str]:
+        """Human-readable (name, description) for a Pro instance.
+
+        The raw problem statements are issue-template mush; the heuristic
+        title/summary extraction always works, and with ``polish`` a single
+        best-effort gateway call rewrites the description into clean prose
+        (silently falling back to the heuristic when no gateway is available).
+        """
+        from harness_lab_app.swebench_pro_client import title_and_summary
+
+        title, summary = title_and_summary(spec["problem_statement"])
+        name = title or spec["instance_id"]
+        description = ""
+        if polish:
+            from harness_lab_app.case_summary import polish_case_description
+
+            description = (
+                polish_case_description(title, spec["problem_statement"]) or ""
+            )
+        if not description:
+            description = summary or spec["problem_statement"].strip()[:500]
+        return name, description
+
+    def import_swebench_pro_instance(self, spec: dict, polish: bool = False) -> Case:
+        """Create a Case from a normalized SWE-bench Pro spec.
 
         `spec` is the dict produced by ``swebench_pro_client.normalize_instance``.
         Mirrors ``import_swebench_instance``: the Pro payload (docker image,
         run_script/parser assets, test sets) is JSON-encoded into
         ``metadata_json`` — no schema migration; the worker stages it as
         case_spec.json for the docker-based provision/validate helpers
-        (docs/design-swe-bench-pro-lane.md).
+        (docs/design-swe-bench-pro-lane.md). ``polish`` enables the one-call
+        LLM cleanup of name/description (network; API/CLI imports use it).
         """
         instance_id = spec["instance_id"]
         existing = self.session.exec(
             select(Case).where(Case.case_id == instance_id)
         ).first()
         if existing is not None:
+            if existing.name == existing.case_id:
+                # Imported before display cleanup existed — refresh in place.
+                name, description = self._swebench_pro_display(spec, polish)
+                existing.name = name
+                existing.description = description
+                existing.updated_at = utc_now()
+                self.session.add(existing)
+                self.session.commit()
+                self.session.refresh(existing)
             return existing
+        name, description = self._swebench_pro_display(spec, polish)
         case = Case(
             case_id=instance_id,
-            name=instance_id,
-            description=spec["problem_statement"].strip()[:500],
+            name=name,
+            description=description,
             type=CaseType.swe_pro_instance,
             status=CaseStatus.active,
             sync_state=CaseSyncState.imported_from_yaml,

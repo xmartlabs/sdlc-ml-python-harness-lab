@@ -48,7 +48,10 @@ def build_run_environment() -> dict[str, str]:
     injected here win over the `.env` file bind-mounted inside the container.
     """
     settings = get_settings()
-    env: dict[str, str] = {"PYTHONUNBUFFERED": "1"}
+    # IS_SANDBOX=1: the run container is an isolated sandbox; Claude Code
+    # refuses --dangerously-skip-permissions as root unless this is set (same
+    # escape hatch Anthropic's devcontainers use). Harmless for other CLIs.
+    env: dict[str, str] = {"PYTHONUNBUFFERED": "1", "IS_SANDBOX": "1"}
     env_file = settings.repo_root / ".env"
     if env_file.exists():
         for line in env_file.read_text().splitlines():

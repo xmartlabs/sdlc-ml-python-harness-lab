@@ -91,6 +91,7 @@ export function Cases({
   const [proImportingId, setProImportingId] = useState<string | null>(null);
   const [proMessage, setProMessage] = useState<string | null>(null);
   const [proError, setProError] = useState<string | null>(null);
+  const [proExpandedId, setProExpandedId] = useState<string | null>(null);
   const templateLabel = useMemo(
     () => CASE_TEMPLATES.find((item) => item.value === template)?.label ?? template,
     [template]
@@ -308,39 +309,80 @@ export function Cases({
               {proMessage ? <span className="badge ok">{proMessage}</span> : null}
               {proError ? <span className="badge error">{proError}</span> : null}
             </div>
-            <div className="table" style={{ maxHeight: "24rem", overflowY: "auto" }}>
+            <div className="table" style={{ maxHeight: "28rem", overflowY: "auto" }}>
               <div className="table-row table-head">
                 <span>Instance</span>
                 <span>Tests</span>
                 <span></span>
               </div>
-              {visibleProInstances.map((item) => (
-                <div className="table-row" key={item.instance_id}>
-                  <span>
-                    <strong title={item.instance_id}>
-                      {shortInstanceLabel(item.instance_id)}
-                    </strong>
-                    <small>{item.title || item.repo}</small>
-                  </span>
-                  <span className="muted">
-                    F2P {item.f2p_count} / P2P {item.p2p_count}
-                  </span>
-                  <span>
-                    {item.imported ? (
-                      <span className="badge ok">Imported</span>
-                    ) : (
-                      <button
-                        className="badge"
-                        disabled={proImportingId !== null}
-                        onClick={() => handleImportPro(item.instance_id)}
-                        type="button"
-                      >
-                        {proImportingId === item.instance_id ? "Importing..." : "Import"}
-                      </button>
-                    )}
-                  </span>
-                </div>
-              ))}
+              {visibleProInstances.map((item) => {
+                const expanded = proExpandedId === item.instance_id;
+                return (
+                  <div className="table-row" key={item.instance_id}>
+                    <span
+                      onClick={() =>
+                        setProExpandedId(expanded ? null : item.instance_id)
+                      }
+                      style={{ cursor: "pointer" }}
+                      title={item.instance_id}
+                    >
+                      <strong style={{ display: "block" }}>
+                        {item.title || shortInstanceLabel(item.instance_id)}
+                      </strong>
+                      <small className="muted" style={{ display: "block" }}>
+                        {shortInstanceLabel(item.instance_id)}
+                        {item.summary && !expanded
+                          ? ` — ${item.summary.slice(0, 110)}…`
+                          : ""}
+                      </small>
+                      {expanded ? (
+                        <span style={{ display: "block", marginTop: "0.35rem" }}>
+                          {item.summary ? (
+                            <small style={{ display: "block", whiteSpace: "normal" }}>
+                              {item.summary}
+                            </small>
+                          ) : null}
+                          {item.issue_categories.length > 0 ? (
+                            <span
+                              style={{
+                                display: "flex",
+                                flexWrap: "wrap",
+                                gap: "0.3rem",
+                                marginTop: "0.35rem"
+                              }}
+                            >
+                              {item.issue_categories.map((category) => (
+                                <span className="badge neutral" key={category}>
+                                  {category.replaceAll("_", " ")}
+                                </span>
+                              ))}
+                            </span>
+                          ) : null}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="muted">
+                      F2P {item.f2p_count} / P2P {item.p2p_count}
+                    </span>
+                    <span>
+                      {item.imported ? (
+                        <span className="badge ok">Imported</span>
+                      ) : (
+                        <button
+                          className="badge"
+                          disabled={proImportingId !== null}
+                          onClick={() => handleImportPro(item.instance_id)}
+                          type="button"
+                        >
+                          {proImportingId === item.instance_id
+                            ? "Importing..."
+                            : "Import"}
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </>
         )}
@@ -447,8 +489,16 @@ export function Cases({
                 type="button"
               >
                 <span>
-                  <strong>{item.case_id}</strong>
-                  <small>{item.name}</small>
+                  <strong style={{ display: "block" }}>
+                    {item.name && item.name !== item.case_id
+                      ? item.name
+                      : item.case_id}
+                  </strong>
+                  <small className="muted" style={{ display: "block" }}>
+                    {SWE_CASE_TYPES.has(item.type)
+                      ? shortInstanceLabel(item.case_id)
+                      : item.case_id}
+                  </small>
                 </span>
                 {caseTypeBadge(item)}
                 <span className="badge neutral">{item.sync_state}</span>

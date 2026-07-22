@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
 
     init_db()
     with Session(get_engine()) as session:
-        case = CaseService(session).import_swebench_pro_instance(spec)
+        case = CaseService(session).import_swebench_pro_instance(spec, polish=True)
     print(
         f"✅ Case '{case.case_id}' ready (type={case.type}). Create a run from the UI."
     )

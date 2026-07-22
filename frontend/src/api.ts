@@ -2,6 +2,7 @@ import type {
   ArtifactRecord,
   AttributionRecord,
   AuditRecord,
+  ImprovementsDoc,
   CaseCreatePayload,
   CaseRecord,
   DocContent,
@@ -146,6 +147,15 @@ export const api = {
       method: "POST"
     }),
   getAudit: (runId: string) => request<AuditRecord>(`/api/runs/${runId}/audit`),
+  getImprovements: (runId: string) =>
+    request<ImprovementsDoc>(`/api/runs/${runId}/improvements`),
+  runImprove: (runId: string, model?: string) => {
+    const query = model ? `?model=${encodeURIComponent(model)}` : "";
+    return request<{ status: string; run_id: string }>(
+      `/api/runs/${runId}/improve${query}`,
+      { method: "POST" }
+    );
+  },
   runAudit: (runId: string, auditorModel?: string) => {
     const query = auditorModel ? `?auditor_model=${encodeURIComponent(auditorModel)}` : "";
     return request<{ status: string; run_id: string }>(`/api/runs/${runId}/audit${query}`, {

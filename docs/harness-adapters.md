@@ -38,6 +38,18 @@ container):
    (or just `make app-up`, which builds it).
 3. Create a claude run as usual — no host worker needed.
 
+Two details the docker lane handles for you:
+
+- **Root + skip-permissions:** the runner container runs as root, and Claude
+  Code refuses `--dangerously-skip-permissions` as root unless `IS_SANDBOX=1`
+  is set. `build_run_environment` injects it into every run container (the
+  same escape hatch Anthropic's devcontainers use).
+- **Project settings travel with the bind mount:** `.claude/settings.local.json`
+  (e.g. `ANTHROPIC_BASE_URL` → a LiteLLM gateway + custom headers for metrics)
+  is project-level config inside the mounted repo, so the containerized claude
+  picks it up exactly like a host run. Remember it is gitignored — copy it to
+  any new deployment (the bench server) along with `.env`.
+
 The preflight guard checks the credential is present before a Docker claude run,
 with an actionable message if it's missing. `codex` in Docker is not wired yet
 (its packaging/auth needs confirming) — run codex via host mode for now.

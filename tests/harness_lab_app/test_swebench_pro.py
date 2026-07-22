@@ -118,6 +118,7 @@ def test_summarize_row_compacts_catalog_entry():
     assert entry["instance_id"] == _IID
     assert entry["repo"] == "ansible/ansible"
     assert entry["title"] == "Fix the frobnicator"
+    assert entry["summary"] == "Long body…"
     assert entry["issue_categories"] == ["major_bug", "data_bug"]
     assert entry["f2p_count"] == 1
     assert entry["p2p_count"] == 1
@@ -131,6 +132,29 @@ def test_summarize_row_unescapes_json_style_statement():
         | {"problem_statement": '"Title\\n\\nTypeError combining dicts\\n\\nBody…"'}
     )
     assert entry["title"] == "TypeError combining dicts"
+    assert entry["summary"] == "Body…"
+
+
+def test_title_and_summary_single_line_statement():
+    # openlibrary-style: the whole issue on one line with inline ## sections.
+    title, summary = swebench_pro_client.title_and_summary(
+        "## Title: Allow Import API to Bypass Validation ## Description "
+        "**Label:** Feature Request The current import fails when validation "
+        "rules trigger."
+    )
+    assert title == "Allow Import API to Bypass Validation"
+    assert summary.startswith("Description **Label:** Feature Request") or (
+        "current import fails" in summary
+    )
+
+
+def test_title_and_summary_skips_header_noise():
+    title, summary = swebench_pro_client.title_and_summary(
+        "# Bug Report\n\n## Summary\n\nINI values are not unquoted correctly\n\n"
+        "## Description\n\nSince 2.15 string values keep their quotes."
+    )
+    assert title == "INI values are not unquoted correctly"
+    assert summary == "Since 2.15 string values keep their quotes."
 
 
 def test_clean_text_unescapes_only_when_needed():
@@ -185,6 +209,9 @@ def test_import_swebench_pro_instance_builds_case():
         case = CaseService(session).import_swebench_pro_instance(_pro_spec())
         assert case.type == CaseType.swe_pro_instance
         assert case.subject_repo == "ansible/ansible"
+        # Display fields come from the heuristic extraction, not the raw id/mush.
+        assert case.name == "Fix the frobnicator."
+        assert case.description == "Fix the frobnicator."
         assert any("swebench_pro_validate" in c for c in case.validation_commands)
         # Both A/B arms exist; the treatment arm wraps the same task.
         default = case.prompt_variants["swe_default"]
@@ -342,6 +369,37 @@ def test_evaluate_containerized_missing_output_is_failure(monkeypatch, tmp_path)
     verdict = swebench_pro_common.evaluate_containerized(tmp_path / "ws", _eval_spec())
     assert verdict["resolved"] is False
     assert verdict["error"] == "parser produced no output.json"
+
+
+def test_provision_run_resets_stale_workspace(monkeypatch, tmp_path):
+    """The worker owns managed-run freshness: leftovers are wiped, not skipped.
+
+    Regression: a pre-existing (even fully provisioned) workspace used to be
+    skipped, and the runner's --fresh reset then deleted it — leaving the
+    docker-less runner with nothing it could rebuild.
+    """
+    run_id = "run-pro-fresh"
+    run_dir = tmp_path / "data" / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "case_spec.json").write_text(
+        json.dumps({"case_type": "swe_pro", "dockerhub_image": "jefzda/x:y"})
+    )
+    workspace = tmp_path / "workspace" / run_id
+    (workspace / ".git").mkdir(parents=True)
+    (workspace / "stale-agent-edit.py").write_text("leftover")
+
+    provisioned: list[Path] = []
+
+    def fake_provision(ws: Path, _spec: dict) -> None:
+        provisioned.append(ws)
+        ws.mkdir(parents=True, exist_ok=True)
+        (ws / ".git").mkdir(exist_ok=True)
+
+    monkeypatch.setattr(swebench_pro_common, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(swebench_pro_common, "provision", fake_provision)
+    assert swebench_pro_common._provision_run(run_id) == 0
+    assert provisioned == [workspace]
+    assert not (workspace / "stale-agent-edit.py").exists()
 
 
 def test_host_path_translation(monkeypatch):

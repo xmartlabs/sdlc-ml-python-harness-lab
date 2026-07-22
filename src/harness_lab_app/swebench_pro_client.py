@@ -147,24 +147,105 @@ def fetch_run_assets(instance_id: str, timeout: float = 30.0) -> dict[str, str]:
 
 
 # The dataset is static (731 published rows), so the browse catalog is cached
-# on disk and refreshed at most daily; data/tmp/ is gitignored.
+# on disk and refreshed at most daily; data/tmp/ is gitignored. Bump the file
+# name when the entry schema changes so stale caches are never half-shaped.
 _CATALOG_CACHE = (
-    Path(__file__).resolve().parents[2] / "data" / "tmp" / "swebench_pro_catalog.json"
+    Path(__file__).resolve().parents[2]
+    / "data"
+    / "tmp"
+    / "swebench_pro_catalog_v2.json"
 )
 _CATALOG_TTL_SECONDS = 24 * 3600
+
+# Section-header lines that carry no content of their own in the Pro issue
+# templates ("## Description", "Problem / Opportunity", "SUMMARY", …).
+_HEADER_NOISE = {
+    "title",
+    "description",
+    "summary",
+    "problem",
+    "problem / opportunity",
+    "bug report",
+    "bug",
+    "feature request",
+    "issue type",
+    "component name",
+    "expected behavior",
+    "expected behaviour",
+    "actual behavior",
+    "actual behaviour",
+    "steps to reproduce",
+    "reproducing the bug",
+    "label",
+}
+
+
+# Reaching one of these headers means the prose part is over — what follows is
+# repro commands / numbered steps, which read as noise in a short summary.
+_SUMMARY_STOP_HEADERS = {
+    "steps to reproduce",
+    "reproducing the bug",
+    "how to reproduce",
+}
+
+
+def _sentence_cap(text: str, budget: int = 300) -> str:
+    """Truncate at a sentence boundary (never mid-sentence) within budget."""
+    if len(text) <= budget:
+        return text
+    cut = text[:budget]
+    for sep in (". ", "! ", "? "):
+        idx = cut.rfind(sep)
+        if idx > 80:
+            return cut[: idx + 1].strip()
+    return cut[: cut.rfind(" ")].rstrip(",;:") + "…"
+
+
+def title_and_summary(text: str) -> tuple[str, str]:
+    """Extract a display title + short summary from a Pro problem statement.
+
+    The statements come in several framings (markdown headers, ``Title:``
+    prefixes, single-line issues with inline ``##`` separators); this walks the
+    cleaned lines, skips bare section headers, takes the first real line as the
+    title and compacts the following prose into a sentence-capped summary
+    (stopping before repro-steps sections).
+    """
+    lines = [
+        line.strip().strip('"*#').strip() for line in _clean_text(text).splitlines()
+    ]
+    lines = [line for line in lines if line]
+    title = ""
+    rest: list[str] = []
+    for line in lines:
+        norm = line.lower().rstrip(".:").strip()
+        if norm in _SUMMARY_STOP_HEADERS:
+            if title:
+                break
+            continue
+        if not title:
+            if norm in _HEADER_NOISE:
+                continue
+            candidate = line
+            if candidate.lower().startswith("title:"):
+                candidate = candidate[6:].strip()
+            # Single-line statements keep their sections inline ("… ## Description …").
+            parts = [p.strip() for p in candidate.split(" ## ") if p.strip()]
+            title = parts[0]
+            rest.extend(parts[1:])
+        elif norm in _HEADER_NOISE:
+            continue
+        else:
+            rest.append(line)
+    summary_words = " ".join(" ".join(rest).split())
+    for noise in ("Description", "Problem / Opportunity"):
+        summary_words = summary_words.removeprefix(noise).lstrip(" :")
+    summary_words = summary_words.lstrip(" .—-:")
+    return title[:160], _sentence_cap(summary_words)
 
 
 def _summarize_row(record: dict) -> dict:
     """Compact browse-catalog entry for one dataset row."""
-    text = _clean_text(record.get("problem_statement", ""))
-    lines = [line.strip().strip('"*#').strip() for line in text.splitlines()]
-    lines = [line for line in lines if line]
-    first_line = lines[0] if lines else ""
-    # Common Pro framing: a bare "Title:"/"Title" header line before the title.
-    if first_line.lower().startswith("title:"):
-        first_line = first_line[6:].strip()
-    elif first_line.lower() == "title" and len(lines) > 1:
-        first_line = lines[1]
+    title, summary = title_and_summary(record.get("problem_statement", ""))
     try:
         categories = _literal_list(record.get("issue_categories", "[]"))
     except (ValueError, json.JSONDecodeError, SyntaxError):
@@ -173,7 +254,8 @@ def _summarize_row(record: dict) -> dict:
         "instance_id": record["instance_id"],
         "repo": record["repo"],
         "repo_language": record.get("repo_language", ""),
-        "title": first_line[:160],
+        "title": title,
+        "summary": summary,
         "issue_categories": categories,
         "f2p_count": len(_literal_list(record.get("fail_to_pass", "[]"))),
         "p2p_count": len(_literal_list(record.get("pass_to_pass", "[]"))),

@@ -58,7 +58,10 @@ LOG_CLIP_CHARS = 60_000
 DIFF_CLIP_CHARS = 40_000
 RULES_CLIP_CHARS = 20_000
 # LiteLLM model name (no opencode "gateway/" prefix — that's opencode-only).
-DEFAULT_AUDITOR_MODEL = "gpt-5.5"
+# gpt-5.4-mini: current mini tier — ~6.7x cheaper than gpt-5.5 (~$0.04/audit
+# vs ~$0.29) with enough judgment for log audits. Override per-run via the UI
+# field or AUDITOR_MODEL; escalate to gpt-5.5 if audit depth feels shallow.
+DEFAULT_AUDITOR_MODEL = "gpt-5.4-mini"
 
 SYSTEM_PROMPT = """\
 Sos un auditor de harness de agentes de código. Tu trabajo es leer los artefactos

@@ -507,6 +507,27 @@ def generate_swe_continuation_prompt(
     return path
 
 
+def workspace_fingerprint(workspace: Path) -> str | None:
+    """Cheap change detector: hash of the workspace's git status + diff vs HEAD.
+
+    Used as the SWE stop fallback when no objective per-step evaluation is
+    possible — two consecutive identical fingerprints mean the agent's step
+    made no edits. Returns None (never raises) when git state is unreadable.
+    """
+    import hashlib
+
+    try:
+        status = _run_git(
+            ["git", "-C", str(workspace), "status", "--porcelain"], cwd=REPO_ROOT
+        )
+        diff = _run_git(["git", "-C", str(workspace), "diff", "HEAD"], cwd=REPO_ROOT)
+    except Exception:
+        return None
+    if status.returncode != 0 or diff.returncode != 0:
+        return None
+    return hashlib.sha256((status.stdout + diff.stdout).encode()).hexdigest()
+
+
 def swe_step_evaluation(workspace: Path, spec: dict) -> dict | None:
     """Objective F2P/P2P check against the provisioned install (never raises).
 
@@ -682,15 +703,35 @@ def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
     dest = out_dir / "workspace"
     if dest.exists():
         shutil.rmtree(dest)
-    shutil.copytree(workspace, dest)
+    # symlinks=True: real repos (e.g. openlibrary vendoring infogami) contain
+    # internal/dangling symlinks; following them either crashes copytree or
+    # duplicates trees. Copy links as links — that is also what git records.
+    shutil.copytree(workspace, dest, symlinks=True, ignore_dangling_symlinks=True)
     file_count = sum(1 for _ in dest.rglob("*") if _.is_file())
     print(f"  Copied workspace → data/runs/{run_id}/workspace/ ({file_count} files)")
 
     diff_path = out_dir / "diff.patch"
     if (dest / ".git").exists():
         # Repo task: the meaningful diff is the agent's changes vs the
-        # provisioned commit (base_commit + test_patch), not diff-vs-empty.
-        result = _run_git(["git", "-C", str(dest), "diff", "HEAD"], cwd=REPO_ROOT)
+        # provisioned commit (base_commit + test files), not diff-vs-empty.
+        # Diff against that commit, not HEAD: agents sometimes `git commit`
+        # their fix inside the workspace, which would make diff-vs-HEAD empty.
+        provisioned = _run_git(
+            [
+                "git",
+                "-C",
+                str(dest),
+                "log",
+                "--format=%H",
+                "--grep",
+                "provisioned",
+                "-n",
+                "1",
+            ],
+            cwd=REPO_ROOT,
+        ).stdout.strip()
+        diff_ref = provisioned or "HEAD"
+        result = _run_git(["git", "-C", str(dest), "diff", diff_ref], cwd=REPO_ROOT)
     else:
         result = _run_git(
             ["git", "diff", "--no-index", "/dev/null", str(dest)], cwd=REPO_ROOT
@@ -1538,7 +1579,27 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = DATA_DIR / args.run
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    validate_workspace(workspace, args.run, args.resume, fresh=args.fresh)
+    # Pro lane guard: in the web lane the worker pre-provisions the workspace
+    # (fresh by construction) right before launching this docker-less runner —
+    # the --fresh reset must NOT wipe it, because we could never rebuild it
+    # here. When docker IS available (host CLI lane), normal fresh semantics
+    # apply and provision_workspace simply re-provisions after the reset.
+    keep_preprovisioned = False
+    if (
+        case_spec is not None
+        and case_spec.get("case_type") == "swe_pro"
+        and (workspace / ".git").exists()
+    ):
+        import swebench_pro_common as swe_pro
+
+        keep_preprovisioned = not swe_pro.docker_available()
+    if keep_preprovisioned:
+        print(
+            f"  workspace/{args.run}/ pre-provisioned by the worker (Pro lane) "
+            "— keeping it."
+        )
+    else:
+        validate_workspace(workspace, args.run, args.resume, fresh=args.fresh)
     workspace.mkdir(parents=True, exist_ok=True)
 
     if case_spec is not None:
@@ -1645,6 +1706,7 @@ def main(argv: list[str] | None = None) -> int:
             steps_dir.mkdir(exist_ok=True)
 
         last_swe_eval: dict | None = None
+        last_workspace_fp: str | None = None
         for step_n in range(1, max_steps + 1):
             if max_steps > 1:
                 if step_n == 1:
@@ -1707,6 +1769,22 @@ def main(argv: list[str] | None = None) -> int:
                             f"  ✅ SWE-bench resolved after step {step_n} — stopping."
                         )
                         break
+                elif max_steps > 1:
+                    # No objective signal (Pro lane in the docker-less runner):
+                    # fall back to a no-progress detector so the loop doesn't
+                    # burn every remaining step re-summarizing finished work. A
+                    # step that changed nothing in the workspace is the
+                    # strongest done-signal available; validation still renders
+                    # the real verdict after the run.
+                    fp = workspace_fingerprint(workspace)
+                    if fp is not None and fp == last_workspace_fp:
+                        print(
+                            f"  ⏹  Step {step_n} changed nothing in the "
+                            "workspace and no objective eval is available — "
+                            "stopping (agent appears done)."
+                        )
+                        break
+                    last_workspace_fp = fp
 
             if max_steps > 1:
                 step_text = step_log.read_text()
