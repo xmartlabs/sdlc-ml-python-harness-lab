@@ -58,7 +58,10 @@ LOG_CLIP_CHARS = 60_000
 DIFF_CLIP_CHARS = 40_000
 RULES_CLIP_CHARS = 20_000
 # LiteLLM model name (no opencode "gateway/" prefix — that's opencode-only).
-DEFAULT_AUDITOR_MODEL = "gpt-5.5"
+# gpt-5.4-mini: current mini tier — ~6.7x cheaper than gpt-5.5 (~$0.04/audit
+# vs ~$0.29) with enough judgment for log audits. Override per-run via the UI
+# field or AUDITOR_MODEL; escalate to gpt-5.5 if audit depth feels shallow.
+DEFAULT_AUDITOR_MODEL = "gpt-5.4-mini"
 
 SYSTEM_PROMPT = """\
 Sos un auditor de harness de agentes de código. Tu trabajo es leer los artefactos
@@ -278,14 +281,19 @@ def parse_findings(text: str) -> dict:
 
 
 def resolve_runs_path(run_id: str) -> Path:
-    """Map a run id to its runs.yaml by matching the known case prefixes."""
+    """Map a run id to its runs.yaml by matching the known case prefixes.
+
+    Registered benchmarks (e.g. ``tetris-v1``) return their real runs.yaml.
+    SWE-bench (ADR-0009) and web-lane (ADR-0006) runs are never registered in a
+    runs.yaml; rather than abort, return a non-existent placeholder so the caller
+    falls through to ``resolve_or_synthesize_run``, which rebuilds the run from
+    the run's ``metadata.json``. Mirrors ``bench_run.py`` setting ``runs_path``
+    to a synthesis fallback for the repo-task lane.
+    """
     for case, path in RUNS_FILES.items():
         if run_id.startswith(case):
             return path
-    sys.exit(
-        f"Could not resolve a runs.yaml for run '{run_id}'.\n"
-        f"Known cases: {list(RUNS_FILES.keys())}"
-    )
+    return DATA_DIR / run_id / "runs.yaml"
 
 
 def clip(text: str, budget: int) -> str:

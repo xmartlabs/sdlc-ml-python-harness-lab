@@ -11,6 +11,7 @@ import { StateBadge } from "../components/StateBadge";
 import type {
   AttributionRecord,
   AuditRecord,
+  ImprovementsDoc,
   RunEventRecord,
   RunMetadata,
   RunRecord,
@@ -28,8 +29,10 @@ const POLL_INTERVAL_MS = 1500;
 export const CANCELLABLE_STATES: RunRecord["state"][] = ["pending", "running"];
 export const RETRYABLE_STATES: RunRecord["state"][] = ["failed", "cancelled"];
 
-// Harnesses whose host CLI emits final summaries, not opencode-style per-tool
-// step logs — so file/tool/governance attribution can't be parsed from them.
+// Harnesses whose CLI emits final summaries, not per-tool logs — so file/tool/
+// governance attribution can't be parsed from them. claude runs now capture
+// stream-json events (first-class tool calls), so a claude run only falls back
+// to the summary-only note when its attribution carries no signals (old runs).
 const SUMMARY_ONLY_HARNESSES = new Set(["claude", "codex"]);
 
 function harnessFromCommand(command: string[] | undefined): string {
@@ -40,7 +43,6 @@ function harnessFromCommand(command: string[] | undefined): string {
 
 export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetailProps) {
   const harness = harnessFromCommand(run?.command);
-  const summaryOnlyHarness = SUMMARY_ONLY_HARNESSES.has(harness);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -52,8 +54,21 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
   const [audit, setAudit] = useState<AuditRecord | null>(null);
   const [metadata, setMetadata] = useState<RunMetadata | null>(null);
   const [auditModel, setAuditModel] = useState("");
+  const [improvements, setImprovements] = useState<ImprovementsDoc | null>(null);
+  const [improving, setImproving] = useState(false);
+  const [improveError, setImproveError] = useState<string | null>(null);
   const [tab, setTab] = useState<"detail" | "terminal" | "desktop">("detail");
   const consoleRef = useRef<HTMLDivElement | null>(null);
+  // A claude run with events-based attribution has real tool counts; only fall
+  // back to the summary-only explainer when there is nothing to show.
+  const attributionHasSignals = Boolean(
+    attribution &&
+      (Object.values(attribution.tools ?? {}).some((count) => count > 0) ||
+        (attribution.files?.read?.length ?? 0) > 0 ||
+        (attribution.files?.edited?.length ?? 0) > 0)
+  );
+  const summaryOnlyHarness =
+    SUMMARY_ONLY_HARNESSES.has(harness) && !attributionHasSignals;
 
   useEffect(() => {
     setEvents([]);
@@ -115,6 +130,8 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
     setAttribution(null);
     setAudit(null);
     setMetadata(null);
+    setImprovements(null);
+    setImproveError(null);
     if (run === null) {
       return;
     }
@@ -163,6 +180,16 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
       })
       .catch(() => {
         // No audit yet (404) is expected until one is requested.
+      });
+    api
+      .getImprovements(run.run_id)
+      .then((result) => {
+        if (active) {
+          setImprovements(result);
+        }
+      })
+      .catch(() => {
+        // No improvements yet (404) is expected until synthesis is requested.
       });
     const parseMetadata = (content: string) => {
       if (!active) {
@@ -324,6 +351,42 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
       })
       .catch((error: Error) => setActionError(error.message))
       .finally(() => setActionPending(false));
+  };
+
+  const handleImprove = () => {
+    const runId = run.run_id;
+    setImproving(true);
+    setImproveError(null);
+    api
+      .runImprove(runId, auditModel.trim() || undefined)
+      .then(() => {
+        // The synthesis is an LLM call in the worker; poll for the artifact.
+        let tries = 0;
+        const poll = () => {
+          api
+            .getImprovements(runId)
+            .then((result) => {
+              setImprovements(result);
+              setImproving(false);
+            })
+            .catch(() => {
+              if (tries < 40) {
+                tries += 1;
+                window.setTimeout(poll, 3000);
+              } else {
+                setImproving(false);
+                setImproveError(
+                  "Synthesis did not produce proposals — check the run logs."
+                );
+              }
+            });
+        };
+        window.setTimeout(poll, 4000);
+      })
+      .catch((error: Error) => {
+        setImproving(false);
+        setImproveError(error.message);
+      });
   };
 
   const countEntries = (counts: Record<string, number>) =>
@@ -634,6 +697,78 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
           <div className="audit-body">
             <Markdown>{audit.markdown}</Markdown>
           </div>
+        )}
+      </div>
+      <div className="panel subtle">
+        <div className="panel-head">
+          <h3>Improvement proposals</h3>
+          <div className="run-actions">
+            {improvements ? (
+              <span className="badge ok">{improvements.proposals.length} proposal(s)</span>
+            ) : null}
+            <button
+              disabled={improving || audit?.status !== "done"}
+              onClick={handleImprove}
+              title={
+                audit?.status !== "done"
+                  ? "Run the LLM audit first — proposals are synthesized from it."
+                  : undefined
+              }
+              type="button"
+            >
+              {improving
+                ? "Synthesizing..."
+                : improvements
+                  ? "Re-synthesize"
+                  : "Propose improvements"}
+            </button>
+          </div>
+        </div>
+        {improveError ? <ErrorBanner message={improveError} /> : null}
+        {improvements === null ? (
+          <p className="muted">
+            {audit?.status === "done"
+              ? "Turn this audit's findings into concrete GitHub issue proposals for the template/harness repos (LLM synthesis in the worker)."
+              : "Run the LLM audit first; proposals are synthesized from its findings."}
+          </p>
+        ) : (
+          <>
+            {improvements.proposals.length === 0 ? (
+              <p className="muted">
+                The synthesis found nothing actionable to improve from this audit.
+              </p>
+            ) : (
+              <div className="table">
+                {improvements.proposals.map((proposal, index) => (
+                  <div className="table-row" key={`${proposal.title}-${index}`}>
+                    <span>
+                      <strong>{proposal.title}</strong>
+                      <small>{proposal.body.slice(0, 220)}</small>
+                    </span>
+                    <span>
+                      <span className="badge neutral">{proposal.repo.split("/").pop()}</span>
+                      {proposal.kind ? <small> {proposal.kind}</small> : null}
+                    </span>
+                    <span>
+                      {proposal.created_issue_url ? (
+                        <a href={proposal.created_issue_url} rel="noreferrer" target="_blank">
+                          issue ↗
+                        </a>
+                      ) : (
+                        <span className="muted">not filed</span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="muted">
+              Review/edit <code>data/runs/{run.run_id}/improvements.json</code> (repo
+              routing, wording), then file the issues from the host (needs{" "}
+              <code>gh</code> auth):{" "}
+              <code>make improve RUN={run.run_id} CREATE=1</code>
+            </p>
+          </>
         )}
       </div>
       <div className="panel subtle">

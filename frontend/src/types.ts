@@ -223,3 +223,31 @@ export type DocContent = {
   title: string;
   content: string;
 };
+
+export type SwebenchProInstance = {
+  instance_id: string;
+  repo: string;
+  repo_language: string;
+  title: string;
+  summary: string;
+  issue_categories: string[];
+  f2p_count: number;
+  p2p_count: number;
+  imported: boolean;
+};
+
+export type ImprovementProposal = {
+  title: string;
+  body: string;
+  kind?: string;
+  target?: string;
+  repo: string;
+  created_issue_url: string | null;
+};
+
+export type ImprovementsDoc = {
+  run_id: string;
+  context: { case: string; harness: string; executor_model: string };
+  generator_model: string;
+  proposals: ImprovementProposal[];
+};

@@ -371,7 +371,18 @@ def generate_prompt(
     executor_model: str | None,
     session_id: str,
     out_dir: Path,
+    repo_note: str | None = None,
 ) -> Path:
+    """Write the final prompt: metadata header + location constraint + body.
+
+    `repo_note` overrides the default build-from-scratch constraint (workspace
+    main.py) for repo-task/SWE runs, where the correct wording depends on the
+    agent's working directory.
+    """
+    constraint = repo_note or (
+        f"> All files MUST be created in `workspace/{run_id}/`\n"
+        f"> Entry point: `workspace/{run_id}/main.py`\n"
+    )
     header = (
         f"<!-- BENCHMARK RUN METADATA\n"
         f"BENCHMARK_ID: {run_id.rsplit('-', 2)[0]}\n"
@@ -381,8 +392,7 @@ def generate_prompt(
         f"PLANNER_MODEL: {planner_model or ''}\n"
         f"EXECUTOR_MODEL: {executor_model or ''}\n"
         f"-->\n\n"
-        f"> All files MUST be created in `workspace/{run_id}/`\n"
-        f"> Entry point: `workspace/{run_id}/main.py`\n\n"
+        f"{constraint}\n"
         f"---\n\n"
     )
     prompt_path = out_dir / "prompt.md"
@@ -454,14 +464,29 @@ def generate_swe_continuation_prompt(
     steps_dir: Path,
     spec: dict,
     last_eval: dict | None,
+    in_repo_cwd: bool = False,
 ) -> Path:
     """Continuation prompt for a SWE-bench step (no Tetris/game framing).
 
     Keeps the agent on the issue: shows the live F2P/P2P status from the
-    previous objective evaluation and forbids scope creep.
+    previous objective evaluation and forbids scope creep. `in_repo_cwd` means
+    the agent's working directory IS the subject repo (clean-context claude
+    runs), so path references drop the workspace/<run_id>/ prefix.
     """
     f2p = spec.get("fail_to_pass") or []
-    test_cmd = f"python -m pytest {' '.join(f2p)}"
+    repo_ref = "the current directory" if in_repo_cwd else f"`workspace/{run_id}/`"
+    repo_mount = "$(pwd)" if in_repo_cwd else f"$(pwd)/workspace/{run_id}"
+    if spec.get("case_type") == "swe_pro":
+        # Pro lane: the test env only exists inside the instance image.
+        image = spec.get("dockerhub_image", "<instance image>")
+        target_tests = " ".join(f2p[:3])
+        test_cmd = (
+            f'docker run --rm -v "{repo_mount}":/app {image} '
+            f"bash -lc 'cd /app && python -m pytest {target_tests}' "
+            f"# (skip if docker is unavailable)"
+        )
+    else:
+        test_cmd = f"python -m pytest {' '.join(f2p)}"
     status = (
         f"resolved={last_eval['resolved']} "
         f"F2P={last_eval['f2p_passed']}/{last_eval['f2p_total']} "
@@ -473,24 +498,57 @@ def generate_swe_continuation_prompt(
         f"<!-- SWE-bench continuation step {step_n} for RUN_ID={run_id} -->\n\n"
         f"# Resolve the GitHub issue — continuation (step {step_n})\n\n"
         f"You are continuing work on the SWE-bench task in "
-        f"`workspace/{run_id}/` (a real library repo — there is NO main.py to "
+        f"{repo_ref} (a real library repo — there is NO main.py to "
         f"build; do NOT create applications or demos).\n\n"
         f"Objective status after the previous step: {status}\n\n"
         f"Target failing test(s):\n"
         + "\n".join(f"  - {t}" for t in f2p)
-        + f"\n\nRun them with:\n    cd workspace/{run_id} && {test_cmd}\n\n"
-        f"Rules:\n"
-        f"1. Make the target test(s) pass by editing the **library source only** "
-        f"(never the test files).\n"
-        f"2. Keep the change minimal — do not refactor, fix deprecations, or "
-        f"touch anything unrelated to the issue.\n"
-        f"3. After your edit, run the target test(s) and the surrounding test "
-        f"file to check for regressions.\n"
-        f"4. Stop after the target test(s) pass.\n"
+        + (
+            f"\n\nRun them with:\n    {test_cmd}\n\n"
+            if spec.get("case_type") == "swe_pro" or in_repo_cwd
+            else f"\n\nRun them with:\n    cd workspace/{run_id} && {test_cmd}\n\n"
+        )
+        + "Rules:\n"
+        "1. Make the target test(s) pass by editing the **library source only** "
+        "(never the test files).\n"
+        "2. Keep the change minimal — do not refactor, fix deprecations, or "
+        "touch anything unrelated to the issue.\n"
+        "3. After your edit, run the target test(s) and the surrounding test "
+        "file to check for regressions.\n"
+        "4. Stop after the target test(s) pass.\n"
+        + (
+            "5. This sandbox does NOT have the project's dependencies — do NOT "
+            "install packages, build the environment, or hunt for interpreters. "
+            "If the tests cannot run here, verify by reading them; the official "
+            "containerized validation runs after you finish.\n"
+            if spec.get("case_type") == "swe_pro"
+            else ""
+        )
     )
     path = steps_dir / f"step-{step_n}-prompt.md"
     path.write_text(text)
     return path
+
+
+def workspace_fingerprint(workspace: Path) -> str | None:
+    """Cheap change detector: hash of the workspace's git status + diff vs HEAD.
+
+    Used as the SWE stop fallback when no objective per-step evaluation is
+    possible — two consecutive identical fingerprints mean the agent's step
+    made no edits. Returns None (never raises) when git state is unreadable.
+    """
+    import hashlib
+
+    try:
+        status = _run_git(
+            ["git", "-C", str(workspace), "status", "--porcelain"], cwd=REPO_ROOT
+        )
+        diff = _run_git(["git", "-C", str(workspace), "diff", "HEAD"], cwd=REPO_ROOT)
+    except Exception:
+        return None
+    if status.returncode != 0 or diff.returncode != 0:
+        return None
+    return hashlib.sha256((status.stdout + diff.stdout).encode()).hexdigest()
 
 
 def swe_step_evaluation(workspace: Path, spec: dict) -> dict | None:
@@ -500,12 +558,27 @@ def swe_step_evaluation(workspace: Path, spec: dict) -> dict | None:
     the loop can stop as soon as the issue is actually resolved, instead of
     trusting the agent's own completion claims.
     """
-    import swebench_common as swe
-
     f2p = spec.get("fail_to_pass") or []
     p2p = spec.get("pass_to_pass") or []
     if not f2p or not workspace.is_dir():
         return None
+    if spec.get("case_type") == "swe_pro":
+        # Pro lane: the suite only runs inside the instance image. Without
+        # docker (containerized runner) skip the per-step check — validation
+        # still runs worker-side after the run (design doc, test-execution §).
+        import swebench_pro_common as swe_pro
+
+        if not swe_pro.docker_available():
+            print("  ⚠️  docker unavailable — skipping per-step Pro evaluation.")
+            return None
+        try:
+            return swe_pro.evaluate_containerized(workspace, spec)
+        except Exception as exc:
+            print(f"  ⚠️  SWE-bench Pro step evaluation failed: {exc!r}")
+            return None
+
+    import swebench_common as swe
+
     try:
         return swe.evaluate(workspace, sys.executable, f2p, p2p)
     except Exception as exc:
@@ -653,15 +726,35 @@ def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
     dest = out_dir / "workspace"
     if dest.exists():
         shutil.rmtree(dest)
-    shutil.copytree(workspace, dest)
+    # symlinks=True: real repos (e.g. openlibrary vendoring infogami) contain
+    # internal/dangling symlinks; following them either crashes copytree or
+    # duplicates trees. Copy links as links — that is also what git records.
+    shutil.copytree(workspace, dest, symlinks=True, ignore_dangling_symlinks=True)
     file_count = sum(1 for _ in dest.rglob("*") if _.is_file())
     print(f"  Copied workspace → data/runs/{run_id}/workspace/ ({file_count} files)")
 
     diff_path = out_dir / "diff.patch"
     if (dest / ".git").exists():
         # Repo task: the meaningful diff is the agent's changes vs the
-        # provisioned commit (base_commit + test_patch), not diff-vs-empty.
-        result = _run_git(["git", "-C", str(dest), "diff", "HEAD"], cwd=REPO_ROOT)
+        # provisioned commit (base_commit + test files), not diff-vs-empty.
+        # Diff against that commit, not HEAD: agents sometimes `git commit`
+        # their fix inside the workspace, which would make diff-vs-HEAD empty.
+        provisioned = _run_git(
+            [
+                "git",
+                "-C",
+                str(dest),
+                "log",
+                "--format=%H",
+                "--grep",
+                "provisioned",
+                "-n",
+                "1",
+            ],
+            cwd=REPO_ROOT,
+        ).stdout.strip()
+        diff_ref = provisioned or "HEAD"
+        result = _run_git(["git", "-C", str(dest), "diff", diff_ref], cwd=REPO_ROOT)
     else:
         result = _run_git(
             ["git", "diff", "--no-index", "/dev/null", str(dest)], cwd=REPO_ROOT
@@ -708,6 +801,24 @@ def provision_workspace(workspace: Path, spec: dict) -> None:
         return
     if workspace.exists() and any(workspace.iterdir()):
         sys.exit(f"❌ workspace/{workspace.name}/ is not empty; cannot provision repo.")
+
+    if spec.get("case_type") == "swe_pro":
+        # Pro lane: copy the repo out of the instance's prebuilt image (needs
+        # docker). In the web lane the worker pre-provisions before launching
+        # the DB-blind runner, so the .git short-circuit above already fired.
+        import swebench_pro_common as swe_pro
+
+        if not swe_pro.docker_available():
+            sys.exit(
+                "❌ SWE-bench Pro provisioning needs docker, which this "
+                "environment lacks. In the web lane the worker must "
+                "pre-provision the workspace before the runner starts."
+            )
+        print(f"  Provisioning from image {spec.get('dockerhub_image', '?')} …")
+        swe_pro.provision(workspace, spec)
+        print("  ✓ Pro workspace provisioned (repo + test files, committed).")
+        return
+
     if workspace.exists():
         workspace.rmdir()  # let git clone create it
 
@@ -835,9 +946,19 @@ def build_claude_cmd(executor_model: str | None, message: str) -> list[str]:
     """Assemble a non-interactive Claude Code CLI command (host, native auth).
 
     -p is print/non-interactive; --dangerously-skip-permissions avoids blocking
-    on tool approvals in a headless run.
+    on tool approvals in a headless run. stream-json (requires --verbose in -p
+    mode) emits one JSON event per assistant message / tool call / result —
+    the observability layer that gives claude runs real tool-level attribution
+    and usage numbers (the plain CLI only prints a final summary).
     """
-    cmd = ["claude", "-p", "--dangerously-skip-permissions"]
+    cmd = [
+        "claude",
+        "-p",
+        "--dangerously-skip-permissions",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+    ]
     native = _native_model(executor_model)
     if native:
         cmd += ["--model", native]
@@ -875,16 +996,67 @@ def _print_manual_fallback(
     print("-" * 66)
 
 
+def render_claude_event(raw_line: str) -> str | None:
+    """One human-readable line for a claude stream-json event (None = drop).
+
+    Keeps step logs legible for the UI/audit while the raw JSONL goes to the
+    events file: assistant text passes through, tool calls become one-line
+    `→ Tool(arg)` markers, tool results are dropped (noise), and the final
+    result event becomes a compact stats line.
+    """
+    try:
+        event = json.loads(raw_line)
+    except json.JSONDecodeError:
+        return raw_line.rstrip("\n") + "\n"  # not an event — pass through
+    etype = event.get("type")
+    if etype == "system" and event.get("subtype") == "init":
+        return f"# claude session init (model {event.get('model', '?')})\n"
+    if etype == "assistant":
+        parts: list[str] = []
+        for block in (event.get("message") or {}).get("content", []):
+            btype = block.get("type")
+            if btype == "text" and block.get("text", "").strip():
+                parts.append(block["text"].rstrip() + "\n")
+            elif btype == "tool_use":
+                name = block.get("name", "?")
+                inp = block.get("input") or {}
+                arg = (
+                    inp.get("file_path")
+                    or inp.get("notebook_path")
+                    or inp.get("command")
+                    or inp.get("skill")
+                    or inp.get("pattern")
+                    or inp.get("subagent_type")
+                    or ""
+                )
+                arg = str(arg).replace("\n", " ")[:160]
+                parts.append(f"→ {name}({arg})\n")
+        return "".join(parts) or None
+    if etype == "result":
+        cost = event.get("total_cost_usd")
+        cost_s = f"${cost:.4f}" if isinstance(cost, (int, float)) else "?"
+        return (
+            f"# result: {event.get('subtype', '?')} turns={event.get('num_turns', '?')} "
+            f"cost={cost_s} duration_ms={event.get('duration_ms', '?')}\n"
+        )
+    return None  # user/tool_result events: noise for the readable log
+
+
 def run_opencode(
     cmd: list[str],
     log_path: Path,
     also_append: Path | None = None,
     label: str = "opencode",
+    cwd: Path | None = None,
+    events_path: Path | None = None,
 ) -> int:
     """Run the harness CLI, streaming output to terminal and capturing to log_path.
 
     If also_append is given, output is also appended to that file (combined log).
     `label` names the harness in the log header (used by the step counter).
+    `cwd` overrides the working directory (default REPO_ROOT). When
+    `events_path` is given (claude stream-json mode), every raw line is teed
+    there and the log receives the human-readable rendering instead.
     """
     import datetime as _dt
 
@@ -894,6 +1066,7 @@ def run_opencode(
     append_fh = None
     if also_append is not None:
         append_fh = also_append.open("a")
+    events_fh = events_path.open("w") if events_path is not None else None
 
     with log_path.open("w") as log:
         log.write(header + cmd_line)
@@ -904,7 +1077,7 @@ def run_opencode(
 
         proc = subprocess.Popen(
             cmd,
-            cwd=REPO_ROOT,
+            cwd=str(cwd) if cwd is not None else REPO_ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -912,6 +1085,13 @@ def run_opencode(
         )
         assert proc.stdout is not None
         for line in proc.stdout:
+            if events_fh is not None:
+                events_fh.write(line)
+                events_fh.flush()
+                rendered = render_claude_event(line)
+                if rendered is None:
+                    continue
+                line = rendered
             sys.stdout.write(line)
             sys.stdout.flush()
             log.write(line)
@@ -919,6 +1099,8 @@ def run_opencode(
                 append_fh.write(line)
         proc.wait()
 
+    if events_fh:
+        events_fh.close()
     if append_fh:
         append_fh.close()
 
@@ -1124,6 +1306,76 @@ def pull_usage_langfuse(session_id: str) -> dict | None:
     except Exception:
         pass
     return None
+
+
+def collect_claude_usage(out_dir: Path) -> dict:
+    """Aggregate usage from claude stream-json event files (never raises).
+
+    Sums the terminal `result` events (tokens, cost, turns, duration) and
+    counts tool_use events / edited files across steps — filling the usage
+    fields the plain claude CLI never reported.
+    """
+    events_files = sorted((out_dir / "steps").glob("step-*.events.jsonl"))
+    single = out_dir / "opencode.events.jsonl"
+    if single.exists():
+        events_files.append(single)
+    if not events_files:
+        return {}
+
+    input_tokens = output_tokens = 0
+    cost = 0.0
+    turns = tool_calls = 0
+    duration_ms = 0
+    files_modified: set[str] = set()
+    detected_model: str | None = None
+    saw_result = False
+    for path in events_files:
+        for raw in path.read_text(errors="replace").splitlines():
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            etype = event.get("type")
+            if etype == "system" and event.get("subtype") == "init":
+                detected_model = event.get("model") or detected_model
+            elif etype == "assistant":
+                for block in (event.get("message") or {}).get("content", []):
+                    if block.get("type") != "tool_use":
+                        continue
+                    tool_calls += 1
+                    if block.get("name") in {
+                        "Edit",
+                        "Write",
+                        "MultiEdit",
+                        "NotebookEdit",
+                    }:
+                        target = (block.get("input") or {}).get("file_path") or (
+                            block.get("input") or {}
+                        ).get("notebook_path")
+                        if target:
+                            files_modified.add(str(target))
+            elif etype == "result":
+                saw_result = True
+                usage = event.get("usage") or {}
+                input_tokens += usage.get("input_tokens") or 0
+                output_tokens += usage.get("output_tokens") or 0
+                if isinstance(event.get("total_cost_usd"), (int, float)):
+                    cost += event["total_cost_usd"]
+                turns += event.get("num_turns") or 0
+                duration_ms += event.get("duration_ms") or 0
+    if not saw_result and tool_calls == 0:
+        return {}
+    collected: dict = {
+        "turns": turns or None,
+        "tool_calls": tool_calls or None,
+        "input_tokens": input_tokens or None,
+        "output_tokens": output_tokens or None,
+        "cost_usd": round(cost, 6) if cost else None,
+        "time_minutes": round(duration_ms / 60000, 2) if duration_ms else None,
+        "files_modified": sorted(files_modified),
+        "detected_model": detected_model,
+    }
+    return {k: v for k, v in collected.items() if v not in (None, [])}
 
 
 def write_usage_json(out_dir: Path, usage: dict | None) -> Path:
@@ -1491,12 +1743,57 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = DATA_DIR / args.run
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    validate_workspace(workspace, args.run, args.resume, fresh=args.fresh)
+    # Pro lane guard: in the web lane the worker pre-provisions the workspace
+    # (fresh by construction) right before launching this docker-less runner —
+    # the --fresh reset must NOT wipe it, because we could never rebuild it
+    # here. When docker IS available (host CLI lane), normal fresh semantics
+    # apply and provision_workspace simply re-provisions after the reset.
+    keep_preprovisioned = False
+    if (
+        case_spec is not None
+        and case_spec.get("case_type") == "swe_pro"
+        and (workspace / ".git").exists()
+    ):
+        import swebench_pro_common as swe_pro
+
+        keep_preprovisioned = not swe_pro.docker_available()
+    if keep_preprovisioned:
+        print(
+            f"  workspace/{args.run}/ pre-provisioned by the worker (Pro lane) "
+            "— keeping it."
+        )
+    else:
+        validate_workspace(workspace, args.run, args.resume, fresh=args.fresh)
     workspace.mkdir(parents=True, exist_ok=True)
 
     if case_spec is not None:
         provision_workspace(workspace, case_spec)
 
+    # Control-arm hygiene (harness A/B): Claude Code auto-loads CLAUDE.md and
+    # .claude/skills/ from its cwd, so a "bare" default-variant run launched
+    # from the repo root silently inherits the whole lab harness. The default
+    # arm therefore runs from inside the subject repo (truly bare context);
+    # the harness variant keeps the repo-root cwd so the surface is available.
+    agent_cwd: Path | None = None
+    if (
+        args.harness == "claude"
+        and case_spec is not None
+        and prompt_short == "swe_default"
+    ):
+        agent_cwd = workspace
+
+    repo_note: str | None = None
+    if case_spec is not None:
+        repo_note = (
+            "> The subject repository is your current working directory — "
+            "make all changes inside it.\n"
+            if agent_cwd is not None
+            else (
+                f"> The subject repository is checked out at "
+                f"`workspace/{args.run}/` — make ALL changes inside that "
+                f"directory and nowhere else.\n"
+            )
+        )
     prompt_path = generate_prompt(
         args.run,
         prompt_short,
@@ -1505,6 +1802,7 @@ def main(argv: list[str] | None = None) -> int:
         executor_model,
         session_id,
         out_dir,
+        repo_note=repo_note,
     )
     print(f"  Prompt:      {prompt_path.relative_to(REPO_ROOT)}")
 
@@ -1598,6 +1896,7 @@ def main(argv: list[str] | None = None) -> int:
             steps_dir.mkdir(exist_ok=True)
 
         last_swe_eval: dict | None = None
+        last_workspace_fp: str | None = None
         for step_n in range(1, max_steps + 1):
             if max_steps > 1:
                 if step_n == 1:
@@ -1606,7 +1905,12 @@ def main(argv: list[str] | None = None) -> int:
                     # SWE-bench lane: keep the agent on the issue (the generic
                     # continuation prompt is game-build framed and derails it).
                     step_prompt_path = generate_swe_continuation_prompt(
-                        args.run, step_n, steps_dir, case_spec, last_swe_eval
+                        args.run,
+                        step_n,
+                        steps_dir,
+                        case_spec,
+                        last_swe_eval,
+                        in_repo_cwd=agent_cwd is not None,
                     )
                 else:
                     step_prompt_path = generate_continuation_prompt(
@@ -1628,12 +1932,27 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  Harness:     {args.harness}")
             print(f"  Model:       {executor_model or '(harness default)'}")
             print(f"  Log:         {step_log.relative_to(REPO_ROOT)}")
+            if agent_cwd is not None:
+                print(
+                    f"  Agent cwd:   {agent_cwd.relative_to(REPO_ROOT)} (clean context)"
+                )
             print("-" * 66)
 
             # For multi-step, each step log is primary; combined goes to opencode.log
             also_append = opencode_log if max_steps > 1 else None
+            # claude stream-json: raw events per step for attribution/usage.
+            events_path = (
+                step_log.with_suffix(".events.jsonl")
+                if args.harness == "claude"
+                else None
+            )
             rc = run_opencode(
-                cmd, step_log, also_append=also_append, label=args.harness
+                cmd,
+                step_log,
+                also_append=also_append,
+                label=args.harness,
+                cwd=agent_cwd,
+                events_path=events_path,
             )
             completed_steps += 1
 
@@ -1660,6 +1979,22 @@ def main(argv: list[str] | None = None) -> int:
                             f"  ✅ SWE-bench resolved after step {step_n} — stopping."
                         )
                         break
+                elif max_steps > 1:
+                    # No objective signal (Pro lane in the docker-less runner):
+                    # fall back to a no-progress detector so the loop doesn't
+                    # burn every remaining step re-summarizing finished work. A
+                    # step that changed nothing in the workspace is the
+                    # strongest done-signal available; validation still renders
+                    # the real verdict after the run.
+                    fp = workspace_fingerprint(workspace)
+                    if fp is not None and fp == last_workspace_fp:
+                        print(
+                            f"  ⏹  Step {step_n} changed nothing in the "
+                            "workspace and no objective eval is available — "
+                            "stopping (agent appears done)."
+                        )
+                        break
+                    last_workspace_fp = fp
 
             if max_steps > 1:
                 step_text = step_log.read_text()
@@ -1710,12 +2045,16 @@ def main(argv: list[str] | None = None) -> int:
         remote_usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id)
         db_usage = pull_usage_opencode_db(args.run)
         usage: dict = {}
+        # claude stream-json events are the ground truth for claude runs.
+        usage.update(collect_claude_usage(out_dir))
         if log_usage:
             usage.update(log_usage)
         if db_usage:
             usage.update(db_usage)
         if remote_usage:
             usage.update(remote_usage)
+        if completed_steps:
+            usage["steps"] = completed_steps
         write_usage_json(out_dir, usage or None)
         if args.fresh:
             # Managed web run: the API owns scoring (POST /score), so Phase 5
@@ -1792,8 +2131,10 @@ def main(argv: list[str] | None = None) -> int:
     remote_usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id)
     db_usage = pull_usage_opencode_db(args.run)
 
-    # Merge priority (highest wins): remote API > opencode DB > log estimates
+    # Merge priority (highest wins): remote API > opencode DB > log estimates >
+    # claude stream-json events (claude runs: the only populated source).
     merged_usage: dict = {}
+    merged_usage.update(collect_claude_usage(out_dir))
     if log_usage:
         merged_usage.update(log_usage)
     if db_usage:

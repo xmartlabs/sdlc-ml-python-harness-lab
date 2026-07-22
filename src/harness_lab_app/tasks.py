@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -79,28 +80,80 @@ def _write_case_spec(
     # Only SWE-bench cases provision a repo. NOTE: other cases (e.g. Tetris) may
     # carry a subject_repo field for provenance that is NOT a cloneable
     # owner/repo, so type — not subject_repo — is the gate.
-    if case.type != CaseType.swe_bench_instance:
+    if case.type not in (CaseType.swe_bench_instance, CaseType.swe_pro_instance):
         # Remove any spec left over from a prior run reusing this id, so the
         # runner does not mistake this for a repo task.
         stale_spec.unlink(missing_ok=True)
         return
     meta = case.metadata_json or {}
-    spec = {
-        "case_type": str(case.type),
-        "repo": case.subject_repo or "",
-        "repo_url": meta.get("repo_url", ""),
-        "base_commit": case.base_commit or "",
-        "python": meta.get("python", "3.11"),
-        "install_pins": json.loads(meta.get("install_pins", "[]")),
-        "test_patch": meta.get("test_patch", ""),
-        "apply_test_patch": True,
-        "fail_to_pass": json.loads(meta.get("fail_to_pass", "[]")),
-        "pass_to_pass": json.loads(meta.get("pass_to_pass", "[]")),
-        "prompt_variant": prompt_variant,
-        "prompt": case.prompt_variants.get(prompt_variant, ""),
-    }
+    if case.type == CaseType.swe_pro_instance:
+        # Pro lane (docs/design-swe-bench-pro-lane.md): docker-image
+        # provisioning + containerized validation. NOTE: the gold patch is
+        # deliberately absent — this file is agent-readable via the bind mount.
+        spec = {
+            "case_type": "swe_pro",
+            "repo": case.subject_repo or "",
+            "base_commit": case.base_commit or "",
+            "dockerhub_image": meta.get("dockerhub_image", ""),
+            "before_repo_set_cmd": meta.get("before_repo_set_cmd", ""),
+            "run_script": meta.get("run_script", ""),
+            "parser": meta.get("parser", ""),
+            "fail_to_pass": json.loads(meta.get("fail_to_pass", "[]")),
+            "pass_to_pass": json.loads(meta.get("pass_to_pass", "[]")),
+            "selected_test_files_to_run": json.loads(
+                meta.get("selected_test_files_to_run", "[]")
+            ),
+            "prompt_variant": prompt_variant,
+            "prompt": case.prompt_variants.get(prompt_variant, ""),
+        }
+    else:
+        spec = {
+            "case_type": str(case.type),
+            "repo": case.subject_repo or "",
+            "repo_url": meta.get("repo_url", ""),
+            "base_commit": case.base_commit or "",
+            "python": meta.get("python", "3.11"),
+            "install_pins": json.loads(meta.get("install_pins", "[]")),
+            "test_patch": meta.get("test_patch", ""),
+            "apply_test_patch": True,
+            "fail_to_pass": json.loads(meta.get("fail_to_pass", "[]")),
+            "pass_to_pass": json.loads(meta.get("pass_to_pass", "[]")),
+            "prompt_variant": prompt_variant,
+            "prompt": case.prompt_variants.get(prompt_variant, ""),
+        }
     run_dir.mkdir(parents=True, exist_ok=True)
     stale_spec.write_text(json.dumps(spec, indent=2))
+
+
+def _provision_pro_workspace(session: Session, run_id: str, case_id: str) -> None:
+    """Pre-provision a SWE-bench Pro workspace (worker side — docker access).
+
+    The DB-blind runner container has no docker socket, so the image-based
+    provisioning must happen before it starts (docs/design-swe-bench-pro-lane.md).
+    No-op for non-Pro cases; raises on failure so the run is marked failed with
+    the reason instead of the runner dying on an unprovisioned workspace.
+    """
+    try:
+        case = CaseService(session).get_case(case_id)
+    except ValueError:
+        return
+    if case.type != CaseType.swe_pro_instance:
+        return
+    script = get_settings().repo_root / "scripts" / "swebench_pro_common.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--provision-run", run_id],
+        capture_output=True,
+        text=True,
+        timeout=1800,
+    )
+    for line in (result.stdout + "\n" + result.stderr).splitlines():
+        if line.strip():
+            session.add(RunEvent(run_id=run_id, message=line[:500]))
+    session.commit()
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"SWE-bench Pro provisioning failed (rc={result.returncode})"
+        )
 
 
 def _cancel_requested(session: Session, run_id: str) -> bool:
@@ -194,6 +247,9 @@ def _execute_run_body(
             _write_case_spec(
                 session, run_id, config_payload.case_id, config_payload.prompt_variant
             )
+            # Pro lane only: image-based provisioning needs docker, which the
+            # runner lacks — do it here before the container starts.
+            _provision_pro_workspace(session, run_id, config_payload.case_id)
 
             handle = executor.start(run_id, command)
             cancelled, timed_out, tail = _stream_run(
@@ -397,6 +453,56 @@ def audit_run(run_id: str, auditor_model: str | None = None) -> None:
         else:
             tail = (result.stderr or result.stdout or "").strip()[-1500:]
             service.store_error(run_id, tail or "Audit failed (no output)")
+
+
+@celery_app.task(name="harness_lab_app.tasks.improve_run", acks_late=True)
+def improve_run(run_id: str, model: str | None = None) -> None:
+    """Synthesize improvement proposals from a run's audit (worker-side).
+
+    Shells out to scripts/lab_improve.py in generate/dry-run mode (the CLI
+    stays the single source of truth): reads audit.md + audit_findings.json,
+    runs the LLM synthesis via the gateway, and writes
+    data/runs/<id>/improvements.json (+ .md preview). Filing the GitHub issues
+    stays a host-side step (`make improve RUN=<id> CREATE=1` — `gh` auth lives
+    on the host, not in the worker). Progress lands in RunEvents; the frontend
+    polls GET /api/runs/<id>/improvements for the artifact.
+    """
+    init_db()
+    settings = get_settings()
+
+    def _event(message: str, level: str = "info") -> None:
+        with Session(engine) as session:
+            session.add(RunEvent(run_id=run_id, level=level, message=message[:500]))
+            session.commit()
+
+    _event(f"Improvement synthesis started (model {model or 'auditor default'})")
+    python = settings.runner_python or "python"
+    command = [python, "scripts/lab_improve.py", "--run", run_id]
+    if model:
+        command += ["--model", model]
+    env = {**os.environ, **build_run_environment()}
+
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(settings.repo_root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=_AUDIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        _event(
+            f"Improvement synthesis timed out after {_AUDIT_TIMEOUT_SECONDS}s",
+            level="error",
+        )
+        return
+
+    if result.returncode == 0:
+        _event("Improvement proposals ready (improvements.json)")
+    else:
+        tail = (result.stderr or result.stdout or "").strip()[-500:]
+        _event(f"Improvement synthesis failed: {tail}", level="error")
 
 
 def _sandbox_container_name(run_id: str, kind: str) -> str:

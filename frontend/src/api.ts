@@ -2,6 +2,7 @@ import type {
   ArtifactRecord,
   AttributionRecord,
   AuditRecord,
+  ImprovementsDoc,
   CaseCreatePayload,
   CaseRecord,
   DocContent,
@@ -14,6 +15,7 @@ import type {
   SandboxRecord,
   StagedSkillPromoteResult,
   StagedSkillRecord,
+  SwebenchProInstance,
   ValidationRecord
 } from "./types";
 
@@ -102,6 +104,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ instance_id: instanceId })
     }),
+  listSwebenchProInstances: () =>
+    request<SwebenchProInstance[]>("/api/swebench-pro/instances"),
+  importSwebenchPro: (instanceId: string) =>
+    request<CaseRecord>("/api/cases/import-swebench-pro", {
+      method: "POST",
+      body: JSON.stringify({ instance_id: instanceId })
+    }),
   seedTetris: () => request<CaseRecord>("/api/cases/seed/tetris", { method: "POST" }),
   listRuns: () => request<RunRecord[]>("/api/runs"),
   createRun: (payload: RunCreatePayload) =>
@@ -138,6 +147,15 @@ export const api = {
       method: "POST"
     }),
   getAudit: (runId: string) => request<AuditRecord>(`/api/runs/${runId}/audit`),
+  getImprovements: (runId: string) =>
+    request<ImprovementsDoc>(`/api/runs/${runId}/improvements`),
+  runImprove: (runId: string, model?: string) => {
+    const query = model ? `?model=${encodeURIComponent(model)}` : "";
+    return request<{ status: string; run_id: string }>(
+      `/api/runs/${runId}/improve${query}`,
+      { method: "POST" }
+    );
+  },
   runAudit: (runId: string, auditorModel?: string) => {
     const query = auditorModel ? `?auditor_model=${encodeURIComponent(auditorModel)}` : "";
     return request<{ status: string; run_id: string }>(`/api/runs/${runId}/audit${query}`, {

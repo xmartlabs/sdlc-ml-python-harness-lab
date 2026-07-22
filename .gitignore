@@ -74,6 +74,8 @@ src/logger/data/*
 
 # Local web app MVP
 data/app/
+# SWE-bench Pro eval staging (containerized run_script/parser scratch)
+data/tmp/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/

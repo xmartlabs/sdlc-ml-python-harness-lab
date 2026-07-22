@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from harness_lab_app.case_service import CaseService
 from harness_lab_app.celery_app import (
     enqueue_audit,
     enqueue_container_cleanup,
+    enqueue_improve,
     enqueue_run,
     enqueue_sandbox_start,
     enqueue_sandbox_stop,
@@ -37,6 +39,11 @@ from harness_lab_app.schemas import (
 )
 from harness_lab_app.staged_skill_service import StagedSkillError, StagedSkillService
 from harness_lab_app.swebench_client import SwebenchFetchError, normalize_instance
+from harness_lab_app.swebench_pro_client import (
+    SwebenchProFetchError,
+    list_instances as pro_list_instances,
+    normalize_instance as pro_normalize_instance,
+)
 from harness_lab_app.validation_service import ValidationService
 
 
@@ -226,6 +233,34 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return CaseService(session).import_swebench_instance(spec)
 
+    @app.get("/api/swebench-pro/instances")
+    def list_swebench_pro_instances(session: Session = Depends(get_session)):
+        # Browse catalog for the import UI (Python subset, disk-cached daily —
+        # the dataset is static). `imported` marks instances already in the DB.
+        try:
+            catalog = pro_list_instances()
+        except SwebenchProFetchError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        existing = {case.case_id for case in CaseService(session).list_cases()}
+        return [
+            {**entry, "imported": entry["instance_id"] in existing} for entry in catalog
+        ]
+
+    @app.post("/api/cases/import-swebench-pro")
+    def import_swebench_pro(
+        data: SwebenchImportRequest, session: Session = Depends(get_session)
+    ):
+        # SWE-bench Pro lane (docs/design-swe-bench-pro-lane.md): fetches the
+        # instance plus its run_script/parser assets. Python instances only;
+        # idempotent like the Lite/Verified import.
+        try:
+            spec = pro_normalize_instance(data.instance_id)
+        except SwebenchProFetchError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return CaseService(session).import_swebench_pro_instance(spec, polish=True)
+
     @app.post("/api/cases/seed/tetris")
     def seed_tetris(session: Session = Depends(get_session)):
         return CaseService(session).seed_tetris_case()
@@ -313,6 +348,40 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         AuditService(session).mark_running(run_id, auditor_model or "")
         enqueue_audit(run_id, auditor_model)
+        return {"status": "queued", "run_id": run_id}
+
+    @app.get("/api/runs/{run_id}/improvements")
+    def get_improvements(run_id: str):
+        # The artifact is file-based (data/runs/<id>/improvements.json), written
+        # by the worker's improve task or the CLI (`make improve RUN=<id>`).
+        path = get_settings().data_runs_dir / run_id / "improvements.json"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="No improvements yet")
+        try:
+            return json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=500, detail=f"improvements.json unreadable: {exc}"
+            ) from exc
+
+    @app.post("/api/runs/{run_id}/improve")
+    def run_improve(
+        run_id: str,
+        model: str | None = None,
+        session: Session = Depends(get_session),
+    ):
+        # Improvement synthesis needs a finished audit (it reads audit.md).
+        try:
+            RunService(session).get_run(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        audit = AuditService(session).get_audit(run_id)
+        if audit is None or audit.status != "done":
+            raise HTTPException(
+                status_code=409,
+                detail="Run the LLM audit first — proposals are synthesized from it.",
+            )
+        enqueue_improve(run_id, model)
         return {"status": "queued", "run_id": run_id}
 
     @app.get("/api/runs/{run_id}/sandbox")

@@ -72,6 +72,49 @@ def test_finalize_workspace_missing_is_safe(tmp_path):
     assert bench_run.finalize_workspace(out_dir, missing, "ghost") == 0
 
 
+def test_finalize_workspace_survives_dangling_symlinks(tmp_path, monkeypatch):
+    """Regression: real repos (openlibrary vendoring infogami) contain internal
+    and dangling symlinks; following them crashed copytree mid-archive."""
+    workspace_root = tmp_path / "workspace"
+    ws = workspace_root / "run-sym"
+    ws.mkdir(parents=True)
+    (ws / "main.py").write_text("print('x')\n")
+    (ws / "vendor").mkdir()
+    (ws / "vendor" / "real.py").write_text("# vendored\n")
+    (ws / "loop-link").symlink_to(ws / "vendor")  # internal link
+    (ws / "dangling").symlink_to(ws / "does-not-exist")  # dangling link
+    out_dir = tmp_path / "data" / "runs" / "run-sym"
+    out_dir.mkdir(parents=True)
+    monkeypatch.setattr(bench_run, "WORKSPACE_ROOT", workspace_root)
+
+    diff_lines = bench_run.finalize_workspace(out_dir, ws, "run-sym")
+
+    assert diff_lines >= 0
+    assert (out_dir / "workspace" / "main.py").exists()
+    # Links are archived as links, not followed.
+    assert (out_dir / "workspace" / "loop-link").is_symlink()
+
+
+def test_workspace_fingerprint_detects_changes(tmp_path):
+    import subprocess
+
+    ws = tmp_path / "repo"
+    ws.mkdir()
+    ident = ["-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q", str(ws)], check=True)
+    (ws / "a.py").write_text("x = 1\n")
+    subprocess.run(["git", "-C", str(ws), "add", "-A"], check=True)
+    subprocess.run(["git", *ident, "-C", str(ws), "commit", "-qm", "base"], check=True)
+
+    fp1 = bench_run.workspace_fingerprint(ws)
+    fp_same = bench_run.workspace_fingerprint(ws)
+    assert fp1 is not None and fp1 == fp_same  # no edits → stable
+    (ws / "a.py").write_text("x = 2\n")
+    assert bench_run.workspace_fingerprint(ws) != fp1  # edit → changes
+    # Unreadable git state → None, never raises.
+    assert bench_run.workspace_fingerprint(tmp_path / "not-a-repo") is None
+
+
 def test_validate_workspace_fresh_resets_stale_dir(tmp_path, capsys):
     ws = tmp_path / "run-2"
     ws.mkdir()

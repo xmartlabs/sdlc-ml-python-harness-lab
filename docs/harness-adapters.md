@@ -38,6 +38,40 @@ container):
    (or just `make app-up`, which builds it).
 3. Create a claude run as usual — no host worker needed.
 
+### Claude observability + A/B hygiene (stream-json)
+
+`claude` runs execute with `--output-format stream-json --verbose`: the raw
+events (one JSON per assistant message / tool call / result) are teed to
+`steps/step-N.events.jsonl`, while the step log receives a human-readable
+rendering (`→ Read(path)`, `→ Bash(cmd)`, final stats line). Three consumers:
+
+- **Attribution** (`attribution.build_attribution_from_events`): first-class
+  tool calls — files read/edited, bash histogram, governance coverage, and
+  *real* skill invocations (the `Skill` tool), not just SKILL.md reads.
+- **usage.json** (`bench_run.collect_claude_usage`): tokens, cost, turns,
+  duration and modified files summed from the per-step `result` events.
+- **Audit**: step logs now show the tool timeline, so audits stop being
+  narrative-only.
+
+**Control-arm hygiene:** Claude Code auto-loads `CLAUDE.md` + `.claude/skills/`
+from its cwd, so a "bare" run launched from the repo root silently inherits the
+whole lab harness. For SWE cases with the `swe_default` variant, the claude
+agent therefore runs with **cwd = workspace/<run_id>/** (truly bare context);
+the `swe_harness` variant keeps the repo-root cwd so the surface is available.
+Prompts adjust their path references accordingly.
+
+Two details the docker lane handles for you:
+
+- **Root + skip-permissions:** the runner container runs as root, and Claude
+  Code refuses `--dangerously-skip-permissions` as root unless `IS_SANDBOX=1`
+  is set. `build_run_environment` injects it into every run container (the
+  same escape hatch Anthropic's devcontainers use).
+- **Project settings travel with the bind mount:** `.claude/settings.local.json`
+  (e.g. `ANTHROPIC_BASE_URL` → a LiteLLM gateway + custom headers for metrics)
+  is project-level config inside the mounted repo, so the containerized claude
+  picks it up exactly like a host run. Remember it is gitignored — copy it to
+  any new deployment (the bench server) along with `.env`.
+
 The preflight guard checks the credential is present before a Docker claude run,
 with an actionable message if it's missing. `codex` in Docker is not wired yet
 (its packaging/auth needs confirming) — run codex via host mode for now.

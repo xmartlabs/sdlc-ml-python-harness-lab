@@ -65,6 +65,8 @@ def test_build_run_environment_rewrites_host_urls(
     assert env["GATEWAY_TOKEN"] == "sk-test"
     assert env["UNRELATED"] == "keep-me"
     assert env["PYTHONUNBUFFERED"] == "1"
+    # Claude Code refuses --dangerously-skip-permissions as root without this.
+    assert env["IS_SANDBOX"] == "1"
 
 
 def test_build_run_environment_without_env_file(
@@ -74,7 +76,7 @@ def test_build_run_environment_without_env_file(
 
     env = build_run_environment()
 
-    assert env == {"PYTHONUNBUFFERED": "1"}
+    assert env == {"PYTHONUNBUFFERED": "1", "IS_SANDBOX": "1"}
 
 
 def test_subprocess_executor_streams_and_waits() -> None:

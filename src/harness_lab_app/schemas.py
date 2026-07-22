@@ -5,7 +5,11 @@ from pydantic import BaseModel, Field, field_validator
 from harness_lab_app.models import CaseStatus, CaseSyncState, CaseType, RunState
 
 # SWE-bench instance ids look like `pallets__flask-4992` (owner__repo-issue).
-_SWEBENCH_INSTANCE_RE = re.compile(r"^[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+-\d+$")
+# SWE-bench Pro ids look like `instance_owner__repo-<sha>[-v<sha|nan>]`.
+_SWEBENCH_INSTANCE_RE = re.compile(
+    r"^[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+-\d+$"
+    r"|^instance_[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+$"
+)
 
 
 class SwebenchImportRequest(BaseModel):
@@ -17,7 +21,8 @@ class SwebenchImportRequest(BaseModel):
         normalized = value.strip()
         if not _SWEBENCH_INSTANCE_RE.match(normalized):
             raise ValueError(
-                "instance_id must look like owner__repo-N (e.g. pallets__flask-4992)"
+                "instance_id must look like owner__repo-N (e.g. pallets__flask-4992) "
+                "or instance_owner__repo-<sha> (SWE-bench Pro)"
             )
         return normalized
 

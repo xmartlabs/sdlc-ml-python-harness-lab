@@ -3,6 +3,7 @@ import type { MouseEvent } from "react";
 import { NavLink, useNavigate, useParams } from "react-router-dom";
 
 import { api } from "../api";
+import { caseOptionLabel } from "../caseLabels";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
@@ -403,7 +404,7 @@ export function Runs({
             <select value={caseId} onChange={(event) => setCaseId(event.target.value)}>
               {cases.map((item) => (
                 <option key={item.case_id} value={item.case_id}>
-                  {item.case_id} · {item.name}
+                  {caseOptionLabel(item)}
                 </option>
               ))}
             </select>

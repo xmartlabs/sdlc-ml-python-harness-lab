@@ -66,7 +66,8 @@ auth), labeled `lab-improvement`, with a footer linking back to the run
 - **Requirements:** `gh` authenticated (`gh auth status`), the gateway reachable
   (`GATEWAY_*` in `.env`) for the synthesis pass. Runs on the host — pair it with
   the host or docker mode you're already using.
-- **Model:** the synthesis uses the auditor model by default; override with
-  `IMPROVE_MODEL=gateway/gpt-5.5`.
+- **Model:** the synthesis uses the auditor model by default (`gpt-5.4-mini`);
+  override with `IMPROVE_MODEL=<litellm model name>` (e.g. `gpt-5.5` for a
+  stronger pass).
 - **Any harness:** works for opencode, codex, and claude runs — whatever produced
   the audit.

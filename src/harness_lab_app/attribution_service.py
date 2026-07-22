@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Any
 
 from sqlmodel import Session, select
 
-from harness_lab_app.attribution import build_attribution, read_step_logs
+from harness_lab_app.attribution import (
+    build_attribution,
+    build_attribution_from_events,
+    read_step_events,
+    read_step_logs,
+)
 from harness_lab_app.config import get_settings
 from harness_lab_app.models import Attribution, utc_now
 
@@ -41,12 +46,22 @@ class AttributionService:
 
     def index_run(self, run_id: str) -> Attribution:
         run_dir = self._run_dir(run_id)
-        log_text, steps = read_step_logs(run_dir)
-        data: dict[str, Any] = build_attribution(
-            log_text,
-            skills_available=self._skills_available(run_dir),
-            steps_parsed=steps,
-        )
+        # claude stream-json events are first-class tool calls — strictly
+        # richer than log parsing; prefer them whenever the run produced any.
+        event_lines, event_steps = read_step_events(run_dir)
+        if event_lines:
+            data: dict[str, Any] = build_attribution_from_events(
+                event_lines,
+                skills_available=self._skills_available(run_dir),
+                steps_parsed=event_steps,
+            )
+        else:
+            log_text, steps = read_step_logs(run_dir)
+            data = build_attribution(
+                log_text,
+                skills_available=self._skills_available(run_dir),
+                steps_parsed=steps,
+            )
 
         attribution = self.get_attribution(run_id)
         if attribution is None:

@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 
 from harness_lab_app.case_service import CaseService
 from harness_lab_app.config import get_settings
-from harness_lab_app.executors import get_executor
+from harness_lab_app.executors import SubprocessRunExecutor, get_executor
 from harness_lab_app.models import Run, RunEvent, Validation, utc_now
 from harness_lab_app.run_service import RunService
 from harness_lab_app.validation import (
@@ -47,7 +47,12 @@ class ValidationService:
         return get_settings().data_runs_dir / run_id
 
     def _run_objective(self, spec: dict[str, Any], run_id: str) -> dict[str, Any]:
-        executor = self._executor_instance()
+        # "local" specs (SWE-bench Pro) shell out to docker themselves; run them
+        # in this process — the worker has the socket, validation containers
+        # deliberately do not.
+        executor: RunExecutor = (
+            SubprocessRunExecutor() if spec.get("local") else self._executor_instance()
+        )
         results: list[dict[str, Any]] = []
         for command in spec["commands"]:
             label = command[-1] if command else ""
