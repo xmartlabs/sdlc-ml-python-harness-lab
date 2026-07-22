@@ -12,13 +12,18 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from harness_lab_app.harness_lifecycle.models import InstalledManifest, Proposal
+from harness_lab_app.harness_lifecycle.models import (
+    CandidateManifest,
+    InstalledManifest,
+    Proposal,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 INSTALLED_VERSION_FILE = ".harness-version.yaml"
 LEGACY_VERSION_FILE = ".template-version"
+CANDIDATE_FILE = ".harness-candidate.yaml"
 
 
 def dump_yaml(data: dict) -> str:
@@ -100,3 +105,10 @@ def read_legacy_template_version(root: Path) -> dict | None:
     if not path.is_file():
         return None
     return parse_legacy_template_version(path.read_text(encoding="utf-8"))
+
+
+def write_candidate_manifest(worktree: Path, manifest: CandidateManifest) -> Path:
+    """Write the candidate record inside its worktree (``.harness-candidate.yaml``)."""
+    path = worktree / CANDIDATE_FILE
+    atomic_write_text(path, dump_yaml(manifest.model_dump(mode="json")))
+    return path
