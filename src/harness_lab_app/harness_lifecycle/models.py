@@ -104,3 +104,39 @@ class Proposal(BaseModel):
         if not PROPOSAL_ID_RE.match(value):
             raise ValueError(f"Invalid proposal_id '{value}'. Expected HEP-YYYY-NNN.")
         return value
+
+
+# --------------------------------------------------------------------------- #
+# Installed version manifest (.harness-version.yaml — plan §6.3)
+# --------------------------------------------------------------------------- #
+
+
+class InstalledRef(BaseModel):
+    repository: str
+    ref: str
+    commit: str
+    channel: str = "governance"
+    adopted_at: datetime
+
+
+class SyncInfo(BaseModel):
+    protocol: int = 1
+    tools: list[str] = Field(default_factory=list)
+    paths: list[str] = Field(default_factory=list)
+    release_manifest_sha256: str | None = None
+
+
+class ValidationRef(BaseModel):
+    validation_id: str
+    status: str
+    suite: str
+    report: str
+
+
+class InstalledManifest(BaseModel):
+    """The lab's canonical record of the adopted template release."""
+
+    schema_version: int = 1
+    installed: InstalledRef
+    sync: SyncInfo = Field(default_factory=SyncInfo)
+    validation: ValidationRef | None = None
