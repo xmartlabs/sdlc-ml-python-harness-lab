@@ -428,10 +428,12 @@ app-up:
 	@docker compose build runner sandbox
 	@docker compose up -d --build api worker redis frontend
 
-# Host mode for the codex/claude harnesses: they drive their host CLIs (native
-# auth), so the worker (and API, for preflight) must run on the HOST with the
-# subprocess backend, not in the runner container. opencode/SWE-bench keep using
-# `make app-up`. See docs/harness-adapters.md.
+# Host mode: run the worker/API on the HOST with the subprocess backend so the
+# codex/claude harnesses drive your host CLI's interactive/native auth. This is an
+# ALTERNATIVE — `make app-up` already runs every harness (including claude) inside
+# the runner container, with claude auth supplied via .env (CLAUDE_CODE_OAUTH_TOKEN
+# or ANTHROPIC_API_KEY). Use host mode only when you'd rather reuse the host CLI's
+# existing session. See docs/harness-adapters.md.
 #
 # One command: `make app-host` (worker + API + frontend + redis together).
 # Or run each piece in its own terminal:

@@ -152,9 +152,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--harness",
         default="opencode",
         choices=["opencode", "codex", "claude"],
-        help="Agent CLI that drives the run. opencode runs in the runner "
-        "container; codex/claude run on the host (subprocess backend, native "
-        "auth). See docs/harness-adapters.md.",
+        help="Agent CLI that drives the run. All harnesses (opencode, codex, "
+        "claude) run inside the Docker runner under `make app-up`; claude auth "
+        "comes from .env (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY). Host mode "
+        "(`make app-host`, subprocess backend) is an alternative for driving a "
+        "host CLI's interactive/native auth. See docs/harness-adapters.md.",
     )
     p.add_argument(
         "--score-mode",
