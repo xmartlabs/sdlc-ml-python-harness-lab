@@ -486,4 +486,16 @@ the `local` flag in `build_validation_spec`); smoke with
 `make swebench-pro-selftest INSTANCE=instance_…`. Images are amd64-only — dev
 smokes on Apple Silicon run emulated; real benches belong on the amd64 server.
 
+## Operating the lab: restarts kill in-flight runs — 2026-07-22
+
+`docker compose restart worker` aborts any run mid-flight (the run is marked
+failed with "Worker restarted while the run was in flight; retry to resume").
+The worker is deliberately concurrency-1, so one active run is always possible.
+
+**Why it matters:** deploying lab code changes while an experiment runs silently
+costs a run (and its tokens).
+**How to apply:** before restarting api/worker, check the runs list for
+`running`/`pending` states (`GET /api/runs`) — restart only when empty. A run
+killed this way is recoverable with the Retry button.
+
 <!-- Add new learnings above this line -->

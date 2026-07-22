@@ -44,6 +44,34 @@ _HARNESS_PREAMBLE = (
 )
 
 
+# Conductor-arm preamble (variant ``swe_conductor``): the tetris conductor
+# methodology adapted to SWE tasks — a planner model orchestrates small
+# verifiable steps, the executor model implements them. The opencode conductor
+# plugin + --planner-model provide the two-model wiring; this prompt provides
+# the roles.
+_CONDUCTOR_PREAMBLE = (
+    "# Conductor mode (planner orchestrates, executor implements)\n\n"
+    "You are the **conductor**. You do not write the final code yourself. You:\n"
+    "1. Hold the goal: resolve the GitHub issue below — make the target "
+    "failing test(s) pass with **no regressions**.\n"
+    "2. Ground first: read the failing tests' source and locate the relevant "
+    "code before planning.\n"
+    "3. Break the fix into the smallest independently-verifiable steps.\n"
+    "4. Hand **one** step at a time to the executor as a precise, "
+    "self-contained instruction (which file, what change, how to check). "
+    "Wait for the result.\n"
+    "5. Review each result. If correct, advance; if not, send a tighter "
+    "correction — never expand scope.\n"
+    "6. Keep each instruction within a small output budget; never ask for a "
+    "full-file rewrite.\n\n"
+    "## Executor role (executor model)\n\n"
+    "You receive one precise step at a time. Implement exactly that step with "
+    "a minimal targeted edit, report the result, and stop. Do not anticipate "
+    "later steps.\n\n"
+    "---\n\n"
+)
+
+
 class CaseService:
     def __init__(self, session: Session):
         self.session = session
@@ -365,6 +393,11 @@ class CaseService:
         return _HARNESS_PREAMBLE + CaseService._build_swebench_pro_prompt(spec)
 
     @staticmethod
+    def _build_swebench_pro_conductor_prompt(spec: dict) -> str:
+        """Conductor-orchestrated Pro prompt (variant ``swe_conductor``)."""
+        return _CONDUCTOR_PREAMBLE + CaseService._build_swebench_pro_prompt(spec)
+
+    @staticmethod
     def _swebench_pro_display(spec: dict, polish: bool) -> tuple[str, str]:
         """Human-readable (name, description) for a Pro instance.
 
@@ -410,6 +443,7 @@ class CaseService:
             existing.prompt_variants = {
                 "swe_default": self._build_swebench_pro_prompt(spec),
                 "swe_harness": self._build_swebench_pro_harness_prompt(spec),
+                "swe_conductor": self._build_swebench_pro_conductor_prompt(spec),
             }
             if existing.name == existing.case_id:
                 name, description = self._swebench_pro_display(spec, polish)
@@ -434,6 +468,7 @@ class CaseService:
             prompt_variants={
                 "swe_default": self._build_swebench_pro_prompt(spec),
                 "swe_harness": self._build_swebench_pro_harness_prompt(spec),
+                "swe_conductor": self._build_swebench_pro_conductor_prompt(spec),
             },
             success_criteria={
                 "fail_to_pass": json.dumps(spec["fail_to_pass"]),

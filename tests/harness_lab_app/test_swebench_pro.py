@@ -249,6 +249,11 @@ def test_reimport_refreshes_prompt_variants():
         refreshed = service.import_swebench_pro_instance(_pro_spec())
         assert "sandbox does **not** have" in refreshed.prompt_variants["swe_default"]
         assert refreshed.prompt_variants["swe_harness"].startswith("# Engineering")
+        # Conductor arm: planner/executor roles wrapping the same task.
+        conductor = refreshed.prompt_variants["swe_conductor"]
+        assert conductor.startswith("# Conductor mode")
+        assert "You are the **conductor**" in conductor
+        assert conductor.endswith(refreshed.prompt_variants["swe_default"])
 
 
 def test_import_swebench_pro_endpoint_creates_case(monkeypatch):
