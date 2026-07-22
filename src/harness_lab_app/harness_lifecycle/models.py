@@ -153,3 +153,51 @@ class CandidateManifest(BaseModel):
     worktree: str
     created_at: datetime
     governance_paths: list[str] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# Canonical regression suite (benchmarks/harness-regression-v1/suite.yaml — §12)
+# --------------------------------------------------------------------------- #
+
+
+class SuiteCase(BaseModel):
+    id: str
+    role: str
+    repetitions: int = 1
+
+
+class SuiteExecution(BaseModel):
+    canary_repetitions: int = 3
+    swebench_repetitions: int = 1
+    sequential: bool = True
+    require_clean_harness: bool = True
+
+
+class SuiteComparison(BaseModel):
+    baseline: str = "installed"
+    candidate: str = "requested_ref"
+    controlled_fields: list[str] = Field(default_factory=list)
+
+
+class SuiteGates(BaseModel):
+    pathological_loop_threshold: int = 3
+    canary_pass_ratio: float = 1.0
+    max_interventions: int = 0
+
+
+class SuiteWarnings(BaseModel):
+    median_token_increase_pct: float = 20.0
+    median_cost_increase_pct: float = 20.0
+    median_duration_increase_pct: float = 20.0
+    median_steps_increase_pct: float = 25.0
+    composite_drop_max: float = 0.5
+
+
+class SuiteDefinition(BaseModel):
+    schema_version: int = 1
+    suite_id: str
+    execution: SuiteExecution = Field(default_factory=SuiteExecution)
+    cases: list[SuiteCase] = Field(default_factory=list)
+    comparison: SuiteComparison = Field(default_factory=SuiteComparison)
+    gates: SuiteGates = Field(default_factory=SuiteGates)
+    warnings: SuiteWarnings = Field(default_factory=SuiteWarnings)

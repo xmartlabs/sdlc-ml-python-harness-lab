@@ -1191,6 +1191,20 @@ lab can governance-sync a v0.2.x release.
 
 ### Phase 5 — Canonical regression and validation report
 
+**Status (PR 6a — evaluation core):** Implemented and locally validated on
+2026-07-24 on branch `feat/harness-regression-core` (uncommitted). `make ci` green
+(360 tests; +14 focused suite/metrics/gates tests), ruff/bandit/mypy clean.
+Delivered: `benchmarks/harness-regression-v1/suite.yaml` (canonical suite with
+declarative gate/warning thresholds), `SuiteDefinition` models, and
+`harness_lifecycle/{suite,metrics,gates,reports}.py` — suite parse + baseline/candidate
+run expansion, metric normalization + median aggregation + pathological-loop detection +
+controlled-condition isolation, declarative hard-gate/warning evaluation (reusing
+`SuccessCriterion`/`CriterionOperator`), and private YAML/JSON/Markdown reports + a
+sanitized public attestation. **Remaining (PR 6b):** the two deterministic canary cases, the
+`HarnessCandidate`/`RegressionSuiteRun`/`RegressionChildRun` DB models + SQLite
+migration, and the sequential Celery child-run orchestration with cancel/resume/
+orphan recovery.
+
 | Field | Content |
 |---|---|
 | Objective | Compare installed baseline and candidate under controlled conditions. |
@@ -1203,18 +1217,18 @@ lab can governance-sync a v0.2.x release.
 | Rollback | Disable suite orchestrator while retaining individual run support. |
 | Complexity | High |
 
-- [ ] Add suite schema and canonical suite fixture.
-- [ ] Add deterministic systematic-debugging canary with golden validation.
-- [ ] Add deterministic documentation-update canary with golden validation.
-- [ ] Write failing suite-expansion and controlled-condition tests.
-- [ ] Write failing metric normalization and repeated-loop tests.
-- [ ] Write failing hard-gate/warning tests.
-- [ ] Add lifecycle DB models and compatibility migrations.
-- [ ] Implement sequential child-run orchestration.
-- [ ] Implement persisted cancel, resume, and orphan recovery.
-- [ ] Generate private YAML/JSON/Markdown reports atomically.
-- [ ] Verify a synthetic baseline/candidate pass and failure.
-- [ ] Run lab gates and record evidence.
+- [x] Add suite schema and canonical suite fixture.
+- [ ] Add deterministic systematic-debugging canary with golden validation. *(PR 6b)*
+- [ ] Add deterministic documentation-update canary with golden validation. *(PR 6b)*
+- [x] Write failing suite-expansion and controlled-condition tests.
+- [x] Write failing metric normalization and repeated-loop tests.
+- [x] Write failing hard-gate/warning tests.
+- [ ] Add lifecycle DB models and compatibility migrations. *(PR 6b)*
+- [ ] Implement sequential child-run orchestration. *(PR 6b)*
+- [ ] Implement persisted cancel, resume, and orphan recovery. *(PR 6b)*
+- [x] Generate private YAML/JSON/Markdown reports atomically *(`reports.py` + public attestation)*.
+- [x] Verify a synthetic baseline/candidate pass and failure *(gate pass + loop/regression/controlled-mismatch fail tests)*.
+- [x] Run lab gates and record evidence *(PR 6a: `make ci` green, 360 tests)*.
 
 ### Phase 6 — Adoption, rejection, and rollback
 
