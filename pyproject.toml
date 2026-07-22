@@ -91,6 +91,8 @@ unfixable = []
 ]
 # The skills sync CLI legitimately prints user-facing progress to stdout.
 "src/ml_python_base/skills_sync/cli.py" = ["T201"]
+# The harness lifecycle CLI prints user-facing progress to stdout (its interface).
+"src/harness_lab_app/harness_lifecycle/cli.py" = ["T201"]
 # Bootstrap/maintenance scripts are CLIs: stdout progress is their interface.
 "scripts/*.py" = ["T201"]
 

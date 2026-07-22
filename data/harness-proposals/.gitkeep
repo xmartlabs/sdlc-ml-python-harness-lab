@@ -1,0 +1,2 @@
+# Tracked home for reviewed HEP proposals (data/harness-proposals/<year>/<id>.yaml).
+# Unlike data/runs/, these are the reviewed source of truth and are versioned.

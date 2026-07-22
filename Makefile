@@ -282,6 +282,28 @@ improve:
 		$(if $(IMPROVE_MODEL),--model $(IMPROVE_MODEL),) \
 		$(if $(CREATE),--create,)
 
+# Draft a versioned HEP proposal from a run's audit and print a sanitized public
+# issue preview. Writes data/harness-proposals/<year>/<id>.yaml (unless DRY_RUN=1).
+# Usage: make harness-proposal RUN=<id> [IMPROVE_MODEL=...] [DRY_RUN=1]
+harness-proposal:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=systematic-debugging-v1-K-003"; exit 1; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/harness_lifecycle.py proposal \
+		--run $(RUN) \
+		$(if $(IMPROVE_MODEL),--model $(IMPROVE_MODEL),) \
+		$(if $(DRY_RUN),--dry-run,)
+
+# Preview or file the sanitized public issue for a reviewed proposal. Issue
+# creation is idempotent and links back to the proposal.
+# Usage: make harness-proposal-issue PROPOSAL=HEP-2026-001 [CREATE=1] [DRY_RUN=1]
+harness-proposal-issue:
+	@[ -n "$(PROPOSAL)" ] || { echo "❌ PROPOSAL is required. Example: PROPOSAL=HEP-2026-001"; exit 1; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/harness_lifecycle.py proposal-issue \
+		--proposal $(PROPOSAL) \
+		$(if $(CREATE),--create,) \
+		$(if $(DRY_RUN),--dry-run,)
+
 # Reconcile opencode.json's gateway models from the live LiteLLM gateway, so a
 # model added to the gateway becomes selectable and routable without editing
 # opencode.json by hand. Preserves labels/order; appends new, drops removed.
@@ -801,4 +823,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models case-import app-worker-host app-api-host app-host improve
+.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue

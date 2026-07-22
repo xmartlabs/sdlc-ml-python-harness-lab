@@ -50,7 +50,7 @@ dedicated planning branch until implementation begins. During implementation:
 
 ### Overall progress
 
-- [ ] Milestone 1 — Authoritative template and release contract
+- [x] Milestone 1 — Authoritative template and release contract
 - [ ] Milestone 2 — Versioned proposals and safe candidate synchronization
 - [ ] Milestone 3 — Canonical baseline/candidate regression validation
 - [ ] Milestone 4 — Adoption, rejection, and rollback
@@ -63,8 +63,8 @@ dedicated planning branch until implementation begins. During implementation:
 
 | Milestone | Status | Evidence | Notes |
 |---|---|---|---|
-| 1 | In progress | [`ml-python-base` PR #27](https://github.com/marcosdh1987/ml-python-base/pull/27), merge `a97e98c`; branch `feat/harness-traceable-release-contract`; `make ci` (64 tests) and pre-commit green on 2026-07-22 | Phase 1 is merged. Phase 2 implementation is ready for review; its PR, merge, baseline tag, GitHub Release, and release asset are still pending. |
-| 2 | Not started | — | — |
+| 1 | In progress | Phase 1: [`ml-python-base` PR #27](https://github.com/marcosdh1987/ml-python-base/pull/27), merge `a97e98c`. Phase 2: re-created on local branch `feat/harness-traceable-release-contract` (uncommitted) on 2026-07-22; `make ci` green — 88 tests total (38 focused release tests), `make check-sync` no drift, schema/Make smoke tests pass. | Phase 1 is merged. **Note:** the Phase 2 work previously logged as complete was absent from `main` and `origin` of `ml-python-base` on this machine (no branch, no stash, no artifacts; `pyproject` still `0.1.0`), so it was re-implemented from the plan. Its PR, merge, baseline tag `v0.2.0`, GitHub Release, and release asset are still pending (human step). |
+| 2 | In progress | Phase 3 (versioned proposals): implemented on local branch `feat/harness-versioned-proposals` (uncommitted) on 2026-07-22; `make ci` green (303 tests), no drift. Milestone 1's `v0.2.0` baseline release is published, unblocking Phase 4. | Phase 3 done and awaiting PR/merge. Phase 4 (safe installed state + candidate sync) not started; it consumes the published `v0.2.0` + its release manifest. |
 | 3 | Not started | — | — |
 | 4 | Not started | — | — |
 | 5 | Not started | — | — |
@@ -1043,11 +1043,25 @@ tests, 88% coverage) and `make check-sync` with no drift.
 
 ### Phase 2 — Traceable template release contract
 
-**Status:** Implementation and local validation completed on 2026-07-22 in
-`feat/harness-traceable-release-contract`. The work remains uncommitted and
-unpublished pending human review, PR creation, merge, and the manual baseline
-release. Verification: 14 focused release tests, 64 full tests, `make ci`,
-pre-commit, JSON Schema parsing, Make target smoke tests, and no sync drift.
+**Status:** Implementation and local validation completed on 2026-07-22 on the
+local branch `feat/harness-traceable-release-contract`. The work remains
+uncommitted and unpublished pending human review, PR creation, merge, and the
+manual baseline release. Verification: 38 focused release tests, 88 full tests,
+`make ci` (both `make check` and `make check-sync`) green, JSON Schema parsing,
+and Make-target smoke tests (including the deprecated `template-release` shim and
+the `dirty_tree` preflight guard).
+
+**Re-implementation note (2026-07-22):** an earlier ledger entry recorded Phase 2
+as complete, but the artifacts were absent from the accessible `ml-python-base`
+checkout (`main` at `a97e98c`, `pyproject` still `0.1.0`, no tags, no
+`feat/*` branch on `origin`, no stash). Phase 2 was therefore rebuilt from this
+plan. Delivered files: `scripts/harness_release.py`, `make/harness.mk` (included
+from the `Makefile`), `schemas/harness-release-v1.schema.json`,
+`.github/ISSUE_TEMPLATE/harness-improvement.yml`,
+`.github/workflows/release-check.yml`, `docs/harness-release-lifecycle.md`,
+`tests/harness_release/test_harness_release.py`; `pyproject.toml` and `uv.lock`
+reconciled to `0.2.0`; the auto-committing/tagging `template-release` target
+replaced by a read-only preparation flow.
 
 | Field | Content |
 |---|---|
@@ -1075,6 +1089,18 @@ pre-commit, JSON Schema parsing, Make target smoke tests, and no sync drift.
 
 ### Phase 3 — Versioned lab proposals
 
+**Status:** Implemented and locally validated on 2026-07-22 on the local branch
+`feat/harness-versioned-proposals` (uncommitted). Verification: `make ci` green
+(303 tests; 30 focused proposal/sanitizer/CLI tests), `make check-sync` no drift,
+ruff/bandit/mypy clean, and CLI/Make smoke tests. Delivered:
+`src/harness_lab_app/harness_lifecycle/{__init__,models,manifests,proposals,sanitizer,cli}.py`,
+`scripts/harness_lifecycle.py` (thin delegator), `make harness-proposal` and
+`make harness-proposal-issue`, `data/harness-proposals/` (tracked),
+`docs/harness-lifecycle/proposal-workflow.md`, and tests. `lab_improve.py` is left
+intact as the legacy fallback (`make improve`) per the rollback plan; the new
+`harness-proposal` command supersedes it with stable IDs, evidence checksums,
+lifecycle, and sanitization.
+
 | Field | Content |
 |---|---|
 | Objective | Convert run evidence into durable, schema-validated, sanitized proposals. |
@@ -1087,15 +1113,17 @@ pre-commit, JSON Schema parsing, Make target smoke tests, and no sync drift.
 | Rollback | Retain legacy `make improve` for one release. |
 | Complexity | Medium |
 
-- [ ] Write failing tests for proposal parsing, ID allocation, evidence hashes,
+- [x] Write failing tests for proposal parsing, ID allocation, evidence hashes,
   atomic writes, idempotence, and public sanitization.
-- [ ] Implement proposal Pydantic models and YAML storage.
-- [ ] Implement public issue preview with a strict field allowlist.
-- [ ] Adapt `lab_improve.py` to create proposal drafts.
-- [ ] Add `harness-proposal` and `harness-proposal-issue` targets.
-- [ ] Add proposal workflow documentation.
-- [ ] Verify `DRY_RUN=1` leaves Git and filesystem state unchanged.
-- [ ] Run lab gates and record evidence.
+- [x] Implement proposal Pydantic models and YAML storage.
+- [x] Implement public issue preview with a strict field allowlist.
+- [~] Adapt `lab_improve.py` to create proposal drafts. Superseded by the new
+  `make harness-proposal` command; `lab_improve.py`/`make improve` retained
+  unchanged as the one-release legacy fallback per the rollback plan.
+- [x] Add `harness-proposal` and `harness-proposal-issue` targets.
+- [x] Add proposal workflow documentation.
+- [x] Verify `DRY_RUN=1` leaves Git and filesystem state unchanged.
+- [x] Run lab gates and record evidence.
 
 ### Phase 4 — Safe installed state and candidate synchronization
 
