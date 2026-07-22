@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import { api } from "../api";
+import { SWE_CASE_TYPES, shortInstanceLabel } from "../caseLabels";
 import { EmptyState } from "../components/EmptyState";
 import type { CaseCreatePayload, CaseRecord, SwebenchProInstance } from "../types";
 
@@ -13,14 +14,6 @@ type CasesProps = {
   onSelectCase: (caseId: string) => void;
   selectedCaseId: string | null;
 };
-
-const SWE_CASE_TYPES = new Set(["swe_bench_instance", "swe_pro_instance"]);
-
-function shortInstanceLabel(instanceId: string): string {
-  // instance_ansible__ansible-<40-char sha>-v<sha> → ansible__ansible-5f4e332
-  const bare = instanceId.replace(/^instance_/, "");
-  return bare.replace(/-([0-9a-f]{7})[0-9a-f]{33}(-v.*)?$/, "-$1");
-}
 
 const CASE_TEMPLATES = [
   { value: "single_prompt", label: "Single prompt" },
