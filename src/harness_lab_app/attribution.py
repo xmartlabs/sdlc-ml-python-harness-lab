@@ -20,6 +20,7 @@ events — noted as future work, not faked here.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +33,7 @@ HARNESS_READING_SURFACE = (
     ".github/architecture.md",
     ".github/standards.md",
     ".github/domain-boundaries.md",
+    "CLAUDE.md",
     "OPENCODE.md",
     "LOCAL_AGENT.md",
     "memory/context.md",
@@ -118,14 +120,83 @@ def parse_logs(log_text: str) -> dict[str, Any]:
     }
 
 
-def build_attribution(
-    log_text: str,
-    *,
-    skills_available: list[str] | None = None,
-    steps_parsed: int = 0,
+# claude tool names → the lab's tool buckets.
+_CLAUDE_EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+
+def _normalize_event_path(path: str) -> str:
+    """Container paths arrive absolute (/app/...); strip to repo-relative."""
+    return path.removeprefix("/app/").lstrip("/") if path.startswith("/") else path
+
+
+def parse_claude_events(lines: list[str]) -> dict[str, Any]:
+    """Extract tool/file/skill signals from claude stream-json event lines.
+
+    Unlike the opencode permission-log parsing, these are first-class tool_use
+    events, so skill *invocation* is directly observable (the Skill tool call),
+    not just SKILL.md reads.
+    """
+    tools = {"read": 0, "edit": 0, "bash": 0, "shell": 0}
+    files_read: set[str] = set()
+    files_edited: set[str] = set()
+    bash_commands: dict[str, int] = {}
+    skills_consulted: set[str] = set()
+    agent_modes: dict[str, int] = {}
+
+    for raw in lines:
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "assistant":
+            continue
+        for block in (event.get("message") or {}).get("content", []):
+            if block.get("type") != "tool_use":
+                continue
+            name = block.get("name", "")
+            inp = block.get("input") or {}
+            if name == "Read":
+                tools["read"] += 1
+                path = _normalize_event_path(str(inp.get("file_path", "")))
+                if path:
+                    files_read.add(path)
+                    skill = _SKILL_PATH_RE.search(path)
+                    if skill:
+                        skills_consulted.add(skill.group("name"))
+            elif name in _CLAUDE_EDIT_TOOLS:
+                tools["edit"] += 1
+                target = inp.get("file_path") or inp.get("notebook_path")
+                if target:
+                    files_edited.add(_normalize_event_path(str(target)))
+            elif name == "Bash":
+                tools["bash"] += 1
+                command = _bash_command_name(str(inp.get("command", "")))
+                if command:
+                    bash_commands[command] = bash_commands.get(command, 0) + 1
+            elif name == "Skill":
+                skill_name = str(inp.get("skill", "")).strip()
+                if skill_name:
+                    skills_consulted.add(skill_name)
+            elif name in {"Task", "Agent"}:
+                mode = str(inp.get("subagent_type", "agent")).strip() or "agent"
+                agent_modes[mode] = agent_modes.get(mode, 0) + 1
+
+    return {
+        "tools": tools,
+        "files_read": sorted(files_read),
+        "files_edited": sorted(files_edited),
+        "bash_commands": bash_commands,
+        "agent_modes": agent_modes,
+        "skills_consulted": sorted(skills_consulted),
+    }
+
+
+def _assemble(
+    parsed: dict[str, Any],
+    skills_available: list[str] | None,
+    steps_parsed: int,
+    skills_note: str,
 ) -> dict[str, Any]:
-    """Full attribution: parsed signals + harness read-coverage cross-reference."""
-    parsed = parse_logs(log_text)
     read_set = set(parsed["files_read"]) | set(parsed["files_edited"])
     docs_read = [doc for doc in HARNESS_READING_SURFACE if doc in read_set]
     skills_available = sorted(skills_available or [])
@@ -136,10 +207,7 @@ def build_attribution(
         "governance_coverage": f"{len(docs_read)}/{len(HARNESS_READING_SURFACE)}",
         "skills_available": skills_available,
         "skills_consulted": parsed["skills_consulted"],
-        "skills_note": (
-            "skill invocation is context-injected, not file-read; "
-            "'consulted' only counts SKILL.md reads and is a lower bound"
-        ),
+        "skills_note": skills_note,
     }
     tools = parsed["tools"]
     summary = (
@@ -159,6 +227,42 @@ def build_attribution(
     }
 
 
+def build_attribution(
+    log_text: str,
+    *,
+    skills_available: list[str] | None = None,
+    steps_parsed: int = 0,
+) -> dict[str, Any]:
+    """Full attribution from opencode permission logs."""
+    return _assemble(
+        parse_logs(log_text),
+        skills_available,
+        steps_parsed,
+        skills_note=(
+            "skill invocation is context-injected, not file-read; "
+            "'consulted' only counts SKILL.md reads and is a lower bound"
+        ),
+    )
+
+
+def build_attribution_from_events(
+    event_lines: list[str],
+    *,
+    skills_available: list[str] | None = None,
+    steps_parsed: int = 0,
+) -> dict[str, Any]:
+    """Full attribution from claude stream-json events (first-class tool calls)."""
+    return _assemble(
+        parse_claude_events(event_lines),
+        skills_available,
+        steps_parsed,
+        skills_note=(
+            "events-based: 'consulted' counts real Skill-tool invocations "
+            "plus SKILL.md reads"
+        ),
+    )
+
+
 def read_step_logs(run_dir: Path) -> tuple[str, int]:
     """Concatenate the run's step logs; fall back to opencode.log."""
     steps_dir = run_dir / "steps"
@@ -170,6 +274,19 @@ def read_step_logs(run_dir: Path) -> tuple[str, int]:
         return "", 0
     text = "\n".join(_safe_read(path) for path in logs)
     return text, len(logs)
+
+
+def read_step_events(run_dir: Path) -> tuple[list[str], int]:
+    """Collect claude stream-json event lines across steps (empty when absent)."""
+    steps_dir = run_dir / "steps"
+    files = sorted(steps_dir.glob("step-*.events.jsonl")) if steps_dir.is_dir() else []
+    single = run_dir / "opencode.events.jsonl"
+    if single.exists():
+        files.append(single)
+    lines: list[str] = []
+    for path in files:
+        lines.extend(_safe_read(path).splitlines())
+    return lines, len([f for f in files if f.name.startswith("step-")])
 
 
 def _safe_read(path: Path) -> str:

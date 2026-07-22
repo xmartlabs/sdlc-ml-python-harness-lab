@@ -29,8 +29,10 @@ const POLL_INTERVAL_MS = 1500;
 export const CANCELLABLE_STATES: RunRecord["state"][] = ["pending", "running"];
 export const RETRYABLE_STATES: RunRecord["state"][] = ["failed", "cancelled"];
 
-// Harnesses whose host CLI emits final summaries, not opencode-style per-tool
-// step logs — so file/tool/governance attribution can't be parsed from them.
+// Harnesses whose CLI emits final summaries, not per-tool logs — so file/tool/
+// governance attribution can't be parsed from them. claude runs now capture
+// stream-json events (first-class tool calls), so a claude run only falls back
+// to the summary-only note when its attribution carries no signals (old runs).
 const SUMMARY_ONLY_HARNESSES = new Set(["claude", "codex"]);
 
 function harnessFromCommand(command: string[] | undefined): string {
@@ -41,7 +43,6 @@ function harnessFromCommand(command: string[] | undefined): string {
 
 export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetailProps) {
   const harness = harnessFromCommand(run?.command);
-  const summaryOnlyHarness = SUMMARY_ONLY_HARNESSES.has(harness);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -58,6 +59,16 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
   const [improveError, setImproveError] = useState<string | null>(null);
   const [tab, setTab] = useState<"detail" | "terminal" | "desktop">("detail");
   const consoleRef = useRef<HTMLDivElement | null>(null);
+  // A claude run with events-based attribution has real tool counts; only fall
+  // back to the summary-only explainer when there is nothing to show.
+  const attributionHasSignals = Boolean(
+    attribution &&
+      (Object.values(attribution.tools ?? {}).some((count) => count > 0) ||
+        (attribution.files?.read?.length ?? 0) > 0 ||
+        (attribution.files?.edited?.length ?? 0) > 0)
+  );
+  const summaryOnlyHarness =
+    SUMMARY_ONLY_HARNESSES.has(harness) && !attributionHasSignals;
 
   useEffect(() => {
     setEvents([]);

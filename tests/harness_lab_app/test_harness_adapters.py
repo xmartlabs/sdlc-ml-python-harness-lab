@@ -37,21 +37,26 @@ def test_codex_cmd_passes_native_model():
     assert cmd == ["codex", "--quiet", "--full-auto", "-m", "o4-mini", "build tetris"]
 
 
+# stream-json + --verbose: observability flags every claude run now carries
+# (raw events → *.events.jsonl for attribution/usage; log gets the rendering).
+_CLAUDE_BASE = [
+    "claude",
+    "-p",
+    "--dangerously-skip-permissions",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+]
+
+
 def test_claude_cmd_headless_ignores_gateway_model():
     cmd = bench_run.build_claude_cmd("gateway/claude-sonnet-4.6", "build tetris")
-    assert cmd == ["claude", "-p", "--dangerously-skip-permissions", "build tetris"]
+    assert cmd == [*_CLAUDE_BASE, "build tetris"]
 
 
 def test_claude_cmd_passes_native_model():
     cmd = bench_run.build_claude_cmd("claude-opus-4-8", "build tetris")
-    assert cmd == [
-        "claude",
-        "-p",
-        "--dangerously-skip-permissions",
-        "--model",
-        "claude-opus-4-8",
-        "build tetris",
-    ]
+    assert cmd == [*_CLAUDE_BASE, "--model", "claude-opus-4-8", "build tetris"]
 
 
 def test_native_model_helper():
