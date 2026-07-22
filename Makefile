@@ -304,6 +304,17 @@ harness-proposal-issue:
 		$(if $(CREATE),--create,) \
 		$(if $(DRY_RUN),--dry-run,)
 
+# Show installed template version, latest release, drift, and compatibility.
+# Read-only; needs the `template` remote (make template-remote-setup).
+harness-status:
+	@uv run python scripts/harness_lifecycle.py status
+
+# Read-only diff of an immutable candidate release (governance changes + blockers).
+# Works with a dirty tree; writes nothing. Usage: make harness-sync-preview REF=v0.3.0
+harness-sync-preview:
+	@[ -n "$(REF)" ] || { echo "❌ REF is required. Example: REF=v0.3.0"; exit 1; }
+	@uv run python scripts/harness_lifecycle.py sync-preview --ref $(REF)
+
 # Reconcile opencode.json's gateway models from the live LiteLLM gateway, so a
 # model added to the gateway becomes selectable and routable without editing
 # opencode.json by hand. Preserves labels/order; appends new, drops removed.
@@ -823,4 +834,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue
+.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview

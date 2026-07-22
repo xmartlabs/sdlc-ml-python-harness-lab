@@ -1127,6 +1127,17 @@ lifecycle, and sanitization.
 
 ### Phase 4 — Safe installed state and candidate synchronization
 
+**Status (PR 4 — read-only slice):** Implemented and locally validated on
+2026-07-24 on branch `feat/harness-installed-state-preview` (uncommitted). `make ci`
+green (335 tests; 32 focused Phase-4 tests), ruff/bandit/mypy clean, CLI smoke tests
+pass (`harness-status`, `harness-sync-preview` reject `main` → exit 2 and missing
+remote → exit 7). Delivered: `harness_lifecycle/{errors,releases,sync}.py`,
+installed-manifest + legacy `.template-version` parsing in `models.py`/`manifests.py`,
+`make harness-status` and `make harness-sync-preview REF=`, and
+`docs/harness-lifecycle/lab-sync-workflow.md`. **Remaining (PR 5):** candidate
+branch/worktree creation, dual file/DB locking, dirty-main refusal on the mutating
+sync, and the byte-identity guarantee for forbidden paths.
+
 | Field | Content |
 |---|---|
 | Objective | Preview and prepare immutable release candidates without touching main. |
@@ -1139,18 +1150,19 @@ lifecycle, and sanitization.
 | Rollback | Remove only the candidate worktree/branch; main remains unchanged. |
 | Complexity | High |
 
-- [ ] Write failing tests for strict refs and full-SHA resolution.
-- [ ] Write failing tests for legacy installed-state migration.
-- [ ] Write failing tests proving preview is read-only on a dirty tree.
-- [ ] Write failing tests proving sync refuses dirty main.
-- [ ] Write failing tests for forbidden paths and registry/platform changes.
-- [ ] Implement `harness-status`.
-- [ ] Implement source and generated diff preview.
-- [ ] Implement candidate branch/worktree creation without staging or committing.
-- [ ] Add dual file/DB lifecycle locking.
+- [x] Write failing tests for strict refs and full-SHA resolution.
+- [x] Write failing tests for legacy installed-state migration.
+- [x] Write failing tests proving preview is read-only (uses `git diff`; no tree
+  mutation, runs on a dirty tree).
+- [ ] Write failing tests proving sync refuses dirty main. *(PR 5 — mutating sync)*
+- [x] Write failing tests for forbidden paths and registry/platform changes.
+- [x] Implement `harness-status`.
+- [x] Implement source diff preview. *(generated/adapter diff lands with PR 5 sync)*
+- [ ] Implement candidate branch/worktree creation without staging or committing. *(PR 5)*
+- [ ] Add dual file/DB lifecycle locking. *(PR 5)*
 - [ ] Verify `src/`, `tests/`, `benchmarks/`, `data/`, `memory/`, `Makefile`,
-  `scripts/`, and `adapters/registry.toml` remain unchanged by governance sync.
-- [ ] Run lab gates and record evidence.
+  `scripts/`, and `adapters/registry.toml` remain unchanged by governance sync. *(PR 5)*
+- [x] Run lab gates and record evidence *(PR 4 slice: `make ci` green, 335 tests)*.
 
 ### Phase 5 — Canonical regression and validation report
 

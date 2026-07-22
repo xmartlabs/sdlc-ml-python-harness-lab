@@ -25,7 +25,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from harness_lab_app.harness_lifecycle import proposals, sanitizer
+from harness_lab_app.harness_lifecycle import (
+    errors,
+    manifests,
+    proposals,
+    releases,
+    sanitizer,
+    sync,
+)
 from harness_lab_app.harness_lifecycle.models import (
     Observation,
     Proposal,
@@ -217,11 +224,114 @@ def cmd_proposal_issue(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_status(_args: argparse.Namespace) -> int:
+    installed = manifests.read_installed_manifest(REPO_ROOT)
+    legacy = manifests.read_legacy_template_version(REPO_ROOT)
+    print("📦 Harness installed state")
+    installed_ref: str | None = None
+    if installed is not None:
+        info = installed.installed
+        installed_ref = info.ref
+        print(f"   installed : {info.ref} ({info.commit[:12]}) channel={info.channel}")
+        print(f"   protocol  : {installed.sync.protocol}")
+    elif legacy is not None:
+        installed_ref = str(legacy.get("ref") or "")
+        print(f"   installed : {installed_ref} ({legacy.get('commit')}) [legacy]")
+        print("   status    : legacy_unverified — adopt via the lifecycle to verify")
+    else:
+        print("   installed : (none — no .harness-version.yaml or .template-version)")
+
+    if not releases.template_remote_configured(REPO_ROOT):
+        print(
+            "   latest    : (template remote not configured — run `make template-remote-setup`)"
+        )
+        return EXIT_OK
+    releases.fetch_template(REPO_ROOT)
+    latest = releases.latest_release_tag(REPO_ROOT)
+    if latest is None:
+        print("   latest    : (no v* tags on the template remote)")
+        return EXIT_OK
+    print(f"   latest    : {latest}")
+    if installed_ref and installed_ref != latest:
+        print(f"   ⚠️  drift  : installed {installed_ref} ≠ latest {latest}")
+    elif installed_ref == latest:
+        print("   ✅ up to date")
+    latest_protocol = releases.read_sync_protocol_at_ref(REPO_ROOT, latest)
+    if (
+        installed is not None
+        and latest_protocol is not None
+        and latest_protocol > installed.sync.protocol
+    ):
+        print(
+            f"   ⚠️  compatibility: {latest} needs sync protocol {latest_protocol}, "
+            f"installed {installed.sync.protocol}"
+        )
+    return EXIT_OK
+
+
+def cmd_sync_preview(args: argparse.Namespace) -> int:
+    try:
+        releases.validate_release_ref(args.ref)
+    except errors.LifecycleError as exc:
+        print(f"❌ {exc}")
+        return exc.exit_code
+    if not releases.template_remote_configured(REPO_ROOT):
+        print("❌ template remote not configured. Run `make template-remote-setup`.")
+        return errors.EXIT_MISSING
+    releases.fetch_template(REPO_ROOT)
+    try:
+        commit = releases.resolve_ref_commit(REPO_ROOT, args.ref)
+    except errors.LifecycleError as exc:
+        print(f"❌ {exc}")
+        return exc.exit_code
+
+    gov = sync.governance_paths(REPO_ROOT)
+    preview = sync.classify_preview(
+        sync.changed_paths_between(REPO_ROOT, "HEAD", args.ref), gov
+    )
+    print(
+        f"🔍 Sync preview for {args.ref} ({commit[:12]}) — read-only, nothing written:"
+    )
+    print(f"   governance changes: {len(preview.governance)}")
+    for path in preview.governance:
+        print(f"      · {path}")
+    if preview.other:
+        print(f"   other (non-governance, ignored): {len(preview.other)}")
+    installed = manifests.read_installed_manifest(REPO_ROOT)
+    protocol = releases.read_sync_protocol_at_ref(REPO_ROOT, args.ref)
+    if (
+        protocol is not None
+        and installed is not None
+        and protocol > installed.sync.protocol
+    ):
+        print(
+            f"   ⚠️  requires sync protocol {protocol} (installed {installed.sync.protocol})."
+        )
+    if preview.has_blockers:
+        print(
+            "   ⛔ BLOCKERS — these forbidden paths would change; governance sync must not touch them:"
+        )
+        for path in preview.forbidden:
+            print(f"      · {path}")
+        return errors.EXIT_CONFLICT
+    print(
+        "   ✅ governance-only; safe to prepare a candidate (make harness-sync-branch)."
+    )
+    return EXIT_OK
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    st = sub.add_parser("status", help="Show installed/latest/drift/compatibility.")
+    st.set_defaults(func=cmd_status)
+
+    sp = sub.add_parser("sync-preview", help="Read-only diff of a candidate release.")
+    sp.add_argument("--ref", required=True)
+    sp.set_defaults(func=cmd_sync_preview)
 
     pr = sub.add_parser("proposal", help="Draft a versioned proposal from a run.")
     pr.add_argument("--run", required=True)
@@ -240,7 +350,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except errors.LifecycleError as exc:
+        print(f"❌ {exc}")
+        return exc.exit_code
 
 
 if __name__ == "__main__":
