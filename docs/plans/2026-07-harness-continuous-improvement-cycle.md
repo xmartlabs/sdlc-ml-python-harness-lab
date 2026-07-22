@@ -63,7 +63,7 @@ dedicated planning branch until implementation begins. During implementation:
 
 | Milestone | Status | Evidence | Notes |
 |---|---|---|---|
-| 1 | Not started | — | — |
+| 1 | In progress | [`ml-python-base` PR #27](https://github.com/marcosdh1987/ml-python-base/pull/27), merge `a97e98c`; branch `feat/harness-traceable-release-contract`; `make ci` (64 tests) and pre-commit green on 2026-07-22 | Phase 1 is merged. Phase 2 implementation is ready for review; its PR, merge, baseline tag, GitHub Release, and release asset are still pending. |
 | 2 | Not started | — | — |
 | 3 | Not started | — | — |
 | 4 | Not started | — | — |
@@ -1014,6 +1014,11 @@ Compatibility outcomes:
 
 ### Phase 1 — Authoritative template and shared engine
 
+**Status:** Completed and merged on 2026-07-22 via
+[`ml-python-base` PR #27](https://github.com/marcosdh1987/ml-python-base/pull/27)
+at merge commit `a97e98c`. Post-merge verification passed `make check` (50
+tests, 88% coverage) and `make check-sync` with no drift.
+
 | Field | Content |
 |---|---|
 | Objective | Remove shared-engine drift and establish explicit governance/platform ownership. |
@@ -1026,17 +1031,23 @@ Compatibility outcomes:
 | Rollback | Revert PR before a release; corrective release afterward. |
 | Complexity | Medium |
 
-- [ ] Write failing renderer override tests.
-- [ ] Verify tests fail because `render_tool(..., skills=...)` is unsupported.
-- [ ] Implement the minimal compatible override in the template.
-- [ ] Verify default rendering remains byte-identical.
-- [ ] Add explicit sync protocol metadata.
-- [ ] Document governance and platform path ownership.
-- [ ] Compare lab/template shared paths and resolve every unexplained drift.
-- [ ] Run template gates.
-- [ ] Record PR and test evidence in the ledger.
+- [x] Write failing renderer override tests.
+- [x] Verify tests fail because `render_tool(..., skills=...)` is unsupported.
+- [x] Implement the minimal compatible override in the template.
+- [x] Verify default rendering remains byte-identical.
+- [x] Add explicit sync protocol metadata.
+- [x] Document governance and platform path ownership.
+- [x] Compare lab/template shared paths and resolve every unexplained drift.
+- [x] Run template gates.
+- [x] Record PR and test evidence in the ledger.
 
 ### Phase 2 — Traceable template release contract
+
+**Status:** Implementation and local validation completed on 2026-07-22 in
+`feat/harness-traceable-release-contract`. The work remains uncommitted and
+unpublished pending human review, PR creation, merge, and the manual baseline
+release. Verification: 14 focused release tests, 64 full tests, `make ci`,
+pre-commit, JSON Schema parsing, Make target smoke tests, and no sync drift.
 
 | Field | Content |
 |---|---|
@@ -1050,16 +1061,16 @@ Compatibility outcomes:
 | Rollback | Revert PR before publishing; never move a published tag. |
 | Complexity | Medium |
 
-- [ ] Write failing tests for invalid SemVer, mismatched version/changelog,
+- [x] Write failing tests for invalid SemVer, mismatched version/changelog,
   existing tag, missing provenance, and incompatible platform changes.
-- [ ] Add `harness-release-v1` JSON Schema.
-- [ ] Implement `harness_release.py` with argument-array subprocess calls.
-- [ ] Add `make/harness.mk` and include it from the Makefile.
-- [ ] Replace automatic commit/tag behavior with a read-only/preparation flow.
-- [ ] Add the structured harness improvement issue template.
-- [ ] Add release-check workflow without publication.
-- [ ] Reconcile `pyproject.toml` and `CHANGELOG.md` for the baseline release.
-- [ ] Run all gates and record evidence.
+- [x] Add `harness-release-v1` JSON Schema.
+- [x] Implement `harness_release.py` with argument-array subprocess calls.
+- [x] Add `make/harness.mk` and include it from the Makefile.
+- [x] Replace automatic commit/tag behavior with a read-only/preparation flow.
+- [x] Add the structured harness improvement issue template.
+- [x] Add release-check workflow without publication.
+- [x] Reconcile `pyproject.toml` and `CHANGELOG.md` for the baseline release.
+- [x] Run all gates and record evidence.
 - [ ] Human publishes the baseline tag/release/asset in a later explicit step.
 
 ### Phase 3 — Versioned lab proposals
