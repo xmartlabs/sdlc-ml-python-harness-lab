@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from harness_lab_app.harness_lifecycle import drafting
+from harness_lab_app.harness_lifecycle import drafting, metrics
 
 FIXED = datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC)
 
@@ -21,7 +21,7 @@ _DRAFT = {
     "suggested_change": "Add an explicit retry budget and hypothesis reset rule.",
     "suggested_cases": ["systematic-debugging-v1"],
     "success_criteria": [
-        {"metric": "repeated_equivalent_command_max", "operator": "lte", "value": 2}
+        {"metric": "repeated_command_max", "operator": "lte", "value": 2}
     ],
     "confidence": "high",
 }
@@ -51,9 +51,15 @@ def test_draft_to_proposal() -> None:
         source=ProposalSource(repository="marcosdh1987/ai-agentic-harness-lab"),
     )
     assert proposal.title.startswith("Add a retry budget")
-    assert proposal.validation.success_criteria[0].metric == (
-        "repeated_equivalent_command_max"
-    )
+    assert proposal.validation.success_criteria[0].metric == ("repeated_command_max")
+
+
+def test_system_prompt_constrains_metrics_to_the_catalog() -> None:
+    # The draft LLM must only emit metrics the lab can compute; keep the prompt and
+    # the canonical catalog coupled so an off-catalog metric never ships a gate that
+    # fails closed forever.
+    for name in metrics.MEASURABLE_METRICS:
+        assert name in drafting.SYSTEM_PROMPT
 
 
 def test_synthesize_issue_markdown_is_sanitized(tmp_path: Path) -> None:

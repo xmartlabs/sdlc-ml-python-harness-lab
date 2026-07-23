@@ -15,6 +15,25 @@ from dataclasses import dataclass
 _WHITESPACE = re.compile(r"\s+")
 
 
+# Canonical per-case metric vocabulary for proposal ``success_criteria``. A
+# criterion whose ``metric`` is not one of these fails closed in
+# ``gates.evaluate_criterion``, so the drafting LLM must draw only from this
+# catalog. Whoever wires a proposal's ``proposal_metrics`` dict emits exactly
+# these keys (all derived from ``RunMetrics`` / ``AggregatedArm`` below).
+MEASURABLE_METRICS: dict[str, str] = {
+    "objective_passed": "case objective met (bool)",
+    "composite": "composite quality score (float)",
+    "total_tokens": "total tokens used (int)",
+    "cost_usd": "run cost in USD (float)",
+    "duration_min": "wall-clock minutes (float)",
+    "steps": "agent steps / turns (int)",
+    "interventions": "manual interventions required (int)",
+    "files_modified": "files changed (int)",
+    "diff_lines": "lines changed (int)",
+    "repeated_command_max": "longest run of equivalent consecutive commands (int)",
+}
+
+
 # --------------------------------------------------------------------------- #
 # Per-run normalization
 # --------------------------------------------------------------------------- #

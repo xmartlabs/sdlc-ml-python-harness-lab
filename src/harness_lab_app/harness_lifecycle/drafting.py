@@ -14,7 +14,12 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from harness_lab_app.harness_lifecycle import issue_form, proposals, sanitizer
+from harness_lab_app.harness_lifecycle import (
+    issue_form,
+    metrics,
+    proposals,
+    sanitizer,
+)
 from harness_lab_app.harness_lifecycle.models import (
     Observation,
     Proposal,
@@ -31,6 +36,12 @@ if TYPE_CHECKING:
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MODEL = "gpt-5.4-mini"
 
+# The lab fails closed on any success-criterion metric it cannot compute
+# (gates.evaluate_criterion), so the draft must draw only from this catalog.
+_METRIC_CATALOG = "; ".join(
+    f"{name} ({desc})" for name, desc in metrics.MEASURABLE_METRICS.items()
+)
+
 SYSTEM_PROMPT = (
     "You convert a single agent-run behavioral audit into ONE governed harness "
     "improvement proposal. Output ONLY a JSON object with keys: title (str), "
@@ -38,8 +49,18 @@ SYSTEM_PROMPT = (
     "affected_artifacts (list of exact repo paths under .github/ or adapters/"
     "templates), suggested_change (str), suggested_cases (list of case ids), "
     "success_criteria (list of {metric, operator in [lte,gte,eq,lt,gt], value}), "
-    "confidence in [low,medium,high]. Describe aggregate behavior only; never "
-    "include secrets, tokens, local paths, or raw logs."
+    "confidence in [low,medium,high]. "
+    "Each success_criteria.metric MUST be one of the lab's measurable metrics: "
+    f"{_METRIC_CATALOG}. Do NOT invent metric names — the lab automatically fails "
+    "any criterion whose metric it cannot compute, which would keep the cycle from "
+    "ever closing. Map behavioral intent to the closest measurable metric (e.g. run "
+    "length or number of turns -> steps; repeated, redundant, or thrashing actions -> "
+    "repeated_command_max; needing manual help -> interventions). Express any goal "
+    "that none of these metrics can capture (e.g. whether governance docs were read, "
+    "whether a formal verify gate was invoked) only as prose inside suggested_change, "
+    "never as a success_criteria entry. "
+    "Describe aggregate behavior only; never include secrets, tokens, local paths, "
+    "or raw logs."
 )
 
 
