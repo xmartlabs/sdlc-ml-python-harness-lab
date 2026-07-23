@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { ArtifactsPanel } from "../components/ArtifactsPanel";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HarnessCatalog } from "../components/HarnessCatalog";
@@ -61,7 +61,9 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
   const [proposalIssue, setProposalIssue] = useState<ProposalIssue | null>(null);
   const [proposalLoading, setProposalLoading] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
+  const [proposalNotice, setProposalNotice] = useState<string | null>(null);
   const [proposalCopied, setProposalCopied] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
   const [tab, setTab] = useState<"detail" | "terminal" | "desktop">("detail");
   const consoleRef = useRef<HTMLDivElement | null>(null);
   // A claude run with events-based attribution has real tool counts; only fall
@@ -139,6 +141,7 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
     setImproveError(null);
     setProposalIssue(null);
     setProposalError(null);
+    setProposalNotice(null);
     setProposalCopied(false);
     if (run === null) {
       return;
@@ -401,6 +404,7 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
     const runId = run.run_id;
     setProposalLoading(true);
     setProposalError(null);
+    setProposalNotice(null);
     setProposalCopied(false);
     api
       .getProposalIssue(runId)
@@ -408,7 +412,13 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
         setProposalIssue(result);
       })
       .catch((error: Error) => {
-        setProposalError(error.message);
+        // A 409 means the prerequisite isn't ready (no finished audit) — surface it
+        // as a soft, actionable notice rather than a red error banner.
+        if (error instanceof ApiError && error.status === 409) {
+          setProposalNotice(error.message);
+        } else {
+          setProposalError(error.message);
+        }
       })
       .finally(() => setProposalLoading(false));
   };
@@ -425,6 +435,21 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
       })
       .catch(() => {
         // Clipboard access denied — the markdown stays selectable in the <pre>.
+      });
+  };
+
+  const handleCopyField = (key: string, text: string) => {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopiedField(key);
+        window.setTimeout(
+          () => setCopiedField((current) => (current === key ? null : current)),
+          2000
+        );
+      })
+      .catch(() => {
+        // Clipboard access denied — the value stays selectable in the field.
       });
   };
 
@@ -820,6 +845,12 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
           </div>
         </div>
         {proposalError ? <ErrorBanner message={proposalError} onDismiss={() => setProposalError(null)} /> : null}
+        {proposalNotice ? (
+          <p className="muted" style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
+            <span aria-hidden="true">ℹ️</span>
+            <span>{proposalNotice}</span>
+          </p>
+        ) : null}
         {proposalIssue === null ? (
           <p className="muted">
             {proposalLoading
@@ -828,22 +859,82 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
           </p>
         ) : (
           <>
-            <div className="panel-head">
-              <h4>Issue para {proposalIssue.repository} (copiá y pegá)</h4>
-              <button onClick={handleCopyIssue} type="button">
-                {proposalCopied ? "Copiado ✓" : "Copiar"}
-              </button>
+            <div className="run-actions" style={{ marginBottom: "0.5rem" }}>
+              <a
+                className="primary"
+                href={proposalIssue.form.url}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  display: "inline-block",
+                  padding: "8px 14px",
+                  borderRadius: "6px",
+                  textDecoration: "none"
+                }}
+              >
+                Abrir issue pre-cargado en GitHub ↗
+              </a>
             </div>
-            <pre
-              style={{
-                fontFamily: "monospace",
-                whiteSpace: "pre-wrap",
-                maxHeight: "24rem",
-                overflow: "auto"
-              }}
-            >
-              {proposalIssue.markdown}
-            </pre>
+            <p className="muted" style={{ fontSize: "0.85rem" }}>
+              El link abre el form <code>{proposalIssue.form.template}</code> de{" "}
+              {proposalIssue.repository} con todos los campos ya cargados. Confirmá los dos
+              campos marcados <strong>recomendado</strong> (canal y SemVer) y tildá las
+              casillas de sanitización antes de crear. Cada campo también se puede copiar
+              suelto por si preferís pegar a mano.
+            </p>
+            <div className="proposal-fields" style={{ display: "grid", gap: "0.75rem" }}>
+              {proposalIssue.form.fields.map((field) => (
+                <div key={field.id}>
+                  <div className="panel-head">
+                    <h4 style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                      {field.label}
+                      {field.recommended ? (
+                        <span className="badge ok">recomendado</span>
+                      ) : null}
+                    </h4>
+                    <button
+                      onClick={() => handleCopyField(field.id, field.value)}
+                      type="button"
+                    >
+                      {copiedField === field.id ? "Copiado ✓" : "Copiar"}
+                    </button>
+                  </div>
+                  {field.reason ? (
+                    <p className="muted" style={{ fontSize: "0.85rem", marginTop: 0 }}>
+                      {field.reason}
+                    </p>
+                  ) : null}
+                  <pre
+                    style={{
+                      fontFamily: "monospace",
+                      whiteSpace: "pre-wrap",
+                      margin: 0
+                    }}
+                  >
+                    {field.value}
+                  </pre>
+                </div>
+              ))}
+            </div>
+            <details style={{ marginTop: "1rem" }}>
+              <summary>Ver como markdown único (copia y pega manual)</summary>
+              <div className="panel-head" style={{ marginTop: "0.5rem" }}>
+                <span className="muted">Issue para {proposalIssue.repository}</span>
+                <button onClick={handleCopyIssue} type="button">
+                  {proposalCopied ? "Copiado ✓" : "Copiar todo"}
+                </button>
+              </div>
+              <pre
+                style={{
+                  fontFamily: "monospace",
+                  whiteSpace: "pre-wrap",
+                  maxHeight: "24rem",
+                  overflow: "auto"
+                }}
+              >
+                {proposalIssue.markdown}
+              </pre>
+            </details>
           </>
         )}
       </div>

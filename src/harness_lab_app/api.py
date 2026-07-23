@@ -399,11 +399,37 @@ def create_app() -> FastAPI:
         if audit is None or audit.status != "done":
             raise HTTPException(
                 status_code=409,
-                detail="Run the LLM audit first — the issue is synthesized from it.",
+                detail=(
+                    "Run the LLM audit first (the 'Run audit' button) — the issue is "
+                    "synthesized from it."
+                ),
             )
+        # bench_audit.call_gateway reads GATEWAY_BASE_URL/TOKEN from os.environ, which
+        # the API process (especially in Docker) may not have. Populate them from .env,
+        # rewriting localhost so a container can reach the host gateway (as /api/models does).
+        import os
+        from pathlib import Path
+
+        from harness_lab_app.executors import rewrite_localhost
+
+        base = read_env_file_value("GATEWAY_BASE_URL")
+        token = read_env_file_value("GATEWAY_TOKEN")
+        if not base or not token:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "LLM gateway not configured — set GATEWAY_BASE_URL and GATEWAY_TOKEN "
+                    "in .env, then restart the app."
+                ),
+            )
+        if Path("/.dockerenv").exists():
+            base = rewrite_localhost(base, get_settings().docker_host_alias)
+        os.environ["GATEWAY_BASE_URL"] = base
+        os.environ["GATEWAY_TOKEN"] = token
+
         run_dir = get_settings().data_runs_dir / run_id
         try:
-            markdown = drafting.synthesize_issue_markdown(
+            markdown, form = drafting.synthesize_issue(
                 run_dir,
                 repository="marcosdh1987/ml-python-base",
                 created_at=datetime.now(UTC),
@@ -413,7 +439,9 @@ def create_app() -> FastAPI:
                 status_code=422,
                 detail=f"Refusing to generate — the issue would leak private data: {exc}",
             ) from exc
-        except (ImportError, ValueError, KeyError, OSError) as exc:
+        except (Exception, SystemExit) as exc:
+            # bench_audit.call_gateway raises SystemExit on config errors; surface any
+            # synthesis failure as a clean message instead of an opaque 500.
             raise HTTPException(
                 status_code=502, detail=f"Could not synthesize the issue: {exc}"
             ) from exc
@@ -421,6 +449,7 @@ def create_app() -> FastAPI:
             "run_id": run_id,
             "repository": "marcosdh1987/ml-python-base",
             "markdown": markdown,
+            "form": form.to_dict(),
         }
 
     @app.get("/api/runs/{run_id}/sandbox")

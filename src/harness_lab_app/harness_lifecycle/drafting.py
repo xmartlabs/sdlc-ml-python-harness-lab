@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from harness_lab_app.harness_lifecycle import proposals, sanitizer
+from harness_lab_app.harness_lifecycle import issue_form, proposals, sanitizer
 from harness_lab_app.harness_lifecycle.models import (
     Observation,
     Proposal,
@@ -91,6 +91,30 @@ def draft_to_proposal(
     )
 
 
+def synthesize_proposal(
+    run_dir: Path,
+    *,
+    repository: str,
+    created_at: datetime,
+    model: str = DEFAULT_MODEL,
+    gateway: Callable[[str, str, str], str] | None = None,
+) -> Proposal:
+    """Run audit → structured :class:`Proposal` (LLM call, nothing written).
+
+    ``created_at`` is injected so callers control the (unwritten) placeholder id's
+    year.
+    """
+    gateway = gateway or load_gateway()
+    evidence = proposals.extract_run_evidence(run_dir)
+    draft = synthesize_draft(run_dir, model, gateway)
+    return draft_to_proposal(
+        draft,
+        proposal_id=f"HEP-{created_at.year}-000",
+        created_at=created_at,
+        source=ProposalSource(repository=repository, runs=[evidence]),
+    )
+
+
 def synthesize_issue_markdown(
     run_dir: Path,
     *,
@@ -101,16 +125,42 @@ def synthesize_issue_markdown(
 ) -> str:
     """Full path: run audit → sanitized public issue markdown (no file written).
 
-    ``created_at`` is injected so callers control the (unwritten) placeholder id's
-    year. Raises ``sanitizer.SanitizationError`` if the issue would leak.
+    Raises ``sanitizer.SanitizationError`` if the issue would leak.
     """
-    gateway = gateway or load_gateway()
-    evidence = proposals.extract_run_evidence(run_dir)
-    draft = synthesize_draft(run_dir, model, gateway)
-    proposal = draft_to_proposal(
-        draft,
-        proposal_id=f"HEP-{created_at.year}-000",
+    proposal = synthesize_proposal(
+        run_dir,
+        repository=repository,
         created_at=created_at,
-        source=ProposalSource(repository=repository, runs=[evidence]),
+        model=model,
+        gateway=gateway,
     )
     return sanitizer.build_public_issue(proposal)
+
+
+def synthesize_issue(
+    run_dir: Path,
+    *,
+    repository: str,
+    created_at: datetime,
+    template: str = issue_form.DEFAULT_TEMPLATE,
+    model: str = DEFAULT_MODEL,
+    gateway: Callable[[str, str, str], str] | None = None,
+) -> tuple[str, issue_form.IssueForm]:
+    """One LLM call → (copy-paste markdown, prefilled GitHub issue-form mapping).
+
+    The form maps the proposal onto the ml-python-base harness-improvement issue
+    form and carries a prefilled new-issue URL. Raises
+    ``sanitizer.SanitizationError`` if either output would leak.
+    """
+    proposal = synthesize_proposal(
+        run_dir,
+        repository=repository,
+        created_at=created_at,
+        model=model,
+        gateway=gateway,
+    )
+    markdown = sanitizer.build_public_issue(proposal)
+    form = issue_form.build_issue_form(
+        proposal, repository=repository, template=template
+    )
+    return markdown, form

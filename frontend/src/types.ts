@@ -252,8 +252,26 @@ export type ImprovementsDoc = {
   proposals: ImprovementProposal[];
 };
 
+export type ProposalIssueField = {
+  id: string;
+  label: string;
+  value: string;
+  kind: "input" | "textarea" | "dropdown";
+  recommended: boolean;
+  reason: string;
+};
+
+export type ProposalIssueForm = {
+  repository: string;
+  template: string;
+  title: string;
+  url: string;
+  fields: ProposalIssueField[];
+};
+
 export type ProposalIssue = {
   run_id: string;
   repository: string;
   markdown: string;
+  form: ProposalIssueForm;
 };
