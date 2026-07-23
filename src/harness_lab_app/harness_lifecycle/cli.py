@@ -219,7 +219,7 @@ def _protocol_incompatibility(ref: str) -> tuple[int, int] | None:
 
 def cmd_sync_preview(args: argparse.Namespace) -> int:
     try:
-        releases.validate_release_ref(args.ref)
+        releases.validate_previewable_ref(args.ref)
     except errors.LifecycleError as exc:
         print(f"❌ {exc}")
         return exc.exit_code
@@ -270,7 +270,7 @@ def _regenerate_adapters(worktree: Path) -> bool:
 
 def cmd_sync_branch(args: argparse.Namespace) -> int:
     try:
-        releases.validate_release_ref(args.ref)
+        releases.validate_previewable_ref(args.ref)
     except errors.LifecycleError as exc:
         print(f"❌ {exc}")
         return exc.exit_code
@@ -358,7 +358,7 @@ def cmd_sync_branch(args: argparse.Namespace) -> int:
 
 def cmd_sync_clean(args: argparse.Namespace) -> int:
     try:
-        releases.validate_release_ref(args.ref)
+        releases.validate_previewable_ref(args.ref)
     except errors.LifecycleError as exc:
         print(f"❌ {exc}")
         return exc.exit_code

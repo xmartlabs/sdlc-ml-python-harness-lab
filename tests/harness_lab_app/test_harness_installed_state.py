@@ -100,6 +100,23 @@ def test_validate_release_ref_accepts_tag() -> None:
     releases.validate_release_ref("v0.2.0")  # no raise
 
 
+@pytest.mark.parametrize("ref", ["v0.3.0", "v0.3.0-rc.1", "v1.2.3-alpha.2"])
+def test_is_previewable_ref_accepts_final_and_prerelease(ref: str) -> None:
+    assert releases.is_previewable_ref(ref)
+
+
+@pytest.mark.parametrize("ref", ["main", "template/main", "v0.3", "0.3.0", ""])
+def test_is_previewable_ref_rejects_non_tags(ref: str) -> None:
+    assert not releases.is_previewable_ref(ref)
+
+
+def test_previewable_accepts_rc_but_release_stays_strict() -> None:
+    # A release candidate is measurable (preview/candidate) but never adoptable:
+    # strict is_release_ref (used for adoption and "latest") still rejects it.
+    releases.validate_previewable_ref("v0.3.0-rc.1")  # no raise
+    assert not releases.is_release_ref("v0.3.0-rc.1")
+
+
 # --------------------------------------------------------------------------- #
 # Full-SHA resolution and tag listing
 # --------------------------------------------------------------------------- #

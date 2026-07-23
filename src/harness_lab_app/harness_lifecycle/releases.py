@@ -24,6 +24,11 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 RELEASE_REF_RE = re.compile(r"^v\d+\.\d+\.\d+$")
+# Preview and candidate preparation also accept an immutable pre-release tag
+# (``vX.Y.Z-rc.N``): it is validated for measurement, not pinned for adoption, and
+# is still resolved to a full SHA. Adoption and "latest" selection stay
+# strict-final via ``RELEASE_REF_RE`` / ``is_release_ref``.
+PREVIEW_REF_RE = re.compile(r"^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 DEFAULT_REMOTE = "template"
 
 
@@ -45,6 +50,27 @@ def validate_release_ref(ref: str) -> None:
         raise LifecycleError(
             f"'{ref}' is not a release tag. Use an immutable vMAJOR.MINOR.PATCH tag "
             "(adoption never accepts 'main', a branch, or an unresolved ref).",
+            EXIT_INVALID,
+        )
+
+
+def is_previewable_ref(ref: str) -> bool:
+    return bool(PREVIEW_REF_RE.match(ref))
+
+
+def validate_previewable_ref(ref: str) -> None:
+    """Raise unless ``ref`` is an immutable release OR pre-release tag.
+
+    Used by read-only preview and candidate preparation, which may point at a
+    ``vX.Y.Z-rc.N`` release candidate to measure before promotion. Adoption and
+    "latest" selection stay strict-final via :func:`validate_release_ref` /
+    :func:`is_release_ref`.
+    """
+    if not is_previewable_ref(ref):
+        raise LifecycleError(
+            f"'{ref}' is not a release or pre-release tag. Use an immutable "
+            "vMAJOR.MINOR.PATCH[-rc.N] tag (never 'main', a branch, or an "
+            "unresolved ref).",
             EXIT_INVALID,
         )
 
