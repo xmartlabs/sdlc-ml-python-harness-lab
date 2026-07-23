@@ -53,6 +53,7 @@ you improve. The full loop, tied to it:
    same case** to see whether it actually improved:
 
    ```bash
+   make template-remote-setup             # first time only — see "Template governance"
    make harness-status                    # current version vs latest (vX.Y.Z)
    make harness-sync-preview REF=vX.Y.Z   # read-only diff of the new governance
    make harness-sync-branch  REF=vX.Y.Z   # adopt it in an isolated candidate worktree
@@ -71,10 +72,11 @@ suite with hard gates), see the
 
 ## 📋 Prerequisites
 
-- Python 3.11+
-- [uv](https://github.com/astral-sh/uv) - Fast Python package installer
-- Make
-- **Optional**: Docker Desktop & VS Code Dev Containers extension
+- **Docker Desktop** — required; the web app and every agent run in containers.
+- **Make** and **git**.
+- [uv](https://github.com/astral-sh/uv) — Python 3.11+ package manager (only needed to
+  develop the lab itself; the app stack runs in Docker).
+- An agent credential and an LLM gateway token (see **Setup** below).
 
 ### Install uv
 
@@ -88,9 +90,28 @@ pip install uv
 
 ## 🛠️ Quick Start
 
-### Run the lab (web app)
+### 1. Setup (first time, per machine)
 
-Everything runs in Docker — one command:
+```bash
+git clone https://github.com/marcosdh1987/ai-agentic-harness-lab.git
+cd ai-agentic-harness-lab
+cp .env.example .env
+```
+
+Then edit `.env` and set at least:
+
+- **`CLAUDE_CODE_OAUTH_TOKEN`** (from `claude setup-token`) **or `ANTHROPIC_API_KEY`** —
+  so the `claude` harness can authenticate inside the runner container.
+- **`GATEWAY_TOKEN`** (+ `GATEWAY_BASE_URL`) — the LLM gateway used by the behavioural
+  audit and issue synthesis (and by gateway-routed models).
+
+Finally, point the lab at the template (once) so you can pull governance versions:
+
+```bash
+make template-remote-setup    # see "Template governance" below
+```
+
+### 2. Run the lab (web app)
 
 ```bash
 make app-up          # builds the runner image + starts api/worker/redis/frontend
@@ -98,10 +119,10 @@ make app-up          # builds the runner image + starts api/worker/redis/fronten
 
 Open **http://localhost:5173**. New here? Read the
 **[Web UI guide](docs/guide-web-ui.md)**. Claude/OpenCode/Codex all run inside the
-runner container — provide harness auth via `.env` (e.g. `CLAUDE_CODE_OAUTH_TOKEN`
-or `ANTHROPIC_API_KEY`); see [docs/harness-adapters.md](docs/harness-adapters.md).
+runner container using the auth from `.env`; see
+[docs/harness-adapters.md](docs/harness-adapters.md).
 
-### Develop the lab
+### Develop the lab (optional — only to work on the lab itself)
 
 ```bash
 make install                 # pin Python, create .venv, sync from uv.lock
@@ -327,8 +348,24 @@ The lab's governance layer — skills, agents, governance docs, and adapter temp
 comes from the [`ml-python-base`](https://github.com/marcosdh1987/ml-python-base)
 template. The lab **consumes** it as an immutable release; it does not publish it.
 
+### First-time setup (once)
+
+Point the lab at the template repository — this adds a git remote named `template`:
+
 ```bash
-make template-remote-setup            # one-time: add the `template` remote
+make template-remote-setup
+# adds the `template` remote → git@github.com:marcosdh1987/ml-python-base.git
+```
+
+Using a fork or HTTPS? Override the URL:
+
+```bash
+make template-remote-setup TEMPLATE_REPO=https://github.com/<you>/ml-python-base.git
+```
+
+### Everyday use
+
+```bash
 make harness-status                   # installed version vs latest release + drift
 make harness-sync-preview REF=vX.Y.Z  # read-only diff of a candidate release
 make harness-sync-branch  REF=vX.Y.Z  # prepare the candidate in an isolated worktree
@@ -337,7 +374,8 @@ make harness-sync-branch  REF=vX.Y.Z  # prepare the candidate in an isolated wor
 Full flow (installed state, isolated candidate worktree, adoption, compatibility): see
 **[docs/harness-lifecycle/lab-sync-workflow.md](docs/harness-lifecycle/lab-sync-workflow.md)**.
 The lighter legacy selective sync — `make template-sync REF=vX.Y.Z` (governance layer
-only; never touches `src/`, `Makefile`, `data/`, or the sync engine) — also works.
+only; never touches `src/`, `Makefile`, `data/`, or the sync engine) — also works, and
+records the adopted version in `.template-version` so `make harness-status` can show it.
 
 To feed improvements *back* to the template from what the lab observes, follow the
 **[harness improvement loop](docs/harness-lifecycle/README.md)**.

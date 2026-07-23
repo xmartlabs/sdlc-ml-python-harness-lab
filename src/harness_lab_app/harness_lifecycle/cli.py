@@ -211,7 +211,7 @@ def _protocol_incompatibility(ref: str) -> tuple[int, int] | None:
     current = (
         installed.sync.protocol
         if installed is not None
-        else (releases.read_sync_protocol_at_ref(REPO_ROOT, "HEAD") or 0)
+        else (sync.read_registry_protocol(REPO_ROOT) or 0)
     )
     candidate = releases.read_sync_protocol_at_ref(REPO_ROOT, ref) or 0
     return (current, candidate) if candidate > current else None

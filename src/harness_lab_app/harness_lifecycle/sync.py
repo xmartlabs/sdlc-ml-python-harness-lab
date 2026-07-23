@@ -69,6 +69,16 @@ def governance_paths(root: Path) -> list[str]:
     return list(DEFAULT_GOVERNANCE_PATHS)
 
 
+def read_registry_protocol(root: Path) -> int | None:
+    """The repo's own current sync protocol, from the working-tree registry."""
+    registry = root / "adapters" / "registry.toml"
+    if not registry.is_file():
+        return None
+    data = tomllib.loads(registry.read_text(encoding="utf-8"))
+    protocol = data.get("template_sync", {}).get("protocol")
+    return int(protocol) if protocol is not None else None
+
+
 def _matches(path: str, prefixes: tuple[str, ...] | list[str]) -> bool:
     return any(path == p or path.startswith(p + "/") for p in prefixes)
 

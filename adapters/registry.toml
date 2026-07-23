@@ -8,6 +8,35 @@
 
 schema_version = 1
 
+# Selective synchronization contract with the upstream template. Governance paths are
+# safe to project from an immutable template release; platform paths are an ownership
+# inventory only (a separate reviewed PR, never applied by a governance-only sync).
+# `protocol` gates compatibility: adopting a release that needs a higher protocol
+# requires a platform upgrade first.
+[template_sync]
+protocol = 1
+governance_paths = [
+    ".github/skills",
+    ".github/skills-external",
+    ".github/agents",
+    ".github/architecture.md",
+    ".github/standards.md",
+    ".github/domain-boundaries.md",
+    ".github/sdlc.md",
+    ".github/orchestration.md",
+    ".github/automation.md",
+    ".github/portability.md",
+    "adapters/templates",
+]
+platform_paths = [
+    "src/ml_python_base/skills_sync",
+    "scripts/template_sync.py",
+    "Makefile",
+    "adapters/registry.toml",
+    "pyproject.toml",
+    "uv.lock",
+]
+
 # Governance files surfaced in every generated adapter region.
 [governance]
 files = [
