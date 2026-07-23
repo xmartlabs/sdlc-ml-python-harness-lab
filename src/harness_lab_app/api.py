@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -22,6 +23,7 @@ from harness_lab_app.celery_app import (
 )
 from harness_lab_app.config import get_settings, read_env_file_value
 from harness_lab_app.db import get_engine, get_session, init_db
+from harness_lab_app.harness_lifecycle import drafting, sanitizer
 from harness_lab_app.run_service import (
     RunAlreadyExistsError,
     RunDeleteConflictError,
@@ -383,6 +385,43 @@ def create_app() -> FastAPI:
             )
         enqueue_improve(run_id, model)
         return {"status": "queued", "run_id": run_id}
+
+    @app.get("/api/runs/{run_id}/proposal-issue")
+    def get_proposal_issue(run_id: str, session: Session = Depends(get_session)):
+        # Synthesize a sanitized ml-python-base improvement issue from this run's
+        # audit — copy-paste markdown, nothing written. Synchronous LLM call (runs
+        # in FastAPI's threadpool). Needs a finished audit.
+        try:
+            RunService(session).get_run(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        audit = AuditService(session).get_audit(run_id)
+        if audit is None or audit.status != "done":
+            raise HTTPException(
+                status_code=409,
+                detail="Run the LLM audit first — the issue is synthesized from it.",
+            )
+        run_dir = get_settings().data_runs_dir / run_id
+        try:
+            markdown = drafting.synthesize_issue_markdown(
+                run_dir,
+                repository="marcosdh1987/ml-python-base",
+                created_at=datetime.now(UTC),
+            )
+        except sanitizer.SanitizationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Refusing to generate — the issue would leak private data: {exc}",
+            ) from exc
+        except (ImportError, ValueError, KeyError, OSError) as exc:
+            raise HTTPException(
+                status_code=502, detail=f"Could not synthesize the issue: {exc}"
+            ) from exc
+        return {
+            "run_id": run_id,
+            "repository": "marcosdh1987/ml-python-base",
+            "markdown": markdown,
+        }
 
     @app.get("/api/runs/{run_id}/sandbox")
     def get_sandbox(

@@ -251,3 +251,9 @@ export type ImprovementsDoc = {
   generator_model: string;
   proposals: ImprovementProposal[];
 };
+
+export type ProposalIssue = {
+  run_id: string;
+  repository: string;
+  markdown: string;
+};

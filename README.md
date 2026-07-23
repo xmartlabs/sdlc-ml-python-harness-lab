@@ -1,23 +1,73 @@
-# Python ML Base Project
+# Agentic Harness Lab
 
-A modern Python base project template with best practices for machine learning and data science development.
+A local web app and toolkit for **benchmarking agentic coding harnesses** (Claude Code,
+OpenCode, Codex, Antigravity, …) and models on real coding tasks — and feeding what you
+learn back into the shared governance template (`ml-python-base`) as concrete skill
+improvements.
 
-> **Agentic Harness Lab** — this repo also hosts a local web app for benchmarking
-> agentic coding harnesses and models. Start it with `make app-up`
-> (`http://localhost:5173`). New here? Read the
+Run agents on custom cases and SWE-bench / SWE-bench Pro issues in isolated Docker
+containers, capture per-run provenance (condition hash, harness fingerprint, cost,
+skills consulted), audit behaviour with an LLM, and compare harness/model conditions —
+all from the web UI.
+
+> **Get started:** `make app-up` → `http://localhost:5173`. New here? Read the
 > **[Web UI guide](docs/guide-web-ui.md)**.
+>
+> **Improving the template from what you observe?** Follow the
+> **[harness improvement loop](docs/harness-lifecycle/README.md)** — run a case → audit
+> → generate a sanitized issue for `ml-python-base` → improve the skill → re-measure.
 
-## 🚀 Features
+## 🚀 What it does
 
-- **Modern Python 3.11** setup with `uv` for ultra-fast dependency management
-- **Reproducible Environments** using `uv.lock`
-- **Ruff** for ultra-fast linting and formatting (replaces Black, Flake8, isort, pyupgrade)
-- **Jupyter Notebooks** support with automated cleanup (`nbstripout`)
-- **Pre-commit hooks** to ensure quality before committing
-- **Makefile** commands for common development tasks
-- **Testing** setup with pytest and coverage
-- **Docker** support for containerization
-- **Dev Containers** ready for consistent development environments
+- **Benchmark lanes** — custom cases, SWE-bench, and SWE-bench Pro, one Docker
+  container per run (Celery + Redis), with cancel/retry and orphan reconciliation.
+- **Multiple harnesses** — Claude Code, OpenCode, Codex, and more, selectable per run.
+- **Rich provenance** — condition hash, harness fingerprint, prompt/case hashes, cost,
+  tokens, steps, diff, and skills consulted, captured per run.
+- **Behavioural audit** — an LLM reads a run's artifacts and reports skill usage, loops,
+  and SDLC adherence.
+- **A/B comparison** — control vs harness-wrapped arms to isolate the harness's effect.
+- **Improvement loop** — turn audit findings into sanitized issues for `ml-python-base`
+  and re-measure (see the [harness improvement loop](docs/harness-lifecycle/README.md)).
+- Built on **`uv` + `ruff` + `pytest`** with a read-only CI gate (`make ci`).
+
+## 🔄 The improvement cycle
+
+The lab runs its cases against a **specific version of the `ml-python-base`
+governance** — the skills, agents, and rules the agent is given. That version is what
+you improve. The full loop, tied to it:
+
+1. **Run & observe.** Run a case in the UI (harness `claude`, a governance-loaded
+   prompt variant like `swe_harness` / `sdlc`), let it finish, and open the run. The
+   **Attribution** panel shows which skills were consulted; the **Audit** button
+   writes a behavioural diagnosis. `make harness-status` shows which template version
+   the lab is currently running.
+2. **Generate the issue.** On the run, click **"Generar issue sanitizado"**. It shows
+   a ready-to-paste, sanitized markdown issue (no private data). **Copy the whole block
+   and open a new issue in
+   [`ml-python-base`](https://github.com/marcosdh1987/ml-python-base)** — the first
+   line is the title, the rest is the body.
+3. **Improve & release.** In `ml-python-base`, improve the skill (your own agent/LLM),
+   merge, and **cut a new release** (`vX.Y.Z`). Close the issue.
+4. **Update the lab & validate.** Point the lab at the new version and **re-run the
+   same case** to see whether it actually improved:
+
+   ```bash
+   make harness-status                    # current version vs latest (vX.Y.Z)
+   make harness-sync-preview REF=vX.Y.Z   # read-only diff of the new governance
+   make harness-sync-branch  REF=vX.Y.Z   # adopt it in an isolated candidate worktree
+   #   light alternative: make template-sync REF=vX.Y.Z
+   ```
+
+   Then re-run the case (same harness/model/prompt) and compare its **Attribution** +
+   **Audit** against the earlier run: did the symptom improve? Did the success
+   criterion hold? If yes, the new version is validated; if not, iterate again.
+
+Deliberately light and human-driven — full playbook in
+**[docs/harness-lifecycle/improvement-methodology.md](docs/harness-lifecycle/improvement-methodology.md)**.
+For the rigorous, fully-traceable form (immutable releases + the canonical regression
+suite with hard gates), see the
+[harness lifecycle docs](docs/harness-lifecycle/README.md).
 
 ## 📋 Prerequisites
 
@@ -38,50 +88,29 @@ pip install uv
 
 ## 🛠️ Quick Start
 
-### 0. Start a New Project from This Template
+### Run the lab (web app)
 
-If this is a fresh clone meant to become a new project, bootstrap it first:
+Everything runs in Docker — one command:
 
 ```bash
-make init NAME=my_project
+make app-up          # builds the runner image + starts api/worker/redis/frontend
 ```
 
-This renames the `ml_python_base` package, rewrites references (keeping the
-upstream template URL so `make template-sync-*` keeps working), creates `.env`
-from `.env.example`, installs the environment, refreshes the AI skill/agent
-adapters, and runs the read-only quality gates. Preview without writing:
-`python3 scripts/init_project.py --name my_project --dry-run`. Details in
-[docs/project-init.md](docs/project-init.md); AI assistants can drive the same
-flow via the `bootstrap_project` skill.
+Open **http://localhost:5173**. New here? Read the
+**[Web UI guide](docs/guide-web-ui.md)**. Claude/OpenCode/Codex all run inside the
+runner container — provide harness auth via `.env` (e.g. `CLAUDE_CODE_OAUTH_TOKEN`
+or `ANTHROPIC_API_KEY`); see [docs/harness-adapters.md](docs/harness-adapters.md).
 
-### 1. Setup Development Environment
-
-This command will install the specific Python version defined in the Makefile, create the virtual environment, and sync all dependencies from `uv.lock`.
+### Develop the lab
 
 ```bash
-# Setup project
-make install
-
-# Activate virtual environment
+make install                 # pin Python, create .venv, sync from uv.lock
 source .venv/bin/activate
+make setup-hooks             # pre-commit hooks (optional, recommended)
+make ci                      # read-only quality gate (ruff, mypy, bandit, pytest)
 ```
 
-### 2. Setup Git Hooks (Recommended)
-
-Install pre-commit hooks to automatically clean notebooks and format code before every commit.
-
-```bash
-make setup-hooks
-```
-
-### 3. Jupyter Notebooks
-
-After running `make install`, a kernel named "Python (uv)" will be automatically registered.
-
-```bash
-# Start Jupyter
-uv run jupyter lab
-```� Dev Containers (Recommended)
+### 🐳 Dev Containers (Recommended)
 
 This project is configured to run inside a **Dev Container**. This guarantees that you are working in the exact same environment as production (Linux), regardless of your local OS (macOS, Windows).
 
@@ -98,7 +127,6 @@ This project is configured to run inside a **Dev Container**. This guarantees th
 - **Production Parity**: Develop on Linux, deploy on Linux.
 - **Jupyter Integration**: Notebooks run seamlessly inside the container, using the container's kernel.
 
-## �
 
 ## 📦 Managing Dependencies
 
@@ -164,20 +192,25 @@ make ci
 
 ```
 .
-├── src/                    # Source code
-├── tests/                  # Test files
-├── notebooks/              # Jupyter notebooks
-├── Makefile               # Development commands
-├── pyproject.toml         # Project configuration & dependencies
-├── uv.lock                # Exact versions lockfile (DO NOT EDIT MANUALLY)
-├── .pre-commit-config.yaml # Git hooks configuration
-├── .editorconfig          # Editor formatting rules
-└── README.md              # This file
+├── src/harness_lab_app/    # Backend: FastAPI API, Celery tasks, services, harness_lifecycle
+├── frontend/               # React/TypeScript web UI
+├── benchmarks/             # Cases + the canonical regression suite (harness-regression-v1)
+├── scripts/                # bench_run, bench_audit, harness_lifecycle CLI, …
+├── .github/                # Governed skills, agents, and governance docs (from the template)
+├── data/runs/              # Per-run artifacts (git-ignored)
+├── data/harness-proposals/ # Reviewed HEP proposals (tracked)
+├── docs/                   # Guides, ADRs, and the harness lifecycle docs
+├── Makefile                # Commands
+├── pyproject.toml          # Config & dependencies
+├── uv.lock                 # Exact versions lockfile (DO NOT EDIT MANUALLY)
+└── .harness-version.yaml   # The adopted ml-python-base governance version (once set)
 ```
 
 ## 🧭 AI Rules Structure (Cross-Tool)
 
-This template uses a consistent four-level strategy so it can be reused with Claude Code, VS Code/Copilot, Antigravity rules, and Codex-style instructions.
+The lab's governance — inherited from `ml-python-base` — uses a consistent four-level
+strategy that works across Claude Code, OpenCode, Codex, Antigravity, and Copilot. It
+is exactly the harness the lab benchmarks and improves.
 
 ### Level 1 — Governance
 
@@ -187,32 +220,18 @@ This template uses a consistent four-level strategy so it can be reused with Cla
 
 ### Level 2 — Operational Skills
 
-Internal governed skills are stored in `.github/skills/` as the source of truth:
-
-- `create_use_case`
-- `create_repository_interface`
-- `create_mle_agent_package`
-- `generate_e2e_tests`
-- `generate_implementation_docs`
-- `refactor_to_clean_architecture`
-- `validate_module_structure`
-- `generate_migration_plan`
-- `execute_engineering_task`
-- `plan_and_execute_feature`
-
-Claude Code reads a generated native layout from `.claude/skills/`, including internal and synced external skills. Refresh it with:
+Governed skills live in `.github/skills/` (internal, the source of truth) and
+`.github/skills-external/` (vendored). They are projected into each tool's native
+layout (`.claude/skills/`, `.opencode/skills/`, `.agents/skills/`) by the sync engine:
 
 ```bash
-make setup-claude-skills
+make sync-skills             # refresh native skill/agent views + skills-lock.json
+make check-sync              # fail if any generated skill artifact is stale
 ```
 
-Antigravity reads a generated native workspace layout from `.agents/skills/` and `.agents/rules/`. Refresh the skills mirror with:
-
-```bash
-make setup-antigravity-skills
-```
-
-External synced/vendor skills live in `.github/skills-external/`.
+See `.github/skills/README.md` for the current catalog. Improvements to these skills
+flow back to the template via the
+[harness improvement loop](docs/harness-lifecycle/README.md).
 
 ### Level 3 — Automation
 
@@ -291,110 +310,47 @@ assessments of AI-assisted coding skill (and what a template can/can't influence
 | `make setup-antigravity-skills` | Generate `.agents/skills` native Antigravity mirror from governed skills |
 | `make sync-skills` | Sync external skills, refresh `skills-lock.json`, and refresh Claude and Antigravity native skill layouts |
 | `make purge-external-skills` | Remove all external skills and refresh Claude and Antigravity native skill layouts |
-| `make template-remote-setup` | Add or update the template upstream remote |
-| `make template-sync` | Selective governance sync from a semver tag (recommended) |
-| `make template-sync PREVIEW=1` | Preview the governance diff without applying |
-| `make template-release VERSION=x` | Tag a semver release of this template |
-| `make template-sync-preview` | Fetch template changes and preview incoming commits |
-| `make template-sync-merge` | Merge full template branch into current branch |
-| `make template-sync-rebase` | Rebase current branch onto full template branch |
+| `make app-up` | Start the web app in Docker (api + worker + redis + frontend) |
+| `make harness-status` | Installed template version vs latest release + drift |
+| `make harness-sync-preview REF=vX.Y.Z` | Read-only diff of a candidate template release |
+| `make harness-sync-branch REF=vX.Y.Z` | Prepare a candidate in an isolated worktree |
+| `make harness-proposal RUN=<id>` | Draft a sanitized improvement issue for the template |
+| `make template-remote-setup` | Add or update the `template` upstream remote |
+| `make template-sync REF=vX.Y.Z` | Legacy selective governance sync from a tag |
 | `make generate-requirements` | Export `uv.lock` to `requirements.txt` |
 | `make clean` | Remove cache and generated files |
 | `make help` | Show all available commands |
 
-## Template Sync & Release
+## Template governance
 
-This template uses **semver tags** (`vX.Y.Z`) + a CHANGELOG so downstream projects can pin
-to a specific version and adopt improvements incrementally.
-
-### For maintainers of this template — cut a release
+The lab's governance layer — skills, agents, governance docs, and adapter templates —
+comes from the [`ml-python-base`](https://github.com/marcosdh1987/ml-python-base)
+template. The lab **consumes** it as an immutable release; it does not publish it.
 
 ```bash
-# 1. Add a ## [X.Y.Z] section to CHANGELOG.md
-# 2. Commit your governance changes normally
-git add .github/ .agents/ CHANGELOG.md && git commit -m "feat: ..."
-
-# 3. Tag the release (bumps pyproject, creates annotated tag)
-make template-release VERSION=0.3.0
-
-# 4. Push branch + tags
-git push origin main --tags
+make template-remote-setup            # one-time: add the `template` remote
+make harness-status                   # installed version vs latest release + drift
+make harness-sync-preview REF=vX.Y.Z  # read-only diff of a candidate release
+make harness-sync-branch  REF=vX.Y.Z  # prepare the candidate in an isolated worktree
 ```
 
-### For downstream projects — adopt a release
+Full flow (installed state, isolated candidate worktree, adoption, compatibility): see
+**[docs/harness-lifecycle/lab-sync-workflow.md](docs/harness-lifecycle/lab-sync-workflow.md)**.
+The lighter legacy selective sync — `make template-sync REF=vX.Y.Z` (governance layer
+only; never touches `src/`, `Makefile`, `data/`, or the sync engine) — also works.
+
+To feed improvements *back* to the template from what the lab observes, follow the
+**[harness improvement loop](docs/harness-lifecycle/README.md)**.
+
+## 🐳 Docker
+
+The web app runs entirely in Docker via `make app-up` (api + worker + redis + frontend,
+plus a per-run runner container). Agents — including `claude` — execute inside the
+runner image with auth supplied from `.env` (`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`).
 
 ```bash
-# Selective sync: governance layer only (skills, agents, rules, adapter templates)
-# Does NOT touch src/, Makefile, data/, or the skills_sync engine
-make template-sync REF=v0.3.0        # adopt a specific version
-make template-sync                    # adopt the latest v* tag
-make template-sync PREVIEW=1          # inspect the diff before applying
-make template-sync TOOL=opencode      # regenerate only one tool's adapter
-```
-
-Review with `git diff`, then `make check-sync && make check`, then commit on a branch.
-
-For the **full release cycle** (when to tag, semver rules, bootstrap for older projects),
-see [docs/updating-existing-projects.md](docs/updating-existing-projects.md).
-For the full sync workflow (conflict resolution, full-repo merge/rebase option),
-see [docs/template-sync.md](docs/template-sync.md).
-
-## 🧩 Skills Lifecycle (Template)
-
-### Default skills bundled in this template
-
-Internal curated skills live in `.github/skills/`:
-
-- `create_use_case`
-- `create_repository_interface`
-- `create_mle_agent_package`
-- `generate_e2e_tests`
-- `generate_implementation_docs`
-- `refactor_to_clean_architecture`
-- `validate_module_structure`
-- `generate_migration_plan`
-- `execute_engineering_task`
-- `plan_and_execute_feature`
-
-### Install an external skill from skills.sh
-
-Use the skills installer CLI (example):
-
-```bash
-npx skills add https://github.com/mindrally/skills --skill odoo-development
-```
-
-Then normalize it into this repository structure:
-
-```bash
-make sync-skills
-```
-
-This syncs complete skill directories to `.github/skills-external/`, refreshes `skills-lock.json`, removes installer temp folders, and refreshes `.claude/skills`. Run `make setup-claude-skills` separately when internal governed skills change and Claude Code needs its native links refreshed.
-
-After sync, the repo also regenerates `.agents/skills/` so Antigravity can discover the governed internal and synced external skills natively. The generated Antigravity mirror writes a hidden manifest to avoid re-importing generated skills on the next `make sync-skills` run.
-
-### Purge all external skills (reset mode)
-
-To test the full lifecycle from scratch:
-
-```bash
-make purge-external-skills
-```
-
-This removes all synced external skills and `skills-lock.json`, while keeping internal template skills untouched.
-
-## 🐳 Docker Support
-
-```bash
-# Build Docker image
-make build-api
-
-# Run in Docker
-make run-api-docker
-
-# Stop Docker container
-make stop-docker
+make app-up          # build the runner image + start the full stack
+make stop-docker     # stop containers
 ```
 
 ## 📝 Configuration

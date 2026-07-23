@@ -45,7 +45,7 @@ def wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setattr(cli, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(cli, "RUNS_DIR", tmp_path / "data" / "runs")
     monkeypatch.setattr(
-        cli, "_load_gateway", lambda: (lambda *_args: json.dumps(_DRAFT))
+        cli.drafting, "load_gateway", lambda: (lambda *_args: json.dumps(_DRAFT))
     )
     return run_id
 

@@ -9,6 +9,7 @@ import type {
   DocEntry,
   HarnessSkill,
   ModelCatalog,
+  ProposalIssue,
   RunCreatePayload,
   RunEventRecord,
   RunRecord,
@@ -149,6 +150,8 @@ export const api = {
   getAudit: (runId: string) => request<AuditRecord>(`/api/runs/${runId}/audit`),
   getImprovements: (runId: string) =>
     request<ImprovementsDoc>(`/api/runs/${runId}/improvements`),
+  getProposalIssue: (runId: string) =>
+    request<ProposalIssue>(`/api/runs/${runId}/proposal-issue`),
   runImprove: (runId: string, model?: string) => {
     const query = model ? `?model=${encodeURIComponent(model)}` : "";
     return request<{ status: string; run_id: string }>(

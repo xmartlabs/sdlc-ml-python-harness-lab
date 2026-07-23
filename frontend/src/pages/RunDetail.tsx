@@ -12,6 +12,7 @@ import type {
   AttributionRecord,
   AuditRecord,
   ImprovementsDoc,
+  ProposalIssue,
   RunEventRecord,
   RunMetadata,
   RunRecord,
@@ -57,6 +58,10 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
   const [improvements, setImprovements] = useState<ImprovementsDoc | null>(null);
   const [improving, setImproving] = useState(false);
   const [improveError, setImproveError] = useState<string | null>(null);
+  const [proposalIssue, setProposalIssue] = useState<ProposalIssue | null>(null);
+  const [proposalLoading, setProposalLoading] = useState(false);
+  const [proposalError, setProposalError] = useState<string | null>(null);
+  const [proposalCopied, setProposalCopied] = useState(false);
   const [tab, setTab] = useState<"detail" | "terminal" | "desktop">("detail");
   const consoleRef = useRef<HTMLDivElement | null>(null);
   // A claude run with events-based attribution has real tool counts; only fall
@@ -132,6 +137,9 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
     setMetadata(null);
     setImprovements(null);
     setImproveError(null);
+    setProposalIssue(null);
+    setProposalError(null);
+    setProposalCopied(false);
     if (run === null) {
       return;
     }
@@ -386,6 +394,37 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
       .catch((error: Error) => {
         setImproving(false);
         setImproveError(error.message);
+      });
+  };
+
+  const handleGenerateIssue = () => {
+    const runId = run.run_id;
+    setProposalLoading(true);
+    setProposalError(null);
+    setProposalCopied(false);
+    api
+      .getProposalIssue(runId)
+      .then((result) => {
+        setProposalIssue(result);
+      })
+      .catch((error: Error) => {
+        setProposalError(error.message);
+      })
+      .finally(() => setProposalLoading(false));
+  };
+
+  const handleCopyIssue = () => {
+    if (!proposalIssue) {
+      return;
+    }
+    navigator.clipboard
+      .writeText(proposalIssue.markdown)
+      .then(() => {
+        setProposalCopied(true);
+        window.setTimeout(() => setProposalCopied(false), 2000);
+      })
+      .catch(() => {
+        // Clipboard access denied — the markdown stays selectable in the <pre>.
       });
   };
 
@@ -768,6 +807,43 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
               <code>gh</code> auth):{" "}
               <code>make improve RUN={run.run_id} CREATE=1</code>
             </p>
+          </>
+        )}
+      </div>
+      <div className="panel subtle">
+        <div className="panel-head">
+          <h3>Issue sanitizado (ml-python-base)</h3>
+          <div className="run-actions">
+            <button disabled={proposalLoading} onClick={handleGenerateIssue} type="button">
+              {proposalLoading ? "Generando…" : "Generar issue sanitizado (ml-python-base)"}
+            </button>
+          </div>
+        </div>
+        {proposalError ? <ErrorBanner message={proposalError} onDismiss={() => setProposalError(null)} /> : null}
+        {proposalIssue === null ? (
+          <p className="muted">
+            {proposalLoading
+              ? "Sintetizando un issue sanitizado a partir de la auditoría (corre un LLM en el servidor; puede tardar entre 15 y 40 segundos)."
+              : "Genera un issue de GitHub sanitizado para ml-python-base a partir de la auditoría de este run. Corré la auditoría primero si todavía no está lista."}
+          </p>
+        ) : (
+          <>
+            <div className="panel-head">
+              <h4>Issue para {proposalIssue.repository} (copiá y pegá)</h4>
+              <button onClick={handleCopyIssue} type="button">
+                {proposalCopied ? "Copiado ✓" : "Copiar"}
+              </button>
+            </div>
+            <pre
+              style={{
+                fontFamily: "monospace",
+                whiteSpace: "pre-wrap",
+                maxHeight: "24rem",
+                overflow: "auto"
+              }}
+            >
+              {proposalIssue.markdown}
+            </pre>
           </>
         )}
       </div>

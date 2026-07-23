@@ -17,15 +17,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shutil
 import subprocess
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from harness_lab_app.harness_lifecycle import (
+    drafting,
     errors,
     locking,
     manifests,
@@ -36,16 +34,8 @@ from harness_lab_app.harness_lifecycle import (
 )
 from harness_lab_app.harness_lifecycle.models import (
     CandidateManifest,
-    Observation,
-    Proposal,
     ProposalSource,
-    ProposalValidation,
-    SuccessCriterion,
-    SuggestedChange,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUNS_DIR = REPO_ROOT / "data" / "runs"
@@ -59,71 +49,9 @@ EXIT_PRECONDITION = 3
 EXIT_SANITIZATION = 5
 EXIT_MISSING = 7
 
-_SYSTEM_PROMPT = (
-    "You convert a single agent-run behavioral audit into ONE governed harness "
-    "improvement proposal. Output ONLY a JSON object with keys: title (str), "
-    "observation {failure_mode, expected_behavior, evidence_summary}, "
-    "affected_artifacts (list of exact repo paths under .github/ or adapters/"
-    "templates), suggested_change (str), suggested_cases (list of case ids), "
-    "success_criteria (list of {metric, operator in [lte,gte,eq,lt,gt], value}), "
-    "confidence in [low,medium,high]. Describe aggregate behavior only; never "
-    "include secrets, tokens, local paths, or raw logs."
-)
-
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
-
-
-def _load_gateway() -> Callable[[str, str, str], str]:
-    """Lazily obtain the LLM gateway from scripts/ (infrastructure edge)."""
-    scripts_dir = REPO_ROOT / "scripts"
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
-    from bench_audit import call_gateway
-
-    return call_gateway
-
-
-def _parse_draft(raw: str) -> dict:
-    """Tolerantly extract the JSON object from an LLM response."""
-    text = raw.strip()
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1:
-        raise ValueError("LLM response contained no JSON object.")
-    return json.loads(text[start : end + 1])
-
-
-def _synthesize_draft(
-    run_dir: Path, model: str, gateway: Callable[[str, str, str], str]
-) -> dict:
-    audit = (run_dir / "audit.md").read_text(encoding="utf-8")[:40000]
-    raw = gateway(model, _SYSTEM_PROMPT, audit)
-    return _parse_draft(raw)
-
-
-def _draft_to_proposal(
-    draft: dict, *, proposal_id: str, created_at: datetime, source: ProposalSource
-) -> Proposal:
-    observation = Observation(**draft["observation"])
-    validation = ProposalValidation(
-        suggested_cases=list(draft.get("suggested_cases", [])),
-        success_criteria=[
-            SuccessCriterion(**c) for c in draft.get("success_criteria", [])
-        ],
-    )
-    return proposals.build_proposal(
-        proposal_id=proposal_id,
-        title=draft["title"],
-        created_at=created_at,
-        source=source,
-        observation=observation,
-        affected_artifacts=list(draft.get("affected_artifacts", [])),
-        suggested_change=SuggestedChange(summary=draft["suggested_change"]),
-        validation=validation,
-        confidence=draft.get("confidence", "medium"),
-    )
 
 
 def cmd_proposal(args: argparse.Namespace) -> int:
@@ -135,14 +63,14 @@ def cmd_proposal(args: argparse.Namespace) -> int:
         return EXIT_PRECONDITION
     evidence = proposals.extract_run_evidence(run_dir)
     try:
-        draft = _synthesize_draft(run_dir, args.model, _load_gateway())
+        draft = drafting.synthesize_draft(run_dir, args.model, drafting.load_gateway())
     except (ImportError, ValueError, json.JSONDecodeError) as exc:
         print(f"❌ Could not synthesize proposal draft: {exc}")
         return EXIT_MISSING
     created_at = _utc_now()
     source = ProposalSource(repository=LAB_REPOSITORY, runs=[evidence])
     if args.dry_run:
-        proposal = _draft_to_proposal(
+        proposal = drafting.draft_to_proposal(
             draft,
             proposal_id=f"HEP-{created_at.year}-000",
             created_at=created_at,
@@ -152,7 +80,7 @@ def cmd_proposal(args: argparse.Namespace) -> int:
         print(sanitizer.build_public_issue(proposal))
         return EXIT_OK
     proposal_id = proposals.allocate_proposal_id(REPO_ROOT, created_at.year)
-    proposal = _draft_to_proposal(
+    proposal = drafting.draft_to_proposal(
         draft, proposal_id=proposal_id, created_at=created_at, source=source
     )
     preview = sanitizer.build_public_issue(proposal)  # fail early on any leak

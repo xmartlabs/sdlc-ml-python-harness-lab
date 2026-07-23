@@ -89,9 +89,9 @@ def build_public_issue(proposal: Proposal) -> str:
         "\n".join(f"- {r.condition_hash}" for r in proposal.source.runs) or "- (none)"
     )
 
-    body = f"""## Proposal {proposal.proposal_id}
+    body = f"""# {proposal.title}
 
-**{proposal.title}**
+_Harness improvement proposal {proposal.proposal_id}._
 
 ### Observation
 - failure_mode: {obs.failure_mode}
