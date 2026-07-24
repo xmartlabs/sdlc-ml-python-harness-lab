@@ -68,6 +68,15 @@ Two tiers: the **governed catalog** (read-only, shipped with the harness) and
 **staged skills** (experimental SKILL.md files you can create, test per-run via
 the ablation panel, and promote). The page includes a how-to for the A/B loop.
 
+### Improvements
+Cross-run worklist for the improvement cycle: after a run's proposals are
+synthesized, the **Guardar** button on the run detail snapshots them here (one
+row per proposal, with run date and template version for comparing iterations).
+Select any subset — across runs and cases — and **Generar issue combinado**
+consolidates them, via one LLM pass plus the sanitizer pipeline, into a single
+prefilled ml-python-base issue. Details in
+[improvement-cycle.md](improvement-cycle.md).
+
 ### Compare
 Line up runs of the same case across models or harness conditions:
 
