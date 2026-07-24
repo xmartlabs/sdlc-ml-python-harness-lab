@@ -81,6 +81,25 @@ def _apply_sqlite_compat_migrations() -> None:
                     )
                 )
 
+        saved_proposal_columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('savedproposal')")
+            ).fetchall()
+        }
+        if saved_proposal_columns and "run_created_at" not in saved_proposal_columns:
+            connection.execute(
+                text("ALTER TABLE savedproposal ADD COLUMN run_created_at DATETIME")
+            )
+        for column in ("template_version", "template_fingerprint"):
+            if saved_proposal_columns and column not in saved_proposal_columns:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE savedproposal ADD COLUMN {column} "
+                        "VARCHAR NOT NULL DEFAULT ''"
+                    )
+                )
+
 
 def get_session() -> Generator[Session, None, None]:
     with Session(engine) as session:

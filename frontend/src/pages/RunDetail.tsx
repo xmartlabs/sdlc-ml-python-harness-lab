@@ -813,12 +813,13 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
               </button>
             ) : null}
             {saveResult !== null ? (
-              <>
-                <span className="badge ok">
-                  Guardadas {saveResult.saved + saveResult.updated}
-                </span>
-                <Link to="/improvements">ver tabla ↗</Link>
-              </>
+              <Link
+                className="badge ok save-feedback"
+                title="Abrir el menú Improvements con las proposals guardadas"
+                to="/improvements"
+              >
+                Guardadas {saveResult.saved + saveResult.updated} · ver tabla ↗
+              </Link>
             ) : null}
           </div>
         </div>

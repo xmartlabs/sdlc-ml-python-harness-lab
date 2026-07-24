@@ -1107,22 +1107,51 @@ button.ghost {
   grid-template-columns: minmax(0, 1.3fr) minmax(90px, 0.4fr) minmax(300px, 1fr);
 }
 
-/* Improvements worklist: 7 columns (checkbox · proposal · kind · repo · run ·
-   status · row actions). min-width: 0 on cells lets long run ids/titles
-   ellipsize instead of overflowing the grid. */
+/* Improvements worklist: 8 columns (checkbox · proposal · kind · repo · run ·
+   date/template · status · row actions). min-width: 0 on cells lets long run
+   ids/titles ellipsize instead of overflowing the grid. */
 .table--improvements {
-  min-width: 860px;
+  min-width: 1060px;
 }
 
 .table--improvements .table-row {
   grid-template-columns:
-    28px minmax(0, 2.2fr) minmax(0, 0.9fr) minmax(96px, 0.55fr)
-    minmax(0, 1.1fr) minmax(88px, 0.55fr) minmax(72px, auto);
+    28px minmax(0, 2fr) minmax(0, 0.8fr) minmax(92px, 0.45fr)
+    minmax(0, 0.95fr) minmax(150px, 0.75fr) minmax(84px, 0.45fr) minmax(72px, auto);
   align-items: start;
 }
 
 .table--improvements .table-row > span {
   min-width: 0;
+}
+
+.table--improvements .badge {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.cell-date {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cell-fingerprint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Post-save chip in the RunDetail panel head: keep the badge + link on one
+   line so it never wraps out of the panel. */
+.save-feedback {
+  white-space: nowrap;
+  text-decoration: none;
 }
 
 .table--improvements input[type="checkbox"] {

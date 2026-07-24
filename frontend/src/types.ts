@@ -290,6 +290,9 @@ export type SavedProposalRecord = {
   harness: string;
   executor_model: string;
   generator_model: string;
+  run_created_at: string | null;
+  template_version: string;
+  template_fingerprint: string;
   status: "saved" | "issued";
   group_issue_id: number | null;
   created_at: string;

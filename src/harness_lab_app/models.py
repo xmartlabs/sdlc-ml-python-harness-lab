@@ -236,6 +236,14 @@ class SavedProposal(SQLModel, table=True):
     harness: str = ""
     executor_model: str = ""
     generator_model: str = ""
+    # When the run itself was executed (metadata.json created_at) and which
+    # harness/template surface it ran against — the signals for comparing
+    # proposals across template iterations. template_version is the friendly
+    # label (installed release ref like v0.3.0, else short lab commit);
+    # template_fingerprint is the exact harness_fingerprint.harness_hash.
+    run_created_at: datetime | None = None
+    template_version: str = ""
+    template_fingerprint: str = ""
     status: str = "saved"  # saved | issued
     group_issue_id: int | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utc_now)

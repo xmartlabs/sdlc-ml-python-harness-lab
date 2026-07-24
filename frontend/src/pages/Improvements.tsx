@@ -21,6 +21,27 @@ function shortRunId(runId: string): string {
   return `${runId.slice(0, 16)}…${runId.slice(-9)}`;
 }
 
+function formatRunDate(iso: string | null): string {
+  if (!iso) {
+    return "—";
+  }
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+// harness_fingerprint.harness_hash → short tag ("f9db0a83") for scanning
+// template iterations; the full hash stays in the tooltip.
+function shortFingerprint(fingerprint: string): string {
+  if (!fingerprint) {
+    return "—";
+  }
+  return fingerprint.replace(/^sha256:/, "").slice(0, 8);
+}
+
 // Cross-run worklist: proposals saved from each run's "Guardar" button. Select
 // any subset (across runs/cases) and synthesize ONE combined sanitized issue
 // for ml-python-base — the group counterpart of the per-run card in RunDetail.
@@ -228,6 +249,7 @@ export function Improvements() {
                 <span>Kind · target</span>
                 <span>Repo</span>
                 <span>Run · case</span>
+                <span>Fecha · template</span>
                 <span>Status</span>
                 <span />
               </div>
@@ -256,7 +278,9 @@ export function Improvements() {
                     ) : null}
                   </span>
                   <span>
-                    <span className="badge neutral">{proposal.repo.split("/").pop()}</span>
+                    <span className="badge neutral" title={proposal.repo}>
+                      {proposal.repo.split("/").pop()}
+                    </span>
                   </span>
                   <span className="cell-stack">
                     <Link
@@ -268,6 +292,27 @@ export function Improvements() {
                     </Link>
                     <small className="cell-truncate" title={proposal.case}>
                       {proposal.case}
+                    </small>
+                  </span>
+                  <span className="cell-stack">
+                    <span className="cell-date">{formatRunDate(proposal.run_created_at)}</span>
+                    <small
+                      className="cell-fingerprint"
+                      title={
+                        [
+                          proposal.template_version
+                            ? `template: ${proposal.template_version}`
+                            : null,
+                          proposal.template_fingerprint
+                            ? `fingerprint: ${proposal.template_fingerprint}`
+                            : null
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") || "Sin datos del template"
+                      }
+                    >
+                      {proposal.template_version ||
+                        shortFingerprint(proposal.template_fingerprint)}
                     </small>
                   </span>
                   <span className="cell-stack">

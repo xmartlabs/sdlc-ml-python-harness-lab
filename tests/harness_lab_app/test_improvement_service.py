@@ -10,7 +10,9 @@ from harness_lab_app import improvement_service as service_module
 from harness_lab_app.improvement_service import ImprovementError, ImprovementService
 
 
-def _write_improvements(tmp_path, run_id: str, proposals: list[dict]) -> None:
+def _write_improvements(
+    tmp_path, run_id: str, proposals: list[dict], with_metadata: bool = True
+) -> None:
     run_dir = tmp_path / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     doc = {
@@ -24,6 +26,17 @@ def _write_improvements(tmp_path, run_id: str, proposals: list[dict]) -> None:
         "proposals": proposals,
     }
     (run_dir / "improvements.json").write_text(json.dumps(doc))
+    if with_metadata:
+        (run_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "created_at": "2026-07-23T20:28:53.126754Z",
+                    "harness_fingerprint": {"harness_hash": "sha256:f9db0a83deadbeef"},
+                    "lab_git_commit": "45ad411dd730bf3ed749bb657ea926c816b71a22",
+                }
+            )
+        )
 
 
 def _proposal(title: str, **overrides) -> dict:
@@ -63,6 +76,12 @@ def test_save_from_run_snapshots_proposals_with_context(service, tmp_path):
     assert row.executor_model == "stub-executor"
     assert row.generator_model == "stub-generator"
     assert row.status == "saved"
+    assert row.run_created_at is not None
+    assert row.run_created_at.year == 2026
+    assert row.template_fingerprint == "sha256:f9db0a83deadbeef"
+    # No adopted-release manifest in the stub settings → falls back to the
+    # run's lab commit, shortened.
+    assert row.template_version == "45ad411d"
 
 
 def test_save_from_run_is_idempotent(service, tmp_path):
@@ -100,6 +119,47 @@ def test_save_from_run_refreshes_body_but_preserves_status(service, tmp_path):
 def test_save_from_run_raises_when_file_missing(service):
     with pytest.raises(FileNotFoundError):
         service.save_from_run("ghost-run")
+
+
+def test_save_from_run_tolerates_missing_metadata(service, tmp_path):
+    # Old runs may lack metadata.json — the save still works, just without
+    # run date / template fingerprint.
+    _write_improvements(tmp_path, "run-a", [_proposal("A")], with_metadata=False)
+    result = service.save_from_run("run-a")
+    assert result["saved"] == 1
+    row = service.list_proposals()[0]
+    assert row.run_created_at is None
+    assert row.template_fingerprint == ""
+    assert row.template_version == ""
+
+
+def test_template_version_prefers_installed_release_ref(service, tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+
+    from harness_lab_app.harness_lifecycle import manifests
+    from harness_lab_app.harness_lifecycle.models import (
+        InstalledManifest,
+        InstalledRef,
+    )
+
+    manifests.write_installed_manifest(
+        tmp_path,
+        InstalledManifest(
+            installed=InstalledRef(
+                repository="marcosdh1987/ml-python-base",
+                ref="v0.3.0",
+                commit="abcdef1234567890",
+                adopted_at=datetime(2026, 7, 1, tzinfo=UTC),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "harness_lab_app.improvement_service.get_settings",
+        lambda: type("S", (), {"data_runs_dir": tmp_path, "repo_root": tmp_path})(),
+    )
+    _write_improvements(tmp_path, "run-a", [_proposal("A")])
+    service.save_from_run("run-a")
+    assert service.list_proposals()[0].template_version == "v0.3.0"
 
 
 def test_list_proposals_filters(service, tmp_path):
