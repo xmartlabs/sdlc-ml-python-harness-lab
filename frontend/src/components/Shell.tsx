@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { to: "/runs", label: "Runs", icon: "▶", end: false },
   { to: "/cases", label: "Cases", icon: "🗂", end: false },
   { to: "/skills", label: "Skills", icon: "🧩", end: false },
+  { to: "/improvements", label: "Improvements", icon: "💡", end: false },
   { to: "/compare", label: "Compare", icon: "⇄", end: false },
   { to: "/guide", label: "Guide", icon: "📖", end: false },
   { to: "/settings", label: "Settings", icon: "⚙", end: false }

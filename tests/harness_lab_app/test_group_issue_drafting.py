@@ -1,0 +1,146 @@
+"""Multi-proposal group synthesis (drafting), with a fake gateway."""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from harness_lab_app.harness_lifecycle import drafting, metrics, sanitizer
+
+FIXED = datetime(2026, 7, 23, 12, 0, 0, tzinfo=UTC)
+
+_DRAFT = {
+    "title": "Add a retry budget to systematic debugging",
+    "observation": {
+        "failure_mode": "Agents re-read the same file and churned hypotheses.",
+        "expected_behavior": "Reset the hypothesis after a retry budget.",
+        "evidence_summary": "Seen across the debugging steps of several runs.",
+    },
+    "affected_artifacts": [".github/skills/systematic_debugging/SKILL.md"],
+    "suggested_change": "Add an explicit retry budget and hypothesis reset rule.",
+    "suggested_cases": ["systematic-debugging-v1"],
+    "success_criteria": [
+        {"metric": "repeated_command_max", "operator": "lte", "value": 2}
+    ],
+    "confidence": "high",
+}
+
+
+def _run_dir(root: Path, run_id: str, condition_hash: str) -> Path:
+    d = root / "data" / "runs" / run_id
+    d.mkdir(parents=True)
+    # Private evidence lives in the audit; it must never reach the public issue.
+    (d / "audit.md").write_text(
+        f"# Audit for {run_id}\nRe-read /Users/marcos/x every step.\n",
+        encoding="utf-8",
+    )
+    (d / "metadata.json").write_text(
+        json.dumps({"run_id": run_id, "condition_hash": condition_hash}),
+        encoding="utf-8",
+    )
+    return d
+
+
+def _items() -> list[dict]:
+    # Unsanitized snapshots straight from improvements.json: run ids and local
+    # paths in the bodies are the normal case, not the exception.
+    return [
+        {
+            "run_id": "dbg-K-001",
+            "title": "Add retry budget",
+            "body": "In run dbg-K-001 the agent re-read /Users/marcos/x repeatedly.",
+            "kind": "skill",
+            "target": "systematic_debugging",
+            "case": "debugging-v1",
+            "harness": "claude",
+            "executor_model": "stub-executor",
+        },
+        {
+            "run_id": "dbg-K-002",
+            "title": "Reset hypotheses",
+            "body": "Run dbg-K-002 showed hypothesis churn.",
+            "kind": "process",
+            "target": "debug loop",
+            "case": "debugging-v2",
+            "harness": "opencode",
+            "executor_model": "stub-executor",
+        },
+    ]
+
+
+def test_group_system_prompt_constrains_metrics_to_the_catalog() -> None:
+    for name in metrics.MEASURABLE_METRICS:
+        assert name in drafting.GROUP_SYSTEM_PROMPT
+
+
+def test_build_group_user_message_includes_proposals_and_audits() -> None:
+    message = drafting.build_group_user_message(
+        _items(), {"dbg-K-001": "audit one text", "dbg-K-002": "audit two text"}
+    )
+    assert "Add retry budget" in message
+    assert "Reset hypotheses" in message
+    assert "hypothesis churn" in message
+    assert "audit one text" in message
+    assert "audit two text" in message
+    assert len(message) <= 40000
+
+
+def test_build_group_user_message_clips_long_bodies() -> None:
+    items = [{"run_id": "r", "title": "T", "body": "x" * 20000}]
+    message = drafting.build_group_user_message(items, {})
+    assert len(message) < 20000
+
+
+def test_synthesize_group_issue_is_sanitized(tmp_path: Path) -> None:
+    run_dirs = [
+        _run_dir(tmp_path, "dbg-K-001", "sha256:abc"),
+        _run_dir(tmp_path, "dbg-K-002", "sha256:def"),
+    ]
+    markdown, form = drafting.synthesize_group_issue(
+        _items(),
+        run_dirs,
+        repository="marcosdh1987/ml-python-base",
+        created_at=FIXED,
+        gateway=lambda *_args: json.dumps(_DRAFT),
+    )
+    # Allowlisted content and multi-run evidence are present...
+    assert "Reset the hypothesis after a retry budget." in markdown
+    assert "sha256:abc" in markdown
+    assert "sha256:def" in markdown
+    source_runs = next(f.value for f in form.fields if f.id == "source_runs")
+    assert "x2 runs" in source_runs
+    # ...and private evidence (run ids / local paths) is not surfaced.
+    for haystack in (markdown, *[f.value for f in form.fields]):
+        assert "dbg-K-001" not in haystack
+        assert "dbg-K-002" not in haystack
+        assert "/Users/marcos" not in haystack
+
+
+def test_synthesize_group_issue_backstop_rejects_echoed_run_id(tmp_path: Path) -> None:
+    run_dirs = [_run_dir(tmp_path, "dbg-K-001", "sha256:abc")]
+    leaky = dict(_DRAFT, suggested_change="Fix the loop seen in dbg-K-001.")
+    with pytest.raises(sanitizer.SanitizationError, match="run id"):
+        drafting.synthesize_group_issue(
+            _items()[:1],
+            run_dirs,
+            repository="marcosdh1987/ml-python-base",
+            created_at=FIXED,
+            gateway=lambda *_args: json.dumps(leaky),
+        )
+
+
+def test_synthesize_group_issue_skips_runs_without_metadata(tmp_path: Path) -> None:
+    complete = _run_dir(tmp_path, "dbg-K-001", "sha256:abc")
+    bare = tmp_path / "data" / "runs" / "dbg-K-003"
+    bare.mkdir(parents=True)
+    markdown, _form = drafting.synthesize_group_issue(
+        _items(),
+        [complete, bare],
+        repository="marcosdh1987/ml-python-base",
+        created_at=FIXED,
+        gateway=lambda *_args: json.dumps(_DRAFT),
+    )
+    assert "sha256:abc" in markdown

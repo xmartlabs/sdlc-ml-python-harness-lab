@@ -16,6 +16,7 @@ import type {
   RunEventRecord,
   RunMetadata,
   RunRecord,
+  SaveImprovementsResult,
   ValidationRecord
 } from "../types";
 
@@ -58,6 +59,8 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
   const [improvements, setImprovements] = useState<ImprovementsDoc | null>(null);
   const [improving, setImproving] = useState(false);
   const [improveError, setImproveError] = useState<string | null>(null);
+  const [savingProposals, setSavingProposals] = useState(false);
+  const [saveResult, setSaveResult] = useState<SaveImprovementsResult | null>(null);
   const [proposalIssue, setProposalIssue] = useState<ProposalIssue | null>(null);
   const [proposalLoading, setProposalLoading] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
@@ -398,6 +401,19 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
         setImproving(false);
         setImproveError(error.message);
       });
+  };
+
+  const handleSaveProposals = () => {
+    const runId = run.run_id;
+    setSavingProposals(true);
+    api
+      .saveImprovements(runId)
+      .then((result) => {
+        setSaveResult(result);
+        setImproveError(null);
+      })
+      .catch((error: Error) => setImproveError(error.message))
+      .finally(() => setSavingProposals(false));
   };
 
   const handleGenerateIssue = () => {
@@ -786,6 +802,25 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
                   ? "Re-synthesize"
                   : "Propose improvements"}
             </button>
+            {improvements !== null && improvements.proposals.length > 0 ? (
+              <button
+                disabled={savingProposals}
+                onClick={handleSaveProposals}
+                title="Guarda estas proposals en la tabla cross-run (menú Improvements) para agruparlas en un issue combinado."
+                type="button"
+              >
+                {savingProposals ? "Guardando…" : "Guardar"}
+              </button>
+            ) : null}
+            {saveResult !== null ? (
+              <Link
+                className="badge ok save-feedback"
+                title="Abrir el menú Improvements con las proposals guardadas"
+                to="/improvements"
+              >
+                Guardadas {saveResult.saved + saveResult.updated} · ver tabla ↗
+              </Link>
+            ) : null}
           </div>
         </div>
         {improveError ? <ErrorBanner message={improveError} /> : null}

@@ -110,6 +110,11 @@ class RunRead(BaseModel):
     failure_reason: str | None = None
 
 
+class GroupIssueRequest(BaseModel):
+    proposal_ids: list[int] = Field(min_length=1)
+    model: str | None = None
+
+
 class ValidationRead(BaseModel):
     run_id: str
     objective: dict = Field(default_factory=dict)

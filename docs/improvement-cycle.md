@@ -59,6 +59,46 @@ auth), labeled `lab-improvement`, with a footer linking back to the run
 (harness / model / case). Created issue URLs are written back into
 `improvements.json`, so re-running `CREATE=1` is idempotent (won't duplicate).
 
+## Cross-run worklist: saved proposals → one combined sanitized issue
+
+The per-run flow above ends 1:1 (one run → its proposals → its issues). When you
+iterate the same case across template versions, the **Improvements** page in the
+web UI lets you group evidence from several runs into a single issue:
+
+```
+run detail  →  "Propose improvements"  →  "Guardar"        # snapshot to the DB
+Improvements page  →  select N proposals (any runs/cases)  →
+"Generar issue combinado (N)"  →  ONE sanitized ml-python-base issue
+```
+
+1. **Save** (`POST /api/runs/{id}/improvements/save`): snapshots each proposal
+   from `improvements.json` into the `savedproposal` SQLite table, one row per
+   proposal, keyed by `(run_id, title)` so re-saving updates instead of
+   duplicating. The row also captures run context (case, harness, executor
+   model), the **run date** (`metadata.json` `created_at`) and the **template
+   version** — the adopted release ref (`v0.3.0`) from `.harness-version.yaml`
+   when present, else the run's short `lab_git_commit` — plus the exact
+   `harness_fingerprint.harness_hash`. Date + version are the columns you scan
+   to compare iterations of the same case across template releases.
+2. **Group** (`Improvements` page, `GET /api/improvements`): table of all saved
+   proposals with checkbox multi-select and repo/kind/case filters.
+3. **Combine** (`POST /api/improvements/group-issue`): one LLM call
+   (`drafting.synthesize_group_issue`) consolidates the selected proposals —
+   plus each run's `audit.md` excerpt — into ONE governed proposal, rendered
+   through the same sanitizer + issue-form pipeline as the per-run
+   `GET /api/runs/{id}/proposal-issue`. The `source_runs` field lists every
+   run's condition hash. Selected rows flip to `issued` and the result is
+   recorded in the `groupissue` table.
+
+**Sanitization:** saved proposal bodies are *not* sanitized (they routinely
+mention run ids and local paths), so the combined pipeline never embeds them
+verbatim: content is regenerated via the strict-JSON draft (allowlist render),
+the group system prompt bans private identifiers, and a deterministic backstop
+rejects (HTTP 422) any output echoing a selected run id.
+
+The per-run "Issue sanitizado" card on the run detail is unchanged; the
+worklist is an additive path for multi-run grouping.
+
 ## Notes
 
 - **Approval is the create step.** Dry-run generates and previews only; nothing

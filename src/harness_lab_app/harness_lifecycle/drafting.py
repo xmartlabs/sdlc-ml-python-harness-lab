@@ -8,6 +8,7 @@ the pure assembly stays testable.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import sys
@@ -156,6 +157,112 @@ def synthesize_issue_markdown(
         gateway=gateway,
     )
     return sanitizer.build_public_issue(proposal)
+
+
+GROUP_SYSTEM_PROMPT = (
+    "You consolidate MULTIPLE harness improvement proposals, drawn from several "
+    "agent runs, into ONE governed harness improvement proposal. Merge "
+    "overlapping suggestions, keep the highest-signal changes, and unify the "
+    "affected artifacts. Output ONLY a JSON object with keys: title (str), "
+    "observation {failure_mode, expected_behavior, evidence_summary}, "
+    "affected_artifacts (list of exact repo paths under .github/ or adapters/"
+    "templates), suggested_change (str), suggested_cases (list of case ids), "
+    "success_criteria (list of {metric, operator in [lte,gte,eq,lt,gt], value}), "
+    "confidence in [low,medium,high]. "
+    "Each success_criteria.metric MUST be one of the lab's measurable metrics: "
+    f"{_METRIC_CATALOG}. Do NOT invent metric names — the lab automatically fails "
+    "any criterion whose metric it cannot compute. Express any goal none of these "
+    "metrics can capture only as prose inside suggested_change. "
+    "Describe aggregate behavior only; never include run identifiers, case-run "
+    "codes, secrets, tokens, local filesystem paths, hostnames, or raw logs — "
+    "the input proposals are private and unsanitized, your output is public."
+)
+
+# Per-proposal body / per-run audit excerpt clip, and the same total clip as
+# synthesize_draft — keeps the prompt bounded for large selections.
+_GROUP_ITEM_CLIP = 6000
+_GROUP_TOTAL_CLIP = 40000
+
+
+def build_group_user_message(items: list[dict], audits: dict[str, str]) -> str:
+    """Render selected proposals (+ optional per-run audit excerpts) as one prompt.
+
+    ``items`` are unsanitized proposal snapshots ({title, kind, target, body,
+    case, harness, executor_model, run_id}); ``audits`` maps run_id -> audit.md
+    text. Pure assembly, testable without a gateway.
+    """
+    blocks: list[str] = [
+        "Consolidate the following improvement proposals into one proposal.",
+    ]
+    for index, item in enumerate(items, start=1):
+        lines = [f"## Proposal {index}: {item.get('title', '')}"]
+        for label, key in (
+            ("Kind", "kind"),
+            ("Target", "target"),
+            ("Case", "case"),
+            ("Harness", "harness"),
+            ("Executor model", "executor_model"),
+        ):
+            value = item.get(key)
+            if value:
+                lines.append(f"- {label}: {value}")
+        body = (item.get("body") or "")[:_GROUP_ITEM_CLIP]
+        if body:
+            lines.append("")
+            lines.append(body)
+        blocks.append("\n".join(lines))
+    for index, run_id in enumerate(sorted(audits), start=1):
+        excerpt = audits[run_id][:_GROUP_ITEM_CLIP]
+        if excerpt:
+            blocks.append(f"## Audit excerpt (run {index})\n\n{excerpt}")
+    return "\n\n".join(blocks)[:_GROUP_TOTAL_CLIP]
+
+
+def synthesize_group_issue(
+    items: list[dict],
+    run_dirs: list[Path],
+    *,
+    repository: str,
+    created_at: datetime,
+    template: str = issue_form.DEFAULT_TEMPLATE,
+    model: str = DEFAULT_MODEL,
+    gateway: Callable[[str, str, str], str] | None = None,
+) -> tuple[str, issue_form.IssueForm]:
+    """N selected proposals → ONE combined sanitized issue (LLM call, unwritten).
+
+    Evidence is one condition-hash entry per run dir (runs missing metadata.json
+    degrade gracefully). Besides the allowlist render and denylist scan, a
+    deterministic backstop rejects any output echoing a selected run id — run
+    ids are not in the sanitizer denylist, and the input bodies routinely
+    contain them. Raises ``sanitizer.SanitizationError`` on any leak.
+    """
+    gateway = gateway or load_gateway()
+    evidence_list = []
+    audits: dict[str, str] = {}
+    for run_dir in run_dirs:
+        with contextlib.suppress(FileNotFoundError):
+            evidence_list.append(proposals.extract_run_evidence(run_dir))
+        audit_path = run_dir / "audit.md"
+        if audit_path.exists():
+            audits[run_dir.name] = audit_path.read_text(encoding="utf-8")
+    user_message = build_group_user_message(items, audits)
+    draft = parse_draft(gateway(model, GROUP_SYSTEM_PROMPT, user_message))
+    proposal = draft_to_proposal(
+        draft,
+        proposal_id=f"HEP-{created_at.year}-000",
+        created_at=created_at,
+        source=ProposalSource(repository=repository, runs=evidence_list),
+    )
+    markdown = sanitizer.build_public_issue(proposal)
+    form = issue_form.build_issue_form(
+        proposal, repository=repository, template=template
+    )
+    run_ids = {run_dir.name for run_dir in run_dirs}
+    haystacks = [markdown, form.title, *(field.value for field in form.fields)]
+    for run_id in run_ids:
+        if any(run_id in haystack for haystack in haystacks):
+            raise sanitizer.SanitizationError("combined issue echoed a private run id")
+    return markdown, form
 
 
 def synthesize_issue(
