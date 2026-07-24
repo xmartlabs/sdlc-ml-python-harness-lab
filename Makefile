@@ -280,6 +280,8 @@ improve:
 	uv run python scripts/lab_improve.py \
 		--run $(RUN) \
 		$(if $(IMPROVE_MODEL),--model $(IMPROVE_MODEL),) \
+		$(if $(IMPROVE_STRICTNESS),--strictness $(IMPROVE_STRICTNESS),) \
+		$(if $(IMPROVE_FORCE),--force,) \
 		$(if $(CREATE),--create,)
 
 # Draft a versioned HEP proposal from a run's audit and print a sanitized public

@@ -401,9 +401,19 @@ def create_app() -> FastAPI:
     def run_improve(
         run_id: str,
         model: str | None = None,
+        strictness: str | None = None,
         session: Session = Depends(get_session),
     ):
         # Improvement synthesis needs a finished audit (it reads audit.md).
+        if strictness is not None and strictness not in {
+            "strict",
+            "balanced",
+            "lenient",
+        }:
+            raise HTTPException(
+                status_code=400,
+                detail="strictness must be one of: strict, balanced, lenient",
+            )
         try:
             RunService(session).get_run(run_id)
         except ValueError as exc:
@@ -414,7 +424,7 @@ def create_app() -> FastAPI:
                 status_code=409,
                 detail="Run the LLM audit first — proposals are synthesized from it.",
             )
-        enqueue_improve(run_id, model)
+        enqueue_improve(run_id, model, strictness)
         return {"status": "queued", "run_id": run_id}
 
     @app.get("/api/runs/{run_id}/proposal-issue")

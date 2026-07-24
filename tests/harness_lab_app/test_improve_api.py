@@ -30,6 +30,13 @@ def test_get_improvements_404_when_absent(tmp_path, monkeypatch):
     assert exc.value.status_code == 404
 
 
+def test_run_improve_rejects_invalid_strictness():
+    endpoint = _endpoint(create_app(), "/api/runs/{run_id}/improve")
+    with pytest.raises(HTTPException) as exc:
+        endpoint("run-x", model=None, strictness="wild", session=None)
+    assert exc.value.status_code == 400
+
+
 def test_get_improvements_returns_doc(tmp_path, monkeypatch):
     from harness_lab_app import api as api_module
 

@@ -456,7 +456,9 @@ def audit_run(run_id: str, auditor_model: str | None = None) -> None:
 
 
 @celery_app.task(name="harness_lab_app.tasks.improve_run", acks_late=True)
-def improve_run(run_id: str, model: str | None = None) -> None:
+def improve_run(
+    run_id: str, model: str | None = None, strictness: str | None = None
+) -> None:
     """Synthesize improvement proposals from a run's audit (worker-side).
 
     Shells out to scripts/lab_improve.py in generate/dry-run mode (the CLI
@@ -480,6 +482,8 @@ def improve_run(run_id: str, model: str | None = None) -> None:
     command = [python, "scripts/lab_improve.py", "--run", run_id]
     if model:
         command += ["--model", model]
+    if strictness:
+        command += ["--strictness", strictness]
     env = {**os.environ, **build_run_environment()}
 
     try:

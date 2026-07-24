@@ -51,12 +51,14 @@ def enqueue_audit(run_id: str, auditor_model: str | None = None) -> None:
     )
 
 
-def enqueue_improve(run_id: str, model: str | None = None) -> None:
+def enqueue_improve(
+    run_id: str, model: str | None = None, strictness: str | None = None
+) -> None:
     """Publish an improvement-synthesis task (LLM call, runs in the worker);
     raises if the broker is unreachable."""
     celery_app.send_task(
         "harness_lab_app.tasks.improve_run",
-        args=[run_id, model],
+        args=[run_id, model, strictness],
         queue="runs",
         retry=False,
     )

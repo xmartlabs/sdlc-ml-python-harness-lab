@@ -61,6 +61,7 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
   const [improveError, setImproveError] = useState<string | null>(null);
   const [savingProposals, setSavingProposals] = useState(false);
   const [saveResult, setSaveResult] = useState<SaveImprovementsResult | null>(null);
+  const [improveStrictness, setImproveStrictness] = useState("balanced");
   const [proposalIssue, setProposalIssue] = useState<ProposalIssue | null>(null);
   const [proposalLoading, setProposalLoading] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
@@ -372,7 +373,7 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
     setImproving(true);
     setImproveError(null);
     api
-      .runImprove(runId, auditModel.trim() || undefined)
+      .runImprove(runId, auditModel.trim() || undefined, improveStrictness)
       .then(() => {
         // The synthesis is an LLM call in the worker; poll for the artifact.
         let tries = 0;
@@ -786,6 +787,16 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
             {improvements ? (
               <span className="badge ok">{improvements.proposals.length} proposal(s)</span>
             ) : null}
+            <select
+              aria-label="Estrictez de la síntesis"
+              onChange={(e) => setImproveStrictness(e.target.value)}
+              title="Estrictez del filtro: strict = pocas proposals con evidencia fuerte; lenient = más permisivo."
+              value={improveStrictness}
+            >
+              <option value="strict">strict</option>
+              <option value="balanced">balanced</option>
+              <option value="lenient">lenient</option>
+            </select>
             <button
               disabled={improving || audit?.status !== "done"}
               onClick={handleImprove}
@@ -833,9 +844,17 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
         ) : (
           <>
             {improvements.proposals.length === 0 ? (
-              <p className="muted">
-                The synthesis found nothing actionable to improve from this audit.
-              </p>
+              improvements.gate?.skipped ? (
+                <p className="muted">
+                  ✅ La corrida estuvo dentro de lo esperado para este caso+modelo —{" "}
+                  {improvements.gate.reason} Podés forzar la síntesis con{" "}
+                  <code>make improve RUN={run.run_id} IMPROVE_FORCE=1</code>.
+                </p>
+              ) : (
+                <p className="muted">
+                  The synthesis found nothing actionable to improve from this audit.
+                </p>
+              )
             ) : (
               <div className="table">
                 {improvements.proposals.map((proposal, index) => (

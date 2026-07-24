@@ -249,6 +249,8 @@ export type ImprovementsDoc = {
   run_id: string;
   context: { case: string; harness: string; executor_model: string };
   generator_model: string;
+  strictness?: string;
+  gate?: { skipped: boolean; reason: string | null; min_score: number };
   proposals: ImprovementProposal[];
 };
 

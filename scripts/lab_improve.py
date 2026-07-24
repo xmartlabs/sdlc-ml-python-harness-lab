@@ -57,31 +57,87 @@ GOVERNANCE_DOCS = {
     "LOCAL_AGENT.md",
 }
 
-SYSTEM_PROMPT = """\
-You improve an AI engineering harness. You are given evidence from ONE benchmark
-run: the behavioral audit, the structured per-item verdicts (skills / governance
-docs / subagents / hooks, each judged useful | redundant | improve | unknown),
-and the run context.
+# Strictness of the synthesis filter: how much evidence a proposal needs to
+# exist and how many can come out of one run. "strict" = fewer, higher-signal
+# proposals. Default balanced; override with IMPROVE_STRICTNESS / --strictness.
+STRICTNESS_LEVELS = {
+    "strict": {
+        "max_proposals": 2,
+        "bar": (
+            "Only propose a change when THIS run shows a clear behavioral "
+            "failure with direct evidence (wrong result, wasted work, broken "
+            "workflow) that the targeted artifact plausibly caused."
+        ),
+    },
+    "balanced": {
+        "max_proposals": 4,
+        "bar": (
+            "Only propose changes backed by concrete evidence of friction or "
+            "failure in THIS run; skip speculative polish."
+        ),
+    },
+    "lenient": {
+        "max_proposals": 6,
+        "bar": (
+            "Prefer evidenced problems, but clear improvement opportunities "
+            "with weaker signals may be included."
+        ),
+    },
+}
+DEFAULT_STRICTNESS = "balanced"
 
-Produce concrete, de-duplicated IMPROVEMENT PROPOSALS for the harness — only from
-real signals: items judged "improve", required governance/skills that were NOT
-followed, or gaps the audit calls out. Do NOT invent problems; if a run went
-well with little signal, return few or zero proposals.
+# Outcome gate: a scored run at/above this (score or composite), with its
+# objective passed, zero interventions, and zero "improve" verdicts is treated
+# as "the harness worked for this case+model" — synthesis is skipped entirely
+# so clean runs cannot slowly bias the template. Override the threshold with
+# IMPROVE_GATE_MIN_SCORE; bypass the gate with IMPROVE_FORCE=1 / --force.
+GATE_MIN_SCORE = float(os.environ.get("IMPROVE_GATE_MIN_SCORE", "8"))
+
+SYSTEM_PROMPT_TEMPLATE = """\
+You improve an AI engineering harness. You are given evidence from ONE benchmark
+run: the measured outcome, the behavioral audit, the structured per-item
+verdicts (skills / governance docs / subagents / hooks, each judged useful |
+redundant | improve | unknown), and the run context.
+
+Produce concrete, de-duplicated IMPROVEMENT PROPOSALS for the harness — only
+from real signals: items judged "improve", required governance/skills that were
+NOT followed, or failures the audit demonstrates. {bar}
+
+Calibration rules:
+- Use the measured outcome. A run that passed its objective with a high score,
+  no interventions, and no "improve" verdicts is evidence the harness WORKED
+  for this case+model: return [] unless something concretely failed.
+- "unknown" verdicts mean the harness could not observe usage (normal for
+  summary-only harnesses). Treat them as neutral — never as gaps.
+- "redundant" means unused for this case. That is expected — a template serves
+  many cases. Never propose changes from redundancy alone.
+- Do NOT propose changes whose main purpose is making behavior more observable
+  or auditable (plan notes, read acknowledgements, checkpoints) unless the run
+  concretely failed because that discipline was missing.
+- Do NOT invent problems. An empty array is a good outcome, not a failure.
 
 Each proposal targets a documentation or skill change (not the subject task).
-Output ONLY a JSON array (no prose, no code fences). Each element:
+Output ONLY a JSON array (no prose, no code fences), at most {max_proposals}
+elements. Each element:
 
-{"title": "<imperative, <=80 chars>",
+{{"title": "<imperative, <=80 chars>",
  "kind": "skill" | "doc" | "subagent" | "hook" | "process",
  "target": "<exact skill/doc/subagent name, or the process area>",
  "repo_hint": "template" | "harness",
  "body": "<markdown: the problem (with evidence from THIS run), the proposed
-           change, and why it helps. 2-6 short paragraphs or bullets.>"}
+           change, and why it helps. 2-6 short paragraphs or bullets.>"}}
 
 repo_hint: "template" for skills, governance docs, subagents, hooks that ship in
 the project template; "harness" for methodology / process / cross-cutting harness
-guidance. Keep it to the highest-signal proposals (at most 6).
+guidance. Keep it to the highest-signal proposals.
 """
+
+
+def build_system_prompt(strictness: str) -> str:
+    level = STRICTNESS_LEVELS[strictness]
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        bar=level["bar"], max_proposals=level["max_proposals"]
+    )
 
 
 def route_repo(kind: str, target: str, repo_hint: str) -> str:
@@ -152,21 +208,111 @@ def _parse_proposals(text: str) -> list[dict]:
     return out
 
 
-def synthesize(run: dict, model: str) -> list[dict]:
-    improve = [f for f in run["findings"] if f.get("verdict") == "improve"]
-    findings_block = "\n".join(
-        f"- {f.get('name')} ({f.get('kind')}): {f.get('note', '')}"
-        for f in (improve or run["findings"])
+def load_outcome(run_id: str) -> dict | None:
+    """Best-effort measured outcome from the lab DB (None when unavailable).
+
+    The script stays runnable without the app (e.g. artifacts copied elsewhere):
+    any import/DB failure just disables the outcome gate and the outcome block.
+    """
+    try:
+        from sqlmodel import Session, select
+
+        from harness_lab_app.db import engine
+        from harness_lab_app.models import Run, Validation
+
+        with Session(engine) as session:
+            run = session.exec(select(Run).where(Run.run_id == run_id)).first()
+            validation = session.exec(
+                select(Validation).where(Validation.run_id == run_id)
+            ).first()
+    except Exception:
+        return None
+    if run is None and validation is None:
+        return None
+    objective = (validation.objective if validation else {}) or {}
+    effort = (validation.effort if validation else {}) or {}
+    return {
+        "score": run.score if run else None,
+        "interventions": run.interventions if run else None,
+        "composite": validation.composite if validation else None,
+        "objective_passed": objective.get("passed"),
+        "steps": effort.get("steps"),
+    }
+
+
+def gate_reason(
+    outcome: dict | None, improve_count: int, min_score: float = GATE_MIN_SCORE
+) -> str | None:
+    """Non-None reason ⇒ skip synthesis: the run met expectations as-is.
+
+    Requires CONFIRMED goodness — an unscored run never gates (outcome fields
+    missing/None fail the checks and synthesis proceeds normally).
+    """
+    if outcome is None or improve_count > 0:
+        return None
+    if outcome.get("objective_passed") is not True:
+        return None
+    if (outcome.get("interventions") or 0) != 0:
+        return None
+    scores = [
+        v for v in (outcome.get("score"), outcome.get("composite")) if v is not None
+    ]
+    best = max(scores, default=None)
+    if best is None or best < min_score:
+        return None
+    return (
+        "Run met expectations for this case+model: objective passed, "
+        f"score {best:g} >= {min_score:g}, 0 interventions, 0 'improve' "
+        "findings. No proposals generated."
     )
-    user = (
+
+
+def build_user_message(run: dict, outcome: dict | None) -> str:
+    """Honest signal only: 'improve' verdicts + measured outcome + audit.
+
+    When zero items were judged 'improve' that is said explicitly — the full
+    verdict list (mostly redundant/unknown) is never dumped as if it needed
+    improvement.
+    """
+    improve = [f for f in run["findings"] if f.get("verdict") == "improve"]
+    findings_block = (
+        "\n".join(
+            f"- {f.get('name')} ({f.get('kind')}): {f.get('note', '')}" for f in improve
+        )
+        or "(none — 0 of the audited items were judged 'improve')"
+    )
+    if outcome is None:
+        outcome_block = "(not scored/validated yet)"
+    else:
+        fmt = lambda v: "n/a" if v is None else str(v)  # noqa: E731
+        outcome_block = (
+            f"- objective passed: {fmt(outcome.get('objective_passed'))}\n"
+            f"- manual score (0-10): {fmt(outcome.get('score'))}\n"
+            f"- composite score: {fmt(outcome.get('composite'))}\n"
+            f"- steps: {fmt(outcome.get('steps'))}\n"
+            f"- human interventions: {fmt(outcome.get('interventions'))}"
+        )
+    return (
         f"# Run: {run['run_id']}\n"
         f"harness={run['harness'] or '?'} model={run['executor_model']} "
         f"case={run['case']} prompt={run['prompt_variant']}\n\n"
-        f"## Structured verdicts needing improvement\n{findings_block or '(none)'}\n\n"
+        f"## Measured outcome\n{outcome_block}\n\n"
+        f"## Verdicts judged 'improve'\n{findings_block}\n\n"
         f"## Behavioral audit\n{run['audit_md'][:40000]}"
     )
-    raw = call_gateway(model, SYSTEM_PROMPT, user)
-    proposals = _parse_proposals(raw)
+
+
+def synthesize(
+    run: dict,
+    model: str,
+    strictness: str = DEFAULT_STRICTNESS,
+    outcome: dict | None = None,
+) -> list[dict]:
+    raw = call_gateway(
+        model, build_system_prompt(strictness), build_user_message(run, outcome)
+    )
+    max_proposals = int(STRICTNESS_LEVELS[strictness]["max_proposals"])  # type: ignore[call-overload]
+    proposals = _parse_proposals(raw)[:max_proposals]
     for p in proposals:
         p.setdefault("kind", "doc")
         p["repo"] = route_repo(
@@ -187,10 +333,26 @@ def issue_body(proposal: dict, run: dict) -> str:
     return proposal["body"].strip() + footer
 
 
-def generate(run_id: str, model: str) -> Path:
+def generate(
+    run_id: str,
+    model: str,
+    strictness: str = DEFAULT_STRICTNESS,
+    force: bool = False,
+) -> Path:
     run = load_run(run_id)
-    print(f"→ Synthesizing improvement proposals for {run_id} (model {model})…")
-    proposals = synthesize(run, model)
+    outcome = load_outcome(run_id)
+    improve_count = sum(1 for f in run["findings"] if f.get("verdict") == "improve")
+    reason = None if force else gate_reason(outcome, improve_count)
+    if reason:
+        print(f"✓ Outcome gate: {reason}")
+        print("  (Bypass with IMPROVE_FORCE=1 / --force to synthesize anyway.)")
+        proposals: list[dict] = []
+    else:
+        print(
+            f"→ Synthesizing improvement proposals for {run_id} "
+            f"(model {model}, strictness {strictness})…"
+        )
+        proposals = synthesize(run, model, strictness=strictness, outcome=outcome)
     doc = {
         "run_id": run_id,
         "context": {
@@ -199,11 +361,19 @@ def generate(run_id: str, model: str) -> Path:
             "executor_model": run["executor_model"],
         },
         "generator_model": model,
+        "strictness": strictness,
+        "gate": {
+            "skipped": bool(reason),
+            "reason": reason,
+            "min_score": GATE_MIN_SCORE,
+        },
         "proposals": proposals,
     }
     out = DATA_DIR / run_id
     (out / "improvements.json").write_text(json.dumps(doc, indent=2))
     preview = [f"# Improvement proposals — {run_id}\n"]
+    if reason:
+        preview.append(f"_{reason}_\n")
     for i, p in enumerate(proposals, 1):
         preview.append(
             f"## {i}. {p['title']}\n\n"
@@ -302,12 +472,28 @@ def main(argv: list[str] | None = None) -> int:
         help="File the (edited) proposals as GitHub issues. Without this, only "
         "generates the editable proposals file (dry-run).",
     )
+    parser.add_argument(
+        "--strictness",
+        choices=sorted(STRICTNESS_LEVELS),
+        default=os.environ.get("IMPROVE_STRICTNESS", DEFAULT_STRICTNESS),
+        help="Evidence bar for proposals: strict = fewer, higher-signal; "
+        "lenient = more permissive (default: balanced, or IMPROVE_STRICTNESS).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=os.environ.get("IMPROVE_FORCE") == "1",
+        help="Bypass the outcome gate and synthesize even for a clean run "
+        "(also IMPROVE_FORCE=1).",
+    )
     args = parser.parse_args(argv)
 
+    if args.strictness not in STRICTNESS_LEVELS:
+        sys.exit(f"❌ Invalid strictness: {args.strictness}")
     _load_env()
     if args.create:
         return create(args.run)
-    generate(args.run, args.model)
+    generate(args.run, args.model, strictness=args.strictness, force=args.force)
     return 0
 
 

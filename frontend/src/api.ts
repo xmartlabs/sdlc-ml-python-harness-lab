@@ -167,8 +167,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ proposal_ids: proposalIds, model: model ?? null })
     }),
-  runImprove: (runId: string, model?: string) => {
-    const query = model ? `?model=${encodeURIComponent(model)}` : "";
+  runImprove: (runId: string, model?: string, strictness?: string) => {
+    const params = new URLSearchParams();
+    if (model) params.set("model", model);
+    if (strictness) params.set("strictness", strictness);
+    const query = params.size > 0 ? `?${params.toString()}` : "";
     return request<{ status: string; run_id: string }>(
       `/api/runs/${runId}/improve${query}`,
       { method: "POST" }

@@ -8,6 +8,14 @@ import type { GroupIssueResult, SavedProposalRecord } from "../types";
 
 const ALL = "all";
 
+// A proposal theme is "recurrent" when the same kind+target was proposed from
+// at least this many distinct runs — repeated evidence, not one-off noise.
+const RECURRENCE_MIN_RUNS = 2;
+
+function recurrenceKey(p: SavedProposalRecord): string {
+  return `${p.kind}|${p.target}`.toLowerCase().trim();
+}
+
 function distinct(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))].sort();
 }
@@ -52,6 +60,7 @@ export function Improvements() {
   const [repoFilter, setRepoFilter] = useState(ALL);
   const [kindFilter, setKindFilter] = useState(ALL);
   const [caseFilter, setCaseFilter] = useState(ALL);
+  const [onlyRecurrent, setOnlyRecurrent] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [groupIssue, setGroupIssue] = useState<GroupIssueResult | null>(null);
@@ -68,6 +77,22 @@ export function Improvements() {
 
   useEffect(refresh, []);
 
+  // Distinct runs per kind+target theme, across ALL saved proposals (not the
+  // filtered view) — recurrence is a global signal.
+  const runsPerTheme = useMemo(() => {
+    const themes = new Map<string, Set<string>>();
+    for (const p of proposals ?? []) {
+      const key = recurrenceKey(p);
+      const runs = themes.get(key) ?? new Set<string>();
+      runs.add(p.run_id);
+      themes.set(key, runs);
+    }
+    return themes;
+  }, [proposals]);
+
+  const runCount = (p: SavedProposalRecord) =>
+    runsPerTheme.get(recurrenceKey(p))?.size ?? 1;
+
   const visible = useMemo(() => {
     if (proposals === null) {
       return [];
@@ -76,9 +101,11 @@ export function Improvements() {
       (p) =>
         (repoFilter === ALL || p.repo === repoFilter) &&
         (kindFilter === ALL || p.kind === kindFilter) &&
-        (caseFilter === ALL || p.case === caseFilter)
+        (caseFilter === ALL || p.case === caseFilter) &&
+        (!onlyRecurrent ||
+          (runsPerTheme.get(recurrenceKey(p))?.size ?? 1) >= RECURRENCE_MIN_RUNS)
     );
-  }, [proposals, repoFilter, kindFilter, caseFilter]);
+  }, [proposals, repoFilter, kindFilter, caseFilter, onlyRecurrent, runsPerTheme]);
 
   const toggle = (id: number) => {
     setSelected((current) => {
@@ -211,6 +238,17 @@ export function Improvements() {
                 </option>
               ))}
             </select>
+            <label
+              className="switch"
+              title={`Solo temas propuestos desde ≥${RECURRENCE_MIN_RUNS} runs distintos (mismo kind+target).`}
+            >
+              <input
+                checked={onlyRecurrent}
+                onChange={(e) => setOnlyRecurrent(e.target.checked)}
+                type="checkbox"
+              />
+              <span>solo recurrentes</span>
+            </label>
             <span className="toolbar-spacer" />
             <button
               className="primary"
@@ -270,6 +308,14 @@ export function Improvements() {
                   <span className="cell-stack">
                     {proposal.kind ? (
                       <span className="badge neutral">{proposal.kind}</span>
+                    ) : null}
+                    {runCount(proposal) >= RECURRENCE_MIN_RUNS ? (
+                      <span
+                        className="badge ok"
+                        title={`Mismo kind+target propuesto desde ${runCount(proposal)} runs distintos — evidencia repetida, buen candidato a issue.`}
+                      >
+                        recurrente ×{runCount(proposal)}
+                      </span>
                     ) : null}
                     {proposal.target ? (
                       <small className="cell-truncate" title={proposal.target}>

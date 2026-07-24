@@ -32,8 +32,9 @@ audit writes `audit.md` + `audit_findings.json` (per-item verdicts).
 make improve RUN=tetris-v1-K-004
 ```
 
-A dedicated LLM pass reads the audit + findings + run context and synthesizes at
-most ~6 concrete, evidence-grounded proposals. They're written to:
+A dedicated LLM pass reads the audit + findings + the run's **measured outcome**
+(objective result, scores, steps, interventions from the lab DB) and synthesizes
+concrete, evidence-grounded proposals. They're written to:
 
 - `data/runs/<run>/improvements.json` — the machine record (edit this).
 - `data/runs/<run>/improvements.md` — a readable preview.
@@ -58,6 +59,38 @@ Files each remaining proposal as a GitHub issue via `gh` (on your host, with you
 auth), labeled `lab-improvement`, with a footer linking back to the run
 (harness / model / case). Created issue URLs are written back into
 `improvements.json`, so re-running `CREATE=1` is idempotent (won't duplicate).
+
+## Calibration: outcome gate, strictness, and anti-bias rules
+
+Left unchecked, an audit→improve loop biases the template: the auditor always
+finds *something*, so every run mutates the harness. Three mechanisms keep the
+loop honest — a clean run's legitimate output is **zero proposals**:
+
+- **Outcome gate (deterministic, pre-LLM).** When a run's objective passed, its
+  score or composite is ≥ 8 (`IMPROVE_GATE_MIN_SCORE`), it needed 0
+  interventions, and the audit judged 0 items "improve", synthesis is skipped
+  entirely: `improvements.json` gets `proposals: []` plus a `gate` record
+  ("run met expectations for this case+model"), and no LLM call is made. An
+  unscored run never gates — confirmation of goodness is required. Bypass with
+  `IMPROVE_FORCE=1` (or `--force`).
+- **Honest signal.** The synthesis prompt receives only the findings actually
+  judged `improve` (an explicit "0 items judged improve" when there are none —
+  the full redundant/unknown list is never presented as needing improvement),
+  plus the measured outcome so the model can calibrate. Prompt rules make
+  `unknown` verdicts neutral (summary-only harnesses can't observe doc reads),
+  forbid proposals from redundancy alone, and forbid observability-for-its-own-
+  sake proposals (plan notes, read receipts) unless the run concretely failed
+  without them.
+- **Strictness knob.** `IMPROVE_STRICTNESS=strict|balanced|lenient` (env,
+  `--strictness`, or the selector next to "Propose improvements" in the UI)
+  sets the evidence bar and the proposal cap: strict = at most 2 high-signal
+  proposals, balanced (default) = 4, lenient = 6.
+
+**Recurrence over single runs.** The real anti-bias filter is repetition: the
+Improvements worklist badges a proposal **recurrente ×N** when the same
+kind+target was proposed from ≥ 2 distinct runs, with a "solo recurrentes"
+filter. Prefer turning recurrent themes into issues; treat one-off proposals
+from a single run with suspicion.
 
 ## Cross-run worklist: saved proposals → one combined sanitized issue
 
