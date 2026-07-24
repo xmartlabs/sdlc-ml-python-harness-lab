@@ -88,6 +88,22 @@ def test_build_group_user_message_includes_proposals_and_audits() -> None:
     assert len(message) <= 40000
 
 
+def test_build_group_user_message_masks_run_ids_before_the_llm() -> None:
+    # Run ids ride into the prompt via proposal bodies and audit excerpts. They
+    # must be purged there — the model cannot echo what it never sees, so the
+    # output backstop stops being a routine blocker.
+    message = drafting.build_group_user_message(
+        _items(), {"dbg-K-001": "audit text mentioning dbg-K-001 inline"}
+    )
+    assert "dbg-K-001" not in message
+    assert "dbg-K-002" not in message
+    # Replaced by stable pseudonyms, and the audit stays tied to its run.
+    assert "run-1" in message
+    assert "Audit excerpt (run-1)" in message
+    # Surrounding signal survives the masking.
+    assert "hypothesis churn" in message
+
+
 def test_build_group_user_message_clips_long_bodies() -> None:
     items = [{"run_id": "r", "title": "T", "body": "x" * 20000}]
     message = drafting.build_group_user_message(items, {})

@@ -184,13 +184,37 @@ _GROUP_ITEM_CLIP = 6000
 _GROUP_TOTAL_CLIP = 40000
 
 
+def _run_id_pseudonyms(items: list[dict], audits: dict[str, str]) -> dict[str, str]:
+    """Map each known run id to a stable ``run-N`` pseudonym (sorted for order)."""
+    run_ids: set[str] = {str(item["run_id"]) for item in items if item.get("run_id")}
+    run_ids |= set(audits)
+    return {
+        run_id: f"run-{index}" for index, run_id in enumerate(sorted(run_ids), start=1)
+    }
+
+
+def _mask_run_ids(text: str, pseudonyms: dict[str, str]) -> str:
+    """Replace whole-word run-id occurrences with their pseudonyms.
+
+    Longest id first so an id that is a prefix of another masks cleanly; word
+    boundaries keep single-char ids from corrupting surrounding prose.
+    """
+    for run_id in sorted(pseudonyms, key=len, reverse=True):
+        text = re.sub(rf"\b{re.escape(run_id)}\b", pseudonyms[run_id], text)
+    return text
+
+
 def build_group_user_message(items: list[dict], audits: dict[str, str]) -> str:
     """Render selected proposals (+ optional per-run audit excerpts) as one prompt.
 
     ``items`` are unsanitized proposal snapshots ({title, kind, target, body,
     case, harness, executor_model, run_id}); ``audits`` maps run_id -> audit.md
-    text. Pure assembly, testable without a gateway.
+    text. Run ids ride in via the bodies and audit excerpts, so they are masked
+    to ``run-N`` pseudonyms before the model sees them — the model cannot echo a
+    private id it never received, which turns the output backstop from a routine
+    blocker into a rare safety net. Pure assembly, testable without a gateway.
     """
+    pseudonyms = _run_id_pseudonyms(items, audits)
     blocks: list[str] = [
         "Consolidate the following improvement proposals into one proposal.",
     ]
@@ -211,11 +235,11 @@ def build_group_user_message(items: list[dict], audits: dict[str, str]) -> str:
             lines.append("")
             lines.append(body)
         blocks.append("\n".join(lines))
-    for index, run_id in enumerate(sorted(audits), start=1):
+    for run_id in sorted(audits):
         excerpt = audits[run_id][:_GROUP_ITEM_CLIP]
         if excerpt:
-            blocks.append(f"## Audit excerpt (run {index})\n\n{excerpt}")
-    return "\n\n".join(blocks)[:_GROUP_TOTAL_CLIP]
+            blocks.append(f"## Audit excerpt ({pseudonyms[run_id]})\n\n{excerpt}")
+    return _mask_run_ids("\n\n".join(blocks), pseudonyms)[:_GROUP_TOTAL_CLIP]
 
 
 def synthesize_group_issue(
