@@ -9,8 +9,11 @@ import type {
   DocEntry,
   HarnessSkill,
   ModelCatalog,
+  GroupIssueResult,
   ProposalIssue,
   RunCreatePayload,
+  SaveImprovementsResult,
+  SavedProposalRecord,
   RunEventRecord,
   RunRecord,
   SandboxRecord,
@@ -152,6 +155,18 @@ export const api = {
     request<ImprovementsDoc>(`/api/runs/${runId}/improvements`),
   getProposalIssue: (runId: string) =>
     request<ProposalIssue>(`/api/runs/${runId}/proposal-issue`),
+  saveImprovements: (runId: string) =>
+    request<SaveImprovementsResult>(`/api/runs/${runId}/improvements/save`, {
+      method: "POST"
+    }),
+  listSavedProposals: () => request<SavedProposalRecord[]>("/api/improvements"),
+  deleteSavedProposal: (proposalId: number) =>
+    request<void>(`/api/improvements/${proposalId}`, { method: "DELETE" }),
+  createGroupIssue: (proposalIds: number[], model?: string) =>
+    request<GroupIssueResult>("/api/improvements/group-issue", {
+      method: "POST",
+      body: JSON.stringify({ proposal_ids: proposalIds, model: model ?? null })
+    }),
   runImprove: (runId: string, model?: string) => {
     const query = model ? `?model=${encodeURIComponent(model)}` : "";
     return request<{ status: string; run_id: string }>(

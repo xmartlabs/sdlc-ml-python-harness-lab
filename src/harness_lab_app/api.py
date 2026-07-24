@@ -24,6 +24,7 @@ from harness_lab_app.celery_app import (
 from harness_lab_app.config import get_settings, read_env_file_value
 from harness_lab_app.db import get_engine, get_session, init_db
 from harness_lab_app.harness_lifecycle import drafting, sanitizer
+from harness_lab_app.improvement_service import ImprovementError, ImprovementService
 from harness_lab_app.run_service import (
     RunAlreadyExistsError,
     RunDeleteConflictError,
@@ -33,6 +34,7 @@ from harness_lab_app.run_service import (
 from harness_lab_app.sandbox_service import VALID_KINDS, SandboxService
 from harness_lab_app.schemas import (
     CaseCreate,
+    GroupIssueRequest,
     RunConfigCreate,
     RunCreate,
     StagedSkillCreate,
@@ -59,6 +61,35 @@ class ScoreRequest(BaseModel):
     interventions: int
     notes: str = ""
     rubric: dict[str, int] = {}
+
+
+def _prepare_gateway_env() -> None:
+    """Populate GATEWAY_BASE_URL/TOKEN from .env for in-process LLM calls.
+
+    bench_audit.call_gateway reads them from os.environ, which the API process
+    (especially in Docker) may not have; localhost is rewritten so a container
+    can reach the host gateway. Raises a 502 HTTPException when unconfigured.
+    (Same logic as the per-run proposal-issue endpoint, extracted for reuse.)
+    """
+    import os
+    from pathlib import Path
+
+    from harness_lab_app.executors import rewrite_localhost
+
+    base = read_env_file_value("GATEWAY_BASE_URL")
+    token = read_env_file_value("GATEWAY_TOKEN")
+    if not base or not token:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "LLM gateway not configured — set GATEWAY_BASE_URL and GATEWAY_TOKEN "
+                "in .env, then restart the app."
+            ),
+        )
+    if Path("/.dockerenv").exists():
+        base = rewrite_localhost(base, get_settings().docker_host_alias)
+    os.environ["GATEWAY_BASE_URL"] = base
+    os.environ["GATEWAY_TOKEN"] = token
 
 
 def create_app() -> FastAPI:
@@ -451,6 +482,111 @@ def create_app() -> FastAPI:
             "markdown": markdown,
             "form": form.to_dict(),
         }
+
+    @app.post("/api/runs/{run_id}/improvements/save")
+    def save_improvements(run_id: str, session: Session = Depends(get_session)):
+        # Snapshot the run's improvements.json proposals into the cross-run
+        # worklist (Improvements page). Idempotent per (run_id, title).
+        try:
+            return ImprovementService(session).save_from_run(run_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="No improvements yet — synthesize proposals first.",
+            ) from exc
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=500, detail=f"improvements.json unreadable: {exc}"
+            ) from exc
+
+    @app.get("/api/improvements")
+    def list_saved_proposals(
+        repo: str | None = None,
+        kind: str | None = None,
+        case_id: str | None = None,
+        status: str | None = None,
+        session: Session = Depends(get_session),
+    ):
+        return ImprovementService(session).list_proposals(
+            repo=repo, kind=kind, case=case_id, status=status
+        )
+
+    @app.get("/api/improvements/group-issues")
+    def list_group_issues(session: Session = Depends(get_session)):
+        return ImprovementService(session).list_group_issues()
+
+    @app.post("/api/improvements/group-issue")
+    def create_group_issue(
+        payload: GroupIssueRequest, session: Session = Depends(get_session)
+    ):
+        # Consolidate N saved proposals into ONE combined sanitized issue for
+        # ml-python-base. Synchronous single LLM call, same pattern as the
+        # per-run proposal-issue endpoint.
+        service = ImprovementService(session)
+        try:
+            selected = service.get_proposals(payload.proposal_ids)
+        except ImprovementError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _prepare_gateway_env()
+        runs_dir = get_settings().data_runs_dir
+        run_ids = sorted({p.run_id for p in selected})
+        items = [
+            {
+                "run_id": p.run_id,
+                "title": p.title,
+                "body": p.body,
+                "kind": p.kind,
+                "target": p.target,
+                "case": p.case,
+                "harness": p.harness,
+                "executor_model": p.executor_model,
+            }
+            for p in selected
+        ]
+        repository = "marcosdh1987/ml-python-base"
+        model = payload.model or drafting.DEFAULT_MODEL
+        try:
+            markdown, form = drafting.synthesize_group_issue(
+                items,
+                [runs_dir / run_id for run_id in run_ids],
+                repository=repository,
+                created_at=datetime.now(UTC),
+                model=model,
+            )
+        except sanitizer.SanitizationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Refusing to generate — the issue would leak private data: {exc}",
+            ) from exc
+        except (Exception, SystemExit) as exc:
+            raise HTTPException(
+                status_code=502, detail=f"Could not synthesize the issue: {exc}"
+            ) from exc
+        issue = service.record_group_issue(
+            selected,
+            repository=repository,
+            title=form.title,
+            markdown=markdown,
+            form_json=form.to_dict(),
+            model=model,
+        )
+        return {
+            "group_issue_id": issue.id,
+            "repository": repository,
+            "markdown": markdown,
+            "form": form.to_dict(),
+            "proposal_ids": issue.proposal_ids,
+            "source_run_ids": issue.source_run_ids,
+        }
+
+    @app.delete("/api/improvements/{proposal_id}", status_code=204)
+    def delete_saved_proposal(
+        proposal_id: int, session: Session = Depends(get_session)
+    ):
+        try:
+            ImprovementService(session).delete_proposal(proposal_id)
+        except ImprovementError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/runs/{run_id}/sandbox")
     def get_sandbox(

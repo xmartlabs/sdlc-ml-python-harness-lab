@@ -275,3 +275,39 @@ export type ProposalIssue = {
   markdown: string;
   form: ProposalIssueForm;
 };
+
+export type SavedProposalRecord = {
+  id: number;
+  run_id: string;
+  title: string;
+  body: string;
+  kind: string;
+  target: string;
+  repo_hint: string;
+  repo: string;
+  created_issue_url: string | null;
+  case: string;
+  harness: string;
+  executor_model: string;
+  generator_model: string;
+  status: "saved" | "issued";
+  group_issue_id: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SaveImprovementsResult = {
+  run_id: string;
+  saved: number;
+  updated: number;
+  total: number;
+};
+
+export type GroupIssueResult = {
+  group_issue_id: number;
+  repository: string;
+  markdown: string;
+  form: ProposalIssueForm;
+  proposal_ids: number[];
+  source_run_ids: string[];
+};

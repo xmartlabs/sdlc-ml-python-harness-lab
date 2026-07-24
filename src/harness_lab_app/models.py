@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import Column
+from sqlalchemy import Column, UniqueConstraint
 from sqlalchemy.types import JSON
 from sqlmodel import Field, SQLModel
 
@@ -210,6 +210,50 @@ class StagedSkill(SQLModel, table=True):
     status: str = "draft"  # draft | testing | promoted | archived
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class SavedProposal(SQLModel, table=True):
+    """A run's improvement proposal snapshotted into the DB (UI worklist).
+
+    Source of truth for synthesis stays data/runs/<id>/improvements.json; this
+    row is the cross-run index the Improvements page selects from to build a
+    combined sanitized issue. Run context is denormalized so the list needs no
+    joins. (run_id, title) is the idempotency key for re-saves.
+    """
+
+    __table_args__ = (UniqueConstraint("run_id", "title"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True)
+    title: str
+    body: str = ""
+    kind: str = ""  # skill | doc | subagent | hook | process
+    target: str = ""
+    repo_hint: str = ""
+    repo: str = ""
+    created_issue_url: str | None = None
+    case: str = ""
+    harness: str = ""
+    executor_model: str = ""
+    generator_model: str = ""
+    status: str = "saved"  # saved | issued
+    group_issue_id: int | None = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class GroupIssue(SQLModel, table=True):
+    """A combined sanitized issue generated from N selected SavedProposals."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    repository: str = "marcosdh1987/ml-python-base"
+    title: str = ""
+    markdown: str = ""
+    form_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    proposal_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
+    source_run_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    model: str = ""
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Attribution(SQLModel, table=True):

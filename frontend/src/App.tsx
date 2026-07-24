@@ -7,6 +7,7 @@ import { Cases } from "./pages/Cases";
 import { Compare } from "./pages/Compare";
 import { Dashboard } from "./pages/Dashboard";
 import { Guide } from "./pages/Guide";
+import { Improvements } from "./pages/Improvements";
 import { Runs } from "./pages/Runs";
 import { Settings } from "./pages/Settings";
 import { Skills } from "./pages/Skills";
@@ -217,6 +218,7 @@ export default function App() {
           path="/cases"
         />
         <Route element={<Skills />} path="/skills" />
+        <Route element={<Improvements />} path="/improvements" />
         <Route element={<Compare runs={runs} />} path="/compare" />
         <Route element={<Guide />} path="/guide" />
         <Route element={<Settings onThemeChange={setTheme} theme={theme} />} path="/settings" />
