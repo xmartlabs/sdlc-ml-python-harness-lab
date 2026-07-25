@@ -854,17 +854,27 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
         ) : (
           <>
             {improvements.proposals.length === 0 ? (
-              improvements.gate?.skipped ? (
+              <>
+                {improvements.gate?.skipped ? (
+                  <p className="muted">
+                    ✅ La corrida estuvo dentro de lo esperado para este caso+modelo —{" "}
+                    {improvements.gate.reason} Podés forzar la síntesis con{" "}
+                    <code>make improve RUN={run.run_id} IMPROVE_FORCE=1</code>.
+                  </p>
+                ) : (
+                  <p className="muted">
+                    The synthesis found nothing actionable to improve from this audit.
+                  </p>
+                )}
+                {/* Close the loop: 0 proposals still persists improvements.json,
+                    so the Runs list already reflects this run as "no" — say so,
+                    since there is nothing to "Guardar" into the cross-run worklist. */}
                 <p className="muted">
-                  ✅ La corrida estuvo dentro de lo esperado para este caso+modelo —{" "}
-                  {improvements.gate.reason} Podés forzar la síntesis con{" "}
-                  <code>make improve RUN={run.run_id} IMPROVE_FORCE=1</code>.
+                  Sin proposals para guardar. Este run ya quedó registrado como{" "}
+                  <span className="badge neutral">no</span> en la lista de{" "}
+                  <Link to="/runs">Runs</Link> (columna Improvements).
                 </p>
-              ) : (
-                <p className="muted">
-                  The synthesis found nothing actionable to improve from this audit.
-                </p>
-              )
+              </>
             ) : (
               <div className="table">
                 {improvements.proposals.map((proposal, index) => (
