@@ -169,6 +169,10 @@ GROUP_SYSTEM_PROMPT = (
     "templates), suggested_change (str), suggested_cases (list of case ids), "
     "success_criteria (list of {metric, operator in [lte,gte,eq,lt,gt], value}), "
     "confidence in [low,medium,high]. "
+    "The user message opens with a 'Target surface' directive derived from the "
+    "harness that produced these runs — your affected_artifacts MUST edit exactly "
+    "that surface (a single harness's adapter, or the shared .github/ layer when "
+    "the evidence spans harnesses). "
     "Each success_criteria.metric MUST be one of the lab's measurable metrics: "
     f"{_METRIC_CATALOG}. Do NOT invent metric names — the lab automatically fails "
     "any criterion whose metric it cannot compute. Express any goal none of these "
@@ -182,6 +186,75 @@ GROUP_SYSTEM_PROMPT = (
 # synthesize_draft — keeps the prompt bounded for large selections.
 _GROUP_ITEM_CLIP = 6000
 _GROUP_TOTAL_CLIP = 40000
+
+# Which downstream-template surface an improvement targets, keyed by the harness
+# that produced it. Each harness ships its own adapter files, so a fix proven
+# under one harness belongs in that harness's adapter; a fix that recurs across
+# harnesses is harness-independent and belongs in the shared governed layer that
+# syncs out to all of them. Generic tool names + repo paths — never private data.
+_HARNESS_SURFACE = {
+    "claude": "the claude adapter (CLAUDE.md and .claude/ skills/subagents)",
+    "opencode": "the opencode adapter (AGENTS.md and opencode.json)",
+    "codex": "the codex adapter (AGENTS.md / Codex config)",
+    "antigravity": "the antigravity adapter (.agents/ workspace mirror)",
+}
+_SHARED_SURFACE = "the governed .github/ layer (synced to every harness adapter)"
+
+
+def _is_self_hosted(model: str) -> bool:
+    """A self-hosted/local executor is routed through the lab gateway (``gateway/…``).
+
+    Native cloud harnesses pass bare vendor ids (``claude-opus-4-8``); only the
+    self-hosted backends (LM Studio, NIM, …) carry the gateway prefix. Heuristic,
+    used only to attach an advisory note.
+    """
+    return model.strip().lower().startswith("gateway/")
+
+
+def harness_target_surface(items: list[dict]) -> dict:
+    """Deterministic target surface for a proposal set, derived from its harness.
+
+    Returns ``{harnesses, surface, self_hosted, note}``: one distinct harness →
+    that harness's adapter; several (or none recorded) → the shared governed
+    layer. Pure and secret-free (harness names and repo paths only).
+    """
+    harnesses = sorted(
+        {(item.get("harness") or "").strip().lower() for item in items} - {""}
+    )
+    self_hosted = any(
+        _is_self_hosted(item.get("executor_model") or "") for item in items
+    )
+    surface = (
+        _HARNESS_SURFACE.get(harnesses[0], _SHARED_SURFACE)
+        if len(harnesses) == 1
+        else _SHARED_SURFACE
+    )
+    note = (
+        "At least one run used a self-hosted/local model — weaker models benefit "
+        "from more explicit, front-loaded governance in that surface."
+        if self_hosted
+        else ""
+    )
+    return {
+        "harnesses": harnesses,
+        "surface": surface,
+        "self_hosted": self_hosted,
+        "note": note,
+    }
+
+
+def render_target_surface(scope: dict) -> str:
+    """A deterministic markdown block naming the surface an issue should edit."""
+    who = ", ".join(scope["harnesses"]) if scope["harnesses"] else "unknown"
+    lines = [
+        "## Target harness surface",
+        "",
+        f"- Harness(es) observed: **{who}**",
+        f"- Apply the change in: **{scope['surface']}**",
+    ]
+    if scope["note"]:
+        lines.append(f"- Note: {scope['note']}")
+    return "\n".join(lines)
 
 
 def _run_id_pseudonyms(items: list[dict], audits: dict[str, str]) -> dict[str, str]:
@@ -215,8 +288,15 @@ def build_group_user_message(items: list[dict], audits: dict[str, str]) -> str:
     blocker into a rare safety net. Pure assembly, testable without a gateway.
     """
     pseudonyms = _run_id_pseudonyms(items, audits)
+    scope = harness_target_surface(items)
+    directive = (
+        f"Target surface — your affected_artifacts MUST edit {scope['surface']}."
+    )
+    if scope["note"]:
+        directive = f"{directive} {scope['note']}"
     blocks: list[str] = [
         "Consolidate the following improvement proposals into one proposal.",
+        directive,
     ]
     for index, item in enumerate(items, start=1):
         lines = [f"## Proposal {index}: {item.get('title', '')}"]
@@ -277,7 +357,13 @@ def synthesize_group_issue(
         created_at=created_at,
         source=ProposalSource(repository=repository, runs=evidence_list),
     )
-    markdown = sanitizer.build_public_issue(proposal)
+    # Deterministic scope header from the selection's harness (secret-free, so it
+    # is safe to prepend after sanitization) — the authoritative statement of
+    # which surface to edit, independent of what the model chose.
+    markdown = (
+        f"{render_target_surface(harness_target_surface(items))}\n\n"
+        f"{sanitizer.build_public_issue(proposal)}"
+    )
     form = issue_form.build_issue_form(
         proposal, repository=repository, template=template
     )

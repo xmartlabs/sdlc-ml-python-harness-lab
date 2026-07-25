@@ -60,6 +60,7 @@ export function Improvements() {
   const [repoFilter, setRepoFilter] = useState(ALL);
   const [kindFilter, setKindFilter] = useState(ALL);
   const [caseFilter, setCaseFilter] = useState(ALL);
+  const [harnessFilter, setHarnessFilter] = useState(ALL);
   const [onlyRecurrent, setOnlyRecurrent] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -102,10 +103,19 @@ export function Improvements() {
         (repoFilter === ALL || p.repo === repoFilter) &&
         (kindFilter === ALL || p.kind === kindFilter) &&
         (caseFilter === ALL || p.case === caseFilter) &&
+        (harnessFilter === ALL || p.harness === harnessFilter) &&
         (!onlyRecurrent ||
           (runsPerTheme.get(recurrenceKey(p))?.size ?? 1) >= RECURRENCE_MIN_RUNS)
     );
-  }, [proposals, repoFilter, kindFilter, caseFilter, onlyRecurrent, runsPerTheme]);
+  }, [
+    proposals,
+    repoFilter,
+    kindFilter,
+    caseFilter,
+    harnessFilter,
+    onlyRecurrent,
+    runsPerTheme
+  ]);
 
   const toggle = (id: number) => {
     setSelected((current) => {
@@ -238,6 +248,19 @@ export function Improvements() {
                 </option>
               ))}
             </select>
+            <select
+              aria-label="Filtrar por harness"
+              onChange={(e) => setHarnessFilter(e.target.value)}
+              title="La herramienta que corrió el harness — define si un issue toca CLAUDE.md, opencode o la capa .github/ compartida."
+              value={harnessFilter}
+            >
+              <option value={ALL}>harness: todas</option>
+              {distinct(proposals.map((p) => p.harness)).map((harness) => (
+                <option key={harness} value={harness}>
+                  {harness}
+                </option>
+              ))}
+            </select>
             <label
               className="switch"
               title={`Solo temas propuestos desde ≥${RECURRENCE_MIN_RUNS} runs distintos (mismo kind+target).`}
@@ -286,6 +309,7 @@ export function Improvements() {
                 <span>Proposal</span>
                 <span>Kind · target</span>
                 <span>Repo</span>
+                <span>Harness</span>
                 <span>Run · case</span>
                 <span>Fecha · template</span>
                 <span>Status</span>
@@ -327,6 +351,18 @@ export function Improvements() {
                     <span className="badge neutral" title={proposal.repo}>
                       {proposal.repo.split("/").pop()}
                     </span>
+                  </span>
+                  <span>
+                    {proposal.harness ? (
+                      <span
+                        className="badge neutral"
+                        title={`Harness: ${proposal.harness} — un issue generado apuntaría a su adapter (o a .github/ si la selección mezcla harness).`}
+                      >
+                        {proposal.harness}
+                      </span>
+                    ) : (
+                      <small className="muted">—</small>
+                    )}
                   </span>
                   <span className="cell-stack">
                     <Link

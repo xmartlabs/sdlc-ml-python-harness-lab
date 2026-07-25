@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from queue import Empty, Queue
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +38,8 @@ _AUDIT_TIMEOUT_SECONDS = 300
 _SANDBOX_PORTS = {"terminal": "7681/tcp", "desktop": "6080/tcp"}
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlalchemy.engine import Engine
 
     from harness_lab_app.executors import RunExecutor, RunHandle
@@ -314,18 +317,28 @@ def _index_attribution(session: Session, run_id: str) -> None:
         session.commit()
 
 
-def _autoscore_objective_case(session: Session, run_id: str) -> None:
+def _autoscore_objective_case(
+    session: Session,
+    run_id: str,
+    *,
+    gateway: Callable[[str, str, str], str] | None = None,
+) -> None:
     """Complete objectively-scored cases without a manual score (SWE-bench).
 
     SWE-bench's official score is binary and fully automatic: resolved iff all
     FAIL_TO_PASS pass and no PASS_TO_PASS regresses — exactly what the run's
-    objective validation already computed. For swe_bench_instance cases we
-    therefore apply the score ourselves (resolved → 10, else 0) and complete
-    the run, instead of parking it in awaiting_manual_score. Best-effort: any
-    trouble leaves the run awaiting a manual score, never fails it.
+    objective validation already computed. For both swe_bench_instance and
+    swe_pro_instance cases with a conclusive verdict we apply the score
+    ourselves (resolved → 10, else 0) and complete the run.
+
+    SWE-bench Pro tests often cannot deliver a conclusive verdict in this
+    environment (heavy per-instance images). Rather than park those runs in
+    awaiting_manual_score — a human cannot eyeball a Pro resolution the way they
+    VNC into Tetris — the audit LLM grades the diff and the run is recorded as
+    ``llm_judge``. Best-effort throughout: any trouble leaves the run awaiting a
+    manual score, never fails it. ``gateway`` is injectable for tests.
     """
     from harness_lab_app.models import Validation
-    from harness_lab_app.validation_service import ValidationService
 
     try:
         run_service = RunService(session)
@@ -334,29 +347,32 @@ def _autoscore_objective_case(session: Session, run_id: str) -> None:
             return
         config = run_service.get_run_config(run.run_config_id)
         case = CaseService(session).get_case(config.case_id)
-        if case.type != CaseType.swe_bench_instance:
+        if case.type not in (CaseType.swe_bench_instance, CaseType.swe_pro_instance):
             return
         validation = session.exec(
             select(Validation).where(Validation.run_id == run_id)
         ).first()
-        if validation is None:
-            return  # objective validation missing → manual fallback
-        objective = validation.objective or {}
+        objective = (validation.objective if validation else None) or {}
         passed = objective.get("passed")
-        if passed is None:
-            return  # inconclusive objective result → manual fallback
         summary = objective.get("summary", "")
-        score = 10 if passed else 0
-        notes = f"auto-scored (SWE-bench objective): {summary}".strip()
-        ValidationService(session).apply_subjective(run_id, score, 0, {}, notes)
-        run_service.score_run(run_id, score, 0, notes)
-        session.add(
-            RunEvent(
-                run_id=run_id,
-                message=f"Auto-scored {score}/10 from SWE-bench validation ({summary})",
+
+        if passed is not None:
+            label = (
+                "SWE-bench Pro"
+                if case.type == CaseType.swe_pro_instance
+                else "SWE-bench"
             )
-        )
-        session.commit()
+            score = 10 if passed else 0
+            notes = f"auto-scored ({label} objective): {summary}".strip()
+            _record_autoscore(
+                session, run_service, run_id, score, notes, source="objective"
+            )
+            return
+
+        # No conclusive objective verdict.
+        if case.type == CaseType.swe_bench_instance:
+            return  # bare SWE-bench without a verdict → manual fallback
+        _llm_judge_swe_pro(session, run_service, run_id, summary, gateway)
     except Exception as exc:  # auto-scoring must never fail the run
         session.add(
             RunEvent(
@@ -366,6 +382,127 @@ def _autoscore_objective_case(session: Session, run_id: str) -> None:
             )
         )
         session.commit()
+
+
+def _record_autoscore(
+    session: Session,
+    run_service: RunService,
+    run_id: str,
+    score: int,
+    notes: str,
+    *,
+    source: str,
+) -> None:
+    """Apply an automatic score (objective or LLM judge) and complete the run."""
+    from harness_lab_app.validation_service import ValidationService
+
+    ValidationService(session).apply_subjective(
+        run_id, score, 0, {}, notes, score_source=source
+    )
+    run_service.score_run(run_id, score, 0, notes)
+    session.add(RunEvent(run_id=run_id, message=f"Auto-scored {score}/10 ({source})"))
+    session.commit()
+
+
+def _llm_judge_swe_pro(
+    session: Session,
+    run_service: RunService,
+    run_id: str,
+    objective_summary: str,
+    gateway: Callable[[str, str, str], str] | None,
+) -> None:
+    """Grade a SWE-bench Pro run's diff with the audit LLM when tests can't."""
+    from harness_lab_app.harness_lifecycle import judge
+
+    run_dir = get_settings().data_runs_dir / run_id
+    problem = _read_run_text(run_dir / "prompt.md")
+    diff = _read_run_text(run_dir / "diff.patch")
+    report = _read_run_text(run_dir / "report.md")
+    if not diff and not problem:
+        return  # nothing to grade → manual fallback
+    # The sentinel "No objective validation defined" is noise, not a test summary.
+    test_summary = objective_summary if "F2P" in objective_summary else ""
+    gateway = gateway or _worker_gateway()
+    model = os.environ.get("AUDITOR_MODEL") or judge.DEFAULT_JUDGE_MODEL
+    result = judge.judge_functional_score(
+        problem_statement=problem,
+        diff=diff,
+        objective_summary=test_summary,
+        report=report,
+        gateway=gateway,
+        model=model,
+    )
+    rationale = result["rationale"]
+    notes = f"LLM-judged ({model}): {rationale}".strip()
+    _record_autoscore(
+        session, run_service, run_id, result["score"], notes, source="llm_judge"
+    )
+
+
+def _read_run_text(path: Path) -> str:
+    """Read a run artifact, or '' if it is missing/unreadable (best-effort)."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _worker_gateway() -> Callable[[str, str, str], str]:
+    """An in-process gateway caller for the worker (URLs host-alias-rewritten).
+
+    Mirrors ``case_summary._gateway``: read GATEWAY_* from env/.env and, inside a
+    container, rewrite ``localhost`` to the docker host alias. Raises on missing
+    config or a bad response so the best-effort caller falls back to manual.
+    """
+    import urllib.error
+    import urllib.request
+
+    from harness_lab_app.config import read_env_file_value
+    from harness_lab_app.executors import rewrite_localhost
+    from harness_lab_app.gateway_models import (
+        GATEWAY_USER_AGENT,
+        normalize_model_name,
+    )
+
+    base = (
+        os.environ.get("GATEWAY_BASE_URL")
+        or read_env_file_value("GATEWAY_BASE_URL")
+        or ""
+    ).strip()
+    token = (
+        os.environ.get("GATEWAY_TOKEN") or read_env_file_value("GATEWAY_TOKEN") or ""
+    ).strip()
+    if not base or not token:
+        raise RuntimeError("gateway not configured (GATEWAY_BASE_URL/TOKEN)")
+    if Path("/.dockerenv").exists():
+        base = rewrite_localhost(base, get_settings().docker_host_alias)
+    base = base.rstrip("/")
+
+    def _call(model: str, system: str, user: str) -> str:
+        payload = {
+            "model": normalize_model_name(model),
+            "temperature": 0.2,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        request = urllib.request.Request(
+            f"{base}/chat/completions",
+            data=json.dumps(payload).encode(),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": GATEWAY_USER_AGENT,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=120) as resp:  # nosec B310
+            data = json.loads(resp.read())
+        return data["choices"][0]["message"]["content"]
+
+    return _call
 
 
 def _run_objective_validation(session: Session, run_id: str) -> None:

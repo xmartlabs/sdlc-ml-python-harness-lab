@@ -307,6 +307,12 @@ label {
   border-color: transparent;
 }
 
+.badge.warn {
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-color: transparent;
+}
+
 .badge--pending {
   background: var(--panel-soft);
   color: var(--muted);
@@ -447,7 +453,9 @@ label {
 }
 
 .table--runs .table-row {
-  grid-template-columns: minmax(0, 1.6fr) minmax(120px, 0.7fr) minmax(90px, 0.5fr) minmax(190px, auto);
+  grid-template-columns:
+    minmax(0, 1.6fr) minmax(120px, 0.7fr) minmax(70px, 0.4fr)
+    minmax(104px, 0.55fr) minmax(190px, auto);
 }
 
 .runs-row {
@@ -1111,13 +1119,14 @@ button.ghost {
    date/template · status · row actions). min-width: 0 on cells lets long run
    ids/titles ellipsize instead of overflowing the grid. */
 .table--improvements {
-  min-width: 1060px;
+  min-width: 1180px;
 }
 
 .table--improvements .table-row {
   grid-template-columns:
     28px minmax(0, 2fr) minmax(0, 0.8fr) minmax(92px, 0.45fr)
-    minmax(0, 0.95fr) minmax(150px, 0.75fr) minmax(84px, 0.45fr) minmax(72px, auto);
+    minmax(84px, 0.45fr) minmax(0, 0.95fr) minmax(150px, 0.75fr)
+    minmax(84px, 0.45fr) minmax(72px, auto);
   align-items: start;
 }
 

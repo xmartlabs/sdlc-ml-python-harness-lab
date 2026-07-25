@@ -123,11 +123,22 @@ Improvements page  →  select N proposals (any runs/cases)  →
    run's condition hash. Selected rows flip to `issued` and the result is
    recorded in the `groupissue` table.
 
-**Sanitization:** saved proposal bodies are *not* sanitized (they routinely
-mention run ids and local paths), so the combined pipeline never embeds them
-verbatim: content is regenerated via the strict-JSON draft (allowlist render),
-the group system prompt bans private identifiers, and a deterministic backstop
-rejects (HTTP 422) any output echoing a selected run id.
+**Sanitization (defense in depth):** saved proposal bodies are *not* sanitized
+(they routinely mention run ids and local paths), so the combined pipeline never
+embeds them verbatim. Four layers guard the output:
+
+1. **Input masking (pre-LLM).** Before the gateway call,
+   `build_group_user_message` replaces every selected run id — in the proposal
+   bodies *and* the audit excerpts — with a stable `run-N` pseudonym. The model
+   cannot echo a private id it never received.
+2. **Allowlist render.** Content is regenerated via the strict-JSON draft and the
+   sanitizer's allowlist render, so only aggregate condition hashes surface — not
+   run ids or paths.
+3. **System-prompt ban.** The group system prompt forbids run identifiers,
+   case-run codes, secrets, local paths, and raw logs.
+4. **Deterministic backstop.** A final check rejects (HTTP 422) any output that
+   still echoes a selected run id. With input masking in place this is a rare
+   safety net rather than the routine blocker it used to be.
 
 The per-run "Issue sanitizado" card on the run detail is unchanged; the
 worklist is an additive path for multi-run grouping.

@@ -155,6 +155,7 @@ class ImprovementService:
         kind: str | None = None,
         case: str | None = None,
         status: str | None = None,
+        harness: str | None = None,
     ) -> list[SavedProposal]:
         statement = select(SavedProposal)
         if repo:
@@ -165,6 +166,8 @@ class ImprovementService:
             statement = statement.where(SavedProposal.case == case)
         if status:
             statement = statement.where(SavedProposal.status == status)
+        if harness:
+            statement = statement.where(SavedProposal.harness == harness)
         statement = statement.order_by(SavedProposal.created_at.desc())  # type: ignore[attr-defined]
         return list(self.session.exec(statement))
 

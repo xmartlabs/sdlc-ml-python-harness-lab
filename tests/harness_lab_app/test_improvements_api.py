@@ -83,6 +83,17 @@ def test_list_saved_proposals_filters(session, runs_dir):
     assert listing(kind="process", session=session) == []
 
 
+def test_list_saved_proposals_filters_by_harness(session, runs_dir):
+    # _write_improvements records the run's harness in context (claude here), so
+    # the worklist can be sliced per harness — the axis that decides which
+    # adapter (CLAUDE.md vs opencode) a generated issue would touch.
+    _write_improvements(runs_dir, "run-a", ["A"])
+    _endpoint(create_app(), "/api/runs/{run_id}/improvements/save")("run-a", session)
+    listing = _endpoint(create_app(), "/api/improvements")
+    assert [row.title for row in listing(harness="claude", session=session)] == ["A"]
+    assert listing(harness="opencode", session=session) == []
+
+
 def test_delete_saved_proposal(session, runs_dir):
     _write_improvements(runs_dir, "run-a", ["A"])
     _endpoint(create_app(), "/api/runs/{run_id}/improvements/save")("run-a", session)

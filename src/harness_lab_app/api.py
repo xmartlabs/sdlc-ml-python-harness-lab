@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -63,6 +64,30 @@ class ScoreRequest(BaseModel):
     rubric: dict[str, int] = {}
 
 
+def _improvements_status(runs_dir: Path, run_id: str) -> str:
+    """Has this run's improvement synthesis run, and did it yield proposals?
+
+    Read straight from the file artifact (data/runs/<id>/improvements.json), the
+    same source the per-run panel uses, so the Runs list shows at a glance whether
+    a run still needs a synthesis pass:
+
+    - ``"yes"``     — synthesized and it proposed at least one change.
+    - ``"no"``      — synthesized but proposed nothing (gate closed / clean run).
+    - ``"pending"`` — never synthesized (or unreadable) — go generate it.
+
+    Best-effort: any read/parse error degrades to ``"pending"`` rather than
+    failing the whole list.
+    """
+    path = runs_dir / run_id / "improvements.json"
+    if not path.exists():
+        return "pending"
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return "pending"
+    return "yes" if doc.get("proposals") else "no"
+
+
 def _prepare_gateway_env() -> None:
     """Populate GATEWAY_BASE_URL/TOKEN from .env for in-process LLM calls.
 
@@ -72,7 +97,6 @@ def _prepare_gateway_env() -> None:
     (Same logic as the per-run proposal-issue endpoint, extracted for reuse.)
     """
     import os
-    from pathlib import Path
 
     from harness_lab_app.executors import rewrite_localhost
 
@@ -148,8 +172,6 @@ def create_app() -> FastAPI:
         # Live model discovery from LiteLLM so the run form stays in sync with
         # the gateway (the single place the user updates). Falls back to the
         # opencode.json routing map when the gateway is unreachable.
-        from pathlib import Path
-
         from harness_lab_app.executors import rewrite_localhost
         from harness_lab_app.gateway_models import (
             build_model_catalog,
@@ -304,7 +326,14 @@ def create_app() -> FastAPI:
 
     @app.get("/api/runs")
     def list_runs(session: Session = Depends(get_session)):
-        return RunService(session).list_runs()
+        runs_dir = get_settings().data_runs_dir
+        return [
+            {
+                **run.model_dump(),
+                "improvements": _improvements_status(runs_dir, run.run_id),
+            }
+            for run in RunService(session).list_runs()
+        ]
 
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str, session: Session = Depends(get_session)):
@@ -449,7 +478,6 @@ def create_app() -> FastAPI:
         # the API process (especially in Docker) may not have. Populate them from .env,
         # rewriting localhost so a container can reach the host gateway (as /api/models does).
         import os
-        from pathlib import Path
 
         from harness_lab_app.executors import rewrite_localhost
 
@@ -515,10 +543,11 @@ def create_app() -> FastAPI:
         kind: str | None = None,
         case_id: str | None = None,
         status: str | None = None,
+        harness: str | None = None,
         session: Session = Depends(get_session),
     ):
         return ImprovementService(session).list_proposals(
-            repo=repo, kind=kind, case=case_id, status=status
+            repo=repo, kind=kind, case=case_id, status=status, harness=harness
         )
 
     @app.get("/api/improvements/group-issues")

@@ -76,6 +76,48 @@ def test_group_system_prompt_constrains_metrics_to_the_catalog() -> None:
         assert name in drafting.GROUP_SYSTEM_PROMPT
 
 
+def test_harness_target_surface_single_harness_hits_its_adapter() -> None:
+    # Every proposal ran under claude → the fix belongs in claude's adapter.
+    scope = drafting.harness_target_surface(
+        [{"harness": "claude", "executor_model": "claude-opus-4-8"}]
+    )
+    assert scope["harnesses"] == ["claude"]
+    assert "CLAUDE.md" in scope["surface"]
+    assert scope["self_hosted"] is False
+    assert scope["note"] == ""
+
+
+def test_harness_target_surface_mixed_harnesses_go_to_shared_layer() -> None:
+    # A gap seen under two harnesses generalizes → the governed shared layer.
+    scope = drafting.harness_target_surface(
+        [
+            {"harness": "claude", "executor_model": "claude-opus-4-8"},
+            {"harness": "opencode", "executor_model": "gateway/lmstudio-qwen"},
+        ]
+    )
+    assert scope["harnesses"] == ["claude", "opencode"]
+    assert ".github/" in scope["surface"]
+    # A self-hosted executor anywhere in the selection raises the advisory note.
+    assert scope["self_hosted"] is True
+    assert "self-hosted" in scope["note"].lower()
+
+
+def test_harness_target_surface_no_harness_defaults_to_shared() -> None:
+    scope = drafting.harness_target_surface([{"executor_model": "x"}])
+    assert scope["harnesses"] == []
+    assert ".github/" in scope["surface"]
+
+
+def test_build_group_user_message_states_the_target_surface() -> None:
+    # Single-harness items → the directive names that harness's adapter so the
+    # model's affected_artifacts land on the right files.
+    message = drafting.build_group_user_message(
+        [{"run_id": "r", "title": "T", "body": "b", "harness": "claude"}], {}
+    )
+    assert "Target surface" in message
+    assert "CLAUDE.md" in message
+
+
 def test_build_group_user_message_includes_proposals_and_audits() -> None:
     message = drafting.build_group_user_message(
         _items(), {"dbg-K-001": "audit one text", "dbg-K-002": "audit two text"}
@@ -133,6 +175,28 @@ def test_synthesize_group_issue_is_sanitized(tmp_path: Path) -> None:
         assert "dbg-K-001" not in haystack
         assert "dbg-K-002" not in haystack
         assert "/Users/marcos" not in haystack
+
+
+def test_synthesize_group_issue_prepends_target_surface(tmp_path: Path) -> None:
+    # _items() mixes claude + opencode → the issue must name the shared layer,
+    # deterministically, regardless of what the LLM returned.
+    run_dirs = [
+        _run_dir(tmp_path, "dbg-K-001", "sha256:abc"),
+        _run_dir(tmp_path, "dbg-K-002", "sha256:def"),
+    ]
+    markdown, _form = drafting.synthesize_group_issue(
+        _items(),
+        run_dirs,
+        repository="marcosdh1987/ml-python-base",
+        created_at=FIXED,
+        gateway=lambda *_args: json.dumps(_DRAFT),
+    )
+    assert "Target harness surface" in markdown
+    assert ".github/" in markdown
+    assert "claude" in markdown and "opencode" in markdown
+    # The deterministic scope block carries no private run ids.
+    header = markdown.split("Reset the hypothesis", 1)[0]
+    assert "dbg-K-001" not in header
 
 
 def test_synthesize_group_issue_backstop_rejects_echoed_run_id(tmp_path: Path) -> None:

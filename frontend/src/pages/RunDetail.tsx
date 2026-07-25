@@ -315,6 +315,13 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
     return <span className="badge">objective: manual</span>;
   };
 
+  const scoreSourceBadge = (source: string | undefined) => {
+    if (source === "llm_judge") return <span className="badge">LLM-judged</span>;
+    if (source === "objective") return <span className="badge">auto (tests)</span>;
+    if (source === "manual") return <span className="badge">manual</span>;
+    return null;
+  };
+
   const handleIndexAttribution = () => {
     const runId = run.run_id;
     setActionPending(true);
@@ -603,7 +610,10 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
               </div>
               <div>
                 <span>Functional</span>
-                <strong>{validation.subjective?.functional_score ?? "—"}</strong>
+                <strong>
+                  {validation.subjective?.functional_score ?? "—"}{" "}
+                  {scoreSourceBadge(validation.subjective?.score_source)}
+                </strong>
               </div>
               <div>
                 <span>Objective</span>

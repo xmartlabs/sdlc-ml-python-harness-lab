@@ -47,6 +47,9 @@ export type RunRecord = {
   interventions?: number | null;
   notes?: string;
   failure_reason?: string | null;
+  // Improvement-synthesis status, derived from data/runs/<id>/improvements.json:
+  // "yes" = proposed changes, "no" = ran but proposed none, "pending" = not run.
+  improvements?: "yes" | "no" | "pending";
 };
 
 export type RunEventRecord = {
@@ -79,7 +82,11 @@ export type ValidationRecord = {
     time_minutes?: number | null;
   };
   effort: { steps?: number | null; interventions?: number | null };
-  subjective: { functional_score?: number | null; notes?: string };
+  subjective: {
+    functional_score?: number | null;
+    notes?: string;
+    score_source?: "manual" | "objective" | "llm_judge" | string;
+  };
   composite: number | null;
 };
 

@@ -4,14 +4,23 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from sqlmodel import Session, SQLModel, create_engine
 
+from harness_lab_app import tasks as tasks_module
 from harness_lab_app.case_service import CaseService
-from harness_lab_app.models import RunState, Validation
+from harness_lab_app.models import (
+    Case,
+    CaseStatus,
+    CaseType,
+    RunState,
+    Validation,
+)
 from harness_lab_app.run_service import RunService
 from harness_lab_app.schemas import RunConfigCreate, RunCreate
 from harness_lab_app.tasks import _autoscore_objective_case
+from harness_lab_app.validation_service import ValidationService
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 if str(_SCRIPTS) not in sys.path:
@@ -133,6 +142,99 @@ def test_autoscore_ignores_non_swe_cases():
         # Unknown case (not in DB) / non-SWE case → best-effort no-op.
         _autoscore_objective_case(session, "tetris-auto-1")
         assert service.get_run("tetris-auto-1").state == RunState.awaiting_manual_score
+
+
+def _seed_swe_pro_run(session: Session, run_id: str, state: RunState) -> None:
+    session.add(
+        Case(
+            case_id="pro-case",
+            name="pro-case",
+            type=CaseType.swe_pro_instance,
+            status=CaseStatus.active,
+        )
+    )
+    session.commit()
+    service = RunService(session)
+    service.create_run(
+        RunCreate(
+            run_id=run_id,
+            config=RunConfigCreate(
+                case_id="pro-case",
+                prompt_variant="swe_default",
+                executor_model="stub-executor",
+            ),
+        )
+    )
+    run = service.get_run(run_id)
+    run.state = state
+    session.add(run)
+    session.commit()
+
+
+def test_autoscore_swe_pro_uses_objective_when_conclusive():
+    # SWE-bench Pro with a runnable test verdict scores from tests, like SWE-bench.
+    with _session() as session:
+        _seed_swe_pro_run(session, "pro-1", RunState.awaiting_manual_score)
+        _store_validation(session, "pro-1", passed=True)
+        _autoscore_objective_case(session, "pro-1")
+        run = RunService(session).get_run("pro-1")
+        assert run.state == RunState.completed
+        assert run.score == 10
+        assert "Pro objective" in run.notes
+
+    with _session() as session:
+        _seed_swe_pro_run(session, "pro-2", RunState.awaiting_manual_score)
+        _store_validation(session, "pro-2", passed=False)
+        _autoscore_objective_case(session, "pro-2")
+        assert RunService(session).get_run("pro-2").score == 0
+
+
+def test_autoscore_swe_pro_falls_back_to_llm_judge(tmp_path, monkeypatch):
+    # No conclusive objective verdict → the audit LLM grades the diff instead of
+    # parking the run in manual scoring.
+    runs = tmp_path / "runs"
+    monkeypatch.setattr(
+        tasks_module, "get_settings", lambda: SimpleNamespace(data_runs_dir=runs)
+    )
+    with _session() as session:
+        _seed_swe_pro_run(session, "pro-3", RunState.awaiting_manual_score)
+        (runs / "pro-3").mkdir(parents=True)
+        (runs / "pro-3" / "prompt.md").write_text("Fix the TOML config loader.")
+        (runs / "pro-3" / "diff.patch").write_text("diff --git a/c.py\n+toml branch")
+
+        def fake_gateway(model: str, system: str, user: str) -> str:
+            assert "Fix the TOML config loader" in user
+            assert "toml branch" in user
+            return '{"score": 7, "rationale": "solid partial fix"}'
+
+        _autoscore_objective_case(session, "pro-3", gateway=fake_gateway)
+        run = RunService(session).get_run("pro-3")
+        assert run.state == RunState.completed
+        assert run.score == 7
+        assert "LLM-judged" in run.notes
+        validation = ValidationService(session).get_validation("pro-3")
+        assert validation is not None
+        assert validation.subjective["score_source"] == "llm_judge"
+
+
+def test_autoscore_swe_pro_judge_failure_leaves_manual(tmp_path, monkeypatch):
+    runs = tmp_path / "runs"
+    monkeypatch.setattr(
+        tasks_module, "get_settings", lambda: SimpleNamespace(data_runs_dir=runs)
+    )
+    with _session() as session:
+        _seed_swe_pro_run(session, "pro-4", RunState.awaiting_manual_score)
+        (runs / "pro-4").mkdir(parents=True)
+        (runs / "pro-4" / "diff.patch").write_text("diff")
+
+        def boom(model: str, system: str, user: str) -> str:
+            raise RuntimeError("gateway down")
+
+        # Best-effort: a judge failure never crashes, run stays awaiting a manual score.
+        _autoscore_objective_case(session, "pro-4", gateway=boom)
+        assert (
+            RunService(session).get_run("pro-4").state == RunState.awaiting_manual_score
+        )
 
 
 def test_swe_continuation_prompt_targets_the_issue(tmp_path):

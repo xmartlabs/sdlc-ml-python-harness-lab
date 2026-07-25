@@ -117,13 +117,21 @@ class ValidationService:
         interventions: int,
         rubric: dict[str, int] | None = None,
         notes: str = "",
+        *,
+        score_source: str = "manual",
     ) -> Validation:
-        """Record the manual/LLM subjective score and recompute the composite."""
+        """Record the subjective score and recompute the composite.
+
+        ``score_source`` records how the score was produced — ``manual`` (a human
+        entered it), ``objective`` (derived from the automated test verdict), or
+        ``llm_judge`` (an LLM graded the run) — so the UI can label it.
+        """
         validation = self._upsert(run_id)
         validation.subjective = {
             "functional_score": functional_score,
             "rubric": rubric or {},
             "notes": notes,
+            "score_source": score_source,
         }
         # Refresh effort with the confirmed intervention count.
         run = self.session.exec(select(Run).where(Run.run_id == run_id)).first()

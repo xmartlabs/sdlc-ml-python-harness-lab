@@ -52,6 +52,26 @@ function modelsForHarness(harness: string, gatewayModels: ModelOption[]): ModelO
   return HARNESS_NATIVE_MODELS[harness] ?? gatewayModels;
 }
 
+// At-a-glance improvement-synthesis status per run (from improvements.json):
+// "sí" = proposed changes, "no" = ran but clean, "pendiente" = still to generate.
+function improvementsBadge(status: RunRecord["improvements"]) {
+  if (status === "yes") {
+    return { className: "badge ok", label: "sí", title: "Generó sugerencias de mejora." };
+  }
+  if (status === "no") {
+    return {
+      className: "badge neutral",
+      label: "no",
+      title: "Se generó la síntesis y no propuso cambios (run limpio / gate cerrado)."
+    };
+  }
+  return {
+    className: "badge warn",
+    label: "pendiente",
+    title: "Sin síntesis todavía — entrá al run para generar sus proposals."
+  };
+}
+
 // Ensure the currently-selected model always renders as an option even if the
 // live gateway list does not contain it (e.g. a preset value, or the API is
 // offline in preview mode), so the select never shows a blank selection.
@@ -606,11 +626,13 @@ export function Runs({
               <span>Run</span>
               <span>State</span>
               <span>Score</span>
+              <span>Improvements</span>
               <span>Actions</span>
             </div>
             {runs.map((run) => {
               const isActive = activeRunId === run.run_id;
               const isPending = pendingRowId === run.run_id;
+              const improvements = improvementsBadge(run.improvements);
               return (
                 <div className={isActive ? "table-row runs-row active" : "table-row runs-row"} key={run.run_id}>
                   <NavLink className="runs-row-link" to={`/runs/${run.run_id}`}>
@@ -620,6 +642,11 @@ export function Runs({
                     </span>
                     <StateBadge state={run.state} />
                     <span>{run.score ?? "—"}</span>
+                    <span>
+                      <span className={improvements.className} title={improvements.title}>
+                        {improvements.label}
+                      </span>
+                    </span>
                   </NavLink>
                   <div className="row-actions">
                     <button

@@ -68,6 +68,16 @@ same case**, then compare — by hand, in the UI:
 That comparison **is** the lab reading your improvement. Eyeballing two runs is enough
 for the exploratory loop.
 
+**Closing the loop — the objective signal.** One re-run tells you the symptom moved;
+re-running the same case across your whole **model tier** (e.g. Haiku, Sonnet, Opus)
+tells you the fix *generalized* rather than just fitting one model. The objective
+close signal is that re-run producing **zero proposals**: the deterministic outcome
+gate (see `improvement-cycle.md` — objective passed, score ≥ 8, 0 interventions, 0
+audit items judged `improve`) skips synthesis for a clean run, so `make improve`
+returning `proposals: []` on every model means the cycle is closed for that case. A
+proposal that reappears on only one model marks a gap that fit the others but not that
+one — worth another iteration, not a closed loop.
+
 ## When you want rigor (optional)
 
 The same evidence → issue → change → re-measure loop has a fully-traceable form:
