@@ -10,8 +10,12 @@ containers, capture per-run provenance (condition hash, harness fingerprint, cos
 skills consulted), audit behaviour with an LLM, and compare harness/model conditions —
 all from the web UI.
 
-> **Get started:** `make app-up` → `http://localhost:5173`. New here? Read the
-> **[Web UI guide](docs/guide-web-ui.md)**.
+> **First time on this machine?** Follow the step-by-step
+> **[Onboarding guide](docs/onboarding.md)** — credentials (AI gateway / Claude
+> account), `.env`, first run, troubleshooting.
+>
+> **Already set up?** `make app-up` → `http://localhost:5173`. Screens explained in
+> the **[Web UI guide](docs/guide-web-ui.md)**.
 >
 > **Improving the template from what you observe?** Follow the
 > **[harness improvement loop](docs/harness-lifecycle/README.md)** — run a case → audit
@@ -30,6 +34,35 @@ all from the web UI.
 - **Improvement loop** — turn audit findings into sanitized issues for `ml-python-base`
   and re-measure (see the [harness improvement loop](docs/harness-lifecycle/README.md)).
 - Built on **`uv` + `ruff` + `pytest`** with a read-only CI gate (`make ci`).
+
+## 🗺️ How it fits together
+
+```mermaid
+flowchart TB
+    subgraph stack["Lab stack — make app-up (Docker)"]
+        UI["Web UI<br/>:5173"] --> API["FastAPI<br/>:8008"]
+        API --> W["Celery worker<br/>(+ Redis)"]
+        W --> RUN["Runner container (one per run)<br/>harness: claude / opencode / codex<br/>model: cloud or gateway-routed (self-hosted)"]
+    end
+
+    GW["AI gateway (LiteLLM)<br/>models + per-run keys + Langfuse"] -.-> RUN
+    GW -.-> AUD
+    GW -.-> IMP
+
+    RUN --> ART["Run artifacts<br/>logs · diff · cost · attribution ·<br/>condition hash · harness fingerprint"]
+    ART --> SCORE["Score<br/>SWE auto · manual · LLM judge"]
+    ART --> AUD["LLM behavioural audit<br/>skill usage · loops · SDLC adherence"]
+    AUD --> IMP["Improvement proposals<br/>(gate: clean runs propose nothing)"]
+    IMP --> WL["Saved-proposals worklist<br/>cross-run · filter by harness"]
+    WL --> ISSUE["ONE combined sanitized issue<br/>+ deterministic target surface<br/>(adapter vs shared .github/)"]
+    ISSUE --> MPB["ml-python-base<br/>(governance template)"]
+    MPB --> REL["Improve skill → release vX.Y.Z"]
+    REL --> SYNC["make harness-sync-preview / -branch"]
+    SYNC -->|"re-run the same case,<br/>compare audit + score"| RUN
+```
+
+The loop closes when a re-run under the new governance version shows the symptom
+gone — the lab measures whether the template improvement actually worked.
 
 ## 🔄 The improvement cycle
 
@@ -70,6 +103,18 @@ For the rigorous, fully-traceable form (immutable releases + the canonical regre
 suite with hard gates), see the
 [harness lifecycle docs](docs/harness-lifecycle/README.md).
 
+## 📚 Documentation map
+
+| If you are… | Start here |
+|---|---|
+| **Setting up for the first time** | [Onboarding guide](docs/onboarding.md) — prerequisites, credential paths (gateway / Claude), `.env`, first run, troubleshooting |
+| **Operating the lab day-to-day** | [Web UI guide](docs/guide-web-ui.md) — every screen; [Improvement cycle](docs/improvement-cycle.md) — audit → proposals → GitHub issues |
+| **Improving the template** | [Improvement methodology](docs/harness-lifecycle/improvement-methodology.md) — when to trust a proposal; [Lab sync workflow](docs/harness-lifecycle/lab-sync-workflow.md) — adopt & validate a release; [Harness lifecycle](docs/harness-lifecycle/README.md) — the rigorous form |
+| **Comparing harnesses / models** | [Harness adapters](docs/harness-adapters.md) — claude/opencode/codex design; [claude & codex runbook](docs/runbook-claude-codex.md); [First-run benchmark runbook](docs/runbook-first-run.md) |
+| **Using SWE-bench lanes** | [SWE-bench cases](docs/design-swe-bench-cases.md); [SWE-bench Pro lane](docs/design-swe-bench-pro-lane.md); [Curated set](docs/swebench-curated-set.md) |
+| **Running self-hosted models** | [Local model runtime config](docs/local-model-runtime-config.md); [Task sizing](docs/task-sizing.md); [OpenCode workflow](docs/opencode-workflow.md) |
+| **Developing the lab itself** | [Agentic workflow](docs/agentic-workflow.md) — the working loop; [ADRs](docs/adr/README.md) — why things are the way they are; [Skills management](docs/skills-management.md) |
+
 ## 📋 Prerequisites
 
 - **Docker Desktop** — required; the web app and every agent run in containers.
@@ -90,6 +135,9 @@ pip install uv
 
 ## 🛠️ Quick Start
 
+> Full first-time walkthrough (credential paths, gateway setup, smoke test,
+> troubleshooting): **[docs/onboarding.md](docs/onboarding.md)**.
+
 ### 1. Setup (first time, per machine)
 
 ```bash
@@ -98,12 +146,20 @@ cd ai-agentic-harness-lab
 cp .env.example .env
 ```
 
-Then edit `.env` and set at least:
+Then edit `.env` — there are **two credential paths**, and most features light up
+with both:
 
-- **`CLAUDE_CODE_OAUTH_TOKEN`** (from `claude setup-token`) **or `ANTHROPIC_API_KEY`** —
-  so the `claude` harness can authenticate inside the runner container.
-- **`GATEWAY_TOKEN`** (+ `GATEWAY_BASE_URL`) — the LLM gateway used by the behavioural
-  audit and issue synthesis (and by gateway-routed models).
+- **Path A — AI gateway (LiteLLM), recommended:** `GATEWAY_BASE_URL` +
+  `GATEWAY_TOKEN` + `LITELLM_MASTER_KEY`. Powers the `opencode` harness
+  (gateway-routed models, incl. self-hosted), the behavioural **audit**, the
+  **improvement synthesis**, SWE-Pro auto-scoring, and Langfuse attribution. Then
+  `make sync-gateway-models` to populate the UI's model dropdowns.
+- **Path B — Claude with your own account:** `CLAUDE_CODE_OAUTH_TOKEN` (from
+  `claude setup-token`) or `ANTHROPIC_API_KEY` — so the `claude` harness can
+  authenticate inside the runner container.
+
+Other tools (codex via host mode, direct LM Studio/Ollama, antigravity): see
+[Path C in the onboarding guide](docs/onboarding.md#path-c--other-harnesses-and-backends).
 
 Finally, point the lab at the template (once) so you can pull governance versions:
 

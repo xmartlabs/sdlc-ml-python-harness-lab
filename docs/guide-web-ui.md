@@ -46,6 +46,14 @@ Where you launch and track runs. The **New run** form:
   skills *for this run only*, to A/B the harness. A non-empty ablation makes the
   run a distinct arm (`condition_hash`). See [ADR-0011](adr/0011-per-run-skill-ablation-and-staging.md).
 
+The **run list** shows, per run, its state, score, and an **Improvements** column
+telling you where it stands in the improvement cycle — derived from
+`data/runs/<id>/improvements.json`:
+
+- **sí** — synthesis ran and proposed at least one change (go save/review them);
+- **no** — synthesis ran and proposed nothing (clean run / outcome gate closed);
+- **pendiente** — synthesis hasn't run yet (open the run and generate it).
+
 Create the run and you land on its **detail page**: live logs, artifacts, the
 validation & score panel, attribution, LLM audit, and in-platform sandboxes
 (web terminal / desktop) to poke at the produced workspace.
@@ -72,9 +80,26 @@ the ablation panel, and promote). The page includes a how-to for the A/B loop.
 Cross-run worklist for the improvement cycle: after a run's proposals are
 synthesized, the **Guardar** button on the run detail snapshots them here (one
 row per proposal, with run date and template version for comparing iterations).
+
+Each row shows the **harness** that produced the run (claude, opencode, …), and
+the toolbar can **filter by harness** — useful to work claude-only or
+opencode-only batches, since the harness decides which files a fix should touch.
 Select any subset — across runs and cases — and **Generar issue combinado**
 consolidates them, via one LLM pass plus the sanitizer pipeline, into a single
-prefilled ml-python-base issue. Details in
+prefilled ml-python-base issue.
+
+The generated issue opens with a deterministic **Target harness surface** block,
+computed from the selection's harnesses (never by the LLM):
+
+- all proposals from **one harness** → that harness's adapter (e.g. claude →
+  `CLAUDE.md` + `.claude/`; opencode → `AGENTS.md` + `opencode.json`);
+- **mixed harnesses** → the shared governed `.github/` layer (synced to every
+  adapter);
+- if any run used a **self-hosted model** (`gateway/…` executor), a note reminds
+  that weaker models benefit from more explicit, front-loaded governance.
+
+The same directive steers the LLM's `affected_artifacts`, so the issue lands in
+the surface that actually influenced the runs. Details in
 [improvement-cycle.md](improvement-cycle.md).
 
 ### Compare

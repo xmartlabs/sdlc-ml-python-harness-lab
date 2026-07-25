@@ -20,5 +20,13 @@
   locally before pushing; CI runs `make check` + `make check-sync`.
 - **Docs follow code.** Changes under `src/` or `tests/` must come with a `docs/`
   update (enforced by `.github/workflows/docs-quality-guardrails.yml`).
+- **Onboarding docs follow integrations.** The lab is meant to be shared with other
+  developers, so whenever a new tool/harness/backend is integrated or its setup
+  changes (e.g. wiring codex into Docker, a new gateway path, a new credential),
+  the deliverable INCLUDES updating the setup guides in the same change:
+  `docs/onboarding.md` (credential path + the "what each path enables" feature
+  matrix + troubleshooting table), the README docs map / Quick Start if a new path
+  appears, and `docs/harness-adapters.md` for harness wiring. A working integration
+  that only the author can configure is not done.
 
 <!-- Add new patterns above this line -->
