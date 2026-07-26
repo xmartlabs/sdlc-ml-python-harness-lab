@@ -22,8 +22,27 @@ two front-ends over the same runner (`scripts/bench_run.py`).
 
 ## Screens
 
-### Dashboard
-Landing overview of recent activity. Start here to see run state at a glance.
+### Dashboard — the leaderboard
+The landing page is the lab's **leaderboard**, swebench.com-style: every terminal
+run counts as one attempt, grouped by **condition** (harness + executor model +
+prompt variant + harness version) and ranked by **% resolved** with a
+proportional bar.
+
+- **% resolved is per-attempt**: resolved runs / objectively-validated runs of
+  that condition. Manual-score cases (e.g. tetris) have no objective verdict, so
+  they show avg/best score but no %.
+- **Filters**: lane (case type), harness, model, prompt variant, and **harness
+  version** — so you can ask "does harness v0.4.0 + conductor + qwen3.6-35b beat
+  the bare model?" directly. The per-run version comes from `template_ref` in
+  `metadata.json` (recorded at run time; older runs fall back to the harness
+  fingerprint hash).
+- **Official reference rows** (toggle) come from the curated file
+  `data/reference/swebench_official.json` — edit it by hand to refresh (agent,
+  model, `pct_resolved`, date, source URL per row). They render with an
+  **oficial** badge as a thermometer against the real leaderboard.
+- ⚠️ The comparison is **indicative**: your % runs over the lab's curated subset
+  and your conditions; official rows are pass@1 over the 500 SWE-bench Verified
+  instances.
 
 ### Runs
 Where you launch and track runs. The **New run** form:
@@ -46,7 +65,8 @@ Where you launch and track runs. The **New run** form:
   skills *for this run only*, to A/B the harness. A non-empty ablation makes the
   run a distinct arm (`condition_hash`). See [ADR-0011](adr/0011-per-run-skill-ablation-and-staging.md).
 
-The **run list** shows, per run, its state, score, and an **Improvements** column
+The **run list** shows, per run, its **harness** and **executor model** (parsed
+from the command, for fast visual scanning), state, score, and an **Improvements** column
 telling you where it stands in the improvement cycle — derived from
 `data/runs/<id>/improvements.json`:
 
@@ -108,8 +128,8 @@ Line up runs of the same case across models or harness conditions:
 - Pick 2–4 runs; the **metrics table** shows case, models, prompt, objective
   result, final/composite score, tokens, cost, time, steps, and interventions —
   with the best cell per row highlighted.
-- The **Leaderboard** aggregates all scored runs by *case × executor model* (mean
-  and best final score), so you can see which model wins a case at a glance.
+- The aggregated ranking by condition (% resolved, harness version, official
+  reference) lives on the **Dashboard** leaderboard.
 
 Typical use: run the same case with a new model and a previous one, then open
 Compare to see the objective and cost deltas.

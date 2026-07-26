@@ -8,7 +8,9 @@ import type {
   DocContent,
   DocEntry,
   HarnessSkill,
+  LeaderboardRunRow,
   ModelCatalog,
+  OfficialReferenceRow,
   GroupIssueResult,
   ProposalIssue,
   RunCreatePayload,
@@ -117,6 +119,9 @@ export const api = {
     }),
   seedTetris: () => request<CaseRecord>("/api/cases/seed/tetris", { method: "POST" }),
   listRuns: () => request<RunRecord[]>("/api/runs"),
+  getLeaderboard: () => request<LeaderboardRunRow[]>("/api/leaderboard"),
+  getLeaderboardReference: () =>
+    request<OfficialReferenceRow[]>("/api/leaderboard/reference"),
   createRun: (payload: RunCreatePayload) =>
     request<RunRecord>("/api/runs", {
       method: "POST",

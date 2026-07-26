@@ -18,8 +18,10 @@ second from the first so the gateway stays the single place to update.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING
 
@@ -94,6 +96,75 @@ def list_gateway_models(
         return sorted(m["id"] for m in data.get("data", []) if m.get("id"))
     except Exception:
         return []
+
+
+# Substrings that mark a gateway 5xx as "the backend behind this model is down"
+# (LiteLLM wraps backend connect failures as InternalServerError with these
+# phrases). Deliberately conservative: anything else is treated as ambiguous.
+_BACKEND_DOWN_MARKERS = (
+    "connection error",
+    "connection refused",
+    "connectionerror",
+    "econnrefused",
+    "no route to host",
+    "connect timeout",
+)
+
+
+def probe_gateway_model(
+    model: str,
+    *,
+    base_url: str,
+    token: str,
+    timeout: float = 12.0,
+) -> str | None:
+    """Cheap health probe for a gateway-routed model before a run is created.
+
+    Sends a 1-token completion through the gateway. Returns a short error detail
+    when the backend serving the model is **provably unreachable** (a run would
+    burn every step on stream errors — e.g. the LM Studio / Ollama host is off);
+    returns ``None`` when healthy or ambiguous. Fail-open on ambiguity: a slow
+    response may just be a JIT model load, and this probe must never block a
+    runnable configuration.
+    """
+    base = base_url.rstrip("/")
+    if not base or not token:
+        return None
+    body = json.dumps(
+        {
+            "model": gateway_model_id(model),
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        }
+    ).encode()
+    req = urllib.request.Request(
+        f"{base}/chat/completions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": GATEWAY_USER_AGENT,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout):  # nosec B310
+            return None
+    except urllib.error.HTTPError as exc:
+        payload = ""
+        with contextlib.suppress(Exception):
+            payload = exc.read().decode(errors="replace")
+        lowered = payload.lower()
+        if exc.code >= 500 and any(m in lowered for m in _BACKEND_DOWN_MARKERS):
+            return (
+                f"the gateway reported a connection error reaching the backend "
+                f"that serves this model (HTTP {exc.code})"
+            )
+        return None  # auth/validation/etc — other layers surface those
+    except Exception:
+        # Gateway unreachable or probe timed out (possibly a model still
+        # loading) — ambiguous, let the run proceed.
+        return None
 
 
 def read_opencode_gateway_models(repo_root: Path) -> dict[str, dict]:

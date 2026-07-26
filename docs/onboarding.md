@@ -188,6 +188,7 @@ If all of that worked, your machine is fully onboarded.
 | `claude` run fails auth | `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) set in `.env` **before** `make app-up`; restart the stack after editing `.env` |
 | Audit button errors with gateway config | `GATEWAY_TOKEN` + `GATEWAY_BASE_URL` in `.env`, then restart |
 | Runs stuck in `pending` | worker logs: `docker compose logs -f worker` |
+| Every step logs `stream error` (gateway model) | The self-hosted server behind that model (LM Studio / Ollama / NIM host) is off or unreachable from the gateway — start it and re-run. Run creation preflights this and rejects with a clear error when the backend is provably down (skip with `HARNESS_LAB_DISABLE_GATEWAY_PROBE=1`) |
 | No run attribution in Langfuse | `LITELLM_MASTER_KEY` matches your gateway's master key |
 
 ## 6. Optional — develop the lab itself

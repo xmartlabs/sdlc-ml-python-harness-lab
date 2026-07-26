@@ -8,8 +8,11 @@
 - **CLI-first workflow.** Prefer `make` targets and `uv` over ad-hoc commands; check
   the `Makefile` before suggesting a command. See `.github/standards.md`.
 - **Absolute imports only.** No relative imports inside `src/`.
-- **English-only code artifacts.** Identifiers, docstrings, comments, and docs are in
-  English regardless of conversation language.
+- **English-only code artifacts.** Identifiers, docstrings, comments, docs, AND all
+  user-facing UI/UX copy (labels, tooltips, empty states, aria-labels) are in
+  English regardless of conversation language. Note: some older frontend screens
+  still carry Spanish strings — new/edited copy must be English; sweep legacy
+  strings opportunistically when touching a screen.
 - **src-layout + clean architecture.** Code lives under `src/`; respect the
   domain / application / infrastructure boundaries in `.github/architecture.md` and
   `.github/domain-boundaries.md`.
