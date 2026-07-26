@@ -65,7 +65,8 @@ Where you launch and track runs. The **New run** form:
   skills *for this run only*, to A/B the harness. A non-empty ablation makes the
   run a distinct arm (`condition_hash`). See [ADR-0011](adr/0011-per-run-skill-ablation-and-staging.md).
 
-The **run list** shows, per run, its state, score, and an **Improvements** column
+The **run list** shows, per run, its **harness** and **executor model** (parsed
+from the command, for fast visual scanning), state, score, and an **Improvements** column
 telling you where it stands in the improvement cycle — derived from
 `data/runs/<id>/improvements.json`:
 

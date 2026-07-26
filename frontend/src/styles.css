@@ -454,8 +454,9 @@ label {
 
 .table--runs .table-row {
   grid-template-columns:
-    minmax(0, 1.6fr) minmax(120px, 0.7fr) minmax(70px, 0.4fr)
-    minmax(104px, 0.55fr) minmax(190px, auto);
+    minmax(0, 1.3fr) minmax(84px, 0.42fr) minmax(0, 0.75fr)
+    minmax(110px, 0.6fr) minmax(52px, 0.3fr) minmax(96px, 0.5fr)
+    minmax(190px, auto);
 }
 
 .runs-row {

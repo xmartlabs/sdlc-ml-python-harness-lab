@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import re
 import shutil
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import desc
@@ -167,6 +169,15 @@ class RunService:
                     "GATEWAY_TOKEN is not set (still the placeholder value). Set a "
                     "real token in .env before running a gateway/ model."
                 )
+            detail = self._probe_gateway_executor(executor, token or "")
+            if detail:
+                raise RunPreflightError(
+                    f"Executor model '{executor}' looks unreachable: {detail}. "
+                    "This usually means the self-hosted server behind it "
+                    "(LM Studio / Ollama / NIM) is off — start it (or pick "
+                    "another model) and retry. Without this check the run would "
+                    "burn every step on stream errors."
+                )
         if config.skills_disabled:
             from harness_lab_app.skills_catalog import known_skill_names
 
@@ -187,6 +198,28 @@ class RunService:
                     f"{', '.join(unknown_extra)}. Create them on the Skills page "
                     "first."
                 )
+
+    def _probe_gateway_executor(self, executor: str, token: str) -> str | None:
+        """Health-probe the gateway backend serving a ``gateway/…`` executor.
+
+        Returns an error detail only when the backend is provably down (the
+        K-004/K-005 failure mode: LM Studio host off → every LLM call streams
+        errors). Ambiguity — slow JIT model loads, gateway hiccups — returns
+        ``None`` so a runnable config is never blocked. Extracted for tests;
+        HARNESS_LAB_DISABLE_GATEWAY_PROBE=1 skips it entirely (test suites and
+        air-gapped setups must never make network calls from preflight).
+        """
+        if os.environ.get("HARNESS_LAB_DISABLE_GATEWAY_PROBE"):
+            return None
+        from harness_lab_app.executors import rewrite_localhost
+        from harness_lab_app.gateway_models import probe_gateway_model
+
+        base = read_env_file_value("GATEWAY_BASE_URL") or ""
+        if not base:
+            return None
+        if Path("/.dockerenv").exists():
+            base = rewrite_localhost(base, get_settings().docker_host_alias)
+        return probe_gateway_model(executor, base_url=base, token=token)
 
     def _next_run_id(self, case_id: str) -> str:
         """Return the next free `<case>-K-NNN` id (the web lane, ADR-0006).

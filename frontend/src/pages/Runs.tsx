@@ -54,6 +54,14 @@ function modelsForHarness(harness: string, gatewayModels: ModelOption[]): ModelO
 
 // At-a-glance improvement-synthesis status per run (from improvements.json):
 // "sí" = proposed changes, "no" = ran but clean, "pendiente" = still to generate.
+// Pull a flag's value out of the stored CLI command — the run list shows
+// harness/model as columns so conditions can be scanned without reading the
+// full command line.
+function commandFlag(command: string[], flag: string): string {
+  const index = command.indexOf(flag);
+  return index >= 0 && index + 1 < command.length ? command[index + 1] : "";
+}
+
 function improvementsBadge(status: RunRecord["improvements"]) {
   if (status === "yes") {
     return { className: "badge ok", label: "sí", title: "Generó sugerencias de mejora." };
@@ -624,6 +632,8 @@ export function Runs({
           <div className="table table--runs">
             <div className="table-row table-head">
               <span>Run</span>
+              <span>Harness</span>
+              <span>Model</span>
               <span>State</span>
               <span>Score</span>
               <span>Improvements</span>
@@ -633,12 +643,30 @@ export function Runs({
               const isActive = activeRunId === run.run_id;
               const isPending = pendingRowId === run.run_id;
               const improvements = improvementsBadge(run.improvements);
+              const harness = commandFlag(run.command, "--harness");
+              const model = commandFlag(run.command, "--executor-model");
               return (
                 <div className={isActive ? "table-row runs-row active" : "table-row runs-row"} key={run.run_id}>
                   <NavLink className="runs-row-link" to={`/runs/${run.run_id}`}>
                     <span>
                       <strong>{run.run_id}</strong>
                       <small>{run.command.join(" ")}</small>
+                    </span>
+                    <span>
+                      {harness ? (
+                        <span className="badge neutral">{harness}</span>
+                      ) : (
+                        <small className="muted">—</small>
+                      )}
+                    </span>
+                    <span>
+                      {model ? (
+                        <small className="cell-truncate" title={model}>
+                          {model.replace(/^gateway\//, "")}
+                        </small>
+                      ) : (
+                        <small className="muted">—</small>
+                      )}
                     </span>
                     <StateBadge state={run.state} />
                     <span>{run.score ?? "—"}</span>
