@@ -632,7 +632,7 @@ runs:
   langfuse_session_id: bench-tetris-v1-L-003
   virtual_key: null
   branch: bench/tetris-v1-L-003
-  status: pending
+  status: running
   result_level: null
   human_interventions: null
   notes: ''
