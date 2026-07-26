@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
@@ -147,41 +148,6 @@ function bestIndex(metric: Metric, columns: Column[]): number | null {
   return best;
 }
 
-type LeaderRow = {
-  key: string;
-  caseId: string;
-  executor: string;
-  count: number;
-  avgScore: number;
-  bestScore: number;
-};
-
-function buildLeaderboard(runs: RunRecord[]): LeaderRow[] {
-  const groups = new Map<string, { caseId: string; executor: string; scores: number[] }>();
-  for (const run of runs) {
-    if (typeof run.score !== "number") continue;
-    const flags = parseFlags(run.command);
-    const key = `${flags.caseId} · ${flags.executorModel}`;
-    const group = groups.get(key) ?? {
-      caseId: flags.caseId,
-      executor: flags.executorModel,
-      scores: [],
-    };
-    group.scores.push(run.score);
-    groups.set(key, group);
-  }
-  return [...groups.entries()]
-    .map(([key, g]) => ({
-      key,
-      caseId: g.caseId,
-      executor: g.executor,
-      count: g.scores.length,
-      avgScore: g.scores.reduce((a, b) => a + b, 0) / g.scores.length,
-      bestScore: Math.max(...g.scores),
-    }))
-    .sort((a, b) => b.avgScore - a.avgScore);
-}
-
 export function Compare({ runs }: CompareProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [validations, setValidations] = useState<Record<string, ValidationRecord | null>>({});
@@ -221,7 +187,6 @@ export function Compare({ runs }: CompareProps) {
     [selectedIds, runs, validations]
   );
 
-  const leaderboard = useMemo(() => buildLeaderboard(runs), [runs]);
 
   const setColumn = (index: number, runId: string) =>
     setSelectedIds((prev) => prev.map((id, i) => (i === index ? runId : id)));
@@ -253,8 +218,8 @@ export function Compare({ runs }: CompareProps) {
             for scores, lower for tokens / cost / time / steps.</li>
           <li><strong>Objective</strong> comes from automatic validation; SWE-bench
             resolves to pass/fail, other cases show their check summary.</li>
-          <li>The <strong>Leaderboard</strong> aggregates every scored run by case ×
-            executor model, so you can see which model wins overall.</li>
+          <li>The aggregated <strong>Leaderboard</strong> (% resolved per harness +
+            model + prompt + harness version) lives on the Dashboard.</li>
         </ol>
       </HelpPanel>
 
@@ -322,43 +287,10 @@ export function Compare({ runs }: CompareProps) {
             </table>
           </div>
 
-          <section className="panel">
-            <div className="panel-head">
-              <h2>Leaderboard</h2>
-              <span className="muted">by case × executor model, mean final score</span>
-            </div>
-            {leaderboard.length === 0 ? (
-              <p className="muted">
-                No scored runs yet. Score a run (or let SWE-bench cases auto-score) to
-                populate the leaderboard.
-              </p>
-            ) : (
-              <div className="table-scroll">
-                <table className="compare-table">
-                  <thead>
-                    <tr>
-                      <th>Case</th>
-                      <th>Executor model</th>
-                      <th>Runs</th>
-                      <th>Avg score</th>
-                      <th>Best</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {leaderboard.map((row) => (
-                      <tr key={row.key}>
-                        <th scope="row">{row.caseId}</th>
-                        <td>{row.executor}</td>
-                        <td>{row.count}</td>
-                        <td>{row.avgScore.toFixed(1)}</td>
-                        <td>{row.bestScore}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
+          <p className="muted">
+            Looking for the aggregated ranking by condition (% resolved, harness,
+            version)? It moved to the <Link to="/">Dashboard</Link>.
+          </p>
         </>
       )}
     </section>

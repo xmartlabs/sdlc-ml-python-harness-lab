@@ -1,4 +1,11 @@
-import type { CaseRecord, RunRecord } from "../types";
+import { useEffect, useMemo, useState } from "react";
+import { api } from "../api";
+import type {
+  CaseRecord,
+  LeaderboardRunRow,
+  OfficialReferenceRow,
+  RunRecord
+} from "../types";
 
 type DashboardProps = {
   cases: CaseRecord[];
@@ -6,18 +13,161 @@ type DashboardProps = {
   apiStatus: string;
 };
 
+const ALL = "all";
+
 function countByState(runs: RunRecord[], state: RunRecord["state"]): number {
   return runs.filter((run) => run.state === state).length;
 }
 
+function distinct(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))].sort();
+}
+
+// One leaderboard entry = one experimental condition (or one official
+// reference row). % resolved is per-attempt: resolved runs / objectively
+// validated runs of the condition — manual-score rows carry avg score only.
+type BoardRow = {
+  key: string;
+  official: boolean;
+  label: string;
+  detail: string;
+  sourceUrl?: string;
+  pct: number | null;
+  resolvedCount: number;
+  objectiveAttempts: number;
+  attempts: number;
+  avgScore: number | null;
+  bestScore: number | null;
+  avgCost: number | null;
+};
+
+function buildBoard(rows: LeaderboardRunRow[]): BoardRow[] {
+  const groups = new Map<string, LeaderboardRunRow[]>();
+  for (const row of rows) {
+    const key = [
+      row.harness,
+      row.executor_model ?? "",
+      row.prompt_variant,
+      row.harness_version
+    ].join("|");
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  return [...groups.entries()].map(([key, members]) => {
+    const objective = members.filter((m) => m.resolved !== null);
+    const resolvedCount = objective.filter((m) => m.resolved === true).length;
+    const scores = members
+      .map((m) => m.score)
+      .filter((s): s is number => typeof s === "number");
+    const costs = members
+      .map((m) => m.cost_usd)
+      .filter((c): c is number => typeof c === "number");
+    const first = members[0];
+    return {
+      key,
+      official: false,
+      label: `${first.harness} + ${first.executor_model ?? "?"}`,
+      detail: [first.prompt_variant, first.harness_version && `harness ${first.harness_version}`]
+        .filter(Boolean)
+        .join(" · "),
+      pct: objective.length > 0 ? (resolvedCount / objective.length) * 100 : null,
+      resolvedCount,
+      objectiveAttempts: objective.length,
+      attempts: members.length,
+      avgScore:
+        scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null,
+      bestScore: scores.length > 0 ? Math.max(...scores) : null,
+      avgCost: costs.length > 0 ? costs.reduce((a, b) => a + b, 0) / costs.length : null
+    };
+  });
+}
+
+function referenceToBoard(refs: OfficialReferenceRow[]): BoardRow[] {
+  return refs.map((ref, index) => ({
+    key: `official-${index}`,
+    official: true,
+    label: `${ref.agent} + ${ref.model}`,
+    detail: [ref.dataset && `SWE-bench ${ref.dataset}`, ref.date]
+      .filter(Boolean)
+      .join(" · "),
+    sourceUrl: ref.source_url,
+    pct: ref.pct_resolved,
+    resolvedCount: 0,
+    objectiveAttempts: 0,
+    attempts: 0,
+    avgScore: null,
+    bestScore: null,
+    avgCost: null
+  }));
+}
+
+function fmtPct(pct: number | null): string {
+  return pct === null ? "—" : `${pct.toFixed(1)}%`;
+}
+
+function fmtNum(value: number | null, digits = 1): string {
+  return value === null ? "—" : value.toFixed(digits);
+}
+
 export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
+  const [rows, setRows] = useState<LeaderboardRunRow[]>([]);
+  const [reference, setReference] = useState<OfficialReferenceRow[]>([]);
+  const [laneFilter, setLaneFilter] = useState(ALL);
+  const [harnessFilter, setHarnessFilter] = useState(ALL);
+  const [modelFilter, setModelFilter] = useState(ALL);
+  const [promptFilter, setPromptFilter] = useState(ALL);
+  const [versionFilter, setVersionFilter] = useState(ALL);
+  const [showOfficial, setShowOfficial] = useState(true);
+
+  useEffect(() => {
+    api
+      .getLeaderboard()
+      .then(setRows)
+      .catch(() => setRows([]));
+    api
+      .getLeaderboardReference()
+      .then(setReference)
+      .catch(() => setReference([]));
+  }, []);
+
+  const filtered = useMemo(
+    () =>
+      rows.filter(
+        (r) =>
+          (laneFilter === ALL || r.case_type === laneFilter) &&
+          (harnessFilter === ALL || r.harness === harnessFilter) &&
+          (modelFilter === ALL || r.executor_model === modelFilter) &&
+          (promptFilter === ALL || r.prompt_variant === promptFilter) &&
+          (versionFilter === ALL || r.harness_version === versionFilter)
+      ),
+    [rows, laneFilter, harnessFilter, modelFilter, promptFilter, versionFilter]
+  );
+
+  const board = useMemo(() => {
+    const mine = buildBoard(filtered);
+    const official = showOfficial ? referenceToBoard(reference) : [];
+    return [...mine, ...official].sort((a, b) => {
+      if (a.pct === null && b.pct === null) {
+        return (b.avgScore ?? -1) - (a.avgScore ?? -1);
+      }
+      if (a.pct === null) return 1;
+      if (b.pct === null) return -1;
+      return b.pct - a.pct;
+    });
+  }, [filtered, reference, showOfficial]);
+
+  const maxPct = Math.max(100, ...board.map((r) => r.pct ?? 0));
+
   return (
     <section className="page">
       <header className="page-header">
         <div>
           <p className="eyebrow">Dashboard</p>
-          <h1>Run workbench</h1>
-          <p className="lede">Operate local benchmark runs from the existing harness.</p>
+          <h1>Leaderboard</h1>
+          <p className="lede">
+            % of cases resolved per condition (harness + model + prompt + harness
+            version), swebench.com-style. Every terminal run counts as one attempt;
+            manual-score cases show average score only.
+          </p>
         </div>
         <div className="status-chip">{apiStatus}</div>
       </header>
@@ -43,31 +193,159 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
 
       <section className="panel">
         <div className="panel-head">
-          <h2>Operational notes</h2>
-          <span className="muted">Preview-ready layout</span>
+          <h2>Ranking by condition</h2>
+          <span className="muted">
+            {board.filter((r) => !r.official).length} condition(s) ·{" "}
+            {filtered.length} run(s)
+          </span>
         </div>
-        <div className="table">
-          <div className="table-row table-head">
-            <span>Signal</span>
-            <span>Value</span>
-            <span>Status</span>
-          </div>
-          <div className="table-row">
-            <span>API</span>
-            <span>/api</span>
-            <span className="badge neutral">{apiStatus}</span>
-          </div>
-          <div className="table-row">
-            <span>Case source</span>
-            <span>DB first</span>
-            <span className="badge neutral">Manual sync</span>
-          </div>
-          <div className="table-row">
-            <span>Artifact source</span>
-            <span>data/runs/&lt;run_id&gt;</span>
-            <span className="badge neutral">Indexed</span>
-          </div>
+        <div className="improvements-toolbar">
+          <select
+            aria-label="Filter by lane"
+            onChange={(e) => setLaneFilter(e.target.value)}
+            value={laneFilter}
+          >
+            <option value={ALL}>lane: all</option>
+            {distinct(rows.map((r) => r.case_type)).map((lane) => (
+              <option key={lane} value={lane}>
+                {lane}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Filter by harness"
+            onChange={(e) => setHarnessFilter(e.target.value)}
+            value={harnessFilter}
+          >
+            <option value={ALL}>harness: all</option>
+            {distinct(rows.map((r) => r.harness)).map((harness) => (
+              <option key={harness} value={harness}>
+                {harness}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Filter by model"
+            onChange={(e) => setModelFilter(e.target.value)}
+            value={modelFilter}
+          >
+            <option value={ALL}>model: all</option>
+            {distinct(rows.map((r) => r.executor_model ?? "")).map((model) => (
+              <option key={model} value={model}>
+                {model}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Filter by prompt"
+            onChange={(e) => setPromptFilter(e.target.value)}
+            value={promptFilter}
+          >
+            <option value={ALL}>prompt: all</option>
+            {distinct(rows.map((r) => r.prompt_variant)).map((prompt) => (
+              <option key={prompt} value={prompt}>
+                {prompt}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="Filter by harness version"
+            onChange={(e) => setVersionFilter(e.target.value)}
+            value={versionFilter}
+          >
+            <option value={ALL}>version: all</option>
+            {distinct(rows.map((r) => r.harness_version)).map((version) => (
+              <option key={version} value={version}>
+                {version}
+              </option>
+            ))}
+          </select>
+          <label className="switch" title="Reference rows from the official leaderboard (data/reference/swebench_official.json).">
+            <input
+              checked={showOfficial}
+              onChange={(e) => setShowOfficial(e.target.checked)}
+              type="checkbox"
+            />
+            <span>official reference</span>
+          </label>
         </div>
+        {board.length === 0 ? (
+          <p className="muted">
+            No terminal runs yet — launch a case from the Runs page to populate the
+            ranking.
+          </p>
+        ) : (
+          <div className="table-scroll">
+            <div className="table table--leaderboard">
+              <div className="table-row table-head">
+                <span>#</span>
+                <span>Condition</span>
+                <span>% resolved</span>
+                <span>Runs</span>
+                <span>Avg score</span>
+                <span>Best</span>
+                <span>Avg cost</span>
+              </div>
+              {board.map((row, index) => (
+                <div
+                  className={`table-row${row.official ? " leaderboard-official" : ""}`}
+                  key={row.key}
+                >
+                  <span className="muted">{index + 1}</span>
+                  <span className="cell-stack">
+                    <strong>
+                      {row.label}{" "}
+                      {row.official ? (
+                        <span className="badge neutral" title="Reference row from the official leaderboard — different subset and infrastructure, indicative comparison only.">
+                          official
+                        </span>
+                      ) : null}
+                    </strong>
+                    <small className="muted">
+                      {row.detail}
+                      {row.official && row.sourceUrl ? (
+                        <>
+                          {" · "}
+                          <a href={row.sourceUrl} rel="noreferrer" target="_blank">
+                            source ↗
+                          </a>
+                        </>
+                      ) : null}
+                    </small>
+                  </span>
+                  <span className="cell-stack">
+                    <span className="pct-bar" title={
+                      row.official
+                        ? "Official pass@1 over the 500 Verified instances"
+                        : `${row.resolvedCount}/${row.objectiveAttempts} objectively-validated runs resolved`
+                    }>
+                      <span
+                        className={`pct-bar-fill${row.official ? " official" : ""}`}
+                        style={{ width: `${((row.pct ?? 0) / maxPct) * 100}%` }}
+                      />
+                      <span className="pct-bar-label">{fmtPct(row.pct)}</span>
+                    </span>
+                    {!row.official && row.objectiveAttempts > 0 ? (
+                      <small className="muted">
+                        {row.resolvedCount}/{row.objectiveAttempts} resolved
+                      </small>
+                    ) : null}
+                  </span>
+                  <span>{row.official ? "—" : row.attempts}</span>
+                  <span>{fmtNum(row.avgScore)}</span>
+                  <span>{row.bestScore === null ? "—" : row.bestScore}</span>
+                  <span>{row.avgCost === null ? "—" : `$${row.avgCost.toFixed(3)}`}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <p className="muted">
+          ⚠️ Indicative comparison: your % runs over the lab&apos;s curated subset and
+          your conditions; official rows are pass@1 over the 500 SWE-bench Verified
+          instances. Update the reference by editing{" "}
+          <code>data/reference/swebench_official.json</code>.
+        </p>
       </section>
     </section>
   );

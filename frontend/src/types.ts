@@ -231,6 +231,38 @@ export type DocContent = {
   content: string;
 };
 
+// One flat leaderboard row per terminal run (GET /api/leaderboard); the
+// Dashboard groups by condition (harness · model · prompt · version) client-side.
+export type LeaderboardRunRow = {
+  run_id: string;
+  case_id: string;
+  case_type: string;
+  harness: string;
+  prompt_variant: string;
+  executor_model: string | null;
+  planner_model: string | null;
+  harness_version: string;
+  // true/false = objective verdict; null = manual-score case (no % resolved).
+  resolved: boolean | null;
+  score: number | null;
+  composite: number | null;
+  cost_usd: number | null;
+  total_tokens: number | null;
+  steps: number | null;
+  state: string;
+  created_at: string;
+};
+
+// Curated official swebench.com rows (data/reference/swebench_official.json).
+export type OfficialReferenceRow = {
+  dataset: string;
+  agent: string;
+  model: string;
+  pct_resolved: number;
+  date?: string;
+  source_url?: string;
+};
+
 export type SwebenchProInstance = {
   instance_id: string;
   repo: string;

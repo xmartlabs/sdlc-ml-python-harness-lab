@@ -1174,6 +1174,52 @@ button.ghost {
   align-items: center;
 }
 
+/* Dashboard leaderboard — condition ranking with a swebench-style % bar. */
+.table--leaderboard {
+  min-width: 920px;
+}
+
+.table--leaderboard .table-row {
+  grid-template-columns:
+    32px minmax(0, 1.8fr) minmax(180px, 1.1fr) minmax(56px, 0.35fr)
+    minmax(80px, 0.4fr) minmax(56px, 0.35fr) minmax(90px, 0.45fr);
+  align-items: center;
+}
+
+.table--leaderboard .leaderboard-official {
+  opacity: 0.75;
+}
+
+.pct-bar {
+  position: relative;
+  display: block;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  overflow: hidden;
+}
+
+.pct-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--success);
+  opacity: 0.55;
+  border-radius: 6px;
+}
+
+.pct-bar-fill.official {
+  background: var(--accent);
+}
+
+.pct-bar-label {
+  position: relative;
+  display: block;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
 .cell-truncate {
   display: block;
   overflow: hidden;

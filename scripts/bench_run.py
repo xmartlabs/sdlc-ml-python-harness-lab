@@ -588,6 +588,28 @@ def swe_step_evaluation(workspace: Path, spec: dict) -> dict | None:
         return None
 
 
+def read_template_ref(repo_root: Path) -> str:
+    """The adopted ml-python-base release ref (``v0.4.0``) at run time, or "".
+
+    Reads the first ``ref:`` line of ``.harness-version.yaml`` (falling back to
+    the legacy ``.template-version`` mirror) with a plain regex — bench_run runs
+    standalone inside the runner container, so no yaml dep and no imports from
+    ``src/``. Best-effort: any miss returns "" and the leaderboard falls back to
+    the harness fingerprint hash.
+    """
+    for name in (".harness-version.yaml", ".template-version"):
+        path = repo_root / name
+        try:
+            match = re.search(
+                r"^\s*ref:\s*['\"]?([^'\"\s]+)", path.read_text(), re.MULTILINE
+            )
+        except OSError:
+            continue
+        if match:
+            return match.group(1)
+    return ""
+
+
 def write_metadata(
     out_dir: Path,
     args: argparse.Namespace,
@@ -620,6 +642,8 @@ def write_metadata(
         "subagents": discover_subagents(),
         "base_commit": task.get("base_commit", ""),
         "workspace": f"workspace/{args.run}",
+        # Friendly adopted-governance version at run time (leaderboard axis).
+        "template_ref": read_template_ref(REPO_ROOT),
         "created_at": datetime.datetime.utcnow().isoformat() + "Z",
     }
     # Add the hashable trial condition manifest (condition_hash, harness

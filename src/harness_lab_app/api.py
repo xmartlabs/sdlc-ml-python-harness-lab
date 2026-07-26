@@ -26,6 +26,7 @@ from harness_lab_app.config import get_settings, read_env_file_value
 from harness_lab_app.db import get_engine, get_session, init_db
 from harness_lab_app.harness_lifecycle import drafting, sanitizer
 from harness_lab_app.improvement_service import ImprovementError, ImprovementService
+from harness_lab_app.leaderboard_service import LeaderboardService
 from harness_lab_app.run_service import (
     RunAlreadyExistsError,
     RunDeleteConflictError,
@@ -334,6 +335,16 @@ def create_app() -> FastAPI:
             }
             for run in RunService(session).list_runs()
         ]
+
+    @app.get("/api/leaderboard")
+    def leaderboard(session: Session = Depends(get_session)):
+        # Flat per-run condition rows; the Dashboard groups/filters client-side.
+        return LeaderboardService(session).list_rows()
+
+    @app.get("/api/leaderboard/reference")
+    def leaderboard_reference(session: Session = Depends(get_session)):
+        # Curated official swebench.com rows (data/reference/…json, editable).
+        return LeaderboardService(session).list_reference()
 
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str, session: Session = Depends(get_session)):

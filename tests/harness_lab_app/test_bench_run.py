@@ -130,3 +130,17 @@ def test_validate_workspace_exits_without_fresh_or_resume(tmp_path):
     (ws / "stale.txt").write_text("old")
     with pytest.raises(SystemExit):
         bench_run.validate_workspace(ws, "run-3", resume=False, fresh=False)
+
+
+def test_read_template_ref_prefers_installed_manifest(tmp_path):
+    (tmp_path / ".harness-version.yaml").write_text(
+        "schema_version: 1\ninstalled:\n  repository: x\n  ref: v0.4.0\n"
+    )
+    (tmp_path / ".template-version").write_text("ref: v0.1.0\ncommit: abc\n")
+    assert bench_run.read_template_ref(tmp_path) == "v0.4.0"
+
+
+def test_read_template_ref_falls_back_to_legacy_then_empty(tmp_path):
+    (tmp_path / ".template-version").write_text("ref: 'v0.3.0'\n")
+    assert bench_run.read_template_ref(tmp_path) == "v0.3.0"
+    assert bench_run.read_template_ref(tmp_path / "nowhere") == ""
