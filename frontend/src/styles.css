@@ -454,9 +454,9 @@ label {
 
 .table--runs .table-row {
   grid-template-columns:
-    minmax(0, 1.3fr) minmax(84px, 0.42fr) minmax(0, 0.75fr)
-    minmax(110px, 0.6fr) minmax(52px, 0.3fr) minmax(96px, 0.5fr)
-    minmax(190px, auto);
+    minmax(0, 1.3fr) minmax(84px, 0.42fr) minmax(0, 0.7fr)
+    minmax(105px, 0.55fr) minmax(48px, 0.26fr) minmax(84px, 0.4fr)
+    minmax(92px, 0.44fr) minmax(190px, auto);
 }
 
 .runs-row {
@@ -478,6 +478,119 @@ label {
   display: block;
   color: var(--muted);
   margin-top: 4px;
+}
+
+/* Run identity cell: readable case title on top, compact ids below. The exact
+   run id and the full command live in the cell's tooltip. */
+.run-cell {
+  min-width: 0;
+}
+
+.run-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.runs-row-link .run-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.run-meta .badge {
+  font-size: 11px;
+  padding: 1px 6px;
+}
+
+.run-tests {
+  white-space: nowrap;
+}
+
+.run-created {
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* Run list toolbar: search + column filters + page size, above the table. */
+.table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.toolbar-field {
+  display: grid;
+  gap: 4px;
+  min-width: 130px;
+}
+
+.toolbar-search {
+  flex: 1 1 240px;
+}
+
+.toolbar-field .sidebar-label {
+  margin: 0;
+}
+
+/* Sortable column headers stay visually like header text, not buttons. */
+.sort-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.sort-header:hover,
+.sort-header.active {
+  color: var(--text);
+}
+
+.sort-arrow {
+  font-size: 9px;
+  opacity: 0.55;
+}
+
+.sort-header.active .sort-arrow {
+  opacity: 1;
+}
+
+.table-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pagination-controls button {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.pagination-controls button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .row-actions {

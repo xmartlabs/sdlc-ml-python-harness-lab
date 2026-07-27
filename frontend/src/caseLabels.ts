@@ -20,3 +20,48 @@ export function caseOptionLabel(item: CaseRecord): string {
     ? `${item.case_id} · ${item.name}`
     : item.case_id;
 }
+
+// Headline for a case in a dense listing: the descriptive title when the case
+// has one, else the (shortened) id. `fallbackId` covers runs whose case is no
+// longer in the catalog.
+export function caseDisplayName(item: CaseRecord | undefined, fallbackId: string): string {
+  if (!item) {
+    return fallbackId ? shortInstanceLabel(fallbackId) : "";
+  }
+  if (item.name && item.name !== item.case_id) {
+    return item.name;
+  }
+  return shortInstanceLabel(item.case_id);
+}
+
+// success_criteria stores the test lists as JSON strings; we only show counts.
+function parseTestCount(criteria: Record<string, string> | undefined, key: string): number | null {
+  const raw = criteria?.[key];
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.length : null;
+  } catch {
+    return null;
+  }
+}
+
+// Fail-to-pass / pass-to-pass counts for a SWE case, or null when the case does
+// not carry test lists (non-SWE cases, or an unknown case).
+export function caseTestCounts(item: CaseRecord | undefined): { f2p: number; p2p: number } | null {
+  const f2p = parseTestCount(item?.success_criteria, "fail_to_pass");
+  const p2p = parseTestCount(item?.success_criteria, "pass_to_pass");
+  return f2p !== null && p2p !== null ? { f2p, p2p } : null;
+}
+
+// Run ids are `<case_id>-K-NNN` (ADR-0006), so the attempt is everything after
+// the case id — "K-009". Falls back to a suffix match for legacy/custom labels.
+export function runAttemptSuffix(runId: string, caseId: string): string {
+  if (caseId && runId.startsWith(`${caseId}-`)) {
+    return runId.slice(caseId.length + 1);
+  }
+  const match = runId.match(/-(K-\d+)$/);
+  return match ? match[1] : "";
+}

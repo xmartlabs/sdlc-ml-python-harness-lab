@@ -65,14 +65,35 @@ Where you launch and track runs. The **New run** form:
   skills *for this run only*, to A/B the harness. A non-empty ablation makes the
   run a distinct arm (`condition_hash`). See [ADR-0011](adr/0011-per-run-skill-ablation-and-staging.md).
 
-The **run list** shows, per run, its **harness** and **executor model** (parsed
-from the command, for fast visual scanning), state, score, and an **Improvements** column
-telling you where it stands in the improvement cycle — derived from
-`data/runs/<id>/improvements.json`:
+The **run list** identifies each run by its **case title** (the same descriptive
+name you see when importing a SWE-bench Pro instance), with the attempt id
+(`K-009`), the short instance id, and the `F2P n / P2P m` test counts underneath.
+Hovering the run cell shows a tooltip with the exact run id, the case id, the
+test counts, and the full CLI command — so the row stays scannable and nothing
+is lost.
 
-- **sí** — synthesis ran and proposed at least one change (go save/review them);
+It also shows, per run, its **harness** and **executor model** (parsed from the
+command, for fast visual scanning), state, score, **created** age, and an
+**Improvements** column.
+
+- **Created** shows the run's age (`5h ago`); its tooltip carries the exact
+  creation timestamp plus the last execution window — start → end and how long
+  it took. Timestamps come from the API as naive UTC and are rendered in your
+  local timezone (`frontend/src/dates.ts`).
+- **Search / Harness / State** filter the list; **per page** (10/25/50/100) plus
+  the pager at the bottom keep long histories navigable. Every column header
+  except *Actions* is a **sort** toggle (click again to flip direction); the
+  default is newest-created first.
+- Filters and sorting are client-side over the runs already loaded — no extra
+  API round-trip, and the counter in the panel header shows `N of M runs` while
+  a filter is active.
+
+The **Improvements** column tells you where the run stands in the improvement
+cycle — derived from `data/runs/<id>/improvements.json`:
+
+- **yes** — synthesis ran and proposed at least one change (go save/review them);
 - **no** — synthesis ran and proposed nothing (clean run / outcome gate closed);
-- **pendiente** — synthesis hasn't run yet (open the run and generate it).
+- **pending** — synthesis hasn't run yet (open the run and generate it).
 
 Create the run and you land on its **detail page**: live logs, artifacts, the
 validation & score panel, attribution, LLM audit, and in-platform sandboxes

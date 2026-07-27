@@ -40,6 +40,9 @@ export type RunRecord = {
   run_id: string;
   state: RunState;
   command: string[];
+  // API timestamps are naive UTC strings (no offset) — parse them with
+  // dates.ts/parseApiDate, never with a bare `new Date(...)`.
+  created_at?: string | null;
   started_at?: string | null;
   ended_at?: string | null;
   exit_code?: number | null;

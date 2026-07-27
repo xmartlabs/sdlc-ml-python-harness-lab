@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 
 import { api } from "../api";
-import { SWE_CASE_TYPES, shortInstanceLabel } from "../caseLabels";
+import { SWE_CASE_TYPES, caseTestCounts, shortInstanceLabel } from "../caseLabels";
 import { EmptyState } from "../components/EmptyState";
 import type { CaseCreatePayload, CaseRecord, SwebenchProInstance } from "../types";
 
@@ -33,24 +33,10 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-function parseTestCount(criteria: Record<string, string> | undefined, key: string): number | null {
-  const raw = criteria?.[key];
-  if (!raw) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.length : null;
-  } catch {
-    return null;
-  }
-}
-
 function caseTypeBadge(item: CaseRecord) {
   if (SWE_CASE_TYPES.has(item.type)) {
-    const f2p = parseTestCount(item.success_criteria, "fail_to_pass");
-    const p2p = parseTestCount(item.success_criteria, "pass_to_pass");
-    const counts = f2p !== null && p2p !== null ? ` · F2P ${f2p} / P2P ${p2p}` : "";
+    const tests = caseTestCounts(item);
+    const counts = tests ? ` · F2P ${tests.f2p} / P2P ${tests.p2p}` : "";
     const label = item.type === "swe_pro_instance" ? "SWE-bench Pro" : "SWE-bench";
     return <span className="badge ok">{label}{counts}</span>;
   }

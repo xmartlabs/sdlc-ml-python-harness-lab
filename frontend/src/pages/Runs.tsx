@@ -1,14 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import type { MouseEvent } from "react";
-import { NavLink, useNavigate, useParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 import { api } from "../api";
 import { caseOptionLabel } from "../caseLabels";
-import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
-import { StateBadge } from "../components/StateBadge";
-import { CANCELLABLE_STATES } from "./RunDetail";
+import { RunTable } from "../components/RunTable";
 import type {
   CaseRecord,
   HarnessSkill,
@@ -52,34 +49,6 @@ function modelsForHarness(harness: string, gatewayModels: ModelOption[]): ModelO
   return HARNESS_NATIVE_MODELS[harness] ?? gatewayModels;
 }
 
-// At-a-glance improvement-synthesis status per run (from improvements.json):
-// "sí" = proposed changes, "no" = ran but clean, "pendiente" = still to generate.
-// Pull a flag's value out of the stored CLI command — the run list shows
-// harness/model as columns so conditions can be scanned without reading the
-// full command line.
-function commandFlag(command: string[], flag: string): string {
-  const index = command.indexOf(flag);
-  return index >= 0 && index + 1 < command.length ? command[index + 1] : "";
-}
-
-function improvementsBadge(status: RunRecord["improvements"]) {
-  if (status === "yes") {
-    return { className: "badge ok", label: "sí", title: "Generó sugerencias de mejora." };
-  }
-  if (status === "no") {
-    return {
-      className: "badge neutral",
-      label: "no",
-      title: "Se generó la síntesis y no propuso cambios (run limpio / gate cerrado)."
-    };
-  }
-  return {
-    className: "badge warn",
-    label: "pendiente",
-    title: "Sin síntesis todavía — entrá al run para generar sus proposals."
-  };
-}
-
 // Ensure the currently-selected model always renders as an option even if the
 // live gateway list does not contain it (e.g. a preset value, or the API is
 // offline in preview mode), so the select never shows a blank selection.
@@ -98,7 +67,6 @@ export function Runs({
   onDeleteRun,
   runs
 }: RunsProps) {
-  const { runId: activeRunId } = useParams();
   const navigate = useNavigate();
   const [runId, setRunId] = useState("");
   const [label, setLabel] = useState("");
@@ -118,8 +86,6 @@ export function Runs({
   const [isSaving, setIsSaving] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [caseRunIds, setCaseRunIds] = useState<string[]>([]);
-  const [rowActionError, setRowActionError] = useState<string | null>(null);
-  const [pendingRowId, setPendingRowId] = useState<string | null>(null);
   const [harnessSkills, setHarnessSkills] = useState<HarnessSkill[]>([]);
   const [disabledSkills, setDisabledSkills] = useState<Set<string>>(new Set());
   const [stagedSkills, setStagedSkills] = useState<StagedSkillRecord[]>([]);
@@ -320,42 +286,6 @@ export function Runs({
     } finally {
       setIsSaving(false);
     }
-  };
-
-  const handleCancelRow = (event: MouseEvent, targetRunId: string) => {
-    event.preventDefault();
-    setRowActionError(null);
-    setPendingRowId(targetRunId);
-    onCancelRun(targetRunId)
-      .catch((error: Error) => setRowActionError(error.message))
-      .finally(() => setPendingRowId(null));
-  };
-
-  const handleCloneRow = (event: MouseEvent, targetRunId: string) => {
-    event.preventDefault();
-    setRowActionError(null);
-    setPendingRowId(targetRunId);
-    onCloneRun(targetRunId)
-      .then((created) => navigate(`/runs/${created.run_id}`))
-      .catch((error: Error) => setRowActionError(error.message))
-      .finally(() => setPendingRowId(null));
-  };
-
-  const handleDeleteRow = (event: MouseEvent, targetRunId: string) => {
-    event.preventDefault();
-    if (!window.confirm(`Delete run "${targetRunId}"? This cannot be undone.`)) {
-      return;
-    }
-    setRowActionError(null);
-    setPendingRowId(targetRunId);
-    onDeleteRun(targetRunId)
-      .then(() => {
-        if (activeRunId === targetRunId) {
-          navigate("/runs");
-        }
-      })
-      .catch((error: Error) => setRowActionError(error.message))
-      .finally(() => setPendingRowId(null));
   };
 
   return (
@@ -617,86 +547,13 @@ export function Runs({
         </div>
       </section>
 
-      <section className="panel">
-        <div className="panel-head">
-          <h2>Run list</h2>
-          <span className="muted">{runs.length} total</span>
-        </div>
-        {rowActionError ? <ErrorBanner message={rowActionError} onDismiss={() => setRowActionError(null)} /> : null}
-        {runs.length === 0 ? (
-          <EmptyState
-            description="Create a run from the web app once the API is online."
-            title="No runs yet."
-          />
-        ) : (
-          <div className="table table--runs">
-            <div className="table-row table-head">
-              <span>Run</span>
-              <span>Harness</span>
-              <span>Model</span>
-              <span>State</span>
-              <span>Score</span>
-              <span>Improvements</span>
-              <span>Actions</span>
-            </div>
-            {runs.map((run) => {
-              const isActive = activeRunId === run.run_id;
-              const isPending = pendingRowId === run.run_id;
-              const improvements = improvementsBadge(run.improvements);
-              const harness = commandFlag(run.command, "--harness");
-              const model = commandFlag(run.command, "--executor-model");
-              return (
-                <div className={isActive ? "table-row runs-row active" : "table-row runs-row"} key={run.run_id}>
-                  <NavLink className="runs-row-link" to={`/runs/${run.run_id}`}>
-                    <span>
-                      <strong>{run.run_id}</strong>
-                      <small>{run.command.join(" ")}</small>
-                    </span>
-                    <span>
-                      {harness ? (
-                        <span className="badge neutral">{harness}</span>
-                      ) : (
-                        <small className="muted">—</small>
-                      )}
-                    </span>
-                    <span>
-                      {model ? (
-                        <small className="cell-truncate" title={model}>
-                          {model.replace(/^gateway\//, "")}
-                        </small>
-                      ) : (
-                        <small className="muted">—</small>
-                      )}
-                    </span>
-                    <StateBadge state={run.state} />
-                    <span>{run.score ?? "—"}</span>
-                    <span>
-                      <span className={improvements.className} title={improvements.title}>
-                        {improvements.label}
-                      </span>
-                    </span>
-                  </NavLink>
-                  <div className="row-actions">
-                    <button
-                      disabled={!CANCELLABLE_STATES.includes(run.state) || isPending}
-                      onClick={(event) => handleCancelRow(event, run.run_id)}
-                      type="button"
-                    >
-                      Cancel
-                    </button>
-                    <button disabled={isPending} onClick={(event) => handleCloneRow(event, run.run_id)} type="button">
-                      Run again
-                    </button>
-                    <button disabled={isPending} onClick={(event) => handleDeleteRow(event, run.run_id)} type="button">
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
+      <RunTable
+        cases={cases}
+        onCancelRun={onCancelRun}
+        onCloneRun={onCloneRun}
+        onDeleteRun={onDeleteRun}
+        runs={runs}
+      />
     </section>
   );
 }
