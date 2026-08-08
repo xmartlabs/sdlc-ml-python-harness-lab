@@ -109,6 +109,8 @@ suite with hard gates), see the
 |---|---|
 | **Setting up for the first time** | [Onboarding guide](docs/onboarding.md) — prerequisites, credential paths (gateway / Claude), `.env`, first run, troubleshooting |
 | **Operating the lab day-to-day** | [Web UI guide](docs/guide-web-ui.md) — every screen; [Improvement cycle](docs/improvement-cycle.md) — audit → proposals → GitHub issues |
+| **Trialling a new skill** | [Skill validation guide](docs/guide-skill-validation.md) — import from a URL, A/B it, promote it; [Skills management](docs/skills-management.md) — the governed catalog and the sync engine |
+| **Diagnosing a lab that misbehaves** | The **Health** screen ([guide](docs/guide-web-ui.md#health)) — reachability, drift and the four repairs ([ADR-0018](docs/adr/0018-health-and-drift-panel.md)); [Onboarding troubleshooting](docs/onboarding.md#5-smoke-test--your-first-run) |
 | **Improving the template** | [Improvement methodology](docs/harness-lifecycle/improvement-methodology.md) — when to trust a proposal; [Lab sync workflow](docs/harness-lifecycle/lab-sync-workflow.md) — adopt & validate a release; [Harness lifecycle](docs/harness-lifecycle/README.md) — the rigorous form |
 | **Comparing harnesses / models** | [Harness adapters](docs/harness-adapters.md) — claude/opencode/codex design; [claude & codex runbook](docs/runbook-claude-codex.md); [First-run benchmark runbook](docs/runbook-first-run.md) |
 | **Using SWE-bench lanes** | [SWE-bench cases](docs/design-swe-bench-cases.md); [SWE-bench Pro lane](docs/design-swe-bench-pro-lane.md); [Curated set](docs/swebench-curated-set.md) |
@@ -177,6 +179,20 @@ Open **http://localhost:5173**. New here? Read the
 **[Web UI guide](docs/guide-web-ui.md)**. Claude/OpenCode/Codex all run inside the
 runner container using the auth from `.env`; see
 [docs/harness-adapters.md](docs/harness-adapters.md).
+
+Leaving the lab running on a server instead of a laptop? Protect it and switch to the
+always-on profile — one origin on `:8080`, restarts with the host, rotated logs
+([ADR-0019](docs/adr/0019-always-on-local-deployment.md)):
+
+```bash
+make set-password    # single-user password; without it the UI is open to the LAN
+make app-up-prod     # nginx :8080; the API is no longer published to the network
+```
+
+| Mode | Web UI | API | Command |
+|---|---|---|---|
+| Dev (laptop) | `:5173` (Vite) | `:8008` | `make app-up` |
+| Always-on (server) | `:8080` (nginx) | loopback only | `make app-up-prod` |
 
 ### Develop the lab (optional — only to work on the lab itself)
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import functools
 import json
 import os
 import re
@@ -316,10 +317,29 @@ def build_effective_skills(disabled: list[str], extra: list[str]) -> list:
                 f"❌ --extra-skill '{name}': no SKILL.md at "
                 f"{source.relative_to(REPO_ROOT)}/"
             )
+        # The linker projects every top-level item of an external skill, so a
+        # symlink here would be copied into each tool's native view and could
+        # point anywhere on the host. Staging trees are written from the DB and
+        # never contain one; if they do, something else wrote them.
+        escaping = sorted(
+            item.name
+            for item in source.rglob("*")
+            if item.is_symlink() and not _within(item.resolve(), source)
+        )
+        if escaping:
+            sys.exit(
+                f"❌ --extra-skill '{name}': symlink(s) pointing outside the "
+                f"skill: {', '.join(escaping)}"
+            )
         effective.append(
             Skill(name=name, kind=KIND_EXTERNAL, source_path=source, description="")
         )
     return effective
+
+
+def _within(target: Path, root: Path) -> bool:
+    resolved = root.resolve()
+    return target == resolved or resolved in target.parents
 
 
 def apply_skill_views(skills: list) -> None:
@@ -346,15 +366,49 @@ def restore_full_skill_views() -> None:
     apply_skill_views(discover_governed(REPO_ROOT))
 
 
+@functools.lru_cache(maxsize=1)
+def apply_gateway_overlay() -> str | None:
+    """Export the opencode routing overlay and return its content hash.
+
+    A model enabled from the web lives in ``data/app/gateway-models.json``, not
+    in the git-tracked ``opencode.json``; without this the harness cannot
+    resolve ``gateway/<id>`` and the run burns every step on a routing error.
+
+    Injected here rather than in ``executors.build_run_environment`` because
+    ``SubprocessRunExecutor.start`` passes no ``env=`` — host-mode runs would
+    silently miss it. Both lanes reach this function.
+
+    ``lru_cache`` makes it idempotent, so the metadata writer and the harness
+    launcher can each call it without caring which runs first. Returns ``None``
+    when the catalog adds nothing to the tracked map, which is what keeps every
+    historical ``condition_hash`` byte-identical.
+    """
+    from harness_lab_app.opencode_overlay import build_overlay
+
+    env, digest = build_overlay(REPO_ROOT)
+    os.environ.update(env)
+    return digest
+
+
+STAGED_SKILL_HASH_ALGO = "folder_sha256_v2"
+
+
 def staged_skill_hashes(extra: list[str]) -> dict[str, str]:
-    """Content hash per staged skill — a staged-skill edit must flip the arm."""
-    from harness_lab_app.provenance import hash_file
+    """Digest per staged skill — any edit to the tree must flip the arm.
+
+    Whole-tree, not just SKILL.md (ADR-0017): a staged skill can now ship
+    ``scripts/`` and ``references/``, and changing one of those changes the
+    experiment. The consequence is deliberate and recorded: every historical
+    staged-skill arm re-bins, which is why ``metadata.json`` also carries
+    ``skills_extra_hash_algo`` so the two generations stay legible.
+    """
+    from ml_python_base.skills_sync.hashing import folder_hash
 
     out: dict[str, str] = {}
     for name in sorted(set(extra)):
-        digest = hash_file(SKILLS_STAGING_DIR / name / "SKILL.md")
-        if digest is not None:
-            out[name] = digest
+        source = SKILLS_STAGING_DIR / name
+        if source.is_dir():
+            out[name] = folder_hash(source)
     return out
 
 
@@ -662,6 +716,8 @@ def write_metadata(
         skills_extra_hashes=staged_skill_hashes(
             list(getattr(args, "extra_skill", []) or [])
         ),
+        skills_extra_hash_algo=STAGED_SKILL_HASH_ALGO,
+        gateway_overlay_hash=apply_gateway_overlay(),
     )
     path = out_dir / "metadata.json"
     path.write_text(json.dumps(meta, indent=2))
@@ -1623,6 +1679,9 @@ def close_run(
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     _load_env()
+    # Export the routing overlay before anything builds a harness command, so a
+    # model enabled from the web resolves in both the docker and host lanes.
+    apply_gateway_overlay()
 
     out_dir = DATA_DIR / args.run
     case_spec = _load_case_spec(out_dir)

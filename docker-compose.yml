@@ -1,5 +1,25 @@
+# Two ways to run the lab (ADR-0019):
+#
+#   make app-up        dev profile  — Vite on :5173, API published on :8008
+#   make app-up-prod   prod profile — nginx on :8080, API not published
+#
+# Every long-lived service restarts with the host and rotates its logs: an
+# always-on lab that streams run output fills a disk in weeks otherwise.
+
+# Anchors keep the policy in one place instead of six copies that drift apart.
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
 services:
   api:
+    <<: [*restart, *logging]
     build:
       context: .
       dockerfile: Dockerfile.api
@@ -11,9 +31,12 @@ services:
     volumes:
       - .:/app
     ports:
-      - "8008:8008"
+      # Dev publishes on every interface; `make app-up-prod` pins this to
+      # 127.0.0.1 so the only LAN entrance is nginx.
+      - "${HARNESS_LAB_API_BIND_ADDR:-0.0.0.0}:8008:8008"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/api/health')"]
       interval: 10s
@@ -21,6 +44,7 @@ services:
       retries: 3
 
   redis:
+    <<: [*restart, *logging]
     image: redis:7-alpine
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -29,6 +53,7 @@ services:
       retries: 3
 
   worker:
+    <<: [*restart, *logging]
     build:
       context: .
       dockerfile: Dockerfile.api
@@ -62,7 +87,8 @@ services:
       # mount on the worker service only.
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
 
   # Build-only entry so `docker compose build runner` produces the image the
   # worker launches per run; it is never started as a service.
@@ -84,10 +110,14 @@ services:
     profiles:
       - build-only
 
+  # Dev frontend: Vite with hot reload, source mounted from the host.
   frontend:
+    <<: [*restart, *logging]
     build:
       context: .
       dockerfile: Dockerfile.frontend
+    profiles:
+      - dev
     environment:
       VITE_API_BASE_URL: /api
     volumes:
@@ -96,4 +126,21 @@ services:
     ports:
       - "5173:5173"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+
+  # Prod frontend: the SPA baked into nginx, which also fronts /api so the
+  # browser sees a single origin. Bound to loopback by default — set
+  # HARNESS_LAB_BIND_ADDR=0.0.0.0 in .env only after `make set-password`.
+  frontend-prod:
+    <<: [*restart, *logging]
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend.prod
+    profiles:
+      - prod
+    ports:
+      - "${HARNESS_LAB_BIND_ADDR:-127.0.0.1}:8080:80"
+    depends_on:
+      api:
+        condition: service_healthy

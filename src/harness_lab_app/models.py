@@ -194,22 +194,81 @@ class Audit(SQLModel, table=True):
 
 
 class StagedSkill(SQLModel, table=True):
-    """A skill under trial: authored in the UI, not yet in the governed catalog.
+    """A skill under trial: authored or imported in the UI, not yet governed.
 
-    Content lives in the DB (source of truth for the UI) AND is materialized to
-    data/skills_staging/<name>/SKILL.md (git-ignored) so the runner can inject
-    it into a run via --extra-skill. Promotion writes it into
-    .github/skills-external/ and re-syncs the native views — committing that
-    result is always a human action.
+    The DB is the source of truth; ``data/skills_staging/<name>/`` is a
+    rebuildable materialization of it (git-ignored) that the runner injects
+    into a run via --extra-skill. That direction matters: a real skill ships
+    ``scripts/`` and ``references/`` alongside SKILL.md, and wiping ``data/``
+    or cloning fresh must not lose them (ADR-0017).
+
+    Promotion writes the whole tree into .github/skills-external/ and re-syncs
+    the native views — committing that result is always a human action.
     """
 
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
     description: str = ""
+    # Mirror of SKILL.md, kept so every existing reader keeps working.
+    # Deprecated in favour of StagedSkillFile; see ADR-0017.
     content: str = ""
     status: str = "draft"  # draft | testing | promoted | archived
+    # Digest of the whole tree (folder_sha256_v2) — flips the arm on any edit.
+    content_hash: str = ""
+    # Provenance of an imported skill; empty for one authored in the UI.
+    source_url: str = ""
+    source_ref: str = ""
+    source_kind: str = ""  # manual | url | archive | git | upload
+    imported_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class StagedSkillFile(SQLModel, table=True):
+    """One file of a staged skill's tree, stored so `data/` stays disposable.
+
+    ``path`` is relative to the skill root and always POSIX
+    (``scripts/run.sh``). Text is stored verbatim; anything that is not valid
+    UTF-8 is base64-encoded and marked ``encoding='base64'``, which is also the
+    only case subject to the binary size cap.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    staged_skill_id: int = Field(index=True, foreign_key="stagedskill.id")
+    path: str = Field(index=True)
+    content: str = ""
+    encoding: str = "utf-8"  # utf-8 | base64
+    sha256: str = ""
+    size: int = 0
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class GatewayModel(SQLModel, table=True):
+    """A model the lab can route to, curated from the live gateway list.
+
+    The gateway is the discovery source; this table is the *routing* source the
+    web overlay is built from (data/app/gateway-models.json), replacing the
+    manual `make sync-gateway-models` step for everyday use.
+
+    Ids that disappear from the gateway are marked ``live=False`` and never
+    deleted: a provider that is temporarily down must not cost the user the
+    human label they curated.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    # Bare LiteLLM id (no `gateway/` prefix) — the key opencode resolves.
+    model_id: str = Field(index=True, unique=True)
+    label: str = ""
+    enabled: bool = True
+    is_default: bool = False
+    live: bool = True
+    # Reserved for per-model opencode options (id remaps, context limits...).
+    # Unlike the cosmetic label, these DO change the experimental arm, which is
+    # why the overlay hash enters condition_hash.
+    options_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    first_seen_at: datetime = Field(default_factory=utc_now)
+    last_seen_at: datetime = Field(default_factory=utc_now)
 
 
 class SavedProposal(SQLModel, table=True):

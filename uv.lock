@@ -1100,6 +1100,7 @@ dependencies = [
     { name = "docker" },
     { name = "fastapi" },
     { name = "ipykernel" },
+    { name = "jinja2" },
     { name = "nbstripout" },
     { name = "pandas" },
     { name = "pydantic-settings" },
@@ -1112,7 +1113,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "bandit" },
-    { name = "jinja2" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -1126,6 +1126,7 @@ requires-dist = [
     { name = "docker", specifier = ">=7.1" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "ipykernel" },
+    { name = "jinja2", specifier = ">=3.1" },
     { name = "nbstripout", specifier = ">=0.7.0" },
     { name = "pandas" },
     { name = "pydantic-settings", specifier = ">=2.6.0" },
@@ -1138,7 +1139,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "bandit", specifier = ">=1.9.2" },
-    { name = "jinja2", specifier = ">=3.1" },
     { name = "mypy", specifier = ">=1.11" },
     { name = "pre-commit", specifier = ">=3.8.0" },
     { name = "pytest", specifier = ">=9.0.2" },

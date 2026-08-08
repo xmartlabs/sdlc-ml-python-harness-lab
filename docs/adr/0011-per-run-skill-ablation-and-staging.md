@@ -1,8 +1,16 @@
 # ADR-0011 — Per-run skill ablation and staged-skill trials
 
-- Status: accepted
+- Status: accepted (points 4 and the staged-skill hash extended by ADR-0017)
 - Date: 2026-07-08
 - Relates to: ADR-0003 (condition hash), ADR-0005 (attribution), Pillar 4 (ablation)
+
+> **Extended by [ADR-0017](0017-multi-file-staged-skills-and-remote-import.md).**
+> A staged skill is now a whole tree, not one `SKILL.md`: the DB holds every file
+> and `data/skills_staging/` is a rebuildable materialization. The staged-skill
+> digest changed from `hash_file(SKILL.md)` to `folder_hash(dir)`, which re-bins
+> every staged-skill arm recorded before that change — `metadata.json` carries
+> `skills_extra_hash_algo` to keep the two generations legible. The hash rule in
+> point 3 below is unchanged.
 
 ## Context
 

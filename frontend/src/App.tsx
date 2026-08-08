@@ -1,19 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
-import { api } from "./api";
+import { api, SESSION_EXPIRED_EVENT } from "./api";
 import { Layout } from "./components/Layout";
 import { RunDetailRoute } from "./components/RunDetailRoute";
 import { Cases } from "./pages/Cases";
 import { Compare } from "./pages/Compare";
 import { Dashboard } from "./pages/Dashboard";
 import { Guide } from "./pages/Guide";
+import { Health } from "./pages/Health";
 import { Improvements } from "./pages/Improvements";
+import { Login } from "./pages/Login";
 import { Runs } from "./pages/Runs";
 import { Settings } from "./pages/Settings";
 import { Skills } from "./pages/Skills";
 import { applyTheme, getStoredTheme } from "./theme";
 import type { ThemeMode } from "./theme";
-import type { CaseCreatePayload, CaseRecord, RunCreatePayload, RunRecord } from "./types";
+import type {
+  CaseCreatePayload,
+  CaseRecord,
+  RunCreatePayload,
+  RunRecord,
+  SessionState
+} from "./types";
 
 const previewCase: CaseRecord = {
   case_id: "tetris-v1",
@@ -42,6 +50,9 @@ export default function App() {
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(previewCase.case_id);
   const [apiStatus, setApiStatus] = useState("Preview mode");
   const [theme, setTheme] = useState<ThemeMode>(() => getStoredTheme());
+  // `null` while the session probe is in flight, so the app never flashes the
+  // login form at an already-authenticated operator.
+  const [session, setSession] = useState<SessionState | null>(null);
 
   useEffect(() => {
     applyTheme(theme);
@@ -49,6 +60,39 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+
+    api
+      .readSession()
+      .then((state) => {
+        if (active) {
+          setSession(state);
+        }
+      })
+      .catch(() => {
+        // API unreachable: fall back to preview mode rather than a dead form.
+        if (active) {
+          setSession({ authenticated: true, auth_enabled: false });
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const expire = () => setSession({ authenticated: false, auth_enabled: true });
+    window.addEventListener(SESSION_EXPIRED_EVENT, expire);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, expire);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (session === null || !session.authenticated) {
+      return () => {
+        active = false;
+      };
+    }
 
     Promise.allSettled([api.health(), api.listCases(), api.listRuns()]).then(
       ([healthResult, casesResult, runsResult]) => {
@@ -82,7 +126,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [session]);
 
   const selectedCase = useMemo(
     () => cases.find((item) => item.case_id === selectedCaseId) ?? cases[0] ?? null,
@@ -164,9 +208,32 @@ export default function App() {
     setRuns((current) => current.filter((run) => run.run_id !== runId));
   };
 
+  if (session === null) {
+    return null;
+  }
+
+  if (!session.authenticated) {
+    return (
+      <Login
+        onAuthenticated={() => setSession({ authenticated: true, auth_enabled: true })}
+      />
+    );
+  }
+
   return (
     <Routes>
-      <Route element={<Layout onUpdateRun={updateRun} runs={runs} />}>
+      <Route
+        element={
+          <Layout
+            authEnabled={session.auth_enabled}
+            onLogout={() => {
+              void api.logout().then(() => setSession({ authenticated: false, auth_enabled: true }));
+            }}
+            onUpdateRun={updateRun}
+            runs={runs}
+          />
+        }
+      >
         <Route element={<Dashboard apiStatus={apiStatus} cases={cases} runs={runs} />} path="/" />
         <Route
           element={
@@ -221,6 +288,7 @@ export default function App() {
         <Route element={<Improvements />} path="/improvements" />
         <Route element={<Compare runs={runs} />} path="/compare" />
         <Route element={<Guide />} path="/guide" />
+        <Route element={<Health />} path="/health" />
         <Route element={<Settings onThemeChange={setTheme} theme={theme} />} path="/settings" />
         <Route element={<Navigate replace to="/" />} path="*" />
       </Route>

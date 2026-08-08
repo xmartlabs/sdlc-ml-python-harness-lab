@@ -30,19 +30,49 @@ reasonable start) and compare distributions, not single runs.
 
 ## Lane B — trial a new (staged) skill
 
-1. Open **Skills → New staged skill**. Name it kebab-case, paste/write the
-   SKILL.md (frontmatter `name:` + `description:`, then the workflow body).
-   It is stored in the DB and materialized at `data/skills_staging/<name>/`
-   (git-ignored) — the governed catalog is untouched.
-2. In **Runs → New run → Skills → Experimental**, check the staged skill
+1. Get the skill into staging. Three ways, all from the browser:
+   - **Skills → Import a skill** — paste whatever the source gave you:
+     - a GitHub URL — repo, subdirectory (`/tree/main/skills/my-skill`) or a
+       `blob` link;
+     - a skills.sh page — `https://skills.sh/owner/repo/my-skill`;
+     - an install command — `npx skills add <repo> --skill <name>` (also
+       `bunx`, `pnpm dlx`, `git clone`, `gh repo clone`);
+     - the `owner/repo` shorthand, a raw `SKILL.md`, or an archive URL.
+
+     Optionally pin a ref. Home pages and installer scripts (`install.sh`) are
+     plugin installers, not skills — those are refused before anything is
+     fetched.
+   - **Upload** a `.md`, `.zip` or `.tar.gz` from the same panel.
+   - **New staged skill** — write the `SKILL.md` by hand (frontmatter `name:` +
+     `description:`, then the workflow body).
+
+   Import and upload are **two-step**: you first get a preview (file list,
+   detected name, warnings, total size) and nothing is written until you press
+   **Import**. Re-importing over an existing skill requires ticking *Replace*.
+
+   A source holding several skills — a catalog repo such as
+   `github.com/anthropics/skills` — answers with a **picker** instead of
+   guessing: click the one you want and the preview reloads for it. Naming the
+   skill up front (in the URL path, or via `--skill <name>`) skips the picker.
+2. The skill is stored in the DB — every file, not just `SKILL.md` — and
+   materialized at `data/skills_staging/<name>/` (git-ignored). The governed
+   catalog is untouched. Multi-file skills keep their `scripts/`,
+   `references/` and any other supporting files.
+3. In **Runs → New run → Skills → Experimental**, check the staged skill
    (off by default) and launch. Launch the baseline without it.
-3. Iterate: edit the staged skill and re-run. Each content edit flips the
-   `condition_hash` (the hash covers the SKILL.md content), so arms stay
-   distinguishable.
-4. When it earns its keep, press **Promote**: the file is written to
-   `.github/skills-external/<name>/SKILL.md` and `make sync-skills` runs.
+4. Iterate: edit any file from **Skills → Edit** (file list on the left, editor
+   on the right; add and delete files there too) and re-run. Every edit flips
+   the `condition_hash` — the digest covers the **whole tree**, so changing a
+   helper script is a new arm, not a silent reuse of the old one.
+5. When it earns its keep, press **Promote**: the whole tree is written to
+   `.github/skills-external/<name>/` and `make sync-skills` runs.
    **Nothing is committed** — review `git status` and commit yourself.
-5. If it doesn't earn its keep: Archive (kept for the record) or Delete.
+6. If it doesn't earn its keep: Archive (kept for the record) or Delete.
+
+> An imported skill is text an agent will read and scripts it may run. The
+> import guards (https-only, no private addresses, no archive traversal, size
+> caps) protect *this host* while fetching; they say nothing about what the
+> skill instructs. Read the preview. See ADR-0017.
 
 ## What to look at when judging a skill
 
@@ -60,5 +90,11 @@ reasonable start) and compare distributions, not single runs.
   executing: the runner temporarily owns the generated skill views.
 - If a run is SIGKILLed mid-ablation the tree stays ablated until the next run
   (restore-at-start) or a manual `make sync-skills`.
+- `data/skills_staging/` is a materialization, not the source of truth. If it is
+  wiped or edited behind the app, the **Health** screen reports the drift and
+  rebuilds it from the DB ([ADR-0018](adr/0018-health-and-drift-panel.md)).
+- Staged-skill arms recorded before the whole-tree digest landed (ADR-0017) have
+  `condition_hash` values computed a different way. `metadata.json` records
+  `skills_extra_hash_algo`; treat the two generations as separate populations.
 - Compare like with like: same case, prompt variant, models, and max steps —
   vary ONE factor per experiment.

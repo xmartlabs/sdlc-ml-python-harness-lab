@@ -1,0 +1,112 @@
+"""Deployment guards for the always-on stack (ADR-0019).
+
+These assert properties of `docker-compose.yml` that are invisible until the
+day they matter: the host reboots and nothing comes back, the disk fills with
+run logs, or the API turns out to be reachable from the LAN without a password.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+COMPOSE_PATH = REPO_ROOT / "docker-compose.yml"
+
+# Started and left running; the build-only entries are images, not services.
+LONG_LIVED = ("api", "redis", "worker", "frontend", "frontend-prod")
+BUILD_ONLY = ("runner", "sandbox")
+
+
+@pytest.fixture(scope="module")
+def compose() -> dict:
+    return yaml.safe_load(COMPOSE_PATH.read_text())
+
+
+@pytest.fixture(scope="module")
+def services(compose) -> dict:
+    return compose["services"]
+
+
+def test_every_long_lived_service_exists(services):
+    assert set(LONG_LIVED) <= set(services)
+
+
+@pytest.mark.parametrize("name", LONG_LIVED)
+def test_long_lived_services_restart_with_the_host(services, name):
+    assert services[name]["restart"] == "unless-stopped"
+
+
+@pytest.mark.parametrize("name", BUILD_ONLY)
+def test_build_only_services_are_not_restarted(services, name):
+    """They are never started, so a restart policy would be a lie."""
+    assert "restart" not in services[name]
+
+
+@pytest.mark.parametrize("name", LONG_LIVED)
+def test_long_lived_services_rotate_their_logs(services, name):
+    """An always-on lab streaming run output fills the disk otherwise."""
+    logging = services[name]["logging"]
+
+    assert logging["driver"] == "json-file"
+    assert logging["options"]["max-size"]
+    assert int(logging["options"]["max-file"]) >= 2
+
+
+def test_dev_and_prod_frontends_are_in_separate_profiles(services):
+    assert services["frontend"]["profiles"] == ["dev"]
+    assert services["frontend-prod"]["profiles"] == ["prod"]
+
+
+def test_prod_ui_binds_to_loopback_unless_told_otherwise(services):
+    """Exposing the UI to the LAN is opt-in, and pairs with `make set-password`."""
+    (published,) = services["frontend-prod"]["ports"]
+
+    assert published == "${HARNESS_LAB_BIND_ADDR:-127.0.0.1}:8080:80"
+
+
+def test_api_bind_address_is_overridable(services):
+    """`make app-up-prod` pins it to 127.0.0.1 so nginx is the only way in."""
+    (published,) = services["api"]["ports"]
+
+    assert published == "${HARNESS_LAB_API_BIND_ADDR:-0.0.0.0}:8008:8008"
+
+
+def test_app_up_prod_pins_the_api_to_loopback():
+    makefile = (REPO_ROOT / "Makefile").read_text()
+    target = makefile.partition("\napp-up-prod:")[2].partition("\n\n")[0]
+
+    assert "HARNESS_LAB_API_BIND_ADDR=127.0.0.1" in target
+    assert "--profile prod" in target
+
+
+def test_only_the_worker_holds_the_docker_socket(services):
+    """ADR-0002: the API must never be able to launch a container."""
+    holders = [
+        name
+        for name, service in services.items()
+        if any("docker.sock" in volume for volume in service.get("volumes", []))
+    ]
+
+    assert holders == ["worker"]
+
+
+def test_services_wait_for_their_dependencies_to_be_healthy(services):
+    """Without a condition, compose starts them the instant the container exists."""
+    for name in ("api", "worker", "frontend", "frontend-prod"):
+        depends_on = services[name]["depends_on"]
+        assert depends_on, name
+        for dependency in depends_on.values():
+            assert dependency["condition"] == "service_healthy", name
+
+
+def test_the_prod_frontend_serves_the_api_on_one_origin():
+    """Same origin is what makes the session cookie and Origin check work."""
+    nginx = (REPO_ROOT / "deploy" / "nginx.conf").read_text()
+
+    assert "location /api/" in nginx
+    assert "proxy_pass http://harness_lab_api" in nginx
+    # SPA fallback: client-side routes are not files on disk.
+    assert "try_files $uri $uri/ /index.html" in nginx

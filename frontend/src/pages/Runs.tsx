@@ -411,7 +411,7 @@ export function Runs({
             <select value={executorModel} onChange={(event) => setExecutorModel(event.target.value)}>
               {executorOptions.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.label}
+                  {item.routable === false ? `${item.label} — not routable` : item.label}
                 </option>
               ))}
             </select>
@@ -421,7 +421,7 @@ export function Runs({
                 : modelSource === "opencode.json"
                   ? "Gateway unreachable — showing opencode.json models."
                   : modelSource === "gateway"
-                    ? "Live from your gateway (LiteLLM). Run make sync-gateway-models after adding models."
+                    ? "Live from your gateway (LiteLLM). A model marked “not routable” needs enabling on the Settings page first."
                     : "Loading models from the gateway…"}
             </small>
           </label>

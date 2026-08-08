@@ -163,6 +163,7 @@ class RunService:
             )
         executor = (config.executor_model or "").strip()
         if executor.startswith("gateway/"):
+            self._check_routable(executor)
             token = read_env_file_value("GATEWAY_TOKEN")
             if token in _PLACEHOLDER_TOKENS:
                 raise RunPreflightError(
@@ -220,6 +221,35 @@ class RunService:
         if Path("/.dockerenv").exists():
             base = rewrite_localhost(base, get_settings().docker_host_alias)
         return probe_gateway_model(executor, base_url=base, token=token)
+
+    def _check_routable(self, executor: str) -> None:
+        """Reject a ``gateway/`` model opencode has no provider entry for.
+
+        The gateway serving a model is not enough: opencode resolves
+        ``gateway/<id>`` against ``provider.gateway.models``, from the tracked
+        ``opencode.json`` plus the enabled web catalog (the overlay). A model in
+        neither would burn every step on a provider error.
+
+        Skipped under ``HARNESS_LAB_DISABLE_GATEWAY_PROBE``, alongside the
+        reachability probe: both validate the executor against configuration
+        the test suite deliberately does not have.
+        """
+        if os.environ.get("HARNESS_LAB_DISABLE_GATEWAY_PROBE"):
+            return
+        from harness_lab_app.opencode_overlay import routable_model_ids
+
+        routable = routable_model_ids(get_settings().repo_root)
+        # An empty set means opencode.json is unreadable — fail open rather than
+        # block every run on a parsing problem this check cannot diagnose.
+        if not routable:
+            return
+        bare = executor[len("gateway/") :]
+        if bare not in routable:
+            raise RunPreflightError(
+                f"Executor model '{executor}' is not routable: opencode has no "
+                "provider entry for it. Open the Settings page, press "
+                "'Refresh models' and make sure it is enabled."
+            )
 
     def _next_run_id(self, case_id: str) -> str:
         """Return the next free `<case>-K-NNN` id (the web lane, ADR-0006).

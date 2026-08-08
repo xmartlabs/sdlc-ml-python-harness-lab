@@ -109,7 +109,13 @@ def _do_purge(root: Path, registry: Registry) -> None:
     print("🧨 external skills purged; native views + adapters reset to internal")
 
 
-def _do_check(root: Path, registry: Registry) -> int:
+def check_drift(root: Path, registry: Registry) -> list[str]:
+    """Return the sorted stale paths, or an empty list when nothing has drifted.
+
+    The programmatic half of the ``check`` command. The web health panel calls
+    this directly instead of shelling out and parsing stdout, so drift detection
+    has one implementation shared by CI and the API.
+    """
     skills = discover_skills(root)
     agents = discover_agents(root)
     stale: list[str] = []
@@ -141,8 +147,13 @@ def _do_check(root: Path, registry: Registry) -> int:
     if expected_lock != actual_lock:
         stale.append(str(LOCK_FILE))
 
+    return sorted(set(stale))
+
+
+def _do_check(root: Path, registry: Registry) -> int:
+    stale = check_drift(root, registry)
     if stale:
-        raise DriftError(sorted(set(stale)))
+        raise DriftError(stale)
     print("✅ no skill-sync drift detected")
     return EXIT_OK
 

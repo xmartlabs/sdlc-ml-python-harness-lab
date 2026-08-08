@@ -12,7 +12,7 @@ import urllib.error
 
 import pytest
 
-from harness_lab_app import gateway_models
+from harness_lab_app import gateway_models, opencode_overlay
 from harness_lab_app.gateway_models import probe_gateway_model
 from harness_lab_app.run_service import RunPreflightError, RunService
 from harness_lab_app.schemas import RunConfigCreate, RunCreate
@@ -88,6 +88,42 @@ def test_preflight_rejects_when_backend_is_down(session, monkeypatch):
     )
     with pytest.raises(RunPreflightError, match="unreachable"):
         service.create_run(_config())
+
+
+def test_preflight_rejects_a_model_opencode_cannot_route(session, monkeypatch):
+    """A model the gateway serves but opencode has no provider entry for.
+
+    This is the failure the web model catalog exists to prevent: it used to
+    surface only after the run had started burning steps.
+    """
+    monkeypatch.delenv("HARNESS_LAB_DISABLE_GATEWAY_PROBE", raising=False)
+    monkeypatch.setattr(
+        opencode_overlay, "routable_model_ids", lambda _root: {"gpt-5.5"}
+    )
+    with pytest.raises(RunPreflightError, match="not routable"):
+        RunService(session).create_run(_config("gateway/never-declared"))
+
+
+def test_preflight_accepts_a_model_the_overlay_makes_routable(session, monkeypatch):
+    monkeypatch.delenv("HARNESS_LAB_DISABLE_GATEWAY_PROBE", raising=False)
+    monkeypatch.setattr(
+        opencode_overlay, "routable_model_ids", lambda _root: {"brand-new"}
+    )
+    service = RunService(session)
+    monkeypatch.setattr(service, "_probe_gateway_executor", lambda *_a: None)
+
+    run = service.create_run(_config("gateway/brand-new"))
+    assert run.run_id == "probe-run"
+
+
+def test_preflight_fails_open_when_the_routing_map_is_unreadable(session, monkeypatch):
+    """An unreadable opencode.json must not block every run."""
+    monkeypatch.delenv("HARNESS_LAB_DISABLE_GATEWAY_PROBE", raising=False)
+    monkeypatch.setattr(opencode_overlay, "routable_model_ids", lambda _root: set())
+    service = RunService(session)
+    monkeypatch.setattr(service, "_probe_gateway_executor", lambda *_a: None)
+
+    assert service.create_run(_config("gateway/anything")).run_id == "probe-run"
 
 
 def test_preflight_env_kill_switch_skips_probe(session, monkeypatch):

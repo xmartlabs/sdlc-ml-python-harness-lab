@@ -55,9 +55,11 @@ Where you launch and track runs. The **New run** form:
   [claude/codex runbook](runbook-claude-codex.md); design in
   [harness-adapters.md](harness-adapters.md).
 - **Planner / Executor model** — populated **live from your LiteLLM gateway**. Add
-  a model to the gateway, run `make sync-gateway-models`, and it appears here (and
-  becomes routable by opencode). No hand-edited lists. See
-  [ADR-0012](adr/0012-dynamic-gateway-model-list.md).
+  a model to the gateway, press **Refresh from gateway** on the Settings page, and
+  it appears here and becomes routable. A model the gateway serves but nothing can
+  route is labelled *not routable* — enable it in Settings first. No hand-edited
+  lists. See [ADR-0012](adr/0012-dynamic-gateway-model-list.md) and
+  [ADR-0016](adr/0016-opencode-config-overlay-for-model-routing.md).
 - **Score mode** — web runs are `manual` (interactive is CLI-only). SWE-bench
   cases auto-score objectively regardless.
 - **Max steps**, **Resume**, **Dry run** — run controls.
@@ -114,8 +116,27 @@ The catalog of tasks. Three ways to get realistic cases:
 
 ### Skills
 Two tiers: the **governed catalog** (read-only, shipped with the harness) and
-**staged skills** (experimental SKILL.md files you can create, test per-run via
-the ablation panel, and promote). The page includes a how-to for the A/B loop.
+**staged skills** — experimental skills you trial per-run via the ablation panel
+and promote when they earn their keep. The page includes a how-to for the A/B loop.
+
+Staged skills are whole trees, not single files. Get one in three ways:
+
+- **Import a skill** — a GitHub URL (repo, subdirectory or `blob` link), a raw
+  `SKILL.md` URL, or an archive URL, optionally pinned to a ref;
+- **Upload** a `.md`, `.zip` or `.tar.gz`;
+- **New staged skill** — write the `SKILL.md` inline.
+
+Import and upload return a **preview** first (file list, detected name and
+description, warnings, total size) and write nothing until you confirm; replacing an
+existing staged skill is a separate opt-in. **Edit** opens a file browser: pick a
+file on the left, edit it on the right, add or delete files there too. Binary assets
+are stored and materialized but not editable in the browser.
+
+Everything lives in the database; `data/skills_staging/` is a rebuildable
+materialization, so the git working tree stays clean while you experiment
+([ADR-0017](adr/0017-multi-file-staged-skills-and-remote-import.md)). Editing any
+file — including a helper script — changes the skill's `condition_hash`, so arms
+stay distinguishable.
 
 ### Improvements
 Cross-run worklist for the improvement cycle: after a run's proposals are
@@ -155,9 +176,57 @@ Line up runs of the same case across models or harness conditions:
 Typical use: run the same case with a new model and a previous one, then open
 Compare to see the objective and cost deltas.
 
+### Health
+What the lab can reach, and where its generated state has drifted
+([ADR-0018](adr/0018-health-and-drift-panel.md)). One row per check, worst first,
+refreshing every 30 seconds:
+
+- **AI gateway / Redis / Celery worker** — is the stack actually wired up. No worker
+  reply means runs will sit in `pending`.
+- **Docker runtime** — reported *by the worker*, because the API has no docker socket
+  by design ([ADR-0002](adr/0002-celery-docker-per-run-execution.md)). Covers the socket
+  itself and whether the runner image has been built.
+- **Generated skill views** and **governed git tree** — the drift signals. A run that
+  died mid-ablation leaves the tracked tree modified; this is where you see it.
+- **Staged-skill materialization** and **model routing overlay** — the `data/`
+  derivations. They tell you when a model you enabled is not routable yet, or when
+  `data/skills_staging/` disagrees with the database.
+- **Run queue** — runs active for over six hours, which usually means a worker died
+  under them.
+
+A failing row carries its own **repair button**. There are exactly four repairs —
+re-sync skill views, rebuild the staging tree, refresh the model catalog, reconcile
+stuck runs — and nothing else can be triggered from the browser. Repairs are never
+automatic: `skills_sync` rewrites tracked files and reconciling fails live runs, so
+both wait for you to ask.
+
 ### Settings
-Runtime facts (repo mount, SQLite location, Vite proxy) and the light/dark theme
-toggle.
+The backoffice: everything you would otherwise change with a shell on the server.
+
+- **Gateway connection** — base URL and token, with **Test connection** probing the
+  pair without saving it. Saved values take effect on the next request; no restart.
+  Secrets are shown masked and are never sent back to the browser in the clear —
+  leave a secret field blank to keep the stored value.
+- **Model catalog** — **Refresh from gateway** adopts whatever LiteLLM serves right
+  now. Each model can be renamed, enabled/disabled, or made the default. *Enabled*
+  models are routed to opencode through a config overlay at run launch, so a model
+  you enable here works immediately while `opencode.json` stays untouched
+  ([ADR-0016](adr/0016-opencode-config-overlay-for-model-routing.md)). A model the
+  gateway stopped serving is marked *not served* rather than deleted, so its label
+  survives a provider being down.
+- **Model defaults / Local runtimes / Harness credentials / Tracing** — the
+  allowlisted slice of `.env` ([ADR-0014](adr/0014-web-editable-env-allowlist.md)).
+  Every write is atomic and keeps a rolling backup in `data/app/env-backups/`.
+- **Runtime facts** — `HARNESS_LAB_*` settings, read-only: they are cached at
+  process start and changing them needs a restart.
+
+The password is deliberately **not** on this page: it is set on the server with
+`make set-password`, so a stolen session cannot lock you out of your own lab
+([ADR-0015](adr/0015-single-user-session-auth.md)). Until you set one, the lab runs
+in *open mode* — every screen carries a banner, and anyone who can reach the address
+can drive it. Once set, the app opens on a password prompt and the sidebar gains a
+**Sign out** button; sessions last 7 days and `make set-password ROTATE=1`
+invalidates all of them at once.
 
 ## Continuous-improvement cycle
 
@@ -170,7 +239,10 @@ them in `ml-python-base` / `harness-engineering-guide` on your approval. See
 ## Testing a new model — worked example
 
 1. Register the model in your LiteLLM gateway (your ai-gateway).
-2. `make sync-gateway-models` — it flows into `opencode.json` and the run form.
+2. Settings → **Refresh from gateway**. The model is adopted, enabled and routable
+   immediately; `opencode.json` is not touched. (Once it earns its keep, run
+   `make sync-gateway-models` to curate it into the tracked map for the CLI lane —
+   that is a promotion, not a prerequisite.)
 3. Runs → New run → pick a case (e.g. `pytest-dev__pytest-10051` or
    `cli-textstats-v1`), set **Executor model** to the new model, Create run.
 4. Repeat with the previous model (same case + prompt).

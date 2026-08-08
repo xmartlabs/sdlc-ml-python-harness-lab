@@ -16,6 +16,7 @@ from queue import Empty, Queue
 from typing import TYPE_CHECKING, Any
 
 from celery.signals import worker_ready
+from celery.worker.control import control_command
 from sqlmodel import Session, select
 
 from harness_lab_app.audit_service import AuditService
@@ -819,6 +820,52 @@ def reconcile_stale_runs(
             )
             reconciled += 1
     return reconciled
+
+
+@celery_app.task(name="harness_lab_app.tasks.reconcile_runs", acks_late=True)
+def reconcile_runs() -> int:
+    """The health panel's heal button for stuck runs.
+
+    Same body the worker runs on boot, exposed on demand: the API cannot do
+    this itself because stopping a leftover container needs the docker socket,
+    which only the worker holds (ADR-0002).
+    """
+    init_db()
+    return reconcile_stale_runs()
+
+
+@control_command()
+def harness_facts(_state: Any) -> dict[str, Any]:
+    """Answer "is the run runtime usable?" for the health panel (ADR-0018).
+
+    Registered as a Celery *control* command rather than a task so the API gets
+    a synchronous reply from whichever worker is alive, without a result
+    backend and without ever touching the docker socket itself.
+    """
+    settings = get_settings()
+    facts: dict[str, Any] = {
+        "hostname": os.environ.get("HOSTNAME", ""),
+        "backend": settings.execution_backend,
+        "runner_image": settings.runner_image,
+        "docker_ok": False,
+        "runner_image_present": False,
+        "docker_version": "",
+        "docker_error": "",
+    }
+    if settings.execution_backend != "docker":
+        return facts
+    try:
+        import docker  # local import: only the worker needs the socket
+
+        client = docker.from_env()
+        facts["docker_version"] = client.version().get("Version", "")
+        facts["docker_ok"] = True
+        with contextlib.suppress(Exception):
+            client.images.get(settings.runner_image)
+            facts["runner_image_present"] = True
+    except Exception as exc:  # the failure *is* the answer this command reports
+        facts["docker_error"] = f"{type(exc).__name__}: {exc}"
+    return facts
 
 
 @worker_ready.connect

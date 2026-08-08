@@ -175,15 +175,61 @@ export type HarnessSkill = {
 export type StagedSkillRecord = {
   name: string;
   description: string;
+  /** Mirror of SKILL.md. Kept for compatibility; the file list is the truth. */
   content: string;
   status: "draft" | "testing" | "promoted" | "archived";
+  content_hash: string;
+  source_url: string;
+  source_ref: string;
+  source_kind: string;
+  imported_at: string | null;
   created_at: string;
   updated_at: string;
 };
 
+export type StagedSkillFileRecord = {
+  path: string;
+  content: string;
+  /** "utf-8" for text; "base64" for binary assets, which the UI cannot edit. */
+  encoding: string;
+  sha256: string;
+  size: number;
+};
+
+/** One skill inside a source that holds several — a catalog repo. */
+export type StagedSkillImportChoice = {
+  name: string;
+  path: string;
+  description: string;
+};
+
+/** What an unconfirmed import returns: reviewed by the user, never written. */
+export type StagedSkillImportPreview = {
+  preview: true;
+  choices: StagedSkillImportChoice[];
+  name: string;
+  description: string;
+  source_url: string;
+  source_ref: string;
+  source_kind: string;
+  warnings: string[];
+  total_bytes: number;
+  files: { path: string; size: number }[];
+};
+
+/**
+ * A catalog source that has not been narrowed down yet. Not an error: the user
+ * picks one of `choices` and the same source is previewed again.
+ */
+export type StagedSkillImportChoices = {
+  preview: false;
+  choices: StagedSkillImportChoice[];
+  detail: string;
+};
+
 export type StagedSkillPromoteResult = {
   name: string;
-  written: string;
+  written: string[];
   synced: boolean;
   next_steps: string;
 };
@@ -211,6 +257,9 @@ export type RunCreatePayload = {
 export type ModelOption = {
   id: string;
   label: string;
+  // False when neither opencode.json nor the enabled web catalog can route the
+  // id: the gateway serves it, but a run using it would fail at launch.
+  routable?: boolean;
 };
 
 export type ModelCatalog = {
@@ -219,6 +268,74 @@ export type ModelCatalog = {
   source: string;
   models: ModelOption[];
   default_executor: string;
+};
+
+export type EnvSettingItem = {
+  key: string;
+  label: string;
+  group: string;
+  is_secret: boolean;
+  help_text: string;
+  is_set: boolean;
+  // Secrets come back masked; writing the mask back means "leave unchanged".
+  value: string;
+};
+
+/**
+ * `auth_enabled` false means the lab runs in open mode — no password has been
+ * set, so every request is allowed and the UI shows a warning banner.
+ */
+export type SessionState = {
+  authenticated: boolean;
+  auth_enabled: boolean;
+};
+
+export type EnvSettings = {
+  items: EnvSettingItem[];
+  warnings: string[];
+  env_path: string;
+};
+
+export type EnvUpdateResult = EnvSettings & {
+  written: string[];
+  backup: string | null;
+};
+
+export type RuntimeFacts = {
+  repo_root: string;
+  database_url: string;
+  execution_backend: string;
+  runner_image: string;
+  sandbox_image: string;
+  docker_host_alias: string;
+  redis_url: string;
+  run_timeout_seconds: number;
+};
+
+export type GatewayModelRecord = {
+  id: number;
+  model_id: string;
+  label: string;
+  enabled: boolean;
+  is_default: boolean;
+  live: boolean;
+  options_json: Record<string, unknown>;
+  first_seen_at: string;
+  last_seen_at: string;
+};
+
+export type ModelRefreshResult = {
+  added: string[];
+  stale: string[];
+  total: number;
+  gateway_reachable: boolean;
+};
+
+export type GatewayTestResult = {
+  ok: boolean;
+  detail?: string;
+  model_count?: number;
+  sample?: string[];
 };
 
 export type DocEntry = {
@@ -357,4 +474,28 @@ export type GroupIssueResult = {
   form: ProposalIssueForm;
   proposal_ids: number[];
   source_run_ids: string[];
+};
+
+/** One row of the health panel (ADR-0018). */
+export type HealthCheck = {
+  id: string;
+  label: string;
+  status: "ok" | "warn" | "error" | "unknown";
+  detail: string;
+  latency_ms: number | null;
+  /** The allowlisted repair for this row, or null when nothing to fix. */
+  heal: string | null;
+  /** Offending paths / run ids, when the check can name them. */
+  items: string[];
+};
+
+export type HealthReport = {
+  status: "ok" | "warn" | "error" | "unknown";
+  checks: HealthCheck[];
+};
+
+export type HealResult = {
+  action: string;
+  ok: boolean;
+  detail: string;
 };

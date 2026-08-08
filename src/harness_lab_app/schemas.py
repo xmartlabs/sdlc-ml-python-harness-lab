@@ -91,6 +91,54 @@ class StagedSkillUpdate(BaseModel):
     status: str | None = None
 
 
+class StagedSkillImportRequest(BaseModel):
+    """Import a skill tree from a URL, or from a pasted install command.
+
+    ``confirm`` is what makes this two-step: without it the endpoint fetches,
+    validates and returns a preview, and writes nothing at all (ADR-0017).
+
+    ``skill`` picks one skill out of a source that holds several (a catalog repo
+    like ``anthropics/skills``). Left empty, such a source answers with the list
+    of choices instead of guessing.
+    """
+
+    url: str
+    ref: str = ""
+    name: str = ""
+    skill: str = ""
+    confirm: bool = False
+    replace: bool = False
+
+
+class StagedSkillFileWrite(BaseModel):
+    content: str
+
+
+class GatewayModelUpdate(BaseModel):
+    label: str | None = None
+    enabled: bool | None = None
+    is_default: bool | None = None
+    options: dict | None = None
+
+
+class GatewayTestRequest(BaseModel):
+    """Test-before-save probe. Empty fields fall back to what .env holds."""
+
+    base_url: str = ""
+    token: str = ""
+
+
+class EnvUpdateRequest(BaseModel):
+    """Partial update of the web-editable ``.env`` keys.
+
+    Only the keys present are written. Secrets may carry the "unchanged"
+    sentinel returned by the read endpoint, which the service skips, so the UI
+    can round-trip a masked value without ever learning the real one.
+    """
+
+    updates: dict[str, str] = Field(default_factory=dict)
+
+
 class RunCreate(BaseModel):
     # run_id is optional: when omitted (and no label), the server assigns the
     # next free <case>-K-NNN id (ADR-0006). An explicit run_id or label is used
@@ -108,6 +156,13 @@ class RunRead(BaseModel):
     interventions: int | None = None
     notes: str = ""
     failure_reason: str | None = None
+
+
+class HealRequest(BaseModel):
+    """One of ``health_service.HEAL_ACTIONS`` — validated there, not here, so
+    the allowlist has a single home."""
+
+    action: str
 
 
 class GroupIssueRequest(BaseModel):

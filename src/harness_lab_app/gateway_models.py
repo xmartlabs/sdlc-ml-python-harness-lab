@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING
@@ -96,6 +97,38 @@ def list_gateway_models(
         return sorted(m["id"] for m in data.get("data", []) if m.get("id"))
     except Exception:
         return []
+
+
+_CACHE_TTL_SECONDS = 30.0
+_model_cache: dict[tuple[str, str], tuple[float, list[str]]] = {}
+
+
+def list_gateway_models_cached(base_url: str, token: str) -> list[str]:
+    """``list_gateway_models`` behind a short TTL, keyed by endpoint+token.
+
+    The run form and the models page both hit ``/api/models``, and each call is
+    a blocking HTTP round-trip to LiteLLM. Thirty seconds is short enough that
+    "enable a model, press Refresh" still feels immediate. The pure function is
+    left untouched so scripts and tests keep a cache-free path.
+    """
+    if not base_url or not token:
+        return []
+    key = (base_url, token)
+    now = time.monotonic()
+    cached = _model_cache.get(key)
+    if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
+        return cached[1]
+    models = list_gateway_models(base_url=base_url, token=token)
+    # Never cache an empty list: it usually means the gateway was briefly
+    # unreachable, and caching that would make the Refresh button look broken.
+    if models:
+        _model_cache[key] = (now, models)
+    return models
+
+
+def clear_model_cache() -> None:
+    """Drop the TTL cache so the next read hits the gateway (Refresh button)."""
+    _model_cache.clear()
 
 
 # Substrings that mark a gateway 5xx as "the backend behind this model is down"
@@ -198,6 +231,7 @@ def build_model_catalog(
     live_ids: list[str],
     opencode_models: dict[str, dict],
     default_executor: str = DEFAULT_EXECUTOR_MODEL,
+    overlay: dict[str, dict] | None = None,
 ) -> dict:
     """Compose the ``/api/models`` payload for the run form.
 
@@ -205,20 +239,29 @@ def build_model_catalog(
     unreachable it falls back to the ``opencode.json`` routing map so the form
     always has options. Ids are returned ``gateway/``-prefixed (what the harness
     expects) with a human label when opencode.json provides one.
+
+    ``overlay`` is the enabled slice of the web model catalog. It contributes
+    labels and, more importantly, the ``routable`` flag: a model the gateway
+    serves but neither source can route would appear in the dropdown and then
+    fail at run time, which is exactly the trap this catalog exists to close.
     """
+    overlay = overlay or {}
     if live_ids:
         source = "gateway"
         bare_ids = live_ids
     else:
         source = "opencode.json"
-        bare_ids = sorted(opencode_models.keys())
+        bare_ids = sorted(set(opencode_models) | set(overlay))
     models = [
-        {"id": gateway_model_id(bid), "label": _label_for(bid, opencode_models)}
+        {
+            "id": gateway_model_id(bid),
+            "label": _label_for(bid, {**opencode_models, **overlay}),
+            "routable": bid in opencode_models or bid in overlay,
+        }
         for bid in bare_ids
     ]
-    ordered = [m["id"] for m in models]
-    if default_executor in ordered:
-        default = default_executor
-    else:
-        default = ordered[0] if ordered else ""
+    ordered = [str(m["id"]) for m in models]
+    default = default_executor if default_executor in ordered else ""
+    if not default and ordered:
+        default = ordered[0]
     return {"source": source, "models": models, "default_executor": default}

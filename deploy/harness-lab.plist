@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd agent that starts the always-on lab at login (ADR-0019).
+
+  Install (macOS), replacing __REPO_ROOT__ with the absolute path of your clone:
+
+    sed "s|__REPO_ROOT__|$PWD|g" deploy/harness-lab.plist \
+      > ~/Library/LaunchAgents/com.harnesslab.stack.plist
+    launchctl load ~/Library/LaunchAgents/com.harnesslab.stack.plist
+
+  It is a LaunchAgent, not a LaunchDaemon, on purpose: Docker Desktop runs in
+  the user session, so a system-level daemon would fire before there is a
+  daemon to talk to. That also means the server must log in after a reboot —
+  enable automatic login, or use Linux + systemd (see harness-lab-boot.sh).
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.harnesslab.stack.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.harnesslab.stack</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>__REPO_ROOT__/deploy/harness-lab-boot.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO_ROOT__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HARNESS_LAB_REPO</key>
+        <string>__REPO_ROOT__</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- One shot at login. The containers' own `restart: unless-stopped`
+         handles everything after that; relaunching on exit would loop. -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__REPO_ROOT__/data/app/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO_ROOT__/data/app/launchd.err.log</string>
+</dict>
+</plist>

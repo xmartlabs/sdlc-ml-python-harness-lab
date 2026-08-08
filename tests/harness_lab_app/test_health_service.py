@@ -1,0 +1,308 @@
+"""Health and drift panel (ADR-0018).
+
+Two properties matter more than any individual check. First, **a broken lab
+must still render**: one probe raising cannot take the panel down, because the
+panel is what you open precisely when things are broken. Second, **heal is an
+allowlist**, not a command runner — an unknown action is refused before any
+work happens.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
+from sqlmodel import Session, SQLModel, create_engine
+
+from harness_lab_app import health_service as module
+from harness_lab_app.api import create_app
+from harness_lab_app.models import Run, RunState, utc_now
+from harness_lab_app.schemas import HealRequest
+
+
+def _route_endpoint(app, path: str, method: str | None = None):
+    for route in app.router.routes:
+        if getattr(route, "path", None) != path:
+            continue
+        if method is not None and method not in getattr(route, "methods", set()):
+            continue
+        return route.endpoint
+    raise AssertionError(f"Route not found: {path} ({method})")
+
+
+def _session() -> Session:
+    engine = create_engine(
+        "sqlite:///:memory:", connect_args={"check_same_thread": False}
+    )
+    SQLModel.metadata.create_all(engine)
+    return Session(engine)
+
+
+@pytest.fixture
+def isolated(tmp_path, monkeypatch):
+    """No gateway, no broker, no worker — the panel must still answer."""
+    monkeypatch.setattr(
+        module,
+        "get_settings",
+        lambda: SimpleNamespace(repo_root=tmp_path, docker_host_alias="host.docker"),
+    )
+    monkeypatch.setattr(module, "read_env_file_value", lambda _key: "")
+    monkeypatch.setattr(module, "_worker_facts", dict)
+    return tmp_path
+
+
+def _by_id(report: dict) -> dict:
+    return {check["id"]: check for check in report["checks"]}
+
+
+# -- the panel ---------------------------------------------------------------
+
+
+def test_every_check_reports_even_with_nothing_running(isolated):
+    with _session() as session:
+        report = module.collect_health(session)
+
+    checks = _by_id(report)
+    assert set(checks) == {
+        "gateway",
+        "redis",
+        "worker",
+        "docker",
+        "skills_drift",
+        "git_tree",
+        "staging",
+        "model_overlay",
+        "orphan_runs",
+    }
+    assert all(check["latency_ms"] is not None for check in checks.values())
+    # Nothing is configured, so this lab is not healthy — and says so.
+    assert report["status"] != module.OK
+
+
+def test_a_raising_probe_becomes_a_row_not_a_crash(isolated, monkeypatch):
+    def _boom() -> None:
+        raise RuntimeError("socket exploded")
+
+    monkeypatch.setattr(module, "_check_redis", _boom)
+    with _session() as session:
+        report = module.collect_health(session)
+
+    redis = _by_id(report)["redis"]
+    assert redis["status"] == module.UNKNOWN
+    assert "socket exploded" in redis["detail"]
+
+
+def test_worker_facts_failure_does_not_abort_the_panel(isolated, monkeypatch):
+    def _boom() -> dict:
+        raise TimeoutError("no broker")
+
+    monkeypatch.setattr(module, "_worker_facts", _boom)
+    with _session() as session:
+        report = module.collect_health(session)
+
+    assert _by_id(report)["worker"]["status"] == module.ERROR
+
+
+def test_worst_status_sorts_first_and_wins_overall(isolated, monkeypatch):
+    monkeypatch.setattr(
+        module, "_check_git_tree", lambda: (module.ERROR, "everything is on fire", [])
+    )
+    with _session() as session:
+        report = module.collect_health(session)
+
+    assert report["status"] == module.ERROR
+    assert report["checks"][0]["status"] == module.ERROR
+
+
+def test_a_healthy_check_offers_no_heal_button(isolated, monkeypatch):
+    monkeypatch.setattr(module, "_check_git_tree", lambda: (module.OK, "clean", []))
+    with _session() as session:
+        checks = _by_id(module.collect_health(session))
+
+    assert checks["git_tree"]["heal"] is None
+
+
+def test_a_failing_check_offers_its_heal_action(isolated, monkeypatch):
+    monkeypatch.setattr(
+        module, "_check_git_tree", lambda: (module.WARN, "mid-ablation", [])
+    )
+    with _session() as session:
+        checks = _by_id(module.collect_health(session))
+
+    assert checks["git_tree"]["heal"] == "skills_sync"
+
+
+# -- individual probes -------------------------------------------------------
+
+
+def test_docker_is_unknown_rather_than_ok_when_no_worker_replies():
+    status, detail, _ = module._check_docker({})
+    assert status == module.UNKNOWN
+    assert "worker" in detail
+
+
+def test_docker_reports_the_workers_error_verbatim():
+    status, detail, _ = module._check_docker(
+        {
+            "backend": "docker",
+            "docker_ok": False,
+            "docker_error": "PermissionError: /var/run",
+        }
+    )
+    assert status == module.ERROR
+    assert "PermissionError" in detail
+
+
+def test_a_missing_runner_image_is_a_warning_not_an_error():
+    """The lab is usable — it just needs a build — so this must not read as
+    'docker is broken'."""
+    status, _, _ = module._check_docker(
+        {
+            "backend": "docker",
+            "docker_ok": True,
+            "runner_image_present": False,
+            "runner_image": "harness-lab-runner:latest",
+        }
+    )
+    assert status == module.WARN
+
+
+def test_the_subprocess_backend_does_not_need_docker():
+    status, _, _ = module._check_docker({"backend": "subprocess"})
+    assert status == module.OK
+
+
+def test_a_long_running_run_is_flagged_as_orphaned(isolated):
+    with _session() as session:
+        session.add(
+            Run(
+                run_id="k-001",
+                run_config_id=1,
+                state=RunState.running,
+                started_at=utc_now() - timedelta(hours=9),
+            )
+        )
+        session.add(
+            Run(
+                run_id="k-002",
+                run_config_id=1,
+                state=RunState.running,
+                started_at=utc_now(),
+            )
+        )
+        session.commit()
+        status, _, items = module._check_orphan_runs(session)
+
+    assert status == module.WARN
+    assert items == ["k-001 (running)"]
+
+
+def test_a_finished_run_is_never_orphaned(isolated):
+    with _session() as session:
+        session.add(
+            Run(
+                run_id="k-003",
+                run_config_id=1,
+                state=RunState.completed,
+                started_at=utc_now() - timedelta(days=30),
+            )
+        )
+        session.commit()
+        status, _, _ = module._check_orphan_runs(session)
+
+    assert status == module.OK
+
+
+def test_gateway_without_credentials_warns_instead_of_erroring(isolated):
+    """An unconfigured gateway is a setup step, not a fault."""
+    status, detail, _ = module._check_gateway()
+    assert status == module.WARN
+    assert "GATEWAY_BASE_URL" in detail
+
+
+# -- heal --------------------------------------------------------------------
+
+
+def test_an_unknown_heal_action_is_refused_before_any_work(isolated):
+    with _session() as session, pytest.raises(module.HealthError, match="Unknown heal"):
+        module.heal("rm -rf /", session)
+
+
+def test_reconcile_runs_is_delegated_to_the_worker(isolated, monkeypatch):
+    """The API must never hold the docker socket (ADR-0002), so the only thing
+    this action may do is publish a task."""
+    published: list[str] = []
+    monkeypatch.setattr(
+        "harness_lab_app.celery_app.enqueue_reconcile_runs",
+        lambda: published.append("reconcile"),
+    )
+    with _session() as session:
+        result = module.heal("reconcile_runs", session)
+
+    assert published == ["reconcile"]
+    assert result["ok"] is True
+
+
+def test_materialize_rebuilds_the_staging_tree(isolated, monkeypatch):
+    calls: list[str] = []
+
+    class _Service:
+        def __init__(self, _session) -> None:
+            pass
+
+        def reconcile_all(self) -> dict:
+            calls.append("reconcile_all")
+            return {"rebuilt": ["probe"], "orphans": []}
+
+    monkeypatch.setattr(
+        "harness_lab_app.staged_skill_service.StagedSkillService", _Service
+    )
+    with _session() as session:
+        result = module.heal("materialize_staged_skills", session)
+
+    assert calls == ["reconcile_all"]
+    assert result["rebuilt"] == ["probe"]
+
+
+def test_the_allowlist_is_the_documented_set():
+    assert set(module.HEAL_ACTIONS) == {
+        "skills_sync",
+        "materialize_staged_skills",
+        "refresh_models",
+        "reconcile_runs",
+    }
+
+
+# -- HTTP surface ------------------------------------------------------------
+
+
+def test_health_detail_is_not_public():
+    """`/api/health` stays public for the compose healthcheck; the detail
+    endpoint reports gateway config and repo state, so it must not be."""
+    from harness_lab_app.session_middleware import PUBLIC_PATHS
+
+    assert "/api/health" in PUBLIC_PATHS
+    assert "/api/health/detail" not in PUBLIC_PATHS
+
+
+def test_heal_endpoint_maps_an_unknown_action_to_422(isolated):
+    app = create_app()
+    endpoint = _route_endpoint(app, "/api/health/heal")
+    with _session() as session, pytest.raises(HTTPException) as exc:
+        endpoint(HealRequest(action="shutdown"), session)
+    assert exc.value.status_code == 422
+
+
+def test_heal_endpoint_maps_a_failed_repair_to_502(isolated, monkeypatch):
+    def _explode(_action, _session):
+        raise RuntimeError("git is missing")
+
+    monkeypatch.setattr(module, "heal", _explode)
+    app = create_app()
+    endpoint = _route_endpoint(app, "/api/health/heal")
+    with _session() as session, pytest.raises(HTTPException) as exc:
+        endpoint(HealRequest(action="skills_sync"), session)
+    assert exc.value.status_code == 502
+    assert "git is missing" in exc.value.detail

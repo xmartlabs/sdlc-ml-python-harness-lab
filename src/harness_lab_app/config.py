@@ -12,8 +12,6 @@ class Settings(BaseSettings):
 
     repo_root: Path = Field(default_factory=lambda: Path.cwd())
     database_url: str = "sqlite:///data/app/harness_lab.db"
-    local_username: str = "admin"
-    local_password: str = "admin"
     runner_mode: str = "dry_run"
     runner_python: str | None = None
 
@@ -30,6 +28,13 @@ class Settings(BaseSettings):
     # In-platform validation sandboxes (web terminal / noVNC desktop per run).
     sandbox_image: str = "harness-lab-sandbox:latest"
     sandbox_idle_seconds: int = 3600
+
+    # Session auth (ADR-0015). The password hash, session secret and TTL are read
+    # from `.env` per request (see session_middleware) so `make set-password`
+    # applies without a restart; only this deployment-time flag is cached here.
+    # Default false: over plain HTTP a `Secure` cookie is silently dropped, and
+    # the lab's default deployment is http://<lan-host>:8080.
+    session_cookie_secure: bool = False
 
     @property
     def data_runs_dir(self) -> Path:

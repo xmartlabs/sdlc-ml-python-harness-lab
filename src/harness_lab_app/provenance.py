@@ -195,14 +195,16 @@ def compute_condition_hash(
     case_hash: str | None,
     skills_disabled: tuple[str, ...] = (),
     skills_extra_hashes: dict[str, str] | None = None,
+    gateway_overlay_hash: str | None = None,
 ) -> str:
     """Deterministic id of the experimental arm (excludes provenance-only fields).
 
-    Ablation rule: ``skills_disabled`` / ``skills_extra_hashes`` enter the
-    identity ONLY when non-empty. This keeps every historical/default-arm hash
-    unchanged while any skill ablation (or a staged-skill content edit) flips
-    the arm. Do not "simplify" this by always including the keys — it would
-    silently re-bin every existing arm.
+    Ablation rule: ``skills_disabled`` / ``skills_extra_hashes`` /
+    ``gateway_overlay_hash`` enter the identity ONLY when non-empty. This keeps
+    every historical/default-arm hash unchanged while any skill ablation (or a
+    staged-skill content edit, or a web model-routing overlay) flips the arm.
+    Do not "simplify" this by always including the keys — it would silently
+    re-bin every existing arm.
     """
     identity: dict[str, Any] = {
         "harness_hash": harness_hash,
@@ -222,6 +224,8 @@ def compute_condition_hash(
         identity["skills_disabled"] = sorted(set(skills_disabled))
     if skills_extra_hashes:
         identity["skills_extra"] = dict(sorted(skills_extra_hashes.items()))
+    if gateway_overlay_hash:
+        identity["gateway_overlay"] = gateway_overlay_hash
     return hash_text(json.dumps(identity, sort_keys=True, separators=(",", ":")))
 
 
@@ -236,6 +240,8 @@ def build_condition(
     runner_image: str | None = None,
     skills_disabled: tuple[str, ...] = (),
     skills_extra_hashes: dict[str, str] | None = None,
+    skills_extra_hash_algo: str = "",
+    gateway_overlay_hash: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the full, hashable trial condition manifest."""
     fingerprint = build_harness_fingerprint(repo_root)
@@ -254,7 +260,13 @@ def build_condition(
             case_hash,
             skills_disabled=skills_disabled,
             skills_extra_hashes=skills_extra_hashes,
+            gateway_overlay_hash=gateway_overlay_hash,
         ),
+        "gateway_overlay_hash": gateway_overlay_hash,
+        # Which digest produced skills_extra_hashes. Recorded, never hashed:
+        # it labels the two generations of staged-skill arms (SKILL.md-only vs
+        # whole-tree, ADR-0017) without re-binning anything a second time.
+        "skills_extra_hash_algo": skills_extra_hash_algo if skills_extra_hashes else "",
         "harness_fingerprint": fingerprint,
         "model_condition": model_condition,
         "prompt_hash": prompt_hash,
@@ -278,6 +290,8 @@ def enrich_metadata(
     runner_image: str | None = None,
     skills_disabled: tuple[str, ...] = (),
     skills_extra_hashes: dict[str, str] | None = None,
+    skills_extra_hash_algo: str = "",
+    gateway_overlay_hash: str | None = None,
 ) -> dict[str, Any]:
     """Add the condition manifest to a metadata dict; never raises."""
     with contextlib.suppress(Exception):
@@ -292,6 +306,8 @@ def enrich_metadata(
                 runner_image=runner_image,
                 skills_disabled=skills_disabled,
                 skills_extra_hashes=skills_extra_hashes,
+                skills_extra_hash_algo=skills_extra_hash_algo,
+                gateway_overlay_hash=gateway_overlay_hash,
             )
         )
     return meta
