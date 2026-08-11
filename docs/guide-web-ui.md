@@ -66,6 +66,14 @@ Where you launch and track runs. The **New run** form:
 - **Skills** ablation — disable governed skills or enable experimental staged
   skills *for this run only*, to A/B the harness. A non-empty ablation makes the
   run a distinct arm (`condition_hash`). See [ADR-0011](adr/0011-per-run-skill-ablation-and-staging.md).
+- **Validate config** — runs the creation preflight (`POST /api/runs/validate`)
+  without creating anything: case and harness availability, `GATEWAY_TOKEN`,
+  whether the executor is routable and reachable, and the context window the
+  backend is *actually serving* (ADR-0020). A green verdict means Create run will
+  not be refused; on a cold model the first check pays the JIT load (~40s), and
+  the measurement is memoized so pressing Create right after costs nothing extra.
+  Editing any field clears the verdict, since it only describes the configuration
+  that produced it.
 
 The **run list** identifies each run by its **case title** (the same descriptive
 name you see when importing a SWE-bench Pro instance), with the attempt id
@@ -213,7 +221,21 @@ The backoffice: everything you would otherwise change with a shell on the server
   you enable here works immediately while `opencode.json` stays untouched
   ([ADR-0016](adr/0016-opencode-config-overlay-for-model-routing.md)). A model the
   gateway stopped serving is marked *not served* rather than deleted, so its label
-  survives a provider being down.
+  survives a provider being down. Ids the gateway routes to the same backend model
+  are marked *merged into …* and appear once in the run picker;
+  **Check context** measures the window a backend is really serving and flags
+  anything under 32k, which run creation also refuses
+  ([ADR-0020](adr/0020-context-window-preflight-and-alias-merge.md)).
+
+  The catalog table and both run-form pickers are grouped by serving backend in a
+  fixed order — **LM Studio (local) → Cloud → Ollama (rarely used)** — because the
+  gateway serves ~40 aliases and a flat alphabetical list interleaved the local
+  backend this lab runs on with `ollama-*` routes that are usually down. Within a
+  group, models you can launch come before ones nothing can route, and models you
+  have named come before ones still carrying their bare gateway id, so the default
+  executor sits at the top of the menu rather than buried in it. Backends are
+  matched by id prefix; anything unprefixed falls into Cloud, so a new backend
+  shows up in the menu instead of disappearing from it.
 - **Model defaults / Local runtimes / Harness credentials / Tracing** — the
   allowlisted slice of `.env` ([ADR-0014](adr/0014-web-editable-env-allowlist.md)).
   Every write is atomic and keeps a rolling backup in `data/app/env-backups/`.

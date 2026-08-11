@@ -5,6 +5,7 @@ import type {
   ImprovementsDoc,
   CaseCreatePayload,
   CaseRecord,
+  ContextProbeResult,
   DocContent,
   DocEntry,
   EnvSettings,
@@ -21,7 +22,9 @@ import type {
   OfficialReferenceRow,
   GroupIssueResult,
   ProposalIssue,
+  RunConfigPayload,
   RunCreatePayload,
+  RunValidationResult,
   SaveImprovementsResult,
   SavedProposalRecord,
   SessionState,
@@ -109,6 +112,12 @@ export const api = {
   listModelCatalog: () => request<GatewayModelRecord[]>("/api/models/catalog"),
   refreshModelCatalog: () =>
     request<ModelRefreshResult>("/api/models/refresh", { method: "POST" }),
+  checkModelContext: (modelId: string, requiredTokens?: number) =>
+    request<ContextProbeResult>(
+      `/api/models/${modelId}/context-check` +
+        (requiredTokens ? `?required_tokens=${requiredTokens}` : ""),
+      { method: "POST" }
+    ),
   updateGatewayModel: (
     modelId: string,
     changes: { label?: string; enabled?: boolean; is_default?: boolean }
@@ -233,6 +242,13 @@ export const api = {
   getLeaderboard: () => request<LeaderboardRunRow[]>("/api/leaderboard"),
   getLeaderboardReference: () =>
     request<OfficialReferenceRow[]>("/api/leaderboard/reference"),
+  // Pre-creation check on a *configuration*. Not to be confused with
+  // `validateRun` below, which validates the artifacts of a finished run.
+  preflightRunConfig: (config: RunConfigPayload) =>
+    request<RunValidationResult>("/api/runs/preflight", {
+      method: "POST",
+      body: JSON.stringify(config)
+    }),
   createRun: (payload: RunCreatePayload) =>
     request<RunRecord>("/api/runs", {
       method: "POST",

@@ -98,7 +98,7 @@ def test_preflight_blocks_host_harness_without_subprocess(monkeypatch):
     # codex is host-only in Docker mode.
     cfg = RunConfigCreate(case_id="tetris-v1", prompt_variant="naive", harness="codex")
     with pytest.raises(RunPreflightError, match="host mode"):
-        service._preflight(cfg)
+        service.preflight(cfg)
 
 
 def test_preflight_allows_host_harness_with_subprocess(monkeypatch):
@@ -111,7 +111,7 @@ def test_preflight_allows_host_harness_with_subprocess(monkeypatch):
     service = RunService.__new__(RunService)
     cfg = RunConfigCreate(case_id="tetris-v1", prompt_variant="naive", harness="claude")
     # No executor model / gateway token required for native-auth host harnesses.
-    service._preflight(cfg)
+    service.preflight(cfg)
 
 
 def test_preflight_claude_in_docker_requires_credentials(monkeypatch):
@@ -127,7 +127,7 @@ def test_preflight_claude_in_docker_requires_credentials(monkeypatch):
     # No credentials in .env → blocked with an actionable message.
     monkeypatch.setattr(rs, "read_env_file_value", lambda *_a, **_k: "")
     with pytest.raises(RunPreflightError, match="CLAUDE_CODE_OAUTH_TOKEN"):
-        service._preflight(cfg)
+        service.preflight(cfg)
 
     # A credential present → claude is allowed in Docker.
     monkeypatch.setattr(
@@ -135,4 +135,4 @@ def test_preflight_claude_in_docker_requires_credentials(monkeypatch):
         "read_env_file_value",
         lambda name, *_a, **_k: "tok" if name == "CLAUDE_CODE_OAUTH_TOKEN" else "",
     )
-    service._preflight(cfg)
+    service.preflight(cfg)

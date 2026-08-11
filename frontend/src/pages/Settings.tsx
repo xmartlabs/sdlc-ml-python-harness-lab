@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import type {
+  ContextProbeResult,
   EnvSettingItem,
   EnvSettings,
   GatewayModelRecord,
@@ -77,11 +78,44 @@ function EnvField({
   );
 }
 
+/** Verdict of the last context measurement for one model, or nothing yet. */
+function ContextBadge({ result }: { result: ContextProbeResult | undefined }) {
+  if (!result) {
+    return null;
+  }
+  if (result.status === "insufficient") {
+    return (
+      <span className="badge error" title={result.detail}>
+        context {result.context_tokens ?? "?"} &lt; {result.required_tokens}
+      </span>
+    );
+  }
+  if (result.status === "ok") {
+    return (
+      <span className="badge ok" title={result.detail}>
+        context ≥ {result.required_tokens}
+      </span>
+    );
+  }
+  return (
+    <span className="badge warn" title={result.detail}>
+      context unknown
+    </span>
+  );
+}
+
 export function Settings({ theme, onThemeChange }: SettingsProps) {
   const [env, setEnv] = useState<EnvSettings | null>(null);
   const [facts, setFacts] = useState<RuntimeFacts | null>(null);
   const [models, setModels] = useState<GatewayModelRecord[]>([]);
   const [routable, setRoutable] = useState<Record<string, boolean>>({});
+  // model_id -> canonical id it was merged into, for ids the gateway router
+  // resolves to a backend model another id already covers.
+  const [mergedInto, setMergedInto] = useState<Record<string, string>>({});
+  const [contextChecks, setContextChecks] = useState<Record<string, ContextProbeResult>>(
+    {}
+  );
+  const [checking, setChecking] = useState<string | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -105,10 +139,16 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
       .listModels()
       .then((catalog) => {
         const flags: Record<string, boolean> = {};
+        const merged: Record<string, string> = {};
         for (const model of catalog.models) {
-          flags[model.id.replace(/^gateway\//, "")] = model.routable !== false;
+          const bare = model.id.replace(/^gateway\//, "");
+          flags[bare] = model.routable !== false;
+          for (const alias of model.aliases ?? []) {
+            merged[alias.replace(/^gateway\//, "")] = bare;
+          }
         }
         setRoutable(flags);
+        setMergedInto(merged);
       })
       .catch(() => {});
   };
@@ -201,6 +241,35 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
       .finally(() => setBusy(false));
   };
 
+  /**
+   * Measure the context window the backend is *actually* serving for a model.
+   *
+   * LM Studio loads a model on demand with its default window, which can be far
+   * smaller than the one configured by hand — and the harness system prompt
+   * alone is ~13.7k tokens, so an 8k auto-load kills every step of a run
+   * instantly. The only honest answer comes from sending a real oversized
+   * prompt, so this takes as long as the model needs to load and reply.
+   */
+  const handleCheckContext = (modelId: string) => {
+    setChecking(modelId);
+    setError(null);
+    setNotice(null);
+    api
+      .checkModelContext(modelId)
+      .then((result) => {
+        setContextChecks((current) => ({ ...current, [modelId]: result }));
+        // An insufficient window is a hard failure the user must act on, so it
+        // gets the error banner; anything else is informational.
+        if (result.status === "insufficient") {
+          setError(`${modelId}: ${result.detail}`);
+        } else {
+          setNotice(`${modelId}: ${result.detail}`);
+        }
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setChecking(null));
+  };
+
   const commitLabel = (model: GatewayModelRecord) => {
     const next = labels[model.model_id];
     if (next === undefined || next === model.label) {
@@ -268,7 +337,9 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
         <p className="muted">
           Enabled models are routed to opencode at run time through a config overlay, so a
           model you enable here works immediately and <code>opencode.json</code> stays
-          untouched.
+          untouched. Ids the gateway resolves to the same backend model are merged, so the
+          run picker lists each model once. Use “Check context” to measure the window a
+          backend is really serving before spending a run on it.
         </p>
         {models.length === 0 ? (
           <EmptyState
@@ -283,54 +354,76 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
               <span>State</span>
               <span>Actions</span>
             </div>
-            {models.map((model) => (
-              <div className="table-row" key={model.model_id}>
-                <span className="harness-name">
-                  <strong>{model.model_id}</strong>
-                  <small>gateway/{model.model_id}</small>
-                </span>
-                <span>
-                  <input
-                    disabled={busy}
-                    onBlur={() => commitLabel(model)}
-                    onChange={(event) =>
-                      setLabels((current) => ({
-                        ...current,
-                        [model.model_id]: event.target.value
-                      }))
-                    }
-                    value={labels[model.model_id] ?? model.label}
-                  />
-                </span>
-                <span className="model-flags">
-                  <span className={model.enabled ? "badge ok" : "badge"}>
-                    {model.enabled ? "enabled" : "disabled"}
+            {models.map((model, index) => (
+              <Fragment key={model.model_id}>
+                {model.group && model.group !== models[index - 1]?.group ? (
+                  <div className="table-row table-section" key={`section-${model.group}`}>
+                    <span className="muted">
+                      <strong>{model.group}</strong>
+                    </span>
+                  </div>
+                ) : null}
+                <div className="table-row" key={model.model_id}>
+                  <span className="harness-name">
+                    <strong>{model.model_id}</strong>
+                    <small>gateway/{model.model_id}</small>
                   </span>
-                  {model.live ? null : <span className="badge warn">not served</span>}
-                  {routable[model.model_id] === false ? (
-                    <span className="badge error">not routable</span>
-                  ) : null}
-                  {model.is_default ? <span className="badge neutral">default</span> : null}
-                </span>
-                <span className="row-actions">
-                  <button
-                    disabled={busy}
-                    onClick={() => patchModel(model.model_id, { enabled: !model.enabled })}
-                    type="button"
-                  >
-                    {model.enabled ? "Disable" : "Enable"}
-                  </button>
-                  {model.is_default ? null : (
+                  <span>
+                    <input
+                      disabled={busy}
+                      onBlur={() => commitLabel(model)}
+                      onChange={(event) =>
+                        setLabels((current) => ({
+                          ...current,
+                          [model.model_id]: event.target.value
+                        }))
+                      }
+                      value={labels[model.model_id] ?? model.label}
+                    />
+                  </span>
+                  <span className="model-flags">
+                    <span className={model.enabled ? "badge ok" : "badge"}>
+                      {model.enabled ? "enabled" : "disabled"}
+                    </span>
+                    {model.live ? null : <span className="badge warn">not served</span>}
+                    {routable[model.model_id] === false ? (
+                      <span className="badge error">not routable</span>
+                    ) : null}
+                    {model.is_default ? <span className="badge neutral">default</span> : null}
+                    {mergedInto[model.model_id] ? (
+                      <span className="badge neutral">
+                        merged into {mergedInto[model.model_id]}
+                      </span>
+                    ) : null}
+                    <ContextBadge result={contextChecks[model.model_id]} />
+                  </span>
+                  <span className="row-actions">
                     <button
-                      disabled={busy || !model.enabled}
-                      onClick={() => patchModel(model.model_id, { is_default: true })}
+                      disabled={busy}
+                      onClick={() => patchModel(model.model_id, { enabled: !model.enabled })}
                       type="button"
                     >
-                      Make default
+                      {model.enabled ? "Disable" : "Enable"}
                     </button>
-                  )}
-                </span>
-              </div>
+                    {model.is_default ? null : (
+                      <button
+                        disabled={busy || !model.enabled}
+                        onClick={() => patchModel(model.model_id, { is_default: true })}
+                        type="button"
+                      >
+                        Make default
+                      </button>
+                    )}
+                    <button
+                      disabled={checking !== null}
+                      onClick={() => handleCheckContext(model.model_id)}
+                      type="button"
+                    >
+                      {checking === model.model_id ? "Checking…" : "Check context"}
+                    </button>
+                  </span>
+                </div>
+              </Fragment>
             ))}
           </div>
         )}

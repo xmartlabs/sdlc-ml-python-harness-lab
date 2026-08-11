@@ -254,12 +254,51 @@ export type RunCreatePayload = {
   config: RunConfigPayload;
 };
 
+/**
+ * Verdict of the pre-creation check on a run configuration.
+ *
+ * These are the same checks `POST /api/runs` applies, so `ok: true` means the
+ * form will not be rejected for configuration reasons; it is not a promise that
+ * the run itself will succeed.
+ */
+export type RunValidationResult = {
+  ok: boolean;
+  detail: string;
+};
+
 export type ModelOption = {
   id: string;
   label: string;
   // False when neither opencode.json nor the enabled web catalog can route the
   // id: the gateway serves it, but a run using it would fail at launch.
   routable?: boolean;
+  // Other gateway ids that the router resolves to this same backend model.
+  // They are hidden from the picker so one model appears once.
+  aliases?: string[];
+  // Serving backend ("lmstudio" | "cloud" | "ollama") and its display heading.
+  // The API returns models pre-sorted by group_rank, so rendering in order
+  // reproduces the intended hierarchy: LM Studio → Cloud → Ollama.
+  backend?: string;
+  group?: string;
+  group_rank?: number;
+};
+
+/**
+ * Outcome of measuring the context window a model is *actually* serving.
+ *
+ * `status` is "ok" when the model accepted a prompt of `required_tokens`,
+ * "insufficient" when it refused one and named a smaller window, and "unknown"
+ * when the probe could not reach a verdict — the run gate only blocks on
+ * "insufficient", so an unreachable backend never stops a run.
+ */
+export type ContextProbeResult = {
+  model: string;
+  status: "ok" | "insufficient" | "unknown";
+  ok: boolean;
+  required_tokens: number;
+  context_tokens: number | null;
+  prompt_tokens: number | null;
+  detail: string;
 };
 
 export type ModelCatalog = {
@@ -322,6 +361,11 @@ export type GatewayModelRecord = {
   options_json: Record<string, unknown>;
   first_seen_at: string;
   last_seen_at: string;
+  // Serving backend and its display heading. Rows arrive pre-sorted by
+  // group_rank so the table sections match the run picker's ordering.
+  backend?: string;
+  group?: string;
+  group_rank?: number;
 };
 
 export type ModelRefreshResult = {

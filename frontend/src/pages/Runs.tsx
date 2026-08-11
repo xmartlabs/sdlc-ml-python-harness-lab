@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "../api";
@@ -10,8 +10,10 @@ import type {
   CaseRecord,
   HarnessSkill,
   ModelOption,
+  RunConfigPayload,
   RunCreatePayload,
   RunRecord,
+  RunValidationResult,
   StagedSkillRecord
 } from "../types";
 
@@ -59,6 +61,46 @@ function withCurrent(options: ModelOption[], current: string): ModelOption[] {
   return [...options, { id: current, label: current }];
 }
 
+// Partition the menu into its backend headings, preserving the order the API
+// already sorted them into (LM Studio → Cloud → Ollama). Consecutive runs of the
+// same group become one <optgroup>; options with no group (the native CLI menus)
+// collapse into a single unlabelled bucket so the select still renders flat.
+function groupOptions(options: ModelOption[]): { group?: string; items: ModelOption[] }[] {
+  const sections: { group?: string; items: ModelOption[] }[] = [];
+  for (const option of options) {
+    const last = sections[sections.length - 1];
+    if (last && last.group === option.group) {
+      last.items.push(option);
+    } else {
+      sections.push({ group: option.group, items: [option] });
+    }
+  }
+  return sections;
+}
+
+// One model <select> body. Rendered for both planner and executor so the two
+// menus can never drift apart in ordering or labelling.
+function ModelOptions({ options }: { options: ModelOption[] }) {
+  return (
+    <>
+      {groupOptions(options).map((section, index) => {
+        const items = section.items.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.routable === false ? `${item.label} — not routable` : item.label}
+          </option>
+        ));
+        return section.group ? (
+          <optgroup key={section.group} label={section.group}>
+            {items}
+          </optgroup>
+        ) : (
+          <Fragment key={`ungrouped-${index}`}>{items}</Fragment>
+        );
+      })}
+    </>
+  );
+}
+
 export function Runs({
   cases,
   onCancelRun,
@@ -84,6 +126,8 @@ export function Runs({
   const [resume, setResume] = useState(false);
   const [dryRun, setDryRun] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
+  const [validation, setValidation] = useState<RunValidationResult | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [caseRunIds, setCaseRunIds] = useState<string[]>([]);
   const [harnessSkills, setHarnessSkills] = useState<HarnessSkill[]>([]);
@@ -255,30 +299,71 @@ export function Runs({
     setMaxSteps(10);
   };
 
+  // A verdict only describes the configuration that produced it, so any edit
+  // voids it rather than leaving a stale green tick above the Create button.
+  useEffect(() => {
+    setValidation(null);
+  }, [
+    caseId,
+    promptVariant,
+    harness,
+    plannerModel,
+    executorModel,
+    maxSteps,
+    resume,
+    dryRun,
+    disabledSkills,
+    extraSkills
+  ]);
+
+  const buildConfig = (): RunConfigPayload => ({
+    case_id: caseId,
+    prompt_variant: promptVariant,
+    harness,
+    planner_model: plannerModel || null,
+    executor_model: executorModel || null,
+    score_mode: scoreMode,
+    max_steps: maxSteps,
+    resume,
+    dry_run: dryRun,
+    skills_disabled: [...disabledSkills].sort(),
+    skills_extra: [...extraSkills].sort()
+  });
+
+  // Same checks Create run applies, minus the write. The slow part (measuring
+  // the executor's served context window) is memoized server-side, so creating
+  // right after a green check costs nothing extra.
+  const handleValidateRun = async () => {
+    if (selectedCase === null) {
+      return;
+    }
+    setCreateError(null);
+    setValidation(null);
+    setIsValidating(true);
+    try {
+      setValidation(await api.preflightRunConfig(buildConfig()));
+    } catch (error) {
+      setCreateError(
+        error instanceof Error ? error.message : "Unable to validate configuration"
+      );
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
   const handleCreateRun = async () => {
     if (selectedCase === null) {
       return;
     }
 
     setCreateError(null);
+    setValidation(null);
     setIsSaving(true);
     try {
       const created = await onCreateRun({
         run_id: runId.trim() || undefined,
         label: label.trim() || undefined,
-        config: {
-          case_id: caseId,
-          prompt_variant: promptVariant,
-          harness,
-          planner_model: plannerModel || null,
-          executor_model: executorModel || null,
-          score_mode: scoreMode,
-          max_steps: maxSteps,
-          resume,
-          dry_run: dryRun,
-          skills_disabled: [...disabledSkills].sort(),
-          skills_extra: [...extraSkills].sort()
-        }
+        config: buildConfig()
       });
       navigate(`/runs/${created.run_id}`);
     } catch (error) {
@@ -399,21 +484,13 @@ export function Runs({
             <span>Planner model</span>
             <select value={plannerModel} onChange={(event) => setPlannerModel(event.target.value)}>
               <option value="">None</option>
-              {plannerOptions.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
-                </option>
-              ))}
+              <ModelOptions options={plannerOptions} />
             </select>
           </label>
           <label>
             <span>Executor model</span>
             <select value={executorModel} onChange={(event) => setExecutorModel(event.target.value)}>
-              {executorOptions.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.routable === false ? `${item.label} — not routable` : item.label}
-                </option>
-              ))}
+              <ModelOptions options={executorOptions} />
             </select>
             <small className="muted">
               {HARNESS_NATIVE_MODELS[harness]
@@ -526,10 +603,32 @@ export function Runs({
           </div>
         ) : null}
         <div className="panel-actions">
+          <button
+            disabled={isValidating || isSaving || cases.length === 0}
+            onClick={handleValidateRun}
+            type="button"
+          >
+            {isValidating ? "Validating..." : "Validate config"}
+          </button>
           <button className="primary" disabled={isSaving || cases.length === 0} onClick={handleCreateRun} type="button">
             {isSaving ? "Creating..." : "Create run"}
           </button>
         </div>
+        {validation ? (
+          <p className="muted">
+            <span className={validation.ok ? "badge ok" : "badge error"}>
+              {validation.ok ? "ready" : "blocked"}
+            </span>{" "}
+            {validation.detail}
+          </p>
+        ) : (
+          <p className="muted">
+            Validate config runs the same checks as Create run — case files, harness
+            availability, model routing, and the context window the executor is actually
+            serving — without creating anything. On a cold model the first check can take
+            up to ~40s while the backend loads it.
+          </p>
+        )}
         {createError ? <ErrorBanner message={createError} onDismiss={() => setCreateError(null)} /> : null}
         <div>
           <p className="sidebar-label">Equivalent CLI command</p>

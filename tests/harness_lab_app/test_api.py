@@ -209,3 +209,51 @@ def test_start_sandbox_endpoint_409_without_workspace():
         with pytest.raises(HTTPException) as exc:
             start("no-such-run-workspace", "terminal", session)
         assert exc.value.status_code == 409
+
+
+def test_validate_run_endpoint_greenlights_a_runnable_config():
+    """The run form's Validate button: same checks as create, nothing written."""
+    app = create_app()
+    validate = _route_endpoint(app, "/api/runs/preflight", method="POST")
+    with _session() as session:
+        result = validate(
+            RunConfigCreate(
+                case_id="tetris-v1",
+                prompt_variant="sdlc",
+                executor_model="stub-executor",
+            ),
+            session,
+        )
+        assert result["ok"] is True
+
+
+def test_validate_run_endpoint_reports_the_reason_instead_of_raising():
+    """A blocked config is an answer, not an error — the form renders `detail`."""
+    app = create_app()
+    validate = _route_endpoint(app, "/api/runs/preflight", method="POST")
+    with _session() as session:
+        result = validate(
+            RunConfigCreate(
+                case_id="tetris-v1",
+                prompt_variant="sdlc",
+                executor_model="",
+            ),
+            session,
+        )
+        assert result["ok"] is False
+        assert "Executor model is required" in result["detail"]
+
+
+def test_validate_run_endpoint_persists_nothing():
+    app = create_app()
+    validate = _route_endpoint(app, "/api/runs/preflight", method="POST")
+    with _session() as session:
+        validate(
+            RunConfigCreate(
+                case_id="tetris-v1",
+                prompt_variant="sdlc",
+                executor_model="stub-executor",
+            ),
+            session,
+        )
+        assert RunService(session).list_runs() == []

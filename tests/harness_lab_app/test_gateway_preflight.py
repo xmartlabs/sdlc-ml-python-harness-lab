@@ -12,7 +12,7 @@ import urllib.error
 
 import pytest
 
-from harness_lab_app import gateway_models, opencode_overlay
+from harness_lab_app import gateway_models, opencode_overlay, run_service
 from harness_lab_app.gateway_models import probe_gateway_model
 from harness_lab_app.run_service import RunPreflightError, RunService
 from harness_lab_app.schemas import RunConfigCreate, RunCreate
@@ -136,4 +136,69 @@ def test_preflight_env_kill_switch_skips_probe(session, monkeypatch):
     )
     run = RunService(session).create_run(_config())
     assert run.run_id == "probe-run"
+    assert called == []
+
+
+# -- context window gate -----------------------------------------------------
+
+
+def _probe_result(status: str, context_tokens: int | None = None):
+    from harness_lab_app.gateway_models import ContextProbeResult
+
+    return ContextProbeResult(
+        model="m",
+        status=status,
+        required_tokens=32768,
+        context_tokens=context_tokens,
+        prompt_tokens=None,
+        detail="probe says " + status,
+    )
+
+
+def test_preflight_rejects_a_context_window_too_small_for_the_harness(
+    session, monkeypatch
+):
+    """Run K-020: LM Studio auto-loaded an 8k window and all 4432 steps died.
+
+    The harness system prompt alone is ~13.7k tokens, so the model rejected
+    every single call in 0.4s. Two and a half hours of wall clock for nothing —
+    which is why this is a hard gate, not a warning.
+    """
+    monkeypatch.delenv("HARNESS_LAB_DISABLE_GATEWAY_PROBE", raising=False)
+    monkeypatch.setattr(run_service, "read_env_file_value", lambda _k: "https://gw/v1")
+    monkeypatch.setattr(
+        gateway_models,
+        "probe_model_context_cached",
+        lambda *_a, **_k: _probe_result("insufficient", 8192),
+    )
+    service = RunService(session)
+    monkeypatch.setattr(service, "_probe_gateway_executor", lambda *_a: None)
+    with pytest.raises(RunPreflightError, match="8192"):
+        service.create_run(_config())
+
+
+@pytest.mark.parametrize("status", ["ok", "unknown"])
+def test_the_context_gate_only_blocks_on_a_proven_shortfall(
+    session, monkeypatch, status
+):
+    """Fail open: an inconclusive probe must never stop a runnable config."""
+    monkeypatch.delenv("HARNESS_LAB_DISABLE_GATEWAY_PROBE", raising=False)
+    monkeypatch.setattr(
+        gateway_models,
+        "probe_model_context_cached",
+        lambda *_a, **_k: _probe_result(status),
+    )
+    service = RunService(session)
+    monkeypatch.setattr(service, "_probe_gateway_executor", lambda *_a: None)
+    assert service.create_run(_config()).run_id == "probe-run"
+
+
+def test_the_context_gate_honours_the_kill_switch(session, monkeypatch):
+    called: list[int] = []
+    monkeypatch.setattr(
+        gateway_models,
+        "probe_model_context_cached",
+        lambda *_a, **_k: called.append(1) or _probe_result("insufficient", 8192),
+    )
+    assert RunService(session).create_run(_config()).run_id == "probe-run"
     assert called == []

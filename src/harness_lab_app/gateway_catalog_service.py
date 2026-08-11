@@ -22,6 +22,7 @@ from sqlmodel import Session, select
 from harness_lab_app.config import get_settings
 from harness_lab_app.gateway_models import (
     GATEWAY_PREFIX,
+    classify_backend,
     read_opencode_gateway_models,
 )
 from harness_lab_app.models import GatewayModel, utc_now
@@ -43,8 +44,15 @@ class GatewayCatalogService:
     # -- queries ------------------------------------------------------------
 
     def list_models(self) -> list[GatewayModel]:
-        return list(
-            self.session.exec(select(GatewayModel).order_by(GatewayModel.model_id))
+        """Catalog rows in the menu's own order: LM Studio → Cloud → Ollama.
+
+        Sorting happens in Python rather than SQL because the backend of an id
+        is derived (:func:`classify_backend`), not stored. ``model_id`` breaks
+        ties so the order stays stable between calls.
+        """
+        rows = self.session.exec(select(GatewayModel).order_by(GatewayModel.model_id))
+        return sorted(
+            rows, key=lambda row: (classify_backend(row.model_id)[0], row.model_id)
         )
 
     def get_model(self, model_id: str) -> GatewayModel:

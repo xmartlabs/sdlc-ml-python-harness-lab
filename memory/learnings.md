@@ -498,4 +498,37 @@ costs a run (and its tokens).
 `running`/`pending` states (`GET /api/runs`) — restart only when empty. A run
 killed this way is recoverable with the Retry button.
 
+## LM Studio JIT auto-load serves the model's *default* context — 2026-08-10
+
+The context length you set by hand in LM Studio applies to the model **you
+loaded**. A request for a model that is not loaded triggers a JIT load using that
+model's **default** window (often 8k) and ignores your setting. Nothing upstream
+looks broken: LiteLLM answers normally and `/v1/models` lists the model.
+
+The harness system prompt is **~13.7k tokens before the first user turn**, so
+under an 8k window llama.cpp rejects every call *before evaluation* with
+`n_keep: 13777 >= n_ctx: 8192` in ~0.4s. Run `tetris-v1-K-020` burned 4432 steps,
+2.5 hours and a 12 MB log this way, and the failures surface as generic stream
+errors.
+
+Two related traps found alongside it. **Alias identity is the full parameter set,
+not the target.** `/model/info` shows `lmstudio-qwen3.6-35b` and its `-build` twin
+pointing at the same LM Studio model but with different sampling (0.7/top_p 0.8
+against 0.2/top_p 0.9 + penalties + `max_tokens` 4096) — two real arms. Meanwhile
+`claude-opus-5`, `-oauth` and `[1m]` are byte-identical in everything the gateway
+exposes. Judge by params, never by name. **And LiteLLM returned an identical
+`chatcmpl` id + `created` for two identical requests**, which means response
+caching — poison for a benchmarking lab if it is on.
+
+**Why it matters:** the symptom (opaque stream errors, instant failures) points at
+the network or the harness, not at a context setting on a machine that reports
+itself healthy.
+**How to apply:** load the model explicitly with the window you want before a run,
+or raise its default. The lab now measures the *served* window with a real
+oversized prompt — Settings -> Model catalog -> **Check context**, and run
+creation refuses a proven window under `MIN_CONTEXT_TOKENS` (32768). Both fail
+open, so only a provable shortfall blocks. See
+[ADR-0020](../docs/adr/0020-context-window-preflight-and-alias-merge.md) and the
+"JIT auto-load trap" section in `docs/local-model-runtime-config.md`.
+
 <!-- Add new learnings above this line -->

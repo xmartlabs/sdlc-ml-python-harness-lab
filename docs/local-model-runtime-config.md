@@ -95,6 +95,39 @@ Copilot specifically:
   `provider.lmstudio.models` in `opencode.json` and the gateway `model_name`.
 - Temperature 0.2 (set at the gateway per lever 1, or in LM Studio / `opencode.json`).
 
+### The JIT auto-load trap (read this before blaming the model)
+
+The context length you set by hand in LM Studio applies to the model **you loaded**. When a
+request arrives for a model that is *not* loaded, LM Studio loads it on demand (JIT) using
+that model's **default** window — often 8k — and your setting is not consulted. The gateway
+answers normally, so nothing upstream looks broken.
+
+The harness system prompt (governance docs, 24 skill descriptions, 6 agent definitions and
+the tool schemas) is **~13.7k tokens before the first user turn**. Under an 8k window every
+call is rejected by llama.cpp *before evaluation*:
+
+```
+The number of tokens to keep from the initial prompt is greater than the
+context length (n_keep: 13777 >= n_ctx: 8192)
+```
+
+Run `tetris-v1-K-020` hit exactly this: 4432 steps, each failing in ~0.4s, 2.5 hours of wall
+clock and a 12 MB log for zero work. The rejection is instant, which is what makes it look
+like a stream error rather than a configuration problem.
+
+Two things in the lab now close this:
+
+- **Preflight gate.** Creating a run with a `gateway/` executor sends one oversized prompt
+  and refuses to start if the backend proves its window is under **32768** tokens
+  (`MIN_CONTEXT_TOKENS`). Only a *provable* shortfall blocks — a timeout, a cold JIT load or
+  an unreachable gateway all fail open. `HARNESS_LAB_DISABLE_GATEWAY_PROBE=1` skips it.
+- **“Check context” button** in Settings → Model catalog, which runs the same measurement on
+  demand and reports the window the backend is actually serving.
+
+The reliable fix on the LM Studio side is to load the model explicitly with the window you
+want (or raise its default in the model's config) before launching a run, rather than
+letting JIT pick it.
+
 ## Hard lever 3 — VS Code / Copilot settings
 
 `.github/copilot-instructions.md` is auto-detected and applied to every chat request; keep it

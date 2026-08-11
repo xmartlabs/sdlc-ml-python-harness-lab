@@ -48,6 +48,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0017 — Multi-file staged skills and remote import](0017-multi-file-staged-skills-and-remote-import.md)
 - [0018 — Health and drift panel](0018-health-and-drift-panel.md)
 - [0019 — Always-on local deployment](0019-always-on-local-deployment.md)
+- [0020 — Context-window preflight and gateway alias merge](0020-context-window-preflight-and-alias-merge.md)
 
 ## Why ADRs exist
 

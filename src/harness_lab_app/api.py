@@ -297,6 +297,7 @@ def create_app() -> FastAPI:
         # opencode.json routing map when the gateway is unreachable.
         from harness_lab_app.gateway_models import (
             build_model_catalog,
+            fetch_gateway_routing_cached,
             list_gateway_models_cached,
             read_opencode_gateway_models,
         )
@@ -306,11 +307,35 @@ def create_app() -> FastAPI:
         live = list_gateway_models_cached(base, token)
         opencode_models = read_opencode_gateway_models(settings.repo_root)
         overlay = GatewayCatalogService(session).overlay_models()
-        return build_model_catalog(live, opencode_models, overlay=overlay)
+        # Aliases resolving to the same served model collapse into one option:
+        # they are one experimental arm, and listing both only makes the picker
+        # harder to read.
+        routing = fetch_gateway_routing_cached(base, token)
+        return build_model_catalog(
+            live, opencode_models, overlay=overlay, routing=routing
+        )
 
     @app.get("/api/models/catalog")
     def list_model_catalog(session: Session = Depends(get_session)):
-        return GatewayCatalogService(session).list_models()
+        """Catalog rows, each tagged with the backend heading it belongs under.
+
+        The service already returns them in backend order; tagging each row lets
+        the Settings table draw the same LM Studio → Cloud → Ollama sections the
+        run picker uses, without re-deriving the grouping in the browser.
+        """
+        from harness_lab_app.gateway_models import classify_backend
+
+        rows = GatewayCatalogService(session).list_models()
+        return [
+            {
+                **row.model_dump(),
+                "backend": backend,
+                "group": group_label,
+                "group_rank": rank,
+            }
+            for row in rows
+            for rank, backend, group_label in (classify_backend(row.model_id),)
+        ]
 
     @app.post("/api/models/refresh")
     def refresh_model_catalog(session: Session = Depends(get_session)):
@@ -341,6 +366,41 @@ def create_app() -> FastAPI:
                 ),
             )
         return result
+
+    @app.post("/api/models/{model_id:path}/context-check")
+    def check_model_context(model_id: str, required_tokens: int | None = None):
+        """Measure the context window a model is *actually* serving right now.
+
+        LiteLLM's declared limit is configuration; LM Studio serves whatever
+        window the model was loaded with, and a JIT auto-load quietly uses the
+        model's small default. Only a real oversized prompt tells the truth.
+        """
+        from harness_lab_app.gateway_models import (
+            MIN_CONTEXT_TOKENS,
+            clear_context_cache,
+            probe_model_context,
+        )
+
+        base, token = _gateway_endpoint()
+        if not base or not token:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "LLM gateway not configured — set GATEWAY_BASE_URL and "
+                    "GATEWAY_TOKEN on the Settings page first."
+                ),
+            )
+        # An explicit press means "measure it now", so the memoized verdict the
+        # run gate reuses is dropped rather than replayed.
+        clear_context_cache()
+        result = probe_model_context(
+            model_id,
+            base_url=base,
+            token=token,
+            required_tokens=required_tokens or MIN_CONTEXT_TOKENS,
+            timeout=180.0,
+        )
+        return result.as_dict()
 
     @app.patch("/api/models/{model_id:path}")
     def update_model(
@@ -723,6 +783,23 @@ def create_app() -> FastAPI:
         run_id: str, config: RunConfigCreate, session: Session = Depends(get_session)
     ):
         return {"command": RunService(session).preview_command(run_id, config)}
+
+    @app.post("/api/runs/preflight")
+    def preflight_run_config(
+        config: RunConfigCreate, session: Session = Depends(get_session)
+    ):
+        """Run the creation preflight without creating anything.
+
+        Same checks `POST /api/runs` applies, so a green answer here means the
+        run form will not be rejected — and the slow part (probing the backend
+        and measuring its context window) is memoized, so pressing Create right
+        after costs nothing extra.
+        """
+        try:
+            RunService(session).preflight(config)
+        except RunPreflightError as exc:
+            return {"ok": False, "detail": str(exc)}
+        return {"ok": True, "detail": "Configuration looks runnable."}
 
     @app.post("/api/runs")
     def create_run(data: RunCreate, session: Session = Depends(get_session)):

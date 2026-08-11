@@ -121,12 +121,16 @@ class RunService:
     def preview_command(self, run_id: str, config: RunConfigCreate) -> list[str]:
         return self.adapter.build_command(run_id, config)
 
-    def _preflight(self, config: RunConfigCreate) -> None:
+    def preflight(self, config: RunConfigCreate) -> None:
         """Reject configs that cannot possibly run, before persisting/enqueuing.
 
         Turns the old silent "fails open" behavior (a run that exits 0 having
         built nothing) into an actionable error at creation time (ADR-0006).
         Dry-run needs no model or gateway, so it is exempt.
+
+        Public because the run form calls it on its own through
+        ``POST /api/runs/preflight``: same checks, nothing persisted, so the
+        answer is the one ``create_run`` would give.
         """
         if config.dry_run:
             return
@@ -179,6 +183,7 @@ class RunService:
                     "another model) and retry. Without this check the run would "
                     "burn every step on stream errors."
                 )
+            self._check_executor_context(executor, token or "")
         if config.skills_disabled:
             from harness_lab_app.skills_catalog import known_skill_names
 
@@ -221,6 +226,48 @@ class RunService:
         if Path("/.dockerenv").exists():
             base = rewrite_localhost(base, get_settings().docker_host_alias)
         return probe_gateway_model(executor, base_url=base, token=token)
+
+    def _check_executor_context(self, executor: str, token: str) -> None:
+        """Reject an executor whose context window cannot hold the harness.
+
+        The K-020 failure mode: LM Studio JIT-auto-loaded the model with its
+        default 8k window, the ~13.7k-token system prompt did not fit, and all
+        4432 steps died on ``n_keep >= n_ctx`` — 2.5 hours for nothing. The
+        probe answers in under a second in exactly that case, because the
+        backend refuses an oversized prompt before evaluating it.
+
+        Only a *provable* shortfall blocks the run; ``unknown`` (gateway down,
+        timeout, model still loading) falls through, same contract as
+        :meth:`_probe_gateway_executor`.
+        """
+        if os.environ.get("HARNESS_LAB_DISABLE_GATEWAY_PROBE"):
+            return
+        from harness_lab_app.executors import rewrite_localhost
+        from harness_lab_app.gateway_models import probe_model_context_cached
+
+        base = read_env_file_value("GATEWAY_BASE_URL") or ""
+        if not base:
+            return
+        if Path("/.dockerenv").exists():
+            base = rewrite_localhost(base, get_settings().docker_host_alias)
+        result = probe_model_context_cached(
+            executor, base_url=base, token=token, timeout=90.0
+        )
+        if result.status != "insufficient":
+            return
+        window = (
+            f"{result.context_tokens} tokens"
+            if result.context_tokens
+            else "an unknown size"
+        )
+        raise RunPreflightError(
+            f"Executor model '{executor}' is loaded with a context window of "
+            f"{window}, below the {result.required_tokens} this harness needs. "
+            "The system prompt alone is ~13.7k tokens, so every step would fail "
+            "immediately. Reload the model with a larger context (in LM Studio, "
+            "a JIT auto-load uses the model's small default — set it explicitly) "
+            "and retry."
+        )
 
     def _check_routable(self, executor: str) -> None:
         """Reject a ``gateway/`` model opencode has no provider entry for.
@@ -286,7 +333,7 @@ class RunService:
         return explicit
 
     def create_run(self, data: RunCreate) -> Run:
-        self._preflight(data.config)
+        self.preflight(data.config)
         run_id = self._resolve_run_id(data)
         config = RunConfig(**data.config.model_dump())
         self.session.add(config)
