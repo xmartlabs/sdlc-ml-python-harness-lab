@@ -700,22 +700,80 @@ label {
   border-bottom: 0;
 }
 
-.theme-toggle {
+/* Segmented control. `.theme-toggle` is the original, Settings-only name; the
+   generic `.segmented` alias is what new callers (the model picker) use. */
+.theme-toggle,
+.segmented {
   display: inline-flex;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
-.theme-toggle button {
+.theme-toggle button,
+.segmented button {
   border: 0;
   border-radius: 0;
   padding: 6px 14px;
 }
 
-.theme-toggle button.active {
+.theme-toggle button.active,
+.segmented button.active {
   background: var(--accent);
   color: white;
+}
+
+.segmented button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Model picker: source segmented control → provider chips → model select. */
+.model-picker {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.model-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.model-picker-head button {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.model-picker .segmented {
+  justify-self: start;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  width: auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.chip-count {
+  opacity: 0.7;
 }
 
 .inspector-stack {
@@ -1241,6 +1299,15 @@ button.ghost {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* Run state plus the objective verdict, stacked so a failing check reads as a
+   qualifier on the state rather than competing with it. */
+.run-state-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
 }
 
 /* Improvements worklist: 8 columns (checkbox · proposal · kind · repo · run ·

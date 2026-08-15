@@ -438,3 +438,50 @@ def test_list_events_ascending_orders_chronologically():
 
         assert [event.message for event in ascending][-2:] == ["first", "second"]
         assert [event.message for event in descending][:2] == ["second", "first"]
+
+
+def test_run_list_carries_the_objective_verdict(session):
+    """A run whose code does not start must not read as merely 'pending review'.
+
+    Runs K-035/K-037/K-039 all failed the smoke check (exit 124, 1 and 2) and
+    all three sat in `awaiting_manual_score` with an empty score — visually
+    identical to a run waiting for a human. The lab had already computed the
+    answer; the list just never showed it.
+    """
+    from harness_lab_app.api import create_app
+    from harness_lab_app.models import Validation
+
+    service = RunService(session)
+    for run_id in ("broken-run", "good-run", "unchecked-run"):
+        service.create_run(
+            RunCreate(
+                run_id=run_id,
+                config=RunConfigCreate(
+                    case_id="tetris-v1",
+                    prompt_variant="sdlc",
+                    executor_model="stub-executor",
+                ),
+            )
+        )
+    session.add(
+        Validation(
+            run_id="broken-run", objective={"strategy": "smoke", "passed": False}
+        )
+    )
+    session.add(
+        Validation(run_id="good-run", objective={"strategy": "smoke", "passed": True})
+    )
+    session.commit()
+
+    app = create_app()
+    endpoint = next(
+        route.endpoint
+        for route in app.router.routes
+        if getattr(route, "path", None) == "/api/runs"
+    )
+    verdicts = {row["run_id"]: row["objective_passed"] for row in endpoint(session)}
+
+    assert verdicts["broken-run"] is False
+    assert verdicts["good-run"] is True
+    # Never validated: absent, not "failed" — the two mean different things.
+    assert verdicts["unchecked-run"] is None

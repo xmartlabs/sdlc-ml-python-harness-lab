@@ -71,6 +71,34 @@ def test_probe_ignores_non_connection_http_errors(monkeypatch):
     assert probe_gateway_model("gateway/x", base_url="https://gw/v1", token="t") is None
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"error":{"message":"Invalid model identifier","code":"model_not_found"}}',
+        "The model `qwen3.6:35b` does not exist",
+    ],
+)
+def test_probe_blocks_when_the_backend_rejects_the_forwarded_name(monkeypatch, payload):
+    """Run tetris-v1-K-031: a wrong alias target used to pass as ambiguous.
+
+    LiteLLM forwarded ``qwen3.6:35b`` to LM Studio, the server answered
+    ``Invalid model identifier``, and this probe read the unfamiliar 4xx as
+    ambiguous and reported the config runnable. A named model the backend
+    rejects is the one thing a preflight must never wave through: no retry or
+    warm-up changes the answer.
+    """
+
+    def _raise(*_args, **_kwargs):
+        raise _http_error(400, payload)
+
+    monkeypatch.setattr(gateway_models.urllib.request, "urlopen", _raise)
+    detail = probe_gateway_model("gateway/x", base_url="https://gw/v1", token="t")
+    assert detail is not None
+    assert "rejected the model name" in detail
+    # And it points at the lane that cannot suffer this failure at all.
+    assert "LM Studio (direct, no gateway)" in detail
+
+
 def _config(model: str = "gateway/lmstudio-qwen3.6-35b-build") -> RunCreate:
     return RunCreate(
         run_id="probe-run",

@@ -135,6 +135,11 @@ _SPECS: tuple[EnvKeySpec, ...] = (
         label="LM Studio base URL",
         group=GROUP_RUNTIMES,
         validator=_require_url,
+        help_text=(
+            "Server address including /v1 (e.g. http://192.168.0.223:1234/v1). "
+            "Feeds the 'LM Studio (direct, no gateway)' model group, which "
+            "reads models off this host by name — no alias in between."
+        ),
     ),
     EnvKeySpec(
         key="OLLAMA_BASE_URL",
@@ -240,6 +245,9 @@ def read_runtime_facts() -> dict:
         "docker_host_alias": settings.docker_host_alias,
         "redis_url": settings.redis_url,
         "run_timeout_seconds": settings.run_timeout_seconds,
+        "run_stall_seconds": settings.run_stall_seconds,
+        "run_model_wait_seconds": settings.run_model_wait_seconds,
+        "run_max_stream_errors": settings.run_max_stream_errors,
     }
 
 

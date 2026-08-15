@@ -62,6 +62,36 @@ BACKEND_GROUPS: tuple[tuple[str | None, str, str], ...] = (
     ("ollama-", "ollama", "Ollama (rarely used)"),
 )
 
+# Finer classification for the run form's three-tier picker: source (gateway or
+# direct) → provider → model.
+#
+# :data:`BACKEND_GROUPS` answers "which machine serves this", which is the right
+# axis for ordering but a poor one for *finding* a model: every hosted vendor
+# lands in one "Cloud" bucket, so a menu of ~40 aliases shows `gpt-*`,
+# `claude-*`, `gemini-*` and `nim-*` interleaved under a single heading. These
+# rules split that bucket by vendor. They are deliberately kept beside the
+# backend table rather than replacing it: the Settings catalog and the sort
+# order still key off backends, and one table changing shape should not move the
+# other.
+#
+# Matching is by id prefix, the only signal LiteLLM's /models list carries.
+# First match wins; an unmatched id falls into "other" so a vendor nobody
+# anticipated is still reachable in the menu instead of disappearing from it.
+PROVIDER_RULES: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (("lmstudio-",), "lmstudio", "LM Studio"),
+    (("ollama-",), "ollama", "Ollama"),
+    (("gpt-", "codex-"), "openai", "OpenAI"),
+    (("claude-", "bedrock-claude-"), "anthropic", "Claude"),
+    (("gemini-",), "google", "Gemini"),
+    (("nim-",), "nvidia", "NVIDIA"),
+)
+PROVIDER_FALLBACK = ("other", "Other")
+
+# The value every gateway-routed option carries in its ``source`` field. Not to
+# be confused with the catalog-level ``source`` ("gateway" | "opencode.json"),
+# which records where the *list* came from rather than how a model is reached.
+SOURCE_GATEWAY = "gateway"
+
 # Smallest context window a model may have and still run this harness.
 #
 # Measured, not guessed: the system prompt alone (governance docs, 24 skill
@@ -197,6 +227,25 @@ _BACKEND_DOWN_MARKERS = (
     "connect timeout",
 )
 
+# Substrings that mark the *name* as wrong rather than the backend as down: the
+# alias resolved, reached the server, and the server does not have that model.
+#
+# Fail-open used to swallow these, and run tetris-v1-K-031 is what that cost: a
+# LiteLLM alias forwarded ``qwen3.6:35b`` to LM Studio, the server answered
+# ``Invalid model identifier``, the preflight read an unfamiliar 4xx as
+# ambiguous and reported the configuration runnable. A named model that the
+# backend rejects is not ambiguous — it is the one failure a preflight exists
+# to catch, and no retry or warm-up will change the answer.
+_MODEL_UNKNOWN_MARKERS = (
+    "invalid model identifier",
+    "model_not_found",
+    "model not found",
+    "invalid model name",
+    "does not exist",
+    "no such model",
+    "unknown model",
+)
+
 
 def probe_gateway_model(
     model: str,
@@ -242,6 +291,8 @@ def probe_gateway_model(
         with urllib.request.urlopen(req, timeout=timeout):  # nosec B310
             return None
     except urllib.error.HTTPError as exc:
+        from harness_lab_app.lmstudio_direct import LMSTUDIO_GROUP_LABEL
+
         payload = ""
         with contextlib.suppress(Exception):
             payload = exc.read().decode(errors="replace")
@@ -250,6 +301,16 @@ def probe_gateway_model(
             return (
                 f"the gateway reported a connection error reaching the backend "
                 f"that serves this model (HTTP {exc.code})"
+            )
+        if any(m in lowered for m in _MODEL_UNKNOWN_MARKERS):
+            snippet = " ".join(payload.split())[:200]
+            return (
+                f"the backend rejected the model name this alias forwards "
+                f"(HTTP {exc.code}): {snippet}. The LiteLLM alias points at an "
+                f"id the server does not serve — fix the mapping in the "
+                f"gateway, or pick the model from the "
+                f"'{LMSTUDIO_GROUP_LABEL}' group, which addresses the host "
+                f"directly and cannot be renamed in transit"
             )
         return None  # auth/validation/etc — other layers surface those
     except Exception:
@@ -721,6 +782,18 @@ def classify_backend(bare_id: str) -> tuple[int, str, str]:
     return fallback
 
 
+def classify_provider(bare_id: str) -> tuple[str, str]:
+    """Map a bare gateway id to its ``(provider, provider_label)``.
+
+    The vendor tier of the run form's picker. See :data:`PROVIDER_RULES` for why
+    this is separate from :func:`classify_backend`.
+    """
+    for prefixes, provider, label in PROVIDER_RULES:
+        if bare_id.startswith(prefixes):
+            return provider, label
+    return PROVIDER_FALLBACK
+
+
 def build_model_catalog(
     live_ids: list[str],
     opencode_models: dict[str, dict],
@@ -748,7 +821,9 @@ def build_model_catalog(
     Every model carries the ``backend``/``group``/``group_rank`` triple from
     :func:`classify_backend`, and the list is returned pre-sorted in that order
     (see :data:`BACKEND_GROUPS`) so every consumer renders the same hierarchy
-    without re-deriving it.
+    without re-deriving it. Alongside it each option carries
+    ``source``/``provider``/``provider_label`` for the run form's three-tier
+    picker (see :data:`PROVIDER_RULES`).
     """
     overlay = overlay or {}
     if live_ids:
@@ -777,9 +852,14 @@ def build_model_catalog(
             "backend": backend,
             "group": group_label,
             "group_rank": rank,
+            # Picker tiers: everything here is reached through the gateway.
+            "source": SOURCE_GATEWAY,
+            "provider": provider,
+            "provider_label": provider_label,
         }
         for canonical, aliases in grouped
         for rank, backend, group_label in (classify_backend(canonical),)
+        for provider, provider_label in (classify_provider(canonical),)
     ]
     # Backend, then launchable-before-not, then curated-before-raw, then label.
     #

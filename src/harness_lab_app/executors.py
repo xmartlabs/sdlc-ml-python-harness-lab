@@ -51,7 +51,19 @@ def build_run_environment() -> dict[str, str]:
     # IS_SANDBOX=1: the run container is an isolated sandbox; Claude Code
     # refuses --dangerously-skip-permissions as root unless this is set (same
     # escape hatch Anthropic's devcontainers use). Harmless for other CLIs.
-    env: dict[str, str] = {"PYTHONUNBUFFERED": "1", "IS_SANDBOX": "1"}
+    # SDL_*=dummy makes the container honestly headless. It used to be a line
+    # of prose in the case prompt that the agent had to retype on every single
+    # invocation — measured compliance was 72% (run K-036) and 40% (K-038), and
+    # each miss left a pygame loop running forever, holding opencode's one
+    # persistent shell open until the whole run wedged. That is an environment
+    # fact, not something to test a model's memory on, so the environment now
+    # states it. A case that still passes the prefix by hand is unaffected.
+    env: dict[str, str] = {
+        "PYTHONUNBUFFERED": "1",
+        "IS_SANDBOX": "1",
+        "SDL_VIDEODRIVER": "dummy",
+        "SDL_AUDIODRIVER": "dummy",
+    }
     env_file = settings.repo_root / ".env"
     if env_file.exists():
         for line in env_file.read_text().splitlines():

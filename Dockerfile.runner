@@ -8,6 +8,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_LINK_MODE=copy \
+    # This container has no display, so say so rather than leaving every SDL
+    # program to discover it. Without this a pygame app opens a window that
+    # never closes, and the agent's shell waits on it forever.
+    SDL_VIDEODRIVER=dummy \
+    SDL_AUDIODRIVER=dummy \
     PATH="/opt/venv/bin:${PATH}"
 
 # node 20 is required by opencode and the conductor plugin.

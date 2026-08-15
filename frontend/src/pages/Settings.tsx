@@ -9,6 +9,8 @@ import type {
   EnvSettings,
   GatewayModelRecord,
   GatewayTestResult,
+  LMStudioCatalog,
+  OllamaCatalog,
   RuntimeFacts
 } from "../types";
 import type { ThemeMode } from "../theme";
@@ -116,6 +118,11 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
     {}
   );
   const [checking, setChecking] = useState<string | null>(null);
+  // Models read straight from the LM Studio host, with no gateway in between.
+  const [lmstudio, setLmstudio] = useState<LMStudioCatalog | null>(null);
+  const [lmstudioBusy, setLmstudioBusy] = useState(false);
+  const [ollama, setOllama] = useState<OllamaCatalog | null>(null);
+  const [ollamaBusy, setOllamaBusy] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -153,9 +160,41 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
       .catch(() => {});
   };
 
+  /**
+   * Ask the LM Studio host itself which models it serves.
+   *
+   * `refresh` bypasses the short server-side cache — the point of this panel is
+   * that after loading or unloading a model in LM Studio the list here matches
+   * reality on the next click, without a gateway or a catalog refresh.
+   */
+  const loadLmstudio = (refresh = false) => {
+    setLmstudioBusy(true);
+    api
+      .listLmstudioModels(refresh)
+      .then(setLmstudio)
+      .catch((err: Error) =>
+        setLmstudio({ base_url: "", reachable: false, error: err.message, models: [] })
+      )
+      .finally(() => setLmstudioBusy(false));
+  };
+
+  /** The same, for the second direct host. */
+  const loadOllama = (refresh = false) => {
+    setOllamaBusy(true);
+    api
+      .listOllamaModels(refresh)
+      .then(setOllama)
+      .catch((err: Error) =>
+        setOllama({ base_url: "", reachable: false, error: err.message, models: [] })
+      )
+      .finally(() => setOllamaBusy(false));
+  };
+
   useEffect(() => {
     loadEnv();
     loadModels();
+    loadLmstudio();
+    loadOllama();
     api.readRuntimeFacts().then(setFacts).catch(() => {});
   }, []);
 
@@ -325,6 +364,160 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
               : `Not reachable — ${testResult.detail}`}
           </p>
         ) : null}
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>LM Studio (direct, no gateway)</h2>
+          <button disabled={lmstudioBusy} onClick={() => loadLmstudio(true)} type="button">
+            {lmstudioBusy ? "Reading…" : "Refresh from LM Studio"}
+          </button>
+        </div>
+        <p className="muted">
+          Read straight from <code>LMSTUDIO_BASE_URL</code>, so these are the models the
+          server is really serving under the names it really registers — no gateway alias
+          can rename or reroute them. Loaded models appear in the run picker under “LM
+          Studio (direct, no gateway)”, and their context window is the one reported here,
+          not a guess. {lmstudio?.base_url ? <code>{lmstudio.base_url}</code> : null}
+        </p>
+        {lmstudio === null ? (
+          <p className="muted">Loading…</p>
+        ) : lmstudio.reachable === false ? (
+          <EmptyState
+            description={
+              (lmstudio.error ?? "LM Studio did not answer.") +
+              " Set LMSTUDIO_BASE_URL under “Local runtimes” to the server address " +
+              "including /v1 (for example http://192.168.0.223:1234/v1) and make sure " +
+              "LM Studio is serving on the network, not only on localhost."
+            }
+            title="LM Studio is not reachable."
+          />
+        ) : lmstudio.models.length === 0 ? (
+          <EmptyState
+            description="The server answered but serves no models. Load one in LM Studio, then press “Refresh from LM Studio”."
+            title="No models served."
+          />
+        ) : (
+          <div className="table table--models">
+            <div className="table-row table-head">
+              <span>Model</span>
+              <span>Loaded context</span>
+              <span>State</span>
+              <span>Details</span>
+            </div>
+            {lmstudio.models.map((model) => (
+              <div className="table-row" key={model.id}>
+                <span className="harness-name">
+                  <strong>{model.bare_id}</strong>
+                  <small>{model.id}</small>
+                </span>
+                <span>
+                  {model.loaded_context
+                    ? `${model.loaded_context.toLocaleString()} tokens`
+                    : "—"}
+                  {model.max_context ? (
+                    <small className="muted"> of {model.max_context.toLocaleString()} max</small>
+                  ) : null}
+                </span>
+                <span className="model-flags">
+                  <span className={model.loaded ? "badge ok" : "badge warn"}>
+                    {model.loaded ? "loaded" : model.state}
+                  </span>
+                  {model.loaded && (model.loaded_context ?? 0) < 32768 ? (
+                    <span
+                      className="badge error"
+                      title="The harness system prompt alone is ~13.7k tokens; runs need at least 32k."
+                    >
+                      window too small
+                    </span>
+                  ) : null}
+                </span>
+                <span className="muted">
+                  {[model.type, model.arch, model.quantization].filter(Boolean).join(" · ") ||
+                    "—"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Ollama (direct, no gateway)</h2>
+          <button disabled={ollamaBusy} onClick={() => loadOllama(true)} type="button">
+            {ollamaBusy ? "Reading…" : "Refresh from Ollama"}
+          </button>
+        </div>
+        <p className="muted">
+          Read straight from <code>OLLAMA_BASE_URL</code> — the second direct host. A
+          <em> running</em> model reports the context window the server is serving;
+          anything else gets the host's <code>OLLAMA_CONTEXT_LENGTH</code>, which
+          defaults to 4096 and cannot be read remotely. That default is below the
+          harness system prompt (~13.7k tokens), so raise it on the server before
+          running anything here. {ollama?.base_url ? <code>{ollama.base_url}</code> : null}
+        </p>
+        {ollama === null ? (
+          <p className="muted">Loading…</p>
+        ) : ollama.reachable === false ? (
+          <EmptyState
+            description={
+              (ollama.error ?? "Ollama did not answer.") +
+              " Set OLLAMA_BASE_URL under “Local runtimes” to the server address " +
+              "including /v1 (for example http://192.168.0.155:11434/v1). If Ollama " +
+              "runs on another machine, it must listen on the network — set " +
+              "OLLAMA_HOST=0.0.0.0 there."
+            }
+            title="Ollama is not reachable."
+          />
+        ) : ollama.models.length === 0 ? (
+          <EmptyState
+            description="The server answered but has no models. Pull one with `ollama pull`, then press “Refresh from Ollama”."
+            title="No models installed."
+          />
+        ) : (
+          <div className="table table--models">
+            <div className="table-row table-head">
+              <span>Model</span>
+              <span>Served context</span>
+              <span>State</span>
+              <span>Details</span>
+            </div>
+            {ollama.models.map((model) => (
+              <div className="table-row" key={model.id}>
+                <span className="harness-name">
+                  <strong>{model.bare_id}</strong>
+                  <small>{model.id}</small>
+                </span>
+                <span>
+                  {model.context_length
+                    ? `${model.context_length.toLocaleString()} tokens`
+                    : "—"}
+                </span>
+                <span className="model-flags">
+                  <span className={model.running ? "badge ok" : "badge"}>
+                    {model.running ? "running" : "not loaded"}
+                  </span>
+                  {model.running &&
+                  model.context_length !== null &&
+                  model.context_length < 32768 ? (
+                    <span
+                      className="badge error"
+                      title="The harness system prompt alone is ~13.7k tokens; runs need at least 32k. Raise OLLAMA_CONTEXT_LENGTH on the server."
+                    >
+                      window too small
+                    </span>
+                  ) : null}
+                </span>
+                <span className="muted">
+                  {[model.parameter_size, model.family, model.quantization]
+                    .filter(Boolean)
+                    .join(" · ") || "—"}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="panel">
@@ -522,6 +715,30 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
             <div>
               <span>Run timeout</span>
               <strong>{facts.run_timeout_seconds}s</strong>
+            </div>
+            <div>
+              <span>Stall timeout</span>
+              <strong>
+                {facts.run_stall_seconds
+                  ? `${facts.run_stall_seconds}s without output`
+                  : "disabled"}
+              </strong>
+            </div>
+            <div>
+              <span>Model wait</span>
+              <strong>
+                {facts.run_model_wait_seconds
+                  ? `${facts.run_model_wait_seconds}s awaiting a response`
+                  : "disabled"}
+              </strong>
+            </div>
+            <div>
+              <span>Endpoint errors</span>
+              <strong>
+                {facts.run_max_stream_errors
+                  ? `${facts.run_max_stream_errors} in a row`
+                  : "disabled"}
+              </strong>
             </div>
           </div>
         )}

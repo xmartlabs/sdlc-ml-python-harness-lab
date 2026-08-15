@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -137,11 +138,14 @@ def main(argv: list[str] | None = None) -> int:
         f"  Copied workspace/{args.run}/ -> data/runs/{args.run}/workspace/ ({file_count} files)"
     )
 
-    # 2. Diff: compare /dev/null to the saved workspace (shows all new files)
+    # 2. Diff the saved workspace against an empty directory (all files new).
+    # Not against /dev/null: git pairs the basename and fails with
+    # `Could not access '<dir>/null'`, silently producing an empty patch.
     diff_path = out_dir / "diff.patch"
-    result = _run_git(
-        ["git", "diff", "--no-index", "/dev/null", str(dest)], cwd=REPO_ROOT
-    )
+    with tempfile.TemporaryDirectory() as empty:
+        result = _run_git(
+            ["git", "diff", "--no-index", empty, str(dest)], cwd=REPO_ROOT
+        )
     # git diff --no-index exits 1 when there are diffs (expected when files differ)
     diff_path.write_text(result.stdout)
     diff_lines = result.stdout.count("\n")

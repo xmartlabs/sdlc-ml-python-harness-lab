@@ -15,7 +15,9 @@ import type {
   HarnessSkill,
   HealResult,
   HealthReport,
+  LMStudioCatalog,
   ModelRefreshResult,
+  OllamaCatalog,
   RuntimeFacts,
   LeaderboardRunRow,
   ModelCatalog,
@@ -108,7 +110,15 @@ export const api = {
     }),
   logout: () => request<{ authenticated: boolean }>("/api/auth/logout", { method: "POST" }),
   listHarnessSkills: () => request<HarnessSkill[]>("/api/harness/skills"),
-  listModels: () => request<ModelCatalog>("/api/models"),
+  // `refresh` drops the gateway and LM Studio caches before rebuilding the
+  // list — the two halves of the picker have different cache lifetimes, so a
+  // reload has to clear both or it looks like it only half-worked.
+  listModels: (refresh = false) =>
+    request<ModelCatalog>(`/api/models${refresh ? "?refresh=true" : ""}`),
+  listLmstudioModels: (refresh = false) =>
+    request<LMStudioCatalog>(`/api/lmstudio/models${refresh ? "?refresh=true" : ""}`),
+  listOllamaModels: (refresh = false) =>
+    request<OllamaCatalog>(`/api/ollama/models${refresh ? "?refresh=true" : ""}`),
   listModelCatalog: () => request<GatewayModelRecord[]>("/api/models/catalog"),
   refreshModelCatalog: () =>
     request<ModelRefreshResult>("/api/models/refresh", { method: "POST" }),

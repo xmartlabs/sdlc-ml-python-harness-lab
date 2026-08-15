@@ -171,6 +171,11 @@ exclude_lines = [
     "@(abc\\.)?abstractmethod",
 ]
 
+[tool.uv.workspace]
+members = [
+    "workspace/tetris-v1-K-037",
+]
+
 [dependency-groups]
 dev = [
     "bandit>=1.9.2",

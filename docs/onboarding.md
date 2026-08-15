@@ -148,6 +148,7 @@ runs themselves. Design details: [harness-adapters.md](harness-adapters.md).
 |---|---|---|
 | **codex** harness | Host mode (`make app-host`) — codex drives your host CLI's native OpenAI login; not wired in Docker yet | [runbook-claude-codex.md](runbook-claude-codex.md) |
 | **Self-hosted models** (LM Studio / Ollama) | Route them through your LiteLLM gateway (recommended: build profile + Langfuse visibility) or point `OLLAMA_BASE_URL` / `LMSTUDIO_BASE_URL` directly | [local-model-runtime-config.md](local-model-runtime-config.md) — start with "Priority order"; sizing: [task-sizing.md](task-sizing.md) |
+| **LM Studio / Ollama, no gateway** (fastest way to compare models) | Set `LMSTUDIO_BASE_URL` and/or `OLLAMA_BASE_URL` to those hosts **including `/v1`** on Settings → Local runtimes. The run picker's *Direct (local)* source then lists what each host is really serving, with its context window. Ollama also needs `OLLAMA_CONTEXT_LENGTH=32768` on the server — its 4096 default is too small for the harness | [local-model-runtime-config.md](local-model-runtime-config.md#the-direct-lanes-skip-the-gateway-when-you-are-iterating) |
 | **antigravity** | Human-driven flow (not executed by the runner) | [harness-adapters.md](harness-adapters.md) |
 
 ## 3. Point the lab at the governance template (once)

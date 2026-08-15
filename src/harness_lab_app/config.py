@@ -25,6 +25,45 @@ class Settings(BaseSettings):
     host_repo_root: str = ""
     docker_host_alias: str = "host.docker.internal"
     run_timeout_seconds: int = 7200
+    # Kill a run that has produced no output for this long, even though its
+    # total budget is nowhere near spent.
+    #
+    # The total timeout above only catches runs that are too *slow*; it cannot
+    # see a run that is *stuck*, and the two look identical from outside. Run
+    # tetris-v1-K-034 is the case in point: the agent shelled out to
+    # `timeout 2 python main.py`, the pygame process caught SIGTERM and never
+    # died, and because the surviving grandchild held the stdout pipe open
+    # opencode blocked forever reading it. Not one byte of output for 47
+    # minutes, state "running" in the UI, and nothing would have moved until
+    # the 2-hour ceiling. Ten minutes of total silence is already pathological
+    # for a harness that streams its own logs — provided the run is not simply
+    # waiting on the model, which is what the next setting is for. Set to 0 to
+    # disable.
+    run_stall_seconds: int = 600
+    # The same clock, for silence while a model request is in flight.
+    #
+    # It needs its own value because the two silences differ by orders of
+    # magnitude. A local model says nothing at all while it processes the
+    # prompt, and that is not idle time: measured against the box serving
+    # qwen3.6-35b-a3b, a trivial prompt answers in 0.2s and a 24k-token one
+    # takes 318s before the first token. One 600s clock for both therefore
+    # killed every 35B run at its first turn (K-040/049/050, all dead in the
+    # same place) while the 9B — whose worst gap was 76s — sailed through,
+    # which reads as "the big model broke" and is really "the threshold was
+    # below its prefill time". Forty minutes sits far above any prefill
+    # measured here and far below the two-hour total, and a genuinely dead
+    # endpoint is caught by the error count below long before it. 0 disables.
+    run_model_wait_seconds: int = 2400
+    # Give up after this many provider requests fail back-to-back with no
+    # progress in between.
+    #
+    # opencode retries a failing stream forever, so without this a run spends
+    # its whole budget on it: tetris-v1-K-029 logged 123 consecutive "Cannot
+    # connect to API" errors over 70 minutes and was then recorded as a
+    # two-hour timeout, which blames the model for a connectivity failure.
+    # Five in a row is already conclusive — the endpoint is down, the model id
+    # is wrong, or the prompt does not fit its context. Set to 0 to disable.
+    run_max_stream_errors: int = 5
     # In-platform validation sandboxes (web terminal / noVNC desktop per run).
     sandbox_image: str = "harness-lab-sandbox:latest"
     sandbox_idle_seconds: int = 3600

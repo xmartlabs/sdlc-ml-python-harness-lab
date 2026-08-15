@@ -53,6 +53,17 @@ export type RunRecord = {
   // Improvement-synthesis status, derived from data/runs/<id>/improvements.json:
   // "yes" = proposed changes, "no" = ran but proposed none, "pending" = not run.
   improvements?: "yes" | "no" | "pending";
+  // Verdict of the automated checks: false means the produced code was run and
+  // failed. null when they have not run or the case has no objective criterion.
+  // Without this a run that does not even start is indistinguishable in the
+  // list from one merely waiting for its manual score.
+  objective_passed?: boolean | null;
+  // Why it failed, classified server-side (see run_failures.py) so the list,
+  // the leaderboard and the API share one definition. "lab" means the run
+  // measured nothing — it is excluded from the leaderboard and should be
+  // retried rather than read as a result.
+  failure_kind?: "lab" | "stalled" | "timeout" | "agent" | null;
+  failure_label?: string | null;
 };
 
 export type RunEventRecord = {
@@ -281,6 +292,18 @@ export type ModelOption = {
   backend?: string;
   group?: string;
   group_rank?: number;
+  // The picker's two upper tiers. `source` is how the model is *reached* —
+  // through the LiteLLM gateway, or straight at a local host — which is a
+  // different axis from ModelCatalog.source (where the *list* came from).
+  // `provider` is the vendor: lmstudio, ollama, openai, anthropic, google,
+  // nvidia, other.
+  source?: "gateway" | "direct";
+  provider?: string;
+  provider_label?: string;
+  // Direct models only: what the host reports about the model right now.
+  loaded?: boolean;
+  loaded_context?: number | null;
+  max_context?: number | null;
 };
 
 /**
@@ -307,6 +330,58 @@ export type ModelCatalog = {
   source: string;
   models: ModelOption[];
   default_executor: string;
+  // Why a direct provider has no models (server off, URL unset), keyed by
+  // provider id. Per provider because one host can be up while the other is
+  // down — an empty group with no reason is unactionable.
+  direct_errors?: Record<string, string>;
+};
+
+/** One model as the LM Studio host reports it, with no gateway in between. */
+export type LMStudioModel = {
+  // Prefixed id the run form uses ("lmstudio/prism-ml/bonsai-27b").
+  id: string;
+  // The id LM Studio itself registers ("prism-ml/bonsai-27b").
+  bare_id: string;
+  type: string;
+  state: string;
+  loaded: boolean;
+  // The window it is serving right now; null unless it is loaded, because an
+  // unloaded model gets whatever default a JIT auto-load picks.
+  loaded_context: number | null;
+  max_context: number | null;
+  arch: string;
+  quantization: string;
+};
+
+export type LMStudioCatalog = {
+  base_url: string;
+  reachable: boolean;
+  error: string | null;
+  models: LMStudioModel[];
+};
+
+/** One model as the Ollama host reports it, with no gateway in between. */
+export type OllamaModel = {
+  // Prefixed id the run form uses ("ollama/qwen3:32b").
+  id: string;
+  // The id Ollama itself registers ("qwen3:32b").
+  bare_id: string;
+  state: string;
+  running: boolean;
+  // The window the server serves for this model; only knowable while it runs.
+  // Anything else gets the host's OLLAMA_CONTEXT_LENGTH, which defaults to
+  // 4096 — far below what a run needs, and not readable from here.
+  context_length: number | null;
+  parameter_size: string;
+  quantization: string;
+  family: string;
+};
+
+export type OllamaCatalog = {
+  base_url: string;
+  reachable: boolean;
+  error: string | null;
+  models: OllamaModel[];
 };
 
 export type EnvSettingItem = {
@@ -349,6 +424,14 @@ export type RuntimeFacts = {
   docker_host_alias: string;
   redis_url: string;
   run_timeout_seconds: number;
+  // Seconds of silence, with no model request in flight, after which a run is
+  // killed as stuck; 0 = disabled.
+  run_stall_seconds: number;
+  // The same silence while the model owes the run a first token. Much larger:
+  // a local model says nothing while it processes the prompt.
+  run_model_wait_seconds: number;
+  // Consecutive failed provider requests tolerated before giving up.
+  run_max_stream_errors: number;
 };
 
 export type GatewayModelRecord = {

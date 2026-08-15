@@ -9,6 +9,7 @@ from harness_lab_app.gateway_models import (
     DEFAULT_EXECUTOR_MODEL,
     build_model_catalog,
     classify_backend,
+    classify_provider,
     gateway_model_id,
     normalize_model_name,
     read_opencode_gateway_models,
@@ -46,6 +47,42 @@ def test_backend_classification_routes_ids_to_their_serving_group():
     # an unknown id must land in a group, never disappear from the menu.
     assert classify_backend("gpt-5.5")[1] == "cloud"
     assert classify_backend("sol-preview")[1] == "cloud"
+
+
+def test_provider_classification_splits_the_cloud_bucket_by_vendor():
+    """The vendor tier of the picker, which `classify_backend` cannot express.
+
+    Every hosted model is one "cloud" backend, so without this the second tier
+    would offer a single 30-entry heading — the wall of aliases the hierarchy
+    exists to break up.
+    """
+    assert classify_provider("gpt-5.5") == ("openai", "OpenAI")
+    assert classify_provider("claude-sonnet-5") == ("anthropic", "Claude")
+    assert classify_provider("bedrock-claude-fable-5") == ("anthropic", "Claude")
+    assert classify_provider("gemini-3.5-flash") == ("google", "Gemini")
+    assert classify_provider("nim-nemotron-super-120b") == ("nvidia", "NVIDIA")
+    assert classify_provider("lmstudio-qwen3.6-35b") == ("lmstudio", "LM Studio")
+    assert classify_provider("ollama-qwen3.6-35b") == ("ollama", "Ollama")
+    # Unmatched ids stay reachable rather than dropping out of the menu.
+    assert classify_provider("sol-preview") == ("other", "Other")
+    assert classify_provider("auto") == ("other", "Other")
+
+
+def test_every_catalog_option_carries_its_picker_tiers():
+    catalog = build_model_catalog(["gpt-5.5", "lmstudio-qwen3.6-35b-build"], OPENCODE)
+    tiers = {
+        m["id"]: (m["source"], m["provider"], m["provider_label"])
+        for m in catalog["models"]
+    }
+    # Everything from this catalog is reached through the gateway; the option
+    # `source` is a different axis from the catalog-level one ("gateway" here
+    # means "the live list", not "how the model is reached").
+    assert tiers["gateway/gpt-5.5"] == ("gateway", "openai", "OpenAI")
+    assert tiers["gateway/lmstudio-qwen3.6-35b-build"] == (
+        "gateway",
+        "lmstudio",
+        "LM Studio",
+    )
 
 
 def test_the_menu_puts_lmstudio_first_and_ollama_last():

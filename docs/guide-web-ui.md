@@ -54,12 +54,42 @@ Where you launch and track runs. The **New run** form:
   To test claude/codex, follow the
   [claude/codex runbook](runbook-claude-codex.md); design in
   [harness-adapters.md](harness-adapters.md).
-- **Planner / Executor model** — populated **live from your LiteLLM gateway**. Add
-  a model to the gateway, press **Refresh from gateway** on the Settings page, and
-  it appears here and becomes routable. A model the gateway serves but nothing can
-  route is labelled *not routable* — enable it in Settings first. No hand-edited
-  lists. See [ADR-0012](adr/0012-dynamic-gateway-model-list.md) and
-  [ADR-0016](adr/0016-opencode-config-overlay-for-model-routing.md).
+- **Planner / Executor model** — chosen in three tiers, **source → provider → model**:
+
+  1. **Source.** *AI Gateway* routes through LiteLLM (Langfuse traces, per-model
+     `max_tokens` caps, one name mapping in the middle). *Direct (local)* talks
+     straight to your own hosts — LM Studio at `LMSTUDIO_BASE_URL`, Ollama at
+     `OLLAMA_BASE_URL`. The distinction used to be invisible: a heading reading
+     "LM Studio (local)" actually held gateway aliases, so two very different
+     routes looked like one menu.
+  2. **Provider.** Chips with a count. Under the gateway: LM Studio, Ollama,
+     OpenAI, Claude, Gemini, NVIDIA, Other — split by id prefix, the only signal
+     LiteLLM's `/models` list carries; an id no rule matches lands in *Other*
+     rather than disappearing. Under Direct: one chip per host that answered.
+  3. **Model.** The list for that source and provider, launchable models first.
+     Under the select, one line states what the pick means for a run: a direct
+     model's loaded window, or *not routable* for a gateway model nothing can
+     reach (enable it on the Settings page first).
+
+  Gateway models come **live from LiteLLM** — add one to the gateway, press
+  **Refresh from gateway** in Settings, and it appears here and becomes routable,
+  no hand-edited lists. Direct models come from the host itself, carrying the two
+  facts that decide whether a run works: whether the model is loaded and with how
+  much context. Their ids are the ones the host registers, so no alias can rename
+  or reroute them in transit.
+
+  A source with nothing in it stays **clickable and says why** — "LM Studio at
+  http://…:1234 did not answer", per host, since one machine can be up while the
+  other is down. A disabled button with no reason is the one thing this picker
+  must not do.
+
+  **⟳ Reload** re-reads everything, dropping the server-side caches. The lists
+  have separate cache lifetimes, so this is the one action that guarantees a
+  model you just loaded is visible.
+
+  See [ADR-0012](adr/0012-dynamic-gateway-model-list.md),
+  [ADR-0016](adr/0016-opencode-config-overlay-for-model-routing.md) and
+  [the direct lane](local-model-runtime-config.md#the-direct-lanes-skip-the-gateway-when-you-are-iterating).
 - **Score mode** — web runs are `manual` (interactive is CLI-only). SWE-bench
   cases auto-score objectively regardless.
 - **Max steps**, **Resume**, **Dry run** — run controls.
@@ -86,6 +116,31 @@ It also shows, per run, its **harness** and **executor model** (parsed from the
 command, for fast visual scanning), state, score, **created** age, and an
 **Improvements** column.
 
+Beside the state, a **checks failed** / **checks passed** badge reports the
+automated verdict when one exists ([ADR-0021](adr/0021-benchmark-artifact-integrity.md)).
+It matters most for manual-score cases: a run whose produced code does not even
+start otherwise looks identical to one waiting for your review. No badge means
+the checks have not run or the case has no objective criterion.
+
+A failed run also says *why*, in one word, with the full reason on hover:
+
+| Badge | Meaning | Counts as an attempt? |
+|---|---|---|
+| **lab error** | Never started — runner image missing, Docker unreachable, bad config | No |
+| **worker restarted** | Killed mid-flight by a restart; retry resumes it | No |
+| **endpoint down** | `run_max_stream_errors` provider requests failed back-to-back | No |
+| **no response** | The provider accepted the request and answered nothing for `run_model_wait_seconds` | No |
+| **stalled** | Ran, then went quiet for `run_stall_seconds` with no model request in flight | Yes |
+| **timed out** | Exceeded `run_timeout_seconds` | Yes |
+| **agent error** | The agent's own output ended in an error | Yes |
+
+The first four carry a **no result** note and are **excluded from the leaderboard**:
+nothing about the model or the harness can be read from them, and counting them
+would inflate a condition's attempt total with runs the model was never given the
+chance to get wrong. Retry them instead. The classification lives in
+`src/harness_lab_app/run_failures.py`, so the list, the API and the leaderboard
+share one definition.
+
 - **Created** shows the run's age (`5h ago`); its tooltip carries the exact
   creation timestamp plus the last execution window — start → end and how long
   it took. Timestamps come from the API as naive UTC and are rendered in your
@@ -108,6 +163,50 @@ cycle — derived from `data/runs/<id>/improvements.json`:
 Create the run and you land on its **detail page**: live logs, artifacts, the
 validation & score panel, attribution, LLM audit, and in-platform sandboxes
 (web terminal / desktop) to poke at the produced workspace.
+
+#### When a run stops making progress
+
+Four budgets end a run that will not end itself, and they catch different things:
+
+- **Run timeout** (`run_timeout_seconds`, default 7200) — the total budget. It
+  catches a run that is too *slow*.
+- **Stall timeout** (`run_stall_seconds`, default 600) — time since the last line
+  of output **while no model request is in flight**. It catches a run that is
+  *stuck*, which the total budget structurally cannot: a hung run and a healthy one
+  look identical from outside, so silence needs its own clock.
+- **Model wait** (`run_model_wait_seconds`, default 2400) — the same silence, but
+  while the provider owes the run a first token. It gets its own, much larger
+  budget because a local model says nothing while it processes the prompt.
+- **Endpoint errors** (`run_max_stream_errors`, default 5) — consecutive failed
+  provider requests with no progress between them. opencode retries a failing
+  stream forever, so without this a run spends its entire budget on an endpoint it
+  cannot reach.
+
+A stalled run is marked **failed** with the reason and the last thing it said
+before going quiet — normally the tool call it is wedged inside. Run
+`tetris-v1-K-034` is why this exists: the agent shelled out to a pygame process
+that caught SIGTERM and never died, the surviving grandchild held the stdout pipe
+open, and opencode blocked reading it. Forty-seven minutes of nothing, state
+"running", and only the two-hour ceiling would ever have ended it.
+
+Which clock applies is read off opencode's own log, and getting that wrong is not
+academic: with one 600s clock for both silences, every 35B run died at its first
+turn while still processing the prompt and was filed as the agent wedging the
+harness ([ADR-0022](adr/0022-watchdog-splits-model-wait-from-agent-stall.md)). A
+model-side failure is never the agent's fault, so **no response** and **endpoint
+down** do not count as attempts, while **stalled** does.
+
+The tell, if you want to confirm by hand: `ls -l data/runs/<id>/opencode.log` (has
+it moved?) and `docker top harness-run-<id> -eo pid,etime,stat,pcpu,args` (a child
+whose elapsed time is absurd for what it is — a `timeout 2` alive for 47 minutes).
+Traffic on your model host is the other signal, and it separates the two silences:
+a stuck agent is blocked in a tool call, a prefilling model has your GPU pinned.
+
+The clocks are visible read-only under Settings → Runtime facts. Any of them can be
+disabled with `0` (`HARNESS_LAB_RUN_STALL_SECONDS`,
+`HARNESS_LAB_RUN_MODEL_WAIT_SECONDS`, `HARNESS_LAB_RUN_MAX_STREAM_ERRORS`); see
+[local-model-runtime-config.md](local-model-runtime-config.md) for how to pick
+`run_model_wait_seconds` for a slow model.
 
 ### Cases
 The catalog of tasks. Three ways to get realistic cases:
@@ -215,6 +314,14 @@ The backoffice: everything you would otherwise change with a shell on the server
   pair without saving it. Saved values take effect on the next request; no restart.
   Secrets are shown masked and are never sent back to the browser in the clear —
   leave a secret field blank to keep the stored value.
+- **LM Studio (direct, no gateway)** — what the host at `LMSTUDIO_BASE_URL` is
+  serving right now, read from its own API: model id, state, loaded context and
+  maximum window. Nothing is adopted or stored; **Refresh from LM Studio** re-reads
+  the server, so loading or ejecting a model there shows up here on the next click.
+  Set the URL under *Local runtimes*, including the `/v1` segment — a run using one
+  of these models is refused up front if the host is unreachable, the name is not
+  served, the model is not loaded, or its window is under 32k. That strictness is
+  deliberate: unlike the gateway probes there is no ambiguity to protect.
 - **Model catalog** — **Refresh from gateway** adopts whatever LiteLLM serves right
   now. Each model can be renamed, enabled/disabled, or made the default. *Enabled*
   models are routed to opencode through a config overlay at run launch, so a model
@@ -259,6 +366,11 @@ them in `ml-python-base` / `harness-engineering-guide` on your approval. See
 [improvement-cycle.md](improvement-cycle.md).
 
 ## Testing a new model — worked example
+
+Fastest path, no gateway: load the model in LM Studio with an explicit context
+length, press **Refresh from LM Studio** on the Settings page, and pick it from the
+**LM Studio (direct, no gateway)** group in the run form. Use the gateway path below
+when you want the run's traces and costs in Langfuse.
 
 1. Register the model in your LiteLLM gateway (your ai-gateway).
 2. Settings → **Refresh from gateway**. The model is adopted, enabled and routable

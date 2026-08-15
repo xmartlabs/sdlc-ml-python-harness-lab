@@ -25,9 +25,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from harness_lab_app.provenance import hash_text
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 # Written by gateway_catalog_service from the DB; read here. Both live under
 # data/app/, which is gitignored.
@@ -97,7 +100,81 @@ def overlay_hash(delta: dict[str, dict]) -> str | None:
     return hash_text(json.dumps(delta, sort_keys=True, separators=(",", ":")))
 
 
-def build_config(tracked_gateway: dict[str, Any], delta: dict[str, dict]) -> dict:
+def build_lmstudio_provider(model_ids: Iterable[str]) -> dict[str, Any]:
+    """A ``provider.lmstudio`` block routing ids straight at the LM Studio host.
+
+    No LiteLLM in the path, so no alias can rename the model on the way: the key
+    written here *is* the id sent to the server. ``baseURL`` stays an
+    ``{env:...}`` placeholder for the same reason the gateway block does — the
+    runner container resolves it after ``localhost`` has been rewritten to the
+    docker host alias.
+
+    LM Studio ignores the API key but the OpenAI-compatible client insists on
+    sending one, hence the constant.
+    """
+    from harness_lab_app.lmstudio_direct import bare_model_id
+
+    models = {
+        bare: {"name": f"{bare} (LM Studio direct)"}
+        for bare in sorted({bare_model_id(mid) for mid in model_ids if mid})
+    }
+    return {
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "LM Studio (direct)",
+        "options": {
+            "baseURL": "{env:LMSTUDIO_BASE_URL}",
+            "apiKey": "lm-studio",
+        },
+        "models": models,
+    }
+
+
+def build_ollama_provider(model_ids: Iterable[str]) -> dict[str, Any]:
+    """A ``provider.ollama`` block routing ids straight at the Ollama host.
+
+    Same contract as :func:`build_lmstudio_provider`. The provider name matches
+    the tracked ``provider.ollama`` entry in ``opencode.json``, so a curated
+    model and one picked live off the host route through one provider — opencode
+    merges the two model maps rather than choosing between them.
+    """
+    from harness_lab_app.ollama_direct import bare_model_id
+
+    models = {
+        bare: {"name": f"{bare} (Ollama direct)"}
+        for bare in sorted({bare_model_id(mid) for mid in model_ids if mid})
+    }
+    return {
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "Ollama (direct)",
+        "options": {
+            "baseURL": "{env:OLLAMA_BASE_URL}",
+            "apiKey": "ollama",
+        },
+        "models": models,
+    }
+
+
+def split_direct_models(model_ids: Iterable[str]) -> dict[str, list[str]]:
+    """Group direct model ids by the provider block that must declare them."""
+    from harness_lab_app.lmstudio_direct import LMSTUDIO_PREFIX
+    from harness_lab_app.ollama_direct import OLLAMA_PREFIX
+
+    grouped: dict[str, list[str]] = {"lmstudio": [], "ollama": []}
+    for model in model_ids:
+        if not model:
+            continue
+        if model.startswith(LMSTUDIO_PREFIX):
+            grouped["lmstudio"].append(model)
+        elif model.startswith(OLLAMA_PREFIX):
+            grouped["ollama"].append(model)
+    return grouped
+
+
+def build_config(
+    tracked_gateway: dict[str, Any],
+    delta: dict[str, dict],
+    direct_models: Iterable[str] = (),
+) -> dict:
     """The full opencode config document the overlay contributes.
 
     The whole ``provider.gateway`` block is reproduced — ``npm``, ``name`` and
@@ -105,27 +182,43 @@ def build_config(tracked_gateway: dict[str, Any], delta: dict[str, dict]) -> dic
     deeply, but reproducing the block means the overlay is still correct if a
     given version replaces at the provider level instead. The ``{env:...}``
     placeholders are copied verbatim; opencode resolves them itself.
+
+    ``direct_models`` are prefixed ids (``lmstudio/…``, ``ollama/…``) and add
+    the matching direct provider blocks alongside the gateway one. Only the
+    models a run actually selected: a host may serve thirty and a config listing
+    all of them would change on every load or eject, churning the condition hash
+    for runs that are otherwise identical.
     """
     gateway = {key: value for key, value in tracked_gateway.items() if key != "models"}
     merged = dict(tracked_gateway.get("models") or {})
     merged.update(delta)
     gateway["models"] = merged
-    return {"provider": {"gateway": gateway}}
+    providers: dict[str, Any] = {"gateway": gateway}
+    grouped = split_direct_models(direct_models)
+    if grouped["lmstudio"]:
+        providers["lmstudio"] = build_lmstudio_provider(grouped["lmstudio"])
+    if grouped["ollama"]:
+        providers["ollama"] = build_ollama_provider(grouped["ollama"])
+    return {"provider": providers}
 
 
-def build_overlay(repo_root: Path) -> tuple[dict[str, str], str | None]:
+def build_overlay(
+    repo_root: Path, direct_models: Iterable[str] = ()
+) -> tuple[dict[str, str], str | None]:
     """Materialize the overlay and return ``(env_vars, overlay_hash)``.
 
-    Returns ``({}, None)`` when the catalog adds nothing to the tracked map, so
-    a lab that never touches the Models page runs byte-identically to before.
+    Returns ``({}, None)`` when neither the catalog nor a direct model adds
+    anything, so a lab that never touches the Models page runs byte-identically
+    to before.
     """
     tracked_gateway = read_tracked_gateway(repo_root)
     tracked_models = tracked_gateway.get("models") or {}
     delta = compute_delta(tracked_models, read_catalog_models(repo_root))
-    if not delta:
+    direct = sorted({mid for mid in direct_models if mid})
+    if not delta and not direct:
         return {}, None
 
-    config = build_config(tracked_gateway, delta)
+    config = build_config(tracked_gateway, delta, direct)
     content = json.dumps(config, sort_keys=True, separators=(",", ":"))
 
     path = repo_root / EFFECTIVE_CONFIG_FILE
@@ -134,7 +227,10 @@ def build_overlay(repo_root: Path) -> tuple[dict[str, str], str | None]:
 
     return (
         {ENV_CONFIG_PATH: str(path), ENV_CONFIG_CONTENT: content},
-        overlay_hash(delta),
+        # Direct routing is part of the experimental condition: the same case
+        # run through the gateway and run against the host are not one arm. The
+        # prefixed id is the key, so the two lanes never collide in the hash.
+        overlay_hash({**delta, **{mid: {} for mid in direct}}),
     )
 
 

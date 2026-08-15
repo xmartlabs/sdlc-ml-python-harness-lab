@@ -4,6 +4,7 @@ import contextlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import (
     Depends,
@@ -16,7 +17,7 @@ from fastapi import (
     UploadFile,
 )
 from pydantic import BaseModel
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from harness_lab_app.artifact_service import ArtifactService
 from harness_lab_app.attribution_service import AttributionService
@@ -84,6 +85,9 @@ from harness_lab_app.swebench_pro_client import (
 )
 from harness_lab_app.validation_service import ValidationService
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 
 class LoginRequest(BaseModel):
     """Single-user login: there is no username, only the admin password."""
@@ -136,6 +140,21 @@ def _gateway_endpoint() -> tuple[str, str]:
     if base and Path("/.dockerenv").exists():
         base = rewrite_localhost(base, get_settings().docker_host_alias)
     return base, token
+
+
+def _direct_endpoint(env_key: str) -> str:
+    """A direct host's base URL as reachable *from this process*.
+
+    Same container caveat as :func:`_gateway_endpoint`: a ``localhost`` URL
+    written on the host means the container itself once the API runs in Docker,
+    so it is rewritten to the docker host alias. Empty when unset.
+    """
+    from harness_lab_app.executors import rewrite_localhost
+
+    base = read_env_file_value(env_key) or ""
+    if base and Path("/.dockerenv").exists():
+        base = rewrite_localhost(base, get_settings().docker_host_alias)
+    return base
 
 
 def _prepare_gateway_env() -> None:
@@ -291,17 +310,29 @@ def create_app() -> FastAPI:
         return doc
 
     @app.get("/api/models")
-    def list_models(session: Session = Depends(get_session)):
+    def list_models(refresh: bool = False, session: Session = Depends(get_session)):
         # Live model discovery from LiteLLM so the run form stays in sync with
         # the gateway (the single place the user updates). Falls back to the
         # opencode.json routing map when the gateway is unreachable.
+        #
+        # ``refresh`` drops both TTL caches first. It backs the run form's
+        # Reload button: the two lists come from different servers with
+        # different cache lifetimes, and having to guess which one is stale is
+        # exactly the confusion the button exists to remove.
         from harness_lab_app.gateway_models import (
             build_model_catalog,
+            clear_model_cache,
             fetch_gateway_routing_cached,
             list_gateway_models_cached,
             read_opencode_gateway_models,
         )
+        from harness_lab_app.lmstudio_direct import clear_lmstudio_cache
+        from harness_lab_app.ollama_direct import clear_ollama_cache
 
+        if refresh:
+            clear_model_cache()
+            clear_lmstudio_cache()
+            clear_ollama_cache()
         settings = get_settings()
         base, token = _gateway_endpoint()
         live = list_gateway_models_cached(base, token)
@@ -311,9 +342,146 @@ def create_app() -> FastAPI:
         # they are one experimental arm, and listing both only makes the picker
         # harder to read.
         routing = fetch_gateway_routing_cached(base, token)
-        return build_model_catalog(
+        catalog = build_model_catalog(
             live, opencode_models, overlay=overlay, routing=routing
         )
+        # Direct models lead the menu: they are the only entries whose name is
+        # verified against the server that will serve them.
+        direct, direct_errors = _direct_options()
+        catalog["models"] = direct + catalog["models"]
+        catalog["direct_errors"] = direct_errors
+        return catalog
+
+    def _direct_options() -> tuple[list[dict], dict[str, str]]:
+        """Picker options for the direct sources, and why each empty one is empty.
+
+        The reasons travel with the list because an empty group is otherwise
+        indistinguishable from "no models installed", and the fix (start the
+        server, fix the URL) depends entirely on which one it was — per host,
+        since one may be up while the other is not.
+        """
+        from harness_lab_app.direct_hosts import DirectHostUnreachable
+        from harness_lab_app.lmstudio_direct import (
+            build_direct_options as build_lmstudio_options,
+            list_lmstudio_models_cached,
+        )
+        from harness_lab_app.ollama_direct import (
+            build_direct_options as build_ollama_options,
+            list_ollama_models_cached,
+        )
+
+        options: list[dict] = []
+        errors: dict[str, str] = {}
+
+        def collect(provider: str, env_key: str, read: Callable[[str], list[dict]]):
+            """Add one host's options, or record why it contributed none."""
+            base = _direct_endpoint(env_key)
+            if not base:
+                errors[provider] = f"{env_key} is not set."
+                return
+            try:
+                options.extend(read(base))
+            except DirectHostUnreachable as exc:
+                errors[provider] = str(exc)
+
+        collect(
+            "lmstudio",
+            "LMSTUDIO_BASE_URL",
+            lambda base: build_lmstudio_options(list_lmstudio_models_cached(base)),
+        )
+        collect(
+            "ollama",
+            "OLLAMA_BASE_URL",
+            lambda base: build_ollama_options(list_ollama_models_cached(base)),
+        )
+        return options, errors
+
+    @app.get("/api/lmstudio/models")
+    def list_lmstudio(refresh: bool = False):
+        """What the LM Studio host is serving right now, verbatim.
+
+        No catalog, no database, no alias map: the Settings page renders this
+        list as-is so what you see is what a run will address.
+        """
+        from harness_lab_app.lmstudio_direct import (
+            LMStudioUnreachable,
+            clear_lmstudio_cache,
+            list_lmstudio_models_cached,
+            lmstudio_root,
+        )
+
+        base = _direct_endpoint("LMSTUDIO_BASE_URL")
+        if not base:
+            return {
+                "base_url": "",
+                "reachable": False,
+                "error": (
+                    "LMSTUDIO_BASE_URL is not set — point it at your LM Studio "
+                    "server (for example http://192.168.0.223:1234/v1) below."
+                ),
+                "models": [],
+            }
+        if refresh:
+            clear_lmstudio_cache()
+        try:
+            models = list_lmstudio_models_cached(base)
+        except LMStudioUnreachable as exc:
+            return {
+                "base_url": lmstudio_root(base),
+                "reachable": False,
+                "error": str(exc),
+                "models": [],
+            }
+        return {
+            "base_url": lmstudio_root(base),
+            "reachable": True,
+            "error": None,
+            "models": [model.as_dict() for model in models],
+        }
+
+    @app.get("/api/ollama/models")
+    def list_ollama(refresh: bool = False):
+        """What the Ollama host has right now, verbatim — the sibling endpoint.
+
+        ``running`` models report the context window the server is serving;
+        everything else runs at the host's ``OLLAMA_CONTEXT_LENGTH``, which this
+        cannot read remotely and which defaults far below what a run needs.
+        """
+        from harness_lab_app.direct_hosts import DirectHostUnreachable
+        from harness_lab_app.ollama_direct import (
+            clear_ollama_cache,
+            list_ollama_models_cached,
+            ollama_root,
+        )
+
+        base = _direct_endpoint("OLLAMA_BASE_URL")
+        if not base:
+            return {
+                "base_url": "",
+                "reachable": False,
+                "error": (
+                    "OLLAMA_BASE_URL is not set — point it at your Ollama server "
+                    "(for example http://192.168.0.155:11434/v1) below."
+                ),
+                "models": [],
+            }
+        if refresh:
+            clear_ollama_cache()
+        try:
+            models = list_ollama_models_cached(base)
+        except DirectHostUnreachable as exc:
+            return {
+                "base_url": ollama_root(base),
+                "reachable": False,
+                "error": str(exc),
+                "models": [],
+            }
+        return {
+            "base_url": ollama_root(base),
+            "reachable": True,
+            "error": None,
+            "models": [model.as_dict() for model in models],
+        }
 
     @app.get("/api/models/catalog")
     def list_model_catalog(session: Session = Depends(get_session)):
@@ -323,7 +491,11 @@ def create_app() -> FastAPI:
         the Settings table draw the same LM Studio → Cloud → Ollama sections the
         run picker uses, without re-deriving the grouping in the browser.
         """
-        from harness_lab_app.gateway_models import classify_backend
+        from harness_lab_app.gateway_models import (
+            SOURCE_GATEWAY,
+            classify_backend,
+            classify_provider,
+        )
 
         rows = GatewayCatalogService(session).list_models()
         return [
@@ -332,9 +504,13 @@ def create_app() -> FastAPI:
                 "backend": backend,
                 "group": group_label,
                 "group_rank": rank,
+                "source": SOURCE_GATEWAY,
+                "provider": provider,
+                "provider_label": provider_label,
             }
             for row in rows
             for rank, backend, group_label in (classify_backend(row.model_id),)
+            for provider, provider_label in (classify_provider(row.model_id),)
         ]
 
     @app.post("/api/models/refresh")
@@ -344,6 +520,7 @@ def create_app() -> FastAPI:
             clear_model_cache,
             list_gateway_models,
         )
+        from harness_lab_app.lmstudio_direct import clear_lmstudio_cache
 
         base, token = _gateway_endpoint()
         if not base or not token:
@@ -355,6 +532,9 @@ def create_app() -> FastAPI:
                 ),
             )
         clear_model_cache()
+        # The direct list is a second half of the same menu, on a second cache.
+        # Leaving it behind is what made "Refresh" look like it half-worked.
+        clear_lmstudio_cache()
         live = list_gateway_models(base_url=base, token=token)
         result = GatewayCatalogService(session).refresh(live)
         if not result["gateway_reachable"]:
@@ -752,11 +932,34 @@ def create_app() -> FastAPI:
 
     @app.get("/api/runs")
     def list_runs(session: Session = Depends(get_session)):
+        """Runs, each carrying the objective verdict the lab already computed.
+
+        Without it a run whose produced code does not even start looks exactly
+        like one waiting to be reviewed: both sit in ``awaiting_manual_score``
+        with an empty score. The smoke check has already answered the question
+        — runs K-035/K-037/K-039 failed it with exit 124, 1 and 2 — so the list
+        shows the answer instead of asking someone to open each run to find it.
+        """
+        from harness_lab_app.models import Validation
+        from harness_lab_app.run_failures import classify_failure, failure_label
+
         runs_dir = get_settings().data_runs_dir
+        verdicts = {
+            row.run_id: (row.objective or {}).get("passed")
+            for row in session.exec(select(Validation)).all()
+        }
         return [
             {
                 **run.model_dump(),
                 "improvements": _improvements_status(runs_dir, run.run_id),
+                # True/False from the automated checks; None when they have not
+                # run or the case has no objective criterion.
+                "objective_passed": verdicts.get(run.run_id),
+                # What kind of failure this was, so the list can separate "the
+                # lab broke" from "the agent did badly" without re-parsing the
+                # reason string in the browser.
+                "failure_kind": classify_failure(run.failure_reason),
+                "failure_label": failure_label(run.failure_reason),
             }
             for run in RunService(session).list_runs()
         ]

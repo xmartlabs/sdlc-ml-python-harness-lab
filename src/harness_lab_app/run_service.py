@@ -166,7 +166,11 @@ class RunService:
                 "model before creating the run."
             )
         executor = (config.executor_model or "").strip()
-        if executor.startswith("gateway/"):
+        if executor.startswith("lmstudio/"):
+            self._check_lmstudio_direct(executor)
+        elif executor.startswith("ollama/"):
+            self._check_ollama_direct(executor)
+        elif executor.startswith("gateway/"):
             self._check_routable(executor)
             token = read_env_file_value("GATEWAY_TOKEN")
             if token in _PLACEHOLDER_TOKENS:
@@ -268,6 +272,161 @@ class RunService:
             "a JIT auto-load uses the model's small default — set it explicitly) "
             "and retry."
         )
+
+    def _check_lmstudio_direct(self, executor: str) -> None:
+        """Validate an ``lmstudio/<id>`` executor against the host, in one GET.
+
+        Every question the gateway path answers by inference — does this name
+        exist, is a model actually behind it, how big is its window — LM Studio
+        answers directly in ``/api/v0/models``. So this check is allowed to be
+        strict where the gateway ones fail open: there is no ambiguity left to
+        protect, and the ambiguity is precisely what let run tetris-v1-K-031
+        launch green against a model name the server rejects.
+
+        Skipped under ``HARNESS_LAB_DISABLE_GATEWAY_PROBE`` alongside the other
+        network checks, so the test suite never reaches for a host.
+        """
+        if os.environ.get("HARNESS_LAB_DISABLE_GATEWAY_PROBE"):
+            return
+        from harness_lab_app.gateway_models import MIN_CONTEXT_TOKENS
+        from harness_lab_app.lmstudio_direct import (
+            LMStudioUnreachable,
+            bare_model_id,
+            find_model,
+            list_lmstudio_models_cached,
+            lmstudio_root,
+        )
+
+        base = read_env_file_value("LMSTUDIO_BASE_URL") or ""
+        if not base:
+            raise RunPreflightError(
+                "LMSTUDIO_BASE_URL is not set, so there is no server to send "
+                "this model to. Set it on the Settings page (for example "
+                "http://192.168.0.223:1234/v1) and retry."
+            )
+        if not base.rstrip("/").endswith("/v1"):
+            # opencode passes this straight to an OpenAI-compatible client,
+            # which appends /chat/completions to it. Without the /v1 segment
+            # every request 404s at run time, and the model list this preflight
+            # reads would still look perfect (it uses the native API beside it).
+            raise RunPreflightError(
+                f"LMSTUDIO_BASE_URL ('{base}') must end in /v1 — the harness "
+                "talks to LM Studio through its OpenAI-compatible endpoint. "
+                f"Set it to {base.rstrip('/')}/v1 on the Settings page."
+            )
+        if Path("/.dockerenv").exists():
+            from harness_lab_app.executors import rewrite_localhost
+
+            base = rewrite_localhost(base, get_settings().docker_host_alias)
+        try:
+            models = list_lmstudio_models_cached(base)
+        except LMStudioUnreachable as exc:
+            raise RunPreflightError(
+                f"LM Studio at {lmstudio_root(base)} did not answer ({exc}). "
+                "Start the server (Developer tab → Status: Running) or fix "
+                "LMSTUDIO_BASE_URL on the Settings page."
+            ) from exc
+
+        bare = bare_model_id(executor)
+        model = find_model(models, bare)
+        if model is None:
+            known = ", ".join(m.id for m in models[:8]) or "none"
+            raise RunPreflightError(
+                f"LM Studio does not know a model called '{bare}'. It currently "
+                f"serves: {known}. Press 'Refresh models' — this list is read "
+                "straight off the server, so a name in it always routes."
+            )
+        if not model.loaded:
+            if model.state == "unknown":
+                # Pre-/api/v0 build: the id is real but state is unknowable.
+                # Blocking here would ground a working setup on missing
+                # metadata, so this is the one direct case that falls through.
+                return
+            raise RunPreflightError(
+                f"Model '{bare}' is not loaded in LM Studio. Load it there "
+                "first and set its context length explicitly — a JIT auto-load "
+                "uses the model's small default window (that is how run "
+                "tetris-v1-K-020 lost 2.5 hours to an 8k context)."
+            )
+        window = model.loaded_context
+        if window is not None and window < MIN_CONTEXT_TOKENS:
+            raise RunPreflightError(
+                f"Model '{bare}' is loaded with a {window}-token context, below "
+                f"the {MIN_CONTEXT_TOKENS} this harness needs — the system "
+                "prompt alone is ~13.7k tokens. Eject it, reload with a larger "
+                "Context Length in LM Studio, and retry."
+            )
+
+    def _check_ollama_direct(self, executor: str) -> None:
+        """Validate an ``ollama/<id>`` executor against the host it addresses.
+
+        Strict about everything the host can answer — is it configured, is it
+        up, does it have this model — and deliberately *not* strict about a cold
+        model, which is where Ollama differs from LM Studio. LM Studio JIT-loads
+        with the model's own default window, unknowable in advance; Ollama
+        applies its server-wide ``OLLAMA_CONTEXT_LENGTH`` to whatever it loads.
+        A cold Ollama model is therefore a warning in the picker label, not a
+        block here, while a *running* one whose reported window is too small is
+        refused exactly like an LM Studio model.
+        """
+        if os.environ.get("HARNESS_LAB_DISABLE_GATEWAY_PROBE"):
+            return
+        from harness_lab_app.direct_hosts import DirectHostUnreachable
+        from harness_lab_app.gateway_models import MIN_CONTEXT_TOKENS
+        from harness_lab_app.ollama_direct import (
+            bare_model_id,
+            find_model,
+            list_ollama_models_cached,
+            ollama_root,
+        )
+
+        base = read_env_file_value("OLLAMA_BASE_URL") or ""
+        if not base:
+            raise RunPreflightError(
+                "OLLAMA_BASE_URL is not set, so there is no server to send this "
+                "model to. Set it on the Settings page (for example "
+                "http://192.168.0.155:11434/v1) and retry."
+            )
+        if not base.rstrip("/").endswith("/v1"):
+            # Same trap as LM Studio: the native API this preflight reads lives
+            # beside the OpenAI-compatible one, so the model list would look
+            # perfect while every completion 404s at run time.
+            raise RunPreflightError(
+                f"OLLAMA_BASE_URL ('{base}') must end in /v1 — the harness talks "
+                "to Ollama through its OpenAI-compatible endpoint. Set it to "
+                f"{base.rstrip('/')}/v1 on the Settings page."
+            )
+        if Path("/.dockerenv").exists():
+            from harness_lab_app.executors import rewrite_localhost
+
+            base = rewrite_localhost(base, get_settings().docker_host_alias)
+        try:
+            models = list_ollama_models_cached(base)
+        except DirectHostUnreachable as exc:
+            raise RunPreflightError(
+                f"Ollama at {ollama_root(base)} did not answer ({exc}). Start it "
+                "(or fix OLLAMA_BASE_URL on the Settings page) and retry."
+            ) from exc
+
+        bare = bare_model_id(executor)
+        model = find_model(models, bare)
+        if model is None:
+            known = ", ".join(m.id for m in models[:8]) or "none"
+            raise RunPreflightError(
+                f"Ollama does not have a model called '{bare}'. It currently "
+                f"has: {known}. Pull it there, then press Reload — this list is "
+                "read straight off the server, so a name in it always routes."
+            )
+        window = model.context_length
+        if model.running and window is not None and window < MIN_CONTEXT_TOKENS:
+            raise RunPreflightError(
+                f"Model '{bare}' is running with a {window}-token context, below "
+                f"the {MIN_CONTEXT_TOKENS} this harness needs — the system "
+                "prompt alone is ~13.7k tokens. Ollama takes this from the "
+                "server-wide OLLAMA_CONTEXT_LENGTH, so raise it there (for "
+                f"example OLLAMA_CONTEXT_LENGTH={MIN_CONTEXT_TOKENS}), restart "
+                "Ollama, and retry."
+            )
 
     def _check_routable(self, executor: str) -> None:
         """Reject a ``gateway/`` model opencode has no provider entry for.

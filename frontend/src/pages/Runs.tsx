@@ -1,10 +1,11 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "../api";
 import { caseOptionLabel } from "../caseLabels";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
+import { ModelPicker } from "../components/ModelPicker";
 import { RunTable } from "../components/RunTable";
 import type {
   CaseRecord,
@@ -46,61 +47,6 @@ const HARNESS_NATIVE_MODELS: Record<string, ModelOption[]> = {
   codex: [{ id: "codex-mini-latest", label: "Codex Mini (latest)" }]
 };
 
-// The model menu for a harness: its native CLI models, else the live gateway list.
-function modelsForHarness(harness: string, gatewayModels: ModelOption[]): ModelOption[] {
-  return HARNESS_NATIVE_MODELS[harness] ?? gatewayModels;
-}
-
-// Ensure the currently-selected model always renders as an option even if the
-// live gateway list does not contain it (e.g. a preset value, or the API is
-// offline in preview mode), so the select never shows a blank selection.
-function withCurrent(options: ModelOption[], current: string): ModelOption[] {
-  if (!current || options.some((option) => option.id === current)) {
-    return options;
-  }
-  return [...options, { id: current, label: current }];
-}
-
-// Partition the menu into its backend headings, preserving the order the API
-// already sorted them into (LM Studio → Cloud → Ollama). Consecutive runs of the
-// same group become one <optgroup>; options with no group (the native CLI menus)
-// collapse into a single unlabelled bucket so the select still renders flat.
-function groupOptions(options: ModelOption[]): { group?: string; items: ModelOption[] }[] {
-  const sections: { group?: string; items: ModelOption[] }[] = [];
-  for (const option of options) {
-    const last = sections[sections.length - 1];
-    if (last && last.group === option.group) {
-      last.items.push(option);
-    } else {
-      sections.push({ group: option.group, items: [option] });
-    }
-  }
-  return sections;
-}
-
-// One model <select> body. Rendered for both planner and executor so the two
-// menus can never drift apart in ordering or labelling.
-function ModelOptions({ options }: { options: ModelOption[] }) {
-  return (
-    <>
-      {groupOptions(options).map((section, index) => {
-        const items = section.items.map((item) => (
-          <option key={item.id} value={item.id}>
-            {item.routable === false ? `${item.label} — not routable` : item.label}
-          </option>
-        ));
-        return section.group ? (
-          <optgroup key={section.group} label={section.group}>
-            {items}
-          </optgroup>
-        ) : (
-          <Fragment key={`ungrouped-${index}`}>{items}</Fragment>
-        );
-      })}
-    </>
-  );
-}
-
 export function Runs({
   cases,
   onCancelRun,
@@ -119,6 +65,9 @@ export function Runs({
   const [executorModel, setExecutorModel] = useState(FALLBACK_EXECUTOR_MODEL);
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
   const [modelSource, setModelSource] = useState<string | null>(null);
+  // Why each direct host has no models, keyed by provider id. One may be up
+  // while the other is down, so this is per provider rather than one flag.
+  const [directErrors, setDirectErrors] = useState<Record<string, string>>({});
   // Remember the gateway default so switching back to opencode restores it.
   const [gatewayDefault, setGatewayDefault] = useState(FALLBACK_EXECUTOR_MODEL);
   const scoreMode = "manual";
@@ -135,6 +84,28 @@ export function Runs({
   const [stagedSkills, setStagedSkills] = useState<StagedSkillRecord[]>([]);
   const [extraSkills, setExtraSkills] = useState<Set<string>>(new Set());
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [reloadingModels, setReloadingModels] = useState(false);
+
+  /**
+   * Re-read the model menu, optionally dropping the server-side caches.
+   *
+   * The gateway list and the direct LM Studio list live behind separate caches
+   * with different lifetimes, so a model loaded a moment ago can be missing
+   * from one half of the menu. `refresh` clears both — that is the whole job of
+   * the Reload button.
+   */
+  const loadModels = (refresh = false) => {
+    setReloadingModels(refresh);
+    return api
+      .listModels(refresh)
+      .then((catalog) => {
+        setModelOptions(catalog.models);
+        setModelSource(catalog.source);
+        setDirectErrors(catalog.direct_errors ?? {});
+        return catalog;
+      })
+      .finally(() => setReloadingModels(false));
+  };
 
   useEffect(() => {
     let active = true;
@@ -158,14 +129,11 @@ export function Runs({
       .catch(() => {
         // No staged skills endpoint / API offline — group stays hidden.
       });
-    api
-      .listModels()
+    loadModels()
       .then((catalog) => {
         if (!active) {
           return;
         }
-        setModelOptions(catalog.models);
-        setModelSource(catalog.source);
         if (catalog.default_executor) {
           setGatewayDefault(catalog.default_executor);
           // Adopt the gateway's default only while the form is untouched and the
@@ -184,15 +152,6 @@ export function Runs({
       active = false;
     };
   }, []);
-
-  const plannerOptions = useMemo(
-    () => withCurrent(modelOptions, plannerModel),
-    [modelOptions, plannerModel]
-  );
-  const executorOptions = useMemo(
-    () => withCurrent(modelsForHarness(harness, modelOptions), executorModel),
-    [harness, modelOptions, executorModel]
-  );
 
   // Switching harness swaps the executor menu (native CLI models vs gateway), so
   // reset the executor to that harness's default to avoid a stale/invalid pick.
@@ -480,28 +439,34 @@ export function Runs({
               </small>
             ) : null}
           </label>
-          <label>
-            <span>Planner model</span>
-            <select value={plannerModel} onChange={(event) => setPlannerModel(event.target.value)}>
-              <option value="">None</option>
-              <ModelOptions options={plannerOptions} />
-            </select>
-          </label>
-          <label>
-            <span>Executor model</span>
-            <select value={executorModel} onChange={(event) => setExecutorModel(event.target.value)}>
-              <ModelOptions options={executorOptions} />
-            </select>
+          <ModelPicker
+            allowNone
+            label="Planner model"
+            directErrors={directErrors}
+            onChange={setPlannerModel}
+            options={modelOptions}
+            value={plannerModel}
+          />
+          <ModelPicker
+            label="Executor model"
+            directErrors={directErrors}
+            nativeOptions={HARNESS_NATIVE_MODELS[harness]}
+            onChange={setExecutorModel}
+            onReload={() => void loadModels(true)}
+            options={modelOptions}
+            reloading={reloadingModels}
+            value={executorModel}
+          >
             <small className="muted">
               {HARNESS_NATIVE_MODELS[harness]
                 ? `Native ${harness} CLI models (passed to --model). Edit the list in Runs.tsx as versions ship.`
                 : modelSource === "opencode.json"
                   ? "Gateway unreachable — showing opencode.json models."
                   : modelSource === "gateway"
-                    ? "Live from your gateway (LiteLLM). A model marked “not routable” needs enabling on the Settings page first."
-                    : "Loading models from the gateway…"}
+                    ? "AI Gateway models are routed through LiteLLM; Direct models are read off your LM Studio host, where an alias cannot rename them in transit."
+                    : "Loading models…"}
             </small>
-          </label>
+          </ModelPicker>
           <label>
             <span>Score mode</span>
             <select value={scoreMode} disabled>
