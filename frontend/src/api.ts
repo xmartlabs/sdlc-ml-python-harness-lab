@@ -25,6 +25,8 @@ import type {
   GroupIssueResult,
   ProposalIssue,
   RunConfigPayload,
+  RunBatchPayload,
+  RunBatchResult,
   RunCreatePayload,
   RunValidationResult,
   SaveImprovementsResult,
@@ -261,6 +263,13 @@ export const api = {
     }),
   createRun: (payload: RunCreatePayload) =>
     request<RunRecord>("/api/runs", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  // All-or-nothing: the server validates every combination before creating any,
+  // so a rejection here means nothing was queued.
+  createRunBatch: (payload: RunBatchPayload) =>
+    request<RunBatchResult>("/api/runs/batch", {
       method: "POST",
       body: JSON.stringify(payload)
     }),

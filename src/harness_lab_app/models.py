@@ -6,6 +6,14 @@ from sqlalchemy.types import JSON
 from sqlmodel import Field, SQLModel
 
 
+def _default_template_repository() -> str:
+    # Imported lazily inside the factory so the model module stays importable
+    # without settings/.env present (schema generation, offline tooling).
+    from harness_lab_app.config import get_settings
+
+    return get_settings().template_repository
+
+
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -106,6 +114,10 @@ class Run(SQLModel, table=True):
     score: int | None = None
     interventions: int | None = None
     notes: str = ""
+    # Groups the runs created by one POST /api/runs/batch. Null for a run
+    # created singly, and for every run that predates batching — the column is
+    # a grouping label, never a required key.
+    batch_id: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -313,7 +325,11 @@ class GroupIssue(SQLModel, table=True):
     """A combined sanitized issue generated from N selected SavedProposals."""
 
     id: int | None = Field(default=None, primary_key=True)
-    repository: str = "marcosdh1987/ml-python-base"
+    # Resolved per instance, not at import: retargeting the template repo must
+    # apply to new issues without rewriting the slug rows already carry.
+    repository: str = Field(
+        default_factory=lambda: _default_template_repository(),
+    )
     title: str = ""
     markdown: str = ""
     form_json: dict = Field(default_factory=dict, sa_column=Column(JSON))

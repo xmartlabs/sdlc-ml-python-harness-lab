@@ -27,6 +27,9 @@ def _endpoint(app, path: str, method: str | None = None):
 def runs_dir(tmp_path, monkeypatch):
     class _Settings:
         data_runs_dir = tmp_path
+        # Deliberately not the real default: the endpoint must read the slug
+        # from settings, not carry its own copy.
+        template_repository = "acme/governance-template"
 
     from harness_lab_app import api as api_module
 

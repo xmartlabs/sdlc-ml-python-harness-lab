@@ -56,6 +56,14 @@ def _apply_sqlite_compat_migrations() -> None:
             connection.execute(
                 text("ALTER TABLE run ADD COLUMN notes VARCHAR NOT NULL DEFAULT ''")
             )
+        if "batch_id" not in columns:
+            # Nullable on purpose: pre-existing runs were not part of a batch,
+            # and backfilling them with a synthetic id would invent grouping
+            # that never existed.
+            connection.execute(text("ALTER TABLE run ADD COLUMN batch_id VARCHAR"))
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_run_batch_id ON run (batch_id)")
+            )
 
         audit_columns = {
             row[1]

@@ -9,6 +9,61 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "agentic-harness-lab"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "celery", extra = ["redis"] },
+    { name = "docker" },
+    { name = "fastapi" },
+    { name = "ipykernel" },
+    { name = "jinja2" },
+    { name = "nbstripout" },
+    { name = "pandas" },
+    { name = "pydantic-settings" },
+    { name = "python-multipart" },
+    { name = "pyyaml" },
+    { name = "sqlmodel" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "bandit" },
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "celery", extras = ["redis"], specifier = ">=5.4" },
+    { name = "docker", specifier = ">=7.1" },
+    { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "ipykernel" },
+    { name = "jinja2", specifier = ">=3.1" },
+    { name = "nbstripout", specifier = ">=0.7.0" },
+    { name = "pandas" },
+    { name = "pydantic-settings", specifier = ">=2.6.0" },
+    { name = "python-multipart", specifier = ">=0.0.12" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "sqlmodel", specifier = ">=0.0.22" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "bandit", specifier = ">=1.9.2" },
+    { name = "mypy", specifier = ">=1.11" },
+    { name = "pre-commit", specifier = ">=3.8.0" },
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "ruff", specifier = "==0.14.10" },
+]
+
+[[package]]
 name = "amqp"
 version = "5.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1089,61 +1144,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
-]
-
-[[package]]
-name = "ml-python-base"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "celery", extra = ["redis"] },
-    { name = "docker" },
-    { name = "fastapi" },
-    { name = "ipykernel" },
-    { name = "jinja2" },
-    { name = "nbstripout" },
-    { name = "pandas" },
-    { name = "pydantic-settings" },
-    { name = "python-multipart" },
-    { name = "pyyaml" },
-    { name = "sqlmodel" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "bandit" },
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "celery", extras = ["redis"], specifier = ">=5.4" },
-    { name = "docker", specifier = ">=7.1" },
-    { name = "fastapi", specifier = ">=0.115.0" },
-    { name = "ipykernel" },
-    { name = "jinja2", specifier = ">=3.1" },
-    { name = "nbstripout", specifier = ">=0.7.0" },
-    { name = "pandas" },
-    { name = "pydantic-settings", specifier = ">=2.6.0" },
-    { name = "python-multipart", specifier = ">=0.0.12" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "sqlmodel", specifier = ">=0.0.22" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "bandit", specifier = ">=1.9.2" },
-    { name = "mypy", specifier = ">=1.11" },
-    { name = "pre-commit", specifier = ">=3.8.0" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "ruff", specifier = "==0.14.10" },
 ]
 
 [[package]]

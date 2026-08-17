@@ -64,6 +64,9 @@ export type RunRecord = {
   // retried rather than read as a result.
   failure_kind?: "lab" | "stalled" | "timeout" | "agent" | null;
   failure_label?: string | null;
+  // Set when the run came from POST /api/runs/batch; null for a run created
+  // singly and for every run that predates batching.
+  batch_id?: string | null;
 };
 
 export type RunEventRecord = {
@@ -266,6 +269,33 @@ export type RunCreatePayload = {
 };
 
 /**
+ * One request that expands into the cross-product of its axes.
+ *
+ * Every array is a dimension; the scalars are shared by every generated run.
+ * There is no `resume` and no `run_id`/`label`: resuming targets one specific
+ * workspace, and N generated runs each take the next auto-assigned id.
+ */
+export type RunBatchPayload = {
+  case_ids: string[];
+  prompt_variants: string[];
+  harnesses: string[];
+  executor_models: (string | null)[];
+  planner_models: (string | null)[];
+  repetitions: number;
+  score_mode: string;
+  max_steps: number;
+  dry_run: boolean;
+  skills_disabled?: string[];
+  skills_extra?: string[];
+};
+
+export type RunBatchResult = {
+  batch_id: string;
+  count: number;
+  run_ids: string[];
+};
+
+/**
  * Verdict of the pre-creation check on a run configuration.
  *
  * These are the same checks `POST /api/runs` applies, so `ok: true` means the
@@ -432,6 +462,9 @@ export type RuntimeFacts = {
   run_model_wait_seconds: number;
   // Consecutive failed provider requests tolerated before giving up.
   run_max_stream_errors: number;
+  // Ceiling on the cross-product of one POST /api/runs/batch. Read rather
+  // than mirrored in the client, so the two can never disagree.
+  max_batch_runs: number;
 };
 
 export type GatewayModelRecord = {

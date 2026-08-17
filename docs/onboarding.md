@@ -165,6 +165,23 @@ make template-remote-setup TEMPLATE_REPO=https://github.com/<you>/ml-python-base
 make harness-status   # confirms: installed governance version vs latest release
 ```
 
+### If you forked the template
+
+The lab files improvement issues against GitHub slugs that default to the upstream
+repos. If you work from forks, retarget them in `.env` — no code change:
+
+| Variable | Default | What it is |
+|---|---|---|
+| `HARNESS_LAB_TEMPLATE_REPOSITORY` | `marcosdh1987/ml-python-base` | Where improvement issues are filed |
+| `HARNESS_LAB_LAB_REPOSITORY` | `marcosdh1987/ai-agentic-harness-lab` | Recorded as the source of a proposal's evidence |
+| `HARNESS_LAB_GUIDE_REPOSITORY` | `marcosdh1987/harness-engineering-guide` | Target for harness-methodology findings |
+
+These are runtime defaults only. A proposal already stored keeps the slug it was
+authored against, so retargeting never rewrites history.
+
+`make template-remote-setup TEMPLATE_REPO=…` sets the *git remote*; these set the
+*issue targets*. Both usually point at the same fork.
+
 ## 4. Start the lab
 
 ```bash
@@ -182,6 +199,18 @@ This builds the per-run runner image and starts four services:
 
 Stop everything with `make stop-docker`. (For a server that stays on, use
 `make app-up-prod` instead — one origin on `:8080`; see below.)
+
+> **Reaching the UI from another machine.** The API is published on `127.0.0.1`
+> by default. Authentication is only enforced once an admin password exists, so
+> binding to every interface before that leaves an unauthenticated
+> code-execution API on your network. Set the password first, then opt in:
+>
+> ```bash
+> make set-password
+> HARNESS_LAB_API_BIND_ADDR=0.0.0.0 make app-up
+> ```
+>
+> See [SECURITY.md](../SECURITY.md) for what a run container can actually do.
 
 > **Host mode (alternative):** `make app-host` runs the worker/API on your host so
 > harnesses reuse your host CLI sessions (needed for codex). See the comments above

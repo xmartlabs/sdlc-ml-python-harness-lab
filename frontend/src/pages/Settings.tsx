@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
+import { EXAMPLE_LMSTUDIO_URL, EXAMPLE_OLLAMA_URL } from "../constants";
 import { ErrorBanner } from "../components/ErrorBanner";
 import type {
   ContextProbeResult,
@@ -387,7 +388,7 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
             description={
               (lmstudio.error ?? "LM Studio did not answer.") +
               " Set LMSTUDIO_BASE_URL under “Local runtimes” to the server address " +
-              "including /v1 (for example http://192.168.0.223:1234/v1) and make sure " +
+              `including /v1 (for example ${EXAMPLE_LMSTUDIO_URL}) and make sure ` +
               "LM Studio is serving on the network, not only on localhost."
             }
             title="LM Studio is not reachable."
@@ -464,7 +465,7 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
             description={
               (ollama.error ?? "Ollama did not answer.") +
               " Set OLLAMA_BASE_URL under “Local runtimes” to the server address " +
-              "including /v1 (for example http://192.168.0.155:11434/v1). If Ollama " +
+              `including /v1 (for example ${EXAMPLE_OLLAMA_URL}). If Ollama ` +
               "runs on another machine, it must listen on the network — set " +
               "OLLAMA_HOST=0.0.0.0 there."
             }

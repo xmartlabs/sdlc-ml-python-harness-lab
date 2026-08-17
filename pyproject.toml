@@ -1,9 +1,17 @@
 [project]
-name = "ml-python-base"
+name = "agentic-harness-lab"
 version = "0.1.0"
-description = "Template base para proyectos de ML"
+description = "Benchmark agentic coding harnesses and models on real coding tasks"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
     "pandas",
     "nbstripout>=0.7.0",

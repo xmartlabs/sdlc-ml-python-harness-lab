@@ -1909,3 +1909,38 @@ button.ghost {
   color: var(--muted);
   font-size: 0.85rem;
 }
+
+/* --- Batch mode -----------------------------------------------------------
+   The axes of a cross-product run request. Each fieldset is one dimension and
+   scrolls independently, so a long case list cannot push the run counter — the
+   number that says how much this click costs — below the fold. */
+.batch-section {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.batch-axis {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0;
+  min-width: 0;
+}
+
+.batch-axis legend {
+  padding: 0 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.batch-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 190px;
+  overflow-y: auto;
+}

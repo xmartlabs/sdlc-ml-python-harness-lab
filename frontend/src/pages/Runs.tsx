@@ -11,6 +11,8 @@ import type {
   CaseRecord,
   HarnessSkill,
   ModelOption,
+  RunBatchPayload,
+  RunBatchResult,
   RunConfigPayload,
   RunCreatePayload,
   RunRecord,
@@ -23,9 +25,21 @@ type RunsProps = {
   onCancelRun: (runId: string) => Promise<RunRecord>;
   onCloneRun: (runId: string) => Promise<RunRecord>;
   onCreateRun: (payload: RunCreatePayload) => Promise<RunRecord>;
+  onCreateRunBatch: (payload: RunBatchPayload) => Promise<RunBatchResult>;
   onDeleteRun: (runId: string, force?: boolean) => Promise<void>;
   runs: RunRecord[];
 };
+
+/** Add or remove `value` in a Set, returning a new Set (never mutating state). */
+function toggleInSet(current: Set<string>, value: string): Set<string> {
+  const next = new Set(current);
+  if (next.has(value)) {
+    next.delete(value);
+  } else {
+    next.add(value);
+  }
+  return next;
+}
 
 const HARNESS_OPTIONS = ["opencode", "codex", "claude", "antigravity"] as const;
 // Harnesses that run via the host CLI (native auth) instead of the runner
@@ -52,6 +66,7 @@ export function Runs({
   onCancelRun,
   onCloneRun,
   onCreateRun,
+  onCreateRunBatch,
   onDeleteRun,
   runs
 }: RunsProps) {
@@ -85,6 +100,50 @@ export function Runs({
   const [extraSkills, setExtraSkills] = useState<Set<string>>(new Set());
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [reloadingModels, setReloadingModels] = useState(false);
+
+  // --- Batch mode ----------------------------------------------------------
+  // Off by default, and while off every control above behaves exactly as it did
+  // before batching existed. Turning it on promotes four of the single selects
+  // into additive sets seeded from the current selection, so the batch always
+  // starts as "what I have now" and is widened from there.
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchCases, setBatchCases] = useState<Set<string>>(new Set());
+  const [batchPrompts, setBatchPrompts] = useState<Set<string>>(new Set());
+  const [batchHarnesses, setBatchHarnesses] = useState<Set<string>>(new Set());
+  const [batchExecutors, setBatchExecutors] = useState<Set<string>>(new Set());
+  const [repetitions, setRepetitions] = useState(1);
+  const [batchResult, setBatchResult] = useState<RunBatchResult | null>(null);
+  // Read from the server rather than mirrored as a constant here: a client-side
+  // copy of the cap would silently disagree with the value that actually
+  // enforces it. Null until the fetch lands (or if it fails) — the button stays
+  // enabled and the server remains the authority either way.
+  const [maxBatchRuns, setMaxBatchRuns] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .readRuntimeFacts()
+      .then((facts) => {
+        if (active) {
+          setMaxBatchRuns(facts.max_batch_runs);
+        }
+      })
+      .catch(() => {
+        // Offline / older API: leave the cap unknown and let the server decide.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const enterBatchMode = () => {
+    setBatchCases(new Set([caseId]));
+    setBatchPrompts(new Set([promptVariant]));
+    setBatchHarnesses(new Set([harness]));
+    setBatchExecutors(new Set(executorModel ? [executorModel] : []));
+    setRepetitions(1);
+    setBatchMode(true);
+  };
 
   /**
    * Re-read the model menu, optionally dropping the server-side caches.
@@ -191,6 +250,28 @@ export function Runs({
   );
 
   const promptVariantNames = Object.keys(selectedCase?.prompt_variants ?? { default: "" });
+
+  /**
+   * Prompt variants offered in batch mode: the union across the selected cases.
+   *
+   * Union rather than intersection because cases legitimately define different
+   * variant sets, and an intersection is empty as soon as one case is unusual —
+   * which would silently make the whole axis unselectable. The server pairs
+   * each case only with the variants it defines, so the run count has to be
+   * summed per case rather than multiplied by the size of this axis.
+   */
+  const batchPromptNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const item of cases) {
+      if (!batchCases.has(item.case_id)) {
+        continue;
+      }
+      for (const variant of Object.keys(item.prompt_variants ?? {})) {
+        names.add(variant);
+      }
+    }
+    return [...names].sort();
+  }, [batchCases, cases]);
   useEffect(() => {
     if (promptVariantNames.length === 0) {
       return;
@@ -310,6 +391,62 @@ export function Runs({
     }
   };
 
+  // An empty executor set means "do not vary the model", which the API spells
+  // `[null]` — so it still contributes a factor of one, never zero.
+  const batchExecutorAxis: (string | null)[] =
+    batchExecutors.size > 0 ? [...batchExecutors] : [null];
+
+  // Mirrors the server: a case only runs the selected variants it defines, so
+  // the variant axis is summed per case instead of multiplied once. Selecting
+  // a case that shares no variant with the selection is rejected outright
+  // rather than silently dropped, so name those cases here.
+  const selectedCasesInBatch = cases.filter((item) => batchCases.has(item.case_id));
+  const variantsPerCase = selectedCasesInBatch.map((item) => ({
+    caseId: item.case_id,
+    count: [...batchPrompts].filter((name) =>
+      Object.hasOwn(item.prompt_variants ?? {}, name),
+    ).length,
+  }));
+  const casesWithoutVariant = variantsPerCase
+    .filter((entry) => entry.count === 0)
+    .map((entry) => entry.caseId);
+
+  const batchRunCount =
+    variantsPerCase.reduce((total, entry) => total + entry.count, 0) *
+    batchHarnesses.size *
+    batchExecutorAxis.length *
+    Math.max(repetitions, 0);
+
+  const overBatchCap = maxBatchRuns !== null && batchRunCount > maxBatchRuns;
+
+  const handleCreateBatch = async () => {
+    setCreateError(null);
+    setValidation(null);
+    setBatchResult(null);
+    setIsSaving(true);
+    try {
+      setBatchResult(
+        await onCreateRunBatch({
+          case_ids: [...batchCases],
+          prompt_variants: [...batchPrompts],
+          harnesses: [...batchHarnesses],
+          executor_models: batchExecutorAxis,
+          planner_models: [plannerModel || null],
+          repetitions,
+          score_mode: scoreMode,
+          max_steps: maxSteps,
+          dry_run: dryRun,
+          skills_disabled: [...disabledSkills].sort(),
+          skills_extra: [...extraSkills].sort()
+        })
+      );
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : "Unable to queue batch");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleCreateRun = async () => {
     if (selectedCase === null) {
       return;
@@ -366,7 +503,117 @@ export function Runs({
           <button className="primary" onClick={applySdlcQwenPreset} type="button">
             Preset: Full SDLC + Qwen
           </button>
+          <button
+            onClick={() => (batchMode ? setBatchMode(false) : enterBatchMode())}
+            type="button"
+          >
+            {batchMode ? "Leave batch mode" : "Batch mode"}
+          </button>
         </div>
+        {batchMode ? (
+          <div className="batch-section">
+            <p className="muted">
+              Each list below is a dimension: every combination of the selected cases,
+              prompts, harnesses and executor models is queued, repeated{" "}
+              <strong>{repetitions}</strong>{" "}
+              {repetitions === 1 ? "time" : "times"}. Planner model, max steps, dry run
+              and the skill ablation are shared by every run in the batch.
+            </p>
+            <div className="form-grid">
+              <fieldset className="batch-axis">
+                <legend>Cases ({batchCases.size})</legend>
+                <div className="batch-options">
+                  {cases.map((item) => (
+                    <label className="skill-checkbox" key={item.case_id}>
+                      <input
+                        checked={batchCases.has(item.case_id)}
+                        onChange={() =>
+                          setBatchCases((current) => toggleInSet(current, item.case_id))
+                        }
+                        type="checkbox"
+                      />
+                      <span>{caseOptionLabel(item)}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset className="batch-axis">
+                <legend>Prompt variants ({batchPrompts.size})</legend>
+                <div className="batch-options">
+                  {batchPromptNames.map((variant) => (
+                    <label className="skill-checkbox" key={variant}>
+                      <input
+                        checked={batchPrompts.has(variant)}
+                        onChange={() =>
+                          setBatchPrompts((current) => toggleInSet(current, variant))
+                        }
+                        type="checkbox"
+                      />
+                      <span>{variant}</span>
+                    </label>
+                  ))}
+                </div>
+                <small className="muted">
+                  Union of the variants defined by the selected cases. A case without a
+                  selected variant contributes no runs for it.
+                </small>
+              </fieldset>
+              <fieldset className="batch-axis">
+                <legend>Harnesses ({batchHarnesses.size})</legend>
+                <div className="batch-options">
+                  {HARNESS_OPTIONS.map((item) => (
+                    <label className="skill-checkbox" key={item}>
+                      <input
+                        checked={batchHarnesses.has(item)}
+                        onChange={() =>
+                          setBatchHarnesses((current) => toggleInSet(current, item))
+                        }
+                        type="checkbox"
+                      />
+                      <span>{item}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset className="batch-axis">
+                <legend>Executor models ({batchExecutors.size})</legend>
+                <div className="batch-options">
+                  {modelOptions.map((option) => (
+                    <label className="skill-checkbox" key={option.id}>
+                      <input
+                        checked={batchExecutors.has(option.id)}
+                        onChange={() =>
+                          setBatchExecutors((current) => toggleInSet(current, option.id))
+                        }
+                        type="checkbox"
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                </div>
+                <small className="muted">
+                  None selected means "do not vary the model" — the harness default is
+                  used for every run.
+                </small>
+              </fieldset>
+              <label>
+                <span>Repetitions</span>
+                <input
+                  min={1}
+                  onChange={(event) =>
+                    setRepetitions(Math.max(1, Number(event.target.value) || 1))
+                  }
+                  type="number"
+                  value={repetitions}
+                />
+                <small className="muted">
+                  Trials per combination. Repeat to separate a real difference from
+                  run-to-run variance.
+                </small>
+              </label>
+            </div>
+          </div>
+        ) : null}
         <div className="form-grid">
           <label>
             <span>Run template (optional)</span>
@@ -575,10 +822,68 @@ export function Runs({
           >
             {isValidating ? "Validating..." : "Validate config"}
           </button>
-          <button className="primary" disabled={isSaving || cases.length === 0} onClick={handleCreateRun} type="button">
-            {isSaving ? "Creating..." : "Create run"}
-          </button>
+          {batchMode ? (
+            <button
+              className="primary"
+              disabled={
+                isSaving ||
+                batchRunCount === 0 ||
+                overBatchCap ||
+                casesWithoutVariant.length > 0
+              }
+              onClick={handleCreateBatch}
+              type="button"
+            >
+              {isSaving
+                ? "Queueing..."
+                : `Queue ${batchRunCount} ${batchRunCount === 1 ? "run" : "runs"}`}
+            </button>
+          ) : (
+            <button
+              className="primary"
+              disabled={isSaving || cases.length === 0}
+              onClick={handleCreateRun}
+              type="button"
+            >
+              {isSaving ? "Creating..." : "Create run"}
+            </button>
+          )}
         </div>
+        {batchMode ? (
+          <p className="muted">
+            {batchRunCount === 0 ? (
+              <span className="badge error">
+                Select at least one case, prompt variant and harness.
+              </span>
+            ) : casesWithoutVariant.length > 0 ? (
+              <span className="badge error">
+                {casesWithoutVariant.join(", ")} defines none of the selected prompt
+                variants. Select a variant it has, or deselect the case.
+              </span>
+            ) : overBatchCap ? (
+              <span className="badge error">
+                {batchRunCount} runs exceeds the limit of {maxBatchRuns}. Narrow a
+                dimension, or raise HARNESS_LAB_MAX_BATCH_RUNS.
+              </span>
+            ) : (
+              <>
+                This queues <strong>{batchRunCount}</strong> containerised{" "}
+                {batchRunCount === 1 ? "run" : "runs"}, each spending model budget.
+                Each case runs only the selected variants it defines, so the count
+                can be lower than the product of the axes. Nothing is created unless
+                every combination passes preflight.
+              </>
+            )}
+          </p>
+        ) : null}
+        {batchResult ? (
+          <p className="muted">
+            <span className="badge ok">queued</span> {batchResult.count}{" "}
+            {batchResult.count === 1 ? "run" : "runs"} as{" "}
+            <code>{batchResult.batch_id}</code>. They appear in the table below as the
+            queue drains.
+          </p>
+        ) : null}
         {validation ? (
           <p className="muted">
             <span className={validation.ok ? "badge ok" : "badge error"}>

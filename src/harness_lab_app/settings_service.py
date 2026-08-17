@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from harness_lab_app.config import get_settings
+from harness_lab_app.constants import EXAMPLE_LMSTUDIO_URL
 from harness_lab_app.env_file import (
     BACKUP_DIRNAME,
     EnvFileError,
@@ -136,7 +137,7 @@ _SPECS: tuple[EnvKeySpec, ...] = (
         group=GROUP_RUNTIMES,
         validator=_require_url,
         help_text=(
-            "Server address including /v1 (e.g. http://192.168.0.223:1234/v1). "
+            f"Server address including /v1 (e.g. {EXAMPLE_LMSTUDIO_URL}). "
             "Feeds the 'LM Studio (direct, no gateway)' model group, which "
             "reads models off this host by name — no alias in between."
         ),
@@ -248,6 +249,7 @@ def read_runtime_facts() -> dict:
         "run_stall_seconds": settings.run_stall_seconds,
         "run_model_wait_seconds": settings.run_model_wait_seconds,
         "run_max_stream_errors": settings.run_max_stream_errors,
+        "max_batch_runs": settings.max_batch_runs,
     }
 
 

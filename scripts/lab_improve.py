@@ -41,10 +41,20 @@ sys.path.insert(0, str(Path(__file__).parent))
 from bench_audit import DEFAULT_AUDITOR_MODEL, call_gateway
 from create_run import DATA_DIR, _load_env
 
-# Target repos (override via env). Read git remotes if you fork these.
-TEMPLATE_REPO = os.environ.get("IMPROVE_REPO_TEMPLATE", "marcosdh1987/ml-python-base")
-HARNESS_REPO = os.environ.get(
-    "IMPROVE_REPO_HARNESS", "marcosdh1987/harness-engineering-guide"
+# Target repos. Canonical names match the Settings fields the web app reads
+# (harness_lab_app.config); the IMPROVE_REPO_* spellings predate them and are
+# still honoured so existing .env files keep working. This script deliberately
+# does not import harness_lab_app — it runs from inside the runner container,
+# which installs no web dependencies.
+TEMPLATE_REPO = (
+    os.environ.get("HARNESS_LAB_TEMPLATE_REPOSITORY")
+    or os.environ.get("IMPROVE_REPO_TEMPLATE")
+    or "marcosdh1987/ml-python-base"
+)
+HARNESS_REPO = (
+    os.environ.get("HARNESS_LAB_GUIDE_REPOSITORY")
+    or os.environ.get("IMPROVE_REPO_HARNESS")
+    or "marcosdh1987/harness-engineering-guide"
 )
 ISSUE_LABEL = os.environ.get("IMPROVE_LABEL", "lab-improvement")
 

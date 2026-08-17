@@ -75,6 +75,22 @@ class Settings(BaseSettings):
     # the lab's default deployment is http://<lan-host>:8080.
     session_cookie_secure: bool = False
 
+    # GitHub slugs the improvement cycle files issues against. Defaults point at
+    # the upstream trio this lab was built to measure; a fork retargets them via
+    # HARNESS_LAB_TEMPLATE_REPOSITORY etc. without touching code.
+    #
+    # Note these are *runtime* defaults only. Run.repository persists the slug an
+    # existing proposal was authored against (models.py), so changing them here
+    # never rewrites history.
+    template_repository: str = "marcosdh1987/ml-python-base"
+    lab_repository: str = "marcosdh1987/ai-agentic-harness-lab"
+    guide_repository: str = "marcosdh1987/harness-engineering-guide"
+
+    # Upper bound on runs created by one POST /api/runs/batch. A four-list
+    # cross-product reaches the hundreds from a single click, and each run is a
+    # Docker container plus model spend.
+    max_batch_runs: int = 50
+
     @property
     def data_runs_dir(self) -> Path:
         return self.repo_root / "data" / "runs"
@@ -101,6 +117,17 @@ def get_settings() -> Settings:
     return Settings()
 
 
+def env_file_path() -> Path:
+    """Location of the repository `.env`.
+
+    The single seam every reader goes through, so the file can be redirected in
+    one place. The test suite redirects it to a fixture (see
+    ``tests/harness_lab_app/conftest.py``): reading the developer's real `.env`
+    made the suite pass locally and fail on a fresh clone.
+    """
+    return get_settings().repo_root / ".env"
+
+
 def read_env_file_value(name: str, default: str = "") -> str:
     """Read a single KEY=VALUE from the repo `.env`.
 
@@ -109,7 +136,7 @@ def read_env_file_value(name: str, default: str = "") -> str:
     executors.build_run_environment so the API can preflight config without
     importing worker-only code.
     """
-    env_file = get_settings().repo_root / ".env"
+    env_file = env_file_path()
     if not env_file.exists():
         return default
     for raw in env_file.read_text().splitlines():

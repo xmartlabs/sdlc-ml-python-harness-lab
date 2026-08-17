@@ -229,7 +229,17 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
       if (!needle) {
         return true;
       }
-      return [row.title, row.run.run_id, row.caseId, row.harness, row.model]
+      // batch_id is in the haystack so pasting one from the queue confirmation
+      // narrows the table to exactly that batch — no extra filter control for
+      // what is an opaque, copy-pasted id.
+      return [
+        row.title,
+        row.run.run_id,
+        row.caseId,
+        row.harness,
+        row.model,
+        row.run.batch_id ?? ""
+      ]
         .join(" ")
         .toLowerCase()
         .includes(needle);
@@ -436,6 +446,11 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
                       <strong className="run-title">{row.title}</strong>
                       <small className="run-meta">
                         {row.attempt ? <span className="badge neutral">{row.attempt}</span> : null}
+                        {row.run.batch_id ? (
+                          <span className="badge neutral" title={row.run.batch_id}>
+                            batch
+                          </span>
+                        ) : null}
                         {row.shortCase ? <span className="cell-truncate">{row.shortCase}</span> : null}
                         {row.tests ? (
                           <span className="run-tests">

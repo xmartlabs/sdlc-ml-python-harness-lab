@@ -41,6 +41,7 @@ from harness_lab_app.celery_app import (
     enqueue_validation,
 )
 from harness_lab_app.config import get_settings, read_env_file_value
+from harness_lab_app.constants import EXAMPLE_LMSTUDIO_URL, EXAMPLE_OLLAMA_URL
 from harness_lab_app.db import get_engine, get_session, init_db
 from harness_lab_app.gateway_catalog_service import GatewayCatalogService
 from harness_lab_app.harness_lifecycle import drafting, sanitizer
@@ -48,6 +49,7 @@ from harness_lab_app.improvement_service import ImprovementError, ImprovementSer
 from harness_lab_app.leaderboard_service import LeaderboardService
 from harness_lab_app.run_service import (
     RunAlreadyExistsError,
+    RunBatchTooLargeError,
     RunDeleteConflictError,
     RunPreflightError,
     RunService,
@@ -60,6 +62,8 @@ from harness_lab_app.schemas import (
     GatewayTestRequest,
     GroupIssueRequest,
     HealRequest,
+    RunBatchCreate,
+    RunBatchRead,
     RunConfigCreate,
     RunCreate,
     StagedSkillCreate,
@@ -417,7 +421,7 @@ def create_app() -> FastAPI:
                 "reachable": False,
                 "error": (
                     "LMSTUDIO_BASE_URL is not set — point it at your LM Studio "
-                    "server (for example http://192.168.0.223:1234/v1) below."
+                    f"server (for example {EXAMPLE_LMSTUDIO_URL}) below."
                 ),
                 "models": [],
             }
@@ -461,7 +465,7 @@ def create_app() -> FastAPI:
                 "reachable": False,
                 "error": (
                     "OLLAMA_BASE_URL is not set — point it at your Ollama server "
-                    "(for example http://192.168.0.155:11434/v1) below."
+                    f"(for example {EXAMPLE_OLLAMA_URL}) below."
                 ),
                 "models": [],
             }
@@ -931,7 +935,7 @@ def create_app() -> FastAPI:
         return {"run_ids": CaseService(session).list_case_run_ids(case_id)}
 
     @app.get("/api/runs")
-    def list_runs(session: Session = Depends(get_session)):
+    def list_runs(batch_id: str = "", session: Session = Depends(get_session)):
         """Runs, each carrying the objective verdict the lab already computed.
 
         Without it a run whose produced code does not even start looks exactly
@@ -961,7 +965,7 @@ def create_app() -> FastAPI:
                 "failure_kind": classify_failure(run.failure_reason),
                 "failure_label": failure_label(run.failure_reason),
             }
-            for run in RunService(session).list_runs()
+            for run in RunService(session).list_runs(batch_id=batch_id or None)
         ]
 
     @app.get("/api/leaderboard")
@@ -1012,6 +1016,28 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RunAlreadyExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/runs/batch", status_code=201)
+    def create_run_batch(
+        data: RunBatchCreate, session: Session = Depends(get_session)
+    ) -> RunBatchRead:
+        """Queue the cross-product of the requested axes as one batch.
+
+        All-or-nothing: a preflight failure on any combination rejects the whole
+        request with 422 and persists nothing, so the caller never has to unpick
+        a partially-created batch.
+        """
+        try:
+            batch_id, runs = RunService(session, enqueue=enqueue_run).create_batch(data)
+        except RunBatchTooLargeError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RunPreflightError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return RunBatchRead(
+            batch_id=batch_id,
+            count=len(runs),
+            run_ids=[run.run_id for run in runs],
+        )
 
     @app.post("/api/runs/{run_id}/score")
     def score_run(
@@ -1132,11 +1158,12 @@ def create_app() -> FastAPI:
             )
         _prepare_gateway_env()
 
-        run_dir = get_settings().data_runs_dir / run_id
+        settings = get_settings()
+        run_dir = settings.data_runs_dir / run_id
         try:
             markdown, form = drafting.synthesize_issue(
                 run_dir,
-                repository="marcosdh1987/ml-python-base",
+                repository=settings.template_repository,
                 created_at=datetime.now(UTC),
             )
         except sanitizer.SanitizationError as exc:
@@ -1152,7 +1179,7 @@ def create_app() -> FastAPI:
             ) from exc
         return {
             "run_id": run_id,
-            "repository": "marcosdh1987/ml-python-base",
+            "repository": settings.template_repository,
             "markdown": markdown,
             "form": form.to_dict(),
         }
@@ -1218,7 +1245,7 @@ def create_app() -> FastAPI:
             }
             for p in selected
         ]
-        repository = "marcosdh1987/ml-python-base"
+        repository = get_settings().template_repository
         model = payload.model or drafting.DEFAULT_MODEL
         try:
             markdown, form = drafting.synthesize_group_issue(

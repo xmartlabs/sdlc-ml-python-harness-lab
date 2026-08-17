@@ -51,6 +51,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0020 — Context-window preflight and gateway alias merge](0020-context-window-preflight-and-alias-merge.md)
 - [0021 — Guarantee that a run's artifacts survive and its verdict is visible](0021-benchmark-artifact-integrity.md)
 - [0022 — Split the silence clock by what the run was waiting for](0022-watchdog-splits-model-wait-from-agent-stall.md)
+- [0023 — Queue many runs per request as an all-or-nothing cross-product](0023-batch-run-execution.md)
 
 ## Why ADRs exist
 

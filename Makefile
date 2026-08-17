@@ -440,6 +440,12 @@ app-up:
 	@echo "🚀 Starting local web app stack..."
 	@docker compose build runner sandbox
 	@docker compose --profile dev up -d --build api worker redis frontend
+	@if [ "$$HARNESS_LAB_API_BIND_ADDR" = "0.0.0.0" ] \
+		&& ! grep -qs '^HARNESS_LAB_ADMIN_PASSWORD_HASH=.\+' .env; then \
+		echo "⚠️  API published on 0.0.0.0:8008 with NO authentication —"; \
+		echo "    anyone on your network can start runs, which execute code."; \
+		echo "    Run: make set-password"; \
+	fi
 
 # Always-on stack (prod, ADR-0019): the SPA is baked into nginx, which also
 # fronts /api, so the browser sees one origin on :8080. The API is pinned to
@@ -628,6 +634,19 @@ check:
 	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD}/src pytest tests/ --cov=src --cov-report=term-missing
 	@echo "✅ Quality gate passed (read-only)."
 
+# Read-only frontend gate: type check, then a production build.
+#
+# Separate from `make check` because it needs node, which the Python-only
+# contributor path does not install. `make ci` runs both.
+# The build matters as well as tsc: vite resolves imports and fails on a module
+# tsc is happy to type-check but cannot bundle.
+check-frontend:
+	@echo "🔎 Running read-only frontend gate..."
+	@if [ ! -d frontend/node_modules ]; then cd frontend && npm ci; fi
+	@cd frontend && npm run typecheck
+	@cd frontend && npx vite build
+	@echo "✅ Frontend gate passed (read-only)."
+
 # Static type checking only.
 typecheck:
 	@if [ ! -d .venv ]; then make install; fi
@@ -639,6 +658,7 @@ ci:
 	@echo "🚀 Running full CI pipeline (read-only)..."
 	@make check
 	@make check-sync
+	@make check-frontend
 	@echo "✅ CI pipeline completed successfully!"
 
 # =============================================================================

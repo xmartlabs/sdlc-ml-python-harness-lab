@@ -67,11 +67,16 @@ def test_prod_ui_binds_to_loopback_unless_told_otherwise(services):
     assert published == "${HARNESS_LAB_BIND_ADDR:-127.0.0.1}:8080:80"
 
 
-def test_api_bind_address_is_overridable(services):
-    """`make app-up-prod` pins it to 127.0.0.1 so nginx is the only way in."""
+def test_api_bind_address_defaults_to_loopback(services):
+    """Auth is off until a password is set, so LAN exposure must be opt-in.
+
+    Publishing the dev API on every interface put an unauthenticated
+    code-execution endpoint on the network for anyone who had not yet run
+    `make set-password`.
+    """
     (published,) = services["api"]["ports"]
 
-    assert published == "${HARNESS_LAB_API_BIND_ADDR:-0.0.0.0}:8008:8008"
+    assert published == "${HARNESS_LAB_API_BIND_ADDR:-127.0.0.1}:8008:8008"
 
 
 def test_app_up_prod_pins_the_api_to_loopback():

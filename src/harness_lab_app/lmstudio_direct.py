@@ -30,6 +30,7 @@ import os
 import urllib.error
 from dataclasses import dataclass
 
+from harness_lab_app.constants import EXAMPLE_LMSTUDIO_URL
 from harness_lab_app.direct_hosts import (
     DirectHostUnreachable,
     TtlCache,
@@ -202,7 +203,7 @@ def list_lmstudio_models(
     if not root:
         raise LMStudioUnreachable(
             "LMSTUDIO_BASE_URL is not set — point it at your LM Studio server "
-            "(for example http://192.168.0.223:1234/v1) on the Settings page."
+            f"(for example {EXAMPLE_LMSTUDIO_URL}) on the Settings page."
         )
     try:
         payload = _get_json(f"{root}/api/v0/models", timeout)

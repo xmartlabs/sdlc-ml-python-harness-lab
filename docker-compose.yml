@@ -31,9 +31,13 @@ services:
     volumes:
       - .:/app
     ports:
-      # Dev publishes on every interface; `make app-up-prod` pins this to
-      # 127.0.0.1 so the only LAN entrance is nginx.
-      - "${HARNESS_LAB_API_BIND_ADDR:-0.0.0.0}:8008:8008"
+      # Loopback by default. Authentication is only enforced once an admin
+      # password exists (see session_middleware.auth_enabled), so publishing on
+      # every interface would put an unauthenticated code-execution API on the
+      # LAN for anyone who has not run `make set-password` yet. Opt in with
+      # HARNESS_LAB_API_BIND_ADDR=0.0.0.0 — `make app-up-prod` keeps this on
+      # 127.0.0.1 regardless, because there nginx is the only LAN entrance.
+      - "${HARNESS_LAB_API_BIND_ADDR:-127.0.0.1}:8008:8008"
     depends_on:
       redis:
         condition: service_healthy

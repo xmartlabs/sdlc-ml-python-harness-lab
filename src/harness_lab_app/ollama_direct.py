@@ -36,6 +36,7 @@ import contextlib
 import os
 from dataclasses import dataclass
 
+from harness_lab_app.constants import EXAMPLE_OLLAMA_URL
 from harness_lab_app.direct_hosts import (
     DirectHostUnreachable,
     TtlCache,
@@ -166,7 +167,7 @@ def list_ollama_models(
     if not root:
         raise DirectHostUnreachable(
             "OLLAMA_BASE_URL is not set — point it at your Ollama server "
-            "(for example http://192.168.0.155:11434/v1) on the Settings page."
+            f"(for example {EXAMPLE_OLLAMA_URL}) on the Settings page."
         )
     try:
         models = _parse_tags(get_json(f"{root}/api/tags", timeout))

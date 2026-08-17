@@ -479,7 +479,11 @@ def test_run_list_carries_the_objective_verdict(session):
         for route in app.router.routes
         if getattr(route, "path", None) == "/api/runs"
     )
-    verdicts = {row["run_id"]: row["objective_passed"] for row in endpoint(session)}
+    # Keyword, not positional: the endpoint also takes a `batch_id` query
+    # filter, and binding by position would silently pass the session as it.
+    verdicts = {
+        row["run_id"]: row["objective_passed"] for row in endpoint(session=session)
+    }
 
     assert verdicts["broken-run"] is False
     assert verdicts["good-run"] is True

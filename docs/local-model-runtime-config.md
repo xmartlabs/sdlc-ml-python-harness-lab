@@ -191,7 +191,7 @@ For iterating over models quickly, the lab has a second, shorter path.
 **Setup.** One variable, on Settings → Local runtimes:
 
 ```
-LMSTUDIO_BASE_URL=http://192.168.0.223:1234/v1
+LMSTUDIO_BASE_URL=http://192.168.1.50:1234/v1
 ```
 
 The address of the machine running LM Studio, **including `/v1`** (opencode talks to LM
@@ -238,7 +238,7 @@ whichever executor id it used, so the leaderboard tells them apart.
 installed) and `GET /api/ps` (what is running, and with what window):
 
 ```
-OLLAMA_BASE_URL=http://192.168.0.155:11434/v1
+OLLAMA_BASE_URL=http://192.168.1.50:11434/v1
 ```
 
 Same rules: include `/v1`, and if Ollama runs on another machine it must listen on the

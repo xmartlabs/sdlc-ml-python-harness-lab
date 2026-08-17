@@ -6,15 +6,18 @@ import re
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 from sqlalchemy import desc
 from sqlmodel import Session, select
 
 from harness_lab_app.config import get_settings, read_env_file_value
+from harness_lab_app.constants import EXAMPLE_LMSTUDIO_URL, EXAMPLE_OLLAMA_URL
 from harness_lab_app.models import (
     Artifact,
     Attribution,
     Audit,
+    Case,
     Run,
     RunConfig,
     RunEvent,
@@ -24,10 +27,10 @@ from harness_lab_app.models import (
     utc_now,
 )
 from harness_lab_app.runner_adapter import BenchRunAdapter
-from harness_lab_app.schemas import RunConfigCreate, RunCreate
+from harness_lab_app.schemas import RunBatchCreate, RunConfigCreate, RunCreate
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping, Sequence
 
 
 # Tokens that mean "no real gateway credential configured yet".
@@ -44,6 +47,121 @@ class RunPreflightError(ValueError):
 
 class RunDeleteConflictError(ValueError):
     """Raised when deleting a `running` run without force (cancel it first)."""
+
+
+class RunBatchTooLargeError(ValueError):
+    """Raised when a batch's cross-product exceeds ``max_batch_runs``."""
+
+
+def _resolve_variants(
+    data: RunBatchCreate, defined: Mapping[str, Sequence[str]]
+) -> dict[str, list[str]]:
+    """Narrow the prompt-variant axis to what each case actually defines.
+
+    The variant axis is offered as the *union* across the selected cases, so a
+    plain cross-product pairs cases with variants they do not have. Those runs
+    are not caught by preflight: they reach ``scripts/bench_run.py``, which
+    exits only after a container has started — burning setup time to discover a
+    combination that was known-invalid before the batch was queued.
+
+    Selection order is preserved so the generated run ids stay predictable.
+
+    Raises:
+        RunPreflightError: a case is unknown, or defines none of the selected
+            variants. Dropping some combinations of a case is the documented
+            behaviour; dropping the case entirely is not what was asked for.
+    """
+    resolved: dict[str, list[str]] = {}
+    for case_id in data.case_ids:
+        available = defined.get(case_id)
+        if available is None:
+            raise RunPreflightError(
+                f"Unknown case '{case_id}'. Use GET /api/cases for the valid ids."
+            )
+        allowed = [name for name in data.prompt_variants if name in available]
+        if not allowed:
+            raise RunPreflightError(
+                f"Case '{case_id}' defines none of the selected prompt variants "
+                f"({', '.join(data.prompt_variants)}). It has: "
+                f"{', '.join(sorted(available)) or '(none)'}."
+            )
+        resolved[case_id] = allowed
+    return resolved
+
+
+def _batch_size(data: RunBatchCreate, variants: Mapping[str, Sequence[str]]) -> int:
+    """Size of the cross-product, without building it.
+
+    Counted arithmetically on purpose: the cap has to be enforceable before
+    expansion allocates one ``RunConfigCreate`` per run. ``repetitions`` has no
+    upper bound of its own, so expanding first made a single unauthenticated
+    request able to spend seconds of CPU only to be rejected.
+    """
+    return (
+        sum(len(names) for names in variants.values())
+        * len(data.harnesses)
+        * len(data.executor_models)
+        * len(data.planner_models)
+        * data.repetitions
+    )
+
+
+def _expand_batch(
+    data: RunBatchCreate, variants: Mapping[str, Sequence[str]]
+) -> list[RunConfigCreate]:
+    """Cross-product of the axes, repeated ``repetitions`` times.
+
+    ``variants`` carries the per-case prompt variants from ``_resolve_variants``
+    rather than ``data.prompt_variants``, so a case is only paired with the
+    variants it defines.
+
+    Order is deliberate and stable: case is the outermost loop and repetition
+    the innermost, so the generated ``<case>-K-NNN`` ids of one arm land
+    consecutively and a partially-finished batch reads in a sensible order.
+    """
+    return [
+        RunConfigCreate(
+            case_id=case_id,
+            prompt_variant=prompt_variant,
+            harness=harness,
+            executor_model=executor_model,
+            planner_model=planner_model,
+            score_mode=data.score_mode,
+            max_steps=data.max_steps,
+            dry_run=data.dry_run,
+            resume=False,
+            skills_disabled=list(data.skills_disabled),
+            skills_extra=list(data.skills_extra),
+        )
+        for case_id in data.case_ids
+        for prompt_variant in variants[case_id]
+        for harness in data.harnesses
+        for executor_model in data.executor_models
+        for planner_model in data.planner_models
+        for _ in range(data.repetitions)
+    ]
+
+
+def _preflight_key(config: RunConfigCreate) -> tuple:
+    """The fields ``RunService.preflight`` actually reads.
+
+    Deduplication key for batch validation. Two configs with the same key
+    cannot get different preflight answers, so the second check is pure cost —
+    and preflight's cost is network round-trips.
+
+    Kept next to ``preflight`` on purpose: **if preflight starts reading another
+    field, it must be added here**, or a batch will skip a check it should have
+    made. ``planner_model`` and ``case_id`` are absent because preflight does
+    not consult them; including them would only fragment the cache.
+    """
+    return (
+        config.dry_run,
+        config.harness,
+        config.score_mode,
+        config.executor_model,
+        tuple(sorted(set(config.skills_disabled))),
+        tuple(sorted(set(config.skills_extra))),
+    )
 
 
 def _resume_config(config: RunConfig) -> RunConfigCreate:
@@ -100,8 +218,10 @@ class RunService:
                 self.session.add(run)
             self.session.commit()
 
-    def list_runs(self) -> list[Run]:
+    def list_runs(self, batch_id: str | None = None) -> list[Run]:
         statement = select(Run).order_by(desc(cast("Any", Run.created_at)))
+        if batch_id:
+            statement = statement.where(Run.batch_id == batch_id)
         return list(self.session.exec(statement))
 
     def get_run(self, run_id: str) -> Run:
@@ -302,7 +422,7 @@ class RunService:
             raise RunPreflightError(
                 "LMSTUDIO_BASE_URL is not set, so there is no server to send "
                 "this model to. Set it on the Settings page (for example "
-                "http://192.168.0.223:1234/v1) and retry."
+                f"{EXAMPLE_LMSTUDIO_URL}) and retry."
             )
         if not base.rstrip("/").endswith("/v1"):
             # opencode passes this straight to an OpenAI-compatible client,
@@ -385,7 +505,7 @@ class RunService:
             raise RunPreflightError(
                 "OLLAMA_BASE_URL is not set, so there is no server to send this "
                 "model to. Set it on the Settings page (for example "
-                "http://192.168.0.155:11434/v1) and retry."
+                f"{EXAMPLE_OLLAMA_URL}) and retry."
             )
         if not base.rstrip("/").endswith("/v1"):
             # Same trap as LM Studio: the native API this preflight reads lives
@@ -494,24 +614,90 @@ class RunService:
     def create_run(self, data: RunCreate) -> Run:
         self.preflight(data.config)
         run_id = self._resolve_run_id(data)
-        config = RunConfig(**data.config.model_dump())
-        self.session.add(config)
-        self.session.commit()
-        self.session.refresh(config)
+        run = self._persist_run(run_id, data.config)
+        self._publish(run.run_id)
+        return run
 
-        command = self.preview_command(run_id, data.config)
+    def _persist_run(
+        self, run_id: str, config: RunConfigCreate, batch_id: str | None = None
+    ) -> Run:
+        """Write the config + run rows. No preflight, no publish.
+
+        Split out of ``create_run`` so batching can validate once and persist
+        many, rather than re-running network preflight per generated run.
+        """
+        row = RunConfig(**config.model_dump())
+        self.session.add(row)
+        self.session.commit()
+        self.session.refresh(row)
+
+        command = self.preview_command(run_id, config)
         run = Run(
             run_id=run_id,
-            run_config_id=config.id or 0,
+            run_config_id=row.id or 0,
             state=RunState.pending,
             command=command,
+            batch_id=batch_id,
         )
         self.session.add(run)
         self.session.add(RunEvent(run_id=run_id, message="Run queued"))
         self.session.commit()
         self.session.refresh(run)
-        self._publish(run.run_id)
         return run
+
+    def _defined_variants(self, case_ids: Sequence[str]) -> dict[str, list[str]]:
+        """Prompt variants each requested case declares, keyed by case id."""
+        rows = self.session.exec(
+            select(Case).where(cast("Any", Case.case_id).in_(list(case_ids)))
+        ).all()
+        return {row.case_id: list(row.prompt_variants) for row in rows}
+
+    def create_batch(self, data: RunBatchCreate) -> tuple[str, list[Run]]:
+        """Expand the cross-product into runs, validating everything first.
+
+        Two properties this owes the caller, both learned from what the naive
+        loop would do:
+
+        *Nothing is created unless everything validates.* A batch is one
+        intent. Persisting combinations 1-16 and then rejecting 17 leaves the
+        user with a half-executed request they did not ask for and now have to
+        unpick, while runs are already burning GPU time.
+
+        *Preflight runs once per distinct configuration, not once per run.*
+        ``preflight`` makes network calls (gateway reachability, context-window
+        probe). A 24-run batch over two executors must issue two probes.
+
+        The cap is checked on the counted size, before expansion allocates
+        anything.
+        """
+        variants = _resolve_variants(data, self._defined_variants(data.case_ids))
+        size = _batch_size(data, variants)
+        limit = get_settings().max_batch_runs
+        if size > limit:
+            raise RunBatchTooLargeError(
+                f"This request expands to {size} runs, over the limit of "
+                f"{limit}. Narrow a dimension or raise "
+                "HARNESS_LAB_MAX_BATCH_RUNS."
+            )
+        configs = _expand_batch(data, variants)
+
+        seen: set[tuple] = set()
+        for config in configs:
+            key = _preflight_key(config)
+            if key in seen:
+                continue
+            seen.add(key)
+            self.preflight(config)
+
+        batch_id = f"batch-{uuid4().hex[:12]}"
+        runs = [
+            self._persist_run(self._next_run_id(config.case_id), config, batch_id)
+            for config in configs
+        ]
+        # Publish only after every row exists, so a batch is never half-queued.
+        for run in runs:
+            self._publish(run.run_id)
+        return batch_id, runs
 
     def clone_run(self, source_run_id: str) -> Run:
         """Re-queue a prior run's config under a fresh auto-generated id.

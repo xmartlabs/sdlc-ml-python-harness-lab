@@ -105,6 +105,51 @@ Where you launch and track runs. The **New run** form:
   Editing any field clears the verdict, since it only describes the configuration
   that produced it.
 
+#### Batch mode — queue a whole comparison at once
+
+Every comparison worth making is more than one run: a harness A/B is two, a model
+sweep is four, and telling a real difference from run-to-run variance means
+repeating each of those. **Batch mode** builds that grid in one submission
+([ADR-0023](adr/0023-batch-run-execution.md)).
+
+Press **Batch mode** next to the preset button. Four of the single selects become
+additive checkbox lists, seeded from whatever you currently have selected — so the
+batch starts as "what I was about to run" and you widen it from there:
+
+- **Cases**, **Prompt variants**, **Harnesses**, **Executor models** — each list is
+  an axis. Every combination is queued.
+- **Repetitions** — trials per combination.
+- **Prompt variants** offers the *union* across the selected cases, not the
+  intersection: cases legitimately define different variant sets, and an
+  intersection would empty the axis as soon as one case is unusual. Each case is
+  then paired only with the selected variants it actually defines, so selecting
+  `tetris-v1` (which has `conductor`) alongside `cli-textstats-v1` (which does
+  not) queues `conductor` for the first case only. **The stated run count already
+  accounts for this**, which is why it can be lower than the product of the axes.
+  A case that defines *none* of the selected variants is rejected rather than
+  silently dropped — the batch would not be the one you asked for.
+- Leaving **Executor models** empty means "do not vary the model" — the harness
+  default is used for every run.
+
+Planner model, max steps, dry run and the **Skills** ablation are held constant
+across the batch. That is the point: those are the variables you are controlling.
+
+The submit button states the cost before you pay it — **Queue 24 runs** — and
+refuses to submit past `HARNESS_LAB_MAX_BATCH_RUNS` (default 50). The count is
+worth reading: each unit is a Docker container spending model budget.
+
+Validation is **all-or-nothing**. Every combination is preflighted before anything
+is created, so a rejection means nothing was queued and there is no half-executed
+batch to unpick. Preflight is deduplicated by executor and harness, so a 24-run
+batch over two models pays two context probes, not twenty-four.
+
+On success the form reports the `batch_id`. Paste it into the run list's search
+box to narrow the table to exactly that batch; runs belonging to one carry a
+**batch** badge.
+
+`resume` is not available in batch mode — it resumes one specific workspace, which
+means nothing when you are asking for N fresh trials.
+
 The **run list** identifies each run by its **case title** (the same descriptive
 name you see when importing a SWE-bench Pro instance), with the attempt id
 (`K-009`), the short instance id, and the `F2P n / P2P m` test counts underneath.
@@ -347,7 +392,9 @@ The backoffice: everything you would otherwise change with a shell on the server
   allowlisted slice of `.env` ([ADR-0014](adr/0014-web-editable-env-allowlist.md)).
   Every write is atomic and keeps a rolling backup in `data/app/env-backups/`.
 - **Runtime facts** — `HARNESS_LAB_*` settings, read-only: they are cached at
-  process start and changing them needs a restart.
+  process start and changing them needs a restart. This includes
+  `max_batch_runs` (default 50), the ceiling the run form reads to size a batch —
+  the form reads it rather than mirroring it, so the two cannot disagree.
 
 The password is deliberately **not** on this page: it is set on the server with
 `make set-password`, so a stolen session cannot lock you out of your own lab

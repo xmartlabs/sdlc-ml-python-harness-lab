@@ -18,6 +18,7 @@ import type { ThemeMode } from "./theme";
 import type {
   CaseCreatePayload,
   CaseRecord,
+  RunBatchPayload,
   RunCreatePayload,
   RunRecord,
   SessionState
@@ -173,6 +174,19 @@ export default function App() {
     return created;
   };
 
+  /**
+   * Queue a whole cross-product, then re-read the list.
+   *
+   * Unlike `createRun` this does not splice the new rows in from the response:
+   * a batch returns ids only, and a batch large enough to be worth the feature
+   * is large enough that a refetch is cheaper than N optimistic inserts.
+   */
+  const createRunBatch = async (payload: RunBatchPayload) => {
+    const result = await api.createRunBatch(payload);
+    setRuns(await api.listRuns());
+    return result;
+  };
+
   const updateRun = (updated: RunRecord) => {
     setRuns((current) =>
       current.map((run) => (run.run_id === updated.run_id ? updated : run))
@@ -242,6 +256,7 @@ export default function App() {
               onCancelRun={cancelRun}
               onCloneRun={cloneRun}
               onCreateRun={createRun}
+              onCreateRunBatch={createRunBatch}
               onDeleteRun={deleteRun}
               runs={runs}
             />
