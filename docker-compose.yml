@@ -1,6 +1,6 @@
 # Two ways to run the lab (ADR-0019):
 #
-#   make app-up        dev profile  — Vite on :5173, API published on :8008
+#   make app-up        dev profile  — Vite on :5173, API published on :8009
 #   make app-up-prod   prod profile — nginx on :8080, API not published
 #
 # Every long-lived service restarts with the host and rotates its logs: an
@@ -37,7 +37,12 @@ services:
       # LAN for anyone who has not run `make set-password` yet. Opt in with
       # HARNESS_LAB_API_BIND_ADDR=0.0.0.0 — `make app-up-prod` keeps this on
       # 127.0.0.1 regardless, because there nginx is the only LAN entrance.
-      - "${HARNESS_LAB_API_BIND_ADDR:-127.0.0.1}:8008:8008"
+      #
+      # Only the *host* side is configurable. The container always listens on
+      # 8008, so nginx and the Vite proxy keep addressing `api:8008` inside the
+      # compose network no matter what a host publishes — a deploy whose 8009
+      # is already taken sets HARNESS_LAB_API_PORT and nothing else moves.
+      - "${HARNESS_LAB_API_BIND_ADDR:-127.0.0.1}:${HARNESS_LAB_API_PORT:-8009}:8008"
     depends_on:
       redis:
         condition: service_healthy

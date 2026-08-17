@@ -72,7 +72,7 @@ environment.
 ```mermaid
 flowchart TB
     subgraph stack["Lab stack — make app-up (Docker)"]
-        UI["Web UI<br/>:5173"] --> API["FastAPI<br/>:8008"]
+        UI["Web UI<br/>:5173"] --> API["FastAPI<br/>:8009"]
         API --> W["Celery worker<br/>(+ Redis)"]
         W --> RUN["Runner container (one per run)<br/>harness: claude / opencode / codex<br/>model: cloud or gateway-routed (self-hosted)"]
     end
@@ -224,7 +224,7 @@ make app-up-prod     # nginx :8080; the API is no longer published to the networ
 
 | Mode | Web UI | API | Command |
 |---|---|---|---|
-| Dev (laptop) | `:5173` (Vite) | `:8008` | `make app-up` |
+| Dev (laptop) | `:5173` (Vite) | `:8009` | `make app-up` |
 | Always-on (server) | `:8080` (nginx) | loopback only | `make app-up-prod` |
 
 ### Develop the lab (optional — only to work on the lab itself)

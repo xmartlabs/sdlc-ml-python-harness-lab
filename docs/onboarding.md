@@ -193,7 +193,7 @@ This builds the per-run runner image and starts four services:
 | Service | Where |
 |---|---|
 | Frontend (web UI) | http://localhost:5173 |
-| API (FastAPI) | http://localhost:8008 |
+| API (FastAPI) | http://localhost:8009 |
 | Celery worker + Redis | internal |
 | Runner | one container **per run**, created on demand |
 

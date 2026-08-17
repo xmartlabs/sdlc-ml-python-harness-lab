@@ -24,7 +24,7 @@ echo " Worker is running!"
 # 2. Trigger a dry-run via the API (executes bench_run.py --dry-run in a
 #    runner container; validates the whole queue + container path cheaply).
 echo "Creating dry-run $RUN_ID..."
-curl -s -X POST http://localhost:8008/api/runs \
+curl -s -X POST http://localhost:8009/api/runs \
   -H "Content-Type: application/json" \
   -d "{
     \"run_id\": \"$RUN_ID\",
@@ -46,7 +46,7 @@ MAX_ATTEMPTS=20
 ATTEMPT=0
 STATE="pending"
 until [ "$STATE" == "awaiting_manual_score" ] || [ $ATTEMPT -ge $MAX_ATTEMPTS ]; do
-    STATE=$(curl -s "http://localhost:8008/api/runs/$RUN_ID" | grep -o '"state":"[^"]*"' | cut -d'"' -f4)
+    STATE=$(curl -s "http://localhost:8009/api/runs/$RUN_ID" | grep -o '"state":"[^"]*"' | cut -d'"' -f4)
     echo " Current state: $STATE"
     if [ "$STATE" == "awaiting_manual_score" ]; then break; fi
     sleep 3

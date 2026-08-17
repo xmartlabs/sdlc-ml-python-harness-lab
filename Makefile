@@ -172,7 +172,7 @@ run-dev:
 run-api:
 	@echo "🚀 Starting API server..."
 	@if [ ! -d .venv ]; then make install; fi
-	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD} uvicorn api:app --reload --host 0.0.0.0 --port 8008 --log-level debug
+	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD} uvicorn api:app --reload --host 0.0.0.0 --port 8009 --log-level debug
 
 # Run CLI with a predefined question
 run-question:
@@ -411,7 +411,7 @@ opencode-doctor:
 IMG_NAME ?= ml-python-base
 IMAGE_TAG ?= latest
 CONTAINER_NAME ?= ml-python-base-server
-API_PORT ?= 8008
+API_PORT ?= 8009
 
 # Enable Docker BuildKit
 export DOCKER_BUILDKIT=1
@@ -425,7 +425,7 @@ build-api:
 # Run Docker container
 run-api-docker:
 	@echo "🚀 Running Docker container..."
-	@docker run --platform=linux/amd64 -e ENV=production -d -p ${API_PORT}:${API_PORT} --env-file .env ${IMG_NAME}:${IMAGE_TAG}
+	@docker run --platform=linux/amd64 -e ENV=production -d -p ${API_PORT}:8008 --env-file .env ${IMG_NAME}:${IMAGE_TAG}
 	@echo "✅ Docker container running at http://localhost:${API_PORT}!"
 
 # Build without cache
@@ -442,7 +442,7 @@ app-up:
 	@docker compose --profile dev up -d --build api worker redis frontend
 	@if [ "$$HARNESS_LAB_API_BIND_ADDR" = "0.0.0.0" ] \
 		&& ! grep -qs '^HARNESS_LAB_ADMIN_PASSWORD_HASH=.\+' .env; then \
-		echo "⚠️  API published on 0.0.0.0:8008 with NO authentication —"; \
+		echo "⚠️  API published on 0.0.0.0:$${HARNESS_LAB_API_PORT:-8009} with NO authentication —"; \
 		echo "    anyone on your network can start runs, which execute code."; \
 		echo "    Run: make set-password"; \
 	fi
@@ -489,7 +489,7 @@ backup:
 # Or run each piece in its own terminal:
 #   1. make app-worker-host      # Celery worker on the host (+ a local redis)
 #   2. make app-api-host         # web API on the host, subprocess backend
-#   3. cd frontend && VITE_API_TARGET=http://localhost:8008 npm run dev
+#   3. cd frontend && VITE_API_TARGET=http://localhost:8009 npm run dev
 _HOST_ENV = HARNESS_LAB_REPO_ROOT=$(PWD) \
 	HARNESS_LAB_DATABASE_URL=sqlite:///$(PWD)/data/app/harness_lab.db \
 	HARNESS_LAB_REDIS_URL=redis://localhost:6379/0 \
@@ -505,9 +505,9 @@ app-worker-host:
 
 app-api-host:
 	@if [ ! -d .venv ]; then make install; fi
-	@echo "🧑‍💻 Web API on host (subprocess backend) at :8008…"
+	@echo "🧑‍💻 Web API on host (subprocess backend) at :8009…"
 	@. $(VENV_DIR)/bin/activate && $(_HOST_ENV) \
-		uvicorn harness_lab_app.api:app --host 0.0.0.0 --port 8008 --reload
+		uvicorn harness_lab_app.api:app --host 0.0.0.0 --port 8009 --reload
 
 # One command for host mode: redis + worker + API + frontend together, so the
 # codex/claude harnesses run against your host CLIs. Ctrl-C stops everything.
@@ -520,10 +520,10 @@ app-host:
 	@. $(VENV_DIR)/bin/activate; \
 		$(_HOST_ENV) celery -A harness_lab_app.celery_app worker -Q runs --loglevel=info --concurrency=1 & \
 		worker_pid=$$!; \
-		$(_HOST_ENV) uvicorn harness_lab_app.api:app --host 0.0.0.0 --port 8008 & \
+		$(_HOST_ENV) uvicorn harness_lab_app.api:app --host 0.0.0.0 --port 8009 & \
 		api_pid=$$!; \
 		trap "kill $$worker_pid $$api_pid 2>/dev/null" EXIT INT TERM; \
-		cd frontend && VITE_API_TARGET=http://localhost:8008 npm run dev
+		cd frontend && VITE_API_TARGET=http://localhost:8009 npm run dev
 
 # Build only the per-run validation sandbox image (web terminal / noVNC desktop).
 sandbox-build:
@@ -883,9 +883,9 @@ help:
 	@echo "  make stop-docker         Stop Docker container"
 	@echo ""
 	@echo "Service URLs:"
-	@echo "  🚀 FastAPI: http://localhost:8008"
-	@echo "  📖 API Documentation: http://localhost:8008/docs"
-	@echo "  🔍 Agent Discovery: http://localhost:8008/.well-known/agent.json"
+	@echo "  🚀 FastAPI: http://localhost:8009"
+	@echo "  📖 API Documentation: http://localhost:8009/docs"
+	@echo "  🔍 Agent Discovery: http://localhost:8009/.well-known/agent.json"
 	@echo ""
 	@echo "Utilities:"
 	@echo "  make help                Show this help message"

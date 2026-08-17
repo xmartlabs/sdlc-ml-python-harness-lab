@@ -76,7 +76,24 @@ def test_api_bind_address_defaults_to_loopback(services):
     """
     (published,) = services["api"]["ports"]
 
-    assert published == "${HARNESS_LAB_API_BIND_ADDR:-127.0.0.1}:8008:8008"
+    assert published == (
+        "${HARNESS_LAB_API_BIND_ADDR:-127.0.0.1}:${HARNESS_LAB_API_PORT:-8009}:8008"
+    )
+
+
+def test_the_container_port_is_fixed_while_the_host_port_is_not(services):
+    """Deploys collide on host ports; the compose network never does.
+
+    Publishing on a different host port must not force nginx, the Vite proxy
+    and the healthcheck to be retargeted too — so the container side of the
+    mapping stays 8008 and only the host side reads an override.
+    """
+    (published,) = services["api"]["ports"]
+    assert published.endswith(":8008")
+
+    nginx = (REPO_ROOT / "deploy" / "nginx.conf").read_text()
+    assert "server api:8008;" in nginx
+    assert "8008/api/health" in str(services["api"]["healthcheck"]["test"])
 
 
 def test_app_up_prod_pins_the_api_to_loopback():

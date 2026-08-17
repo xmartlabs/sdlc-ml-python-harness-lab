@@ -112,7 +112,7 @@ make app-host
 ```
 
 Or run the pieces in separate terminals for debugging: `make app-worker-host`,
-`make app-api-host`, then `cd frontend && VITE_API_TARGET=http://localhost:8008
+`make app-api-host`, then `cd frontend && VITE_API_TARGET=http://localhost:8009
 npm run dev`.
 
 Then open `http://localhost:5173/runs`, pick **Case** `tetris-v1`, set
