@@ -11,13 +11,16 @@ import sys
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
 from typing import TYPE_CHECKING, Any
 
 from celery.signals import worker_ready
+from celery.worker.control import control_command
 from sqlmodel import Session, select
 
+from harness_lab_app import run_failures
 from harness_lab_app.audit_service import AuditService
 from harness_lab_app.case_service import CaseService
 from harness_lab_app.celery_app import celery_app
@@ -173,46 +176,250 @@ def _drain(handle: RunHandle, lines: Queue[tuple[str, str] | None]) -> None:
         lines.put(None)
 
 
-def _stream_run(
-    session: Session, run_id: str, handle: RunHandle, timeout_seconds: int
-) -> tuple[bool, bool, deque[str]]:
-    """Persist run output as RunEvents; watch for cancellation and timeout.
+@dataclass
+class StreamOutcome:
+    """Why streaming ended, and what the run last said before it did."""
 
-    Returns (cancelled, timed_out, tail_of_output).
+    # None when the process ended on its own; otherwise "cancelled", "timeout",
+    # "stalled", "model_silent" or "endpoint". At most one applies — the loop
+    # stops the handle on the first one it sees.
+    stop_reason: str | None
+    tail: deque[str]
+    # Seconds of silence when the run was stopped. Only meaningful for the two
+    # silence verdicts, where it is the whole evidence, so it goes in the
+    # failure message.
+    silent_seconds: float = 0.0
+    # Provider requests that failed back-to-back with no progress in between,
+    # and the last one's text. The evidence behind an "endpoint" verdict.
+    stream_errors: int = 0
+    last_error: str = ""
+    # Lifetime totals, never reset: requests handed to the provider (retries
+    # included) and how many failed. `failed_requests >= model_requests > 0`
+    # means the model was never heard from at all — the evidence behind
+    # voiding a run that otherwise ended cleanly (see `_never_answered_failure`).
+    model_requests: int = 0
+    failed_requests: int = 0
+
+
+def _stream_run(
+    session: Session,
+    run_id: str,
+    handle: RunHandle,
+    timeout_seconds: int,
+    stall_seconds: int = 0,
+    model_wait_seconds: int = 0,
+    max_stream_errors: int = 0,
+) -> StreamOutcome:
+    """Persist run output as RunEvents; watch for the four ways a run goes bad.
+
+    ``stall_seconds`` catches the failure ``timeout_seconds`` structurally
+    cannot: a run that is not slow but *stuck*, producing nothing while its
+    total budget ticks away. The two are indistinguishable from outside the
+    process, so they need separate clocks — one since the start, one since the
+    last byte of output.
+
+    A single silence clock, though, cannot tell a wedged agent from a model
+    that has simply not answered yet, and the two deserve opposite verdicts.
+    opencode announces the moment it hands a request to the provider, so the
+    budget applied to a silence is chosen by what the run was doing when it
+    went quiet: ``stall_seconds`` for a tool call, ``model_wait_seconds`` for a
+    request in flight. ``max_stream_errors`` covers the third case, where the
+    provider is answering — with failures — and opencode would retry until the
+    budget ran out. Zero disables any of the three.
     """
     lines: Queue[tuple[str, str] | None] = Queue()
     reader = threading.Thread(target=_drain, args=(handle, lines), daemon=True)
     reader.start()
 
     tail: deque[str] = deque(maxlen=_FAILURE_TAIL_LINES)
-    cancelled = False
-    timed_out = False
+    stop_reason: str | None = None
+    silent_seconds = 0.0
+    stream_errors = 0
+    last_error = ""
+    model_requests = 0
+    failed_requests = 0
+    awaiting_model = False
+    stopped = False
     started = time.monotonic()
+    last_output = started
     last_cancel_check = 0.0
     while True:
         now = time.monotonic()
-        if not cancelled and not timed_out:
+        if stop_reason is None:
             if now - last_cancel_check >= 1.0:
                 last_cancel_check = now
                 if _cancel_requested(session, run_id):
-                    cancelled = True
-                    handle.stop()
-            if now - started >= timeout_seconds:
-                timed_out = True
-                handle.stop()
+                    stop_reason = "cancelled"
+            if stop_reason is None and now - started >= timeout_seconds:
+                stop_reason = "timeout"
+            if stop_reason is None:
+                # Which silence this is decides both the budget and the
+                # verdict. A local model is quiet for as long as it takes to
+                # process the prompt before the first token — measured at 318s
+                # for 24k tokens on the box that runs qwen3.6-35b — so the two
+                # budgets are orders of magnitude apart, and charging a run the
+                # wrong one is how a healthy model gets recorded as stuck.
+                budget = model_wait_seconds if awaiting_model else stall_seconds
+                quiet = now - last_output
+                if budget > 0 and quiet >= budget:
+                    stop_reason = "model_silent" if awaiting_model else "stalled"
+                    silent_seconds = quiet
+        if stop_reason is not None and not stopped:
+            # Stopping the handle is what unblocks the reader thread: it kills
+            # the container, the log stream hits EOF, `_drain` posts its
+            # sentinel and this loop leaves through the `break` below.
+            stopped = True
+            handle.stop()
         try:
             item = lines.get(timeout=0.2)
         except Empty:
             continue
         if item is None:
             break
+        # Any output at all resets the stall clock, including the blank lines
+        # dropped just below — a run that is talking is a run that is alive.
+        last_output = time.monotonic()
         level, message = item
         if not message:
             continue
         session.add(RunEvent(run_id=run_id, level=level, message=message))
         session.commit()
         tail.append(message)
-    return cancelled, timed_out, tail
+        awaiting_model = run_failures.awaits_model_response(message)
+        if run_failures.is_model_request(message):
+            model_requests += 1
+        if run_failures.is_stream_error(message):
+            stream_errors += 1
+            failed_requests += 1
+            last_error = message
+            if stop_reason is None and 0 < max_stream_errors <= stream_errors:
+                stop_reason = "endpoint"
+        elif not run_failures.is_retry_noise(message):
+            # Real work happened, so whatever failed before was survivable.
+            stream_errors = 0
+    return StreamOutcome(
+        stop_reason,
+        tail,
+        silent_seconds,
+        stream_errors,
+        last_error,
+        model_requests,
+        failed_requests,
+    )
+
+
+def _with_tail(message: str, tail: str, heading: str) -> str:
+    """Attach the evidence to a verdict, so nobody has to go dig for it."""
+    return f"{message}\n\n{heading}\n{tail}" if tail else message
+
+
+def _stall_failure(outcome: StreamOutcome, tail: str) -> str:
+    """The verdict for a run that went quiet with no model request in flight.
+
+    Which means the agent's own last act is what it is stuck inside, and the
+    tail is that act — the single most useful thing to read next, so it ships
+    with the verdict.
+    """
+    minutes = round(outcome.silent_seconds / 60)
+    message = (
+        f"Run stalled: no output for {minutes} minutes and no model request was "
+        "in flight, so the run was stopped rather than left to burn its "
+        "remaining time budget. The agent is blocked in a tool call that will "
+        "never return (a shell command holding its stdout pipe open, a process "
+        "that ignores SIGTERM). Retry, or run it again with a narrower step."
+    )
+    return _with_tail(message, tail, "Last output before the stall:")
+
+
+def _model_silence_failure(outcome: StreamOutcome, tail: str, budget: int) -> str:
+    """The verdict for a run stopped while the model still owed it a first token.
+
+    Deliberately not called a stall: the run did nothing wrong, a budget the
+    lab chose ran out. Naming the knob in the message is the point — the
+    operator reading this is the one who can tell "too slow to be worth it"
+    from "too slow for a threshold set too low", and only they should decide.
+    """
+    minutes = round(outcome.silent_seconds / 60)
+    message = (
+        "No model response: the endpoint accepted the request and sent nothing "
+        f"back for {minutes} minutes, so the run was stopped. Nothing was "
+        "learned about the model here, so this does not count as an attempt. "
+        "On a local model this silence is prompt-processing time before the "
+        "first token and it grows with the prompt — if the model is merely "
+        f"slow, raise run_model_wait_seconds (currently {budget}s). Otherwise "
+        "the endpoint is wedged: check that the model is loaded and that its "
+        "context window fits the prompt (docs/local-model-runtime-config.md)."
+    )
+    return _with_tail(message, tail, "Last output before the silence:")
+
+
+def _endpoint_failure(outcome: StreamOutcome, tail: str) -> str:
+    """The verdict for a run that spent itself retrying a provider that refused."""
+    message = (
+        f"Model endpoint failing: {outcome.stream_errors} provider requests "
+        "failed back-to-back with no progress in between, so the run was "
+        "stopped instead of retrying until its time budget ran out. Nothing "
+        "was learned about the model, so this does not count as an attempt. "
+        "Check that the endpoint is reachable from the runner container and "
+        "that the model id and context window are configured "
+        "(docs/local-model-runtime-config.md)."
+    )
+    error = outcome.last_error.strip()
+    if error:
+        return _with_tail(message, error[-600:], "Last error:")
+    return _with_tail(message, tail, "Last output:")
+
+
+def _model_never_answered(outcome: StreamOutcome) -> bool:
+    """True when the run made model requests and not one of them was answered."""
+    return 0 < outcome.model_requests <= outcome.failed_requests
+
+
+def _never_answered_failure(outcome: StreamOutcome, tail: str) -> str:
+    """The verdict for a run that ended on its own without one model response.
+
+    The watchdog verdicts all require the run to still be alive when the
+    threshold trips. Run instance_qutebrowser…-K-003 slipped past every one of
+    them: both provider requests died in two seconds on a gateway config error
+    (`max_tokens` above the model's completion cap) — fewer errors than
+    `run_max_stream_errors` — opencode gave up, and the harness script carried
+    on to scoring, archived an empty diff and exited 0. Recorded as
+    `completed`, score 0, it read as "the model attempted the case and
+    resolved nothing" on the leaderboard, when the model was never heard from.
+    Sharing the `Model endpoint failing:` prefix keeps the taxonomy in
+    :mod:`harness_lab_app.run_failures` a closed set.
+    """
+    message = (
+        f"Model endpoint failing: all {outcome.model_requests} provider "
+        "requests made by this run failed, so it ended without a single model "
+        "response. The harness may still have exited cleanly and archived an "
+        "empty result, but nothing was learned about the model, so this does "
+        "not count as an attempt. The request itself is being rejected — "
+        "check the model id, context window and completion-token cap at the "
+        "gateway (docs/local-model-runtime-config.md)."
+    )
+    error = outcome.last_error.strip()
+    if error:
+        return _with_tail(message, error[-600:], "Last error:")
+    return _with_tail(message, tail, "Last output:")
+
+
+def _watchdog_failure(outcome: StreamOutcome, settings: Any, tail: str) -> str:
+    """The failure reason for a run the watchdog stopped.
+
+    Each branch names a different culprit — the agent, the endpoint, the clock
+    — and :mod:`harness_lab_app.run_failures` reads these prefixes back to
+    decide which of them measured anything. The two must move together.
+    """
+    if outcome.stop_reason == "stalled":
+        return _stall_failure(outcome, tail)
+    if outcome.stop_reason == "model_silent":
+        return _model_silence_failure(
+            outcome, tail, getattr(settings, "run_model_wait_seconds", 0)
+        )
+    if outcome.stop_reason == "endpoint":
+        return _endpoint_failure(outcome, tail)
+    return f"Run timed out after {settings.run_timeout_seconds}s"
 
 
 def _execute_run_body(
@@ -255,24 +462,44 @@ def _execute_run_body(
             _provision_pro_workspace(session, run_id, config_payload.case_id)
 
             handle = executor.start(run_id, command)
-            cancelled, timed_out, tail = _stream_run(
-                session, run_id, handle, settings.run_timeout_seconds
+            outcome = _stream_run(
+                session,
+                run_id,
+                handle,
+                settings.run_timeout_seconds,
+                getattr(settings, "run_stall_seconds", 0),
+                getattr(settings, "run_model_wait_seconds", 0),
+                getattr(settings, "run_max_stream_errors", 0),
             )
             exit_code = handle.wait()
-            if cancelled:
+            if outcome.stop_reason == "cancelled":
                 service.mark_cancelled(run_id, exit_code)
-            elif timed_out:
+            elif outcome.stop_reason is not None:
                 service.mark_finished(
                     run_id,
                     exit_code if exit_code != 0 else -1,
-                    f"Run timed out after {settings.run_timeout_seconds}s",
+                    _watchdog_failure(
+                        outcome, settings, "\n".join(outcome.tail)[-600:]
+                    ),
                 )
             else:
                 failure = None
-                if exit_code != 0:
-                    failure = "\n".join(tail)[-1000:] or "Run failed with no output"
-                service.mark_finished(run_id, exit_code, failure)
-                if exit_code == 0:
+                if _model_never_answered(outcome):
+                    # Checked before the exit code: a clean exit earned by
+                    # archiving an empty result is still not a measurement.
+                    failure = _never_answered_failure(
+                        outcome, "\n".join(outcome.tail)[-600:]
+                    )
+                elif exit_code != 0:
+                    failure = (
+                        "\n".join(outcome.tail)[-1000:] or "Run failed with no output"
+                    )
+                service.mark_finished(
+                    run_id,
+                    exit_code if failure is None or exit_code != 0 else -1,
+                    failure,
+                )
+                if failure is None:
                     _run_objective_validation(session, run_id)
                     _autoscore_objective_case(session, run_id)
             # Attribution is useful for any run that produced step logs
@@ -819,6 +1046,52 @@ def reconcile_stale_runs(
             )
             reconciled += 1
     return reconciled
+
+
+@celery_app.task(name="harness_lab_app.tasks.reconcile_runs", acks_late=True)
+def reconcile_runs() -> int:
+    """The health panel's heal button for stuck runs.
+
+    Same body the worker runs on boot, exposed on demand: the API cannot do
+    this itself because stopping a leftover container needs the docker socket,
+    which only the worker holds (ADR-0002).
+    """
+    init_db()
+    return reconcile_stale_runs()
+
+
+@control_command()
+def harness_facts(_state: Any) -> dict[str, Any]:
+    """Answer "is the run runtime usable?" for the health panel (ADR-0018).
+
+    Registered as a Celery *control* command rather than a task so the API gets
+    a synchronous reply from whichever worker is alive, without a result
+    backend and without ever touching the docker socket itself.
+    """
+    settings = get_settings()
+    facts: dict[str, Any] = {
+        "hostname": os.environ.get("HOSTNAME", ""),
+        "backend": settings.execution_backend,
+        "runner_image": settings.runner_image,
+        "docker_ok": False,
+        "runner_image_present": False,
+        "docker_version": "",
+        "docker_error": "",
+    }
+    if settings.execution_backend != "docker":
+        return facts
+    try:
+        import docker  # local import: only the worker needs the socket
+
+        client = docker.from_env()
+        facts["docker_version"] = client.version().get("Version", "")
+        facts["docker_ok"] = True
+        with contextlib.suppress(Exception):
+            client.images.get(settings.runner_image)
+            facts["runner_image_present"] = True
+    except Exception as exc:  # the failure *is* the answer this command reports
+        facts["docker_error"] = f"{type(exc).__name__}: {exc}"
+    return facts
 
 
 @worker_ready.connect

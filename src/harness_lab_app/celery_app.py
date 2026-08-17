@@ -84,6 +84,16 @@ def enqueue_sandbox_stop(run_id: str, kind: str) -> None:
     )
 
 
+def enqueue_reconcile_runs() -> None:
+    """Publish the stuck-run reconciliation the health panel's heal button asks
+    for; raises if the broker is unreachable."""
+    celery_app.send_task(
+        "harness_lab_app.tasks.reconcile_runs",
+        queue="runs",
+        retry=False,
+    )
+
+
 def enqueue_container_cleanup(run_id: str) -> None:
     """Publish a container-teardown task after a run is deleted (worker owns the
     docker socket); raises if the broker is unreachable."""

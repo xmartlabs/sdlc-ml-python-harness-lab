@@ -22,6 +22,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
+from harness_lab_app.config import get_settings
 from harness_lab_app.harness_lifecycle import (
     drafting,
     errors,
@@ -39,9 +40,18 @@ from harness_lab_app.harness_lifecycle.models import (
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUNS_DIR = REPO_ROOT / "data" / "runs"
-LAB_REPOSITORY = "marcosdh1987/ai-agentic-harness-lab"
-TEMPLATE_REPOSITORY = "marcosdh1987/ml-python-base"
 DEFAULT_MODEL = "gpt-5.4-mini"
+
+
+def lab_repository() -> str:
+    """Slug of the lab repo itself — where proposals record their evidence."""
+    return get_settings().lab_repository
+
+
+def template_repository() -> str:
+    """Slug of the governance template — where improvement issues are filed."""
+    return get_settings().template_repository
+
 
 EXIT_OK = 0
 EXIT_INVALID = 2
@@ -68,7 +78,7 @@ def cmd_proposal(args: argparse.Namespace) -> int:
         print(f"❌ Could not synthesize proposal draft: {exc}")
         return EXIT_MISSING
     created_at = _utc_now()
-    source = ProposalSource(repository=LAB_REPOSITORY, runs=[evidence])
+    source = ProposalSource(repository=lab_repository(), runs=[evidence])
     if args.dry_run:
         proposal = drafting.draft_to_proposal(
             draft,
@@ -129,7 +139,7 @@ def cmd_proposal_issue(args: argparse.Namespace) -> int:
             "issue",
             "create",
             "--repo",
-            TEMPLATE_REPOSITORY,
+            template_repository(),
             "--title",
             f"[HEP] {proposal.title}",
             "--body-file",
@@ -325,7 +335,7 @@ def cmd_sync_branch(args: argparse.Namespace) -> int:
                 manifests.write_candidate_manifest(
                     worktree,
                     CandidateManifest(
-                        repository=TEMPLATE_REPOSITORY,
+                        repository=template_repository(),
                         ref=args.ref,
                         commit=commit,
                         branch=sync.candidate_branch(args.ref),

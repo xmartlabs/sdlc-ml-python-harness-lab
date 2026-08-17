@@ -22,6 +22,23 @@ type LevelFilter = (typeof LEVELS)[number];
 const LOGFMT_RE = /^timestamp=(\S+)\s+level=(\S+)\s+(.*)$/;
 const MESSAGE_RE = /message=("([^"]*)"|\S+)/;
 
+/**
+ * The wall-clock time of a log line, in the reader's own timezone.
+ *
+ * opencode stamps its lines in UTC with an explicit `Z`. Slicing the time out
+ * of the string kept that UTC clock while looking exactly like a local one, so
+ * every line read hours off — and the one question a log timestamp has to
+ * answer, "has this run gone quiet?", could not be answered by eye.
+ */
+function localTime(timestamp: string): string {
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) {
+    return timestamp.includes("T") ? timestamp.split("T")[1].replace("Z", "") : timestamp;
+  }
+  const hhmmss = parsed.toLocaleTimeString(undefined, { hour12: false });
+  return `${hhmmss}.${String(parsed.getMilliseconds()).padStart(3, "0")}`;
+}
+
 function parseLine(event: RunEventRecord): ParsedLine {
   const match = LOGFMT_RE.exec(event.message.trim());
   if (!match) {
@@ -38,10 +55,9 @@ function parseLine(event: RunEventRecord): ParsedLine {
   const messageMatch = MESSAGE_RE.exec(rest);
   const message = messageMatch ? (messageMatch[2] ?? messageMatch[1]) : "";
   const extras = messageMatch ? rest.replace(messageMatch[0], "").trim() : rest.trim();
-  const timePart = timestamp.includes("T") ? timestamp.split("T")[1].replace("Z", "") : timestamp;
   return {
     id: event.id,
-    time: timePart,
+    time: localTime(timestamp),
     level: level.toUpperCase(),
     message: message || rest,
     extras,

@@ -2,7 +2,7 @@
 
 You are building a **complete, playable** Tetris game in Python (pygame) from scratch,
 in ONE autonomous session. Work through all 8 milestones — do not stop after Milestone 1.
-All files go inside `workspace/{run_id}/`. Entry point: `workspace/{run_id}/main.py`.
+All files go inside `{workspace}/`. Entry point: `{workspace}/main.py`.
 
 ---
 
@@ -19,7 +19,7 @@ Keep them in mind while you work.
 
 ## Phase 1 — Plan (before any code)
 
-Create `workspace/{run_id}/PLAN.md`:
+Create `{workspace}/PLAN.md`:
 
 ```markdown
 # Tetris Build Plan — {run_id}
@@ -59,12 +59,12 @@ Go through milestones 1 → 8 **in order**. For EACH milestone:
 2. **Validate headlessly** (a hanging window or a `timeout` is NOT success):
 
    ```bash
-   BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python workspace/{run_id}/main.py; echo "exit=$?"
+   BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python {workspace}/main.py; echo "exit=$?"
    ```
 
    A correct build prints `exit=0`. Do not move to the next milestone until the current
    one validates with `exit=0`.
-3. Update `workspace/{run_id}/PLAN.md`:
+3. Update `{workspace}/PLAN.md`:
    - Mark the milestone `[x]` (done)
    - Add an ADR for any non-obvious architecture decision
    - Append a Session Log line: `Milestone N: ✅ <what you built>`

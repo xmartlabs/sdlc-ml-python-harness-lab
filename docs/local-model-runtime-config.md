@@ -95,6 +95,173 @@ Copilot specifically:
   `provider.lmstudio.models` in `opencode.json` and the gateway `model_name`.
 - Temperature 0.2 (set at the gateway per lever 1, or in LM Studio / `opencode.json`).
 
+### The JIT auto-load trap (read this before blaming the model)
+
+The context length you set by hand in LM Studio applies to the model **you loaded**. When a
+request arrives for a model that is *not* loaded, LM Studio loads it on demand (JIT) using
+that model's **default** window — often 8k — and your setting is not consulted. The gateway
+answers normally, so nothing upstream looks broken.
+
+The harness system prompt (governance docs, 24 skill descriptions, 6 agent definitions and
+the tool schemas) is **~13.7k tokens before the first user turn**. Under an 8k window every
+call is rejected by llama.cpp *before evaluation*:
+
+```
+The number of tokens to keep from the initial prompt is greater than the
+context length (n_keep: 13777 >= n_ctx: 8192)
+```
+
+Run `tetris-v1-K-020` hit exactly this: 4432 steps, each failing in ~0.4s, 2.5 hours of wall
+clock and a 12 MB log for zero work. The rejection is instant, which is what makes it look
+like a stream error rather than a configuration problem.
+
+The runner container is also headless *by construction* now: `SDL_VIDEODRIVER=dummy`
+and `SDL_AUDIODRIVER=dummy` are set in the image, in the run environment, and in
+`bench_run` itself, so a case no longer depends on the agent retyping the prefix
+([ADR-0021](adr/0021-benchmark-artifact-integrity.md)). Measured compliance before that
+was 72% and 40% on two runs, and every miss left a pygame loop holding the agent's
+shell open until the run wedged.
+
+Two things in the lab now close this:
+
+- **Preflight gate.** Creating a run with a `gateway/` executor sends one oversized prompt
+  and refuses to start if the backend proves its window is under **32768** tokens
+  (`MIN_CONTEXT_TOKENS`). Only a *provable* shortfall blocks — a timeout, a cold JIT load or
+  an unreachable gateway all fail open. `HARNESS_LAB_DISABLE_GATEWAY_PROBE=1` skips it.
+- **“Check context” button** in Settings → Model catalog, which runs the same measurement on
+  demand and reports the window the backend is actually serving.
+
+The reliable fix on the LM Studio side is to load the model explicitly with the window you
+want (or raise its default in the model's config) before launching a run, rather than
+letting JIT pick it.
+
+## Prompt processing time and the run watchdog
+
+A local model says **nothing at all** while it processes the prompt. That silence is not
+idle time, and it grows with the prompt: measured against the box serving
+`qwen/qwen3.6-35b-a3b`, a trivial prompt returns its first token in **0.2s** and the
+harness's ~24k-token prompt with tool schemas takes **318s**. The same box serving a 9B
+model never exceeded 76s. Nothing is wrong in either case — the big model is simply
+prefilling.
+
+This matters because the lab kills quiet runs. Three settings decide when, and they
+measure different silences (`.env`, `HARNESS_LAB_` prefix; `0` disables any of them):
+
+| Setting | Default | Kills a run when |
+|---|---|---|
+| `run_stall_seconds` | `600` | It has been quiet this long **with no model request in flight** — i.e. blocked in a tool call that will never return |
+| `run_model_wait_seconds` | `2400` | It has been quiet this long **waiting on the model's first token** |
+| `run_max_stream_errors` | `5` | This many provider requests failed back-to-back with no progress in between |
+
+The watchdog tells the two silences apart by reading opencode's own log: a run sitting on
+`message=stream` / `llm runtime selected` is waiting on the provider, anything else is the
+agent's own doing. Before that split there was one 600s clock for both, and it sat *below*
+the 35B's prefill time — so every 35B run died at its first turn (`K-040`, `K-049`, `K-050`,
+all in the same place) and was filed as the agent wedging the harness, while the faster 9B
+sailed through. It read as "the big model broke"; it was a threshold set too low
+([ADR-0022](adr/0022-watchdog-splits-model-wait-from-agent-stall.md)).
+
+**Reading the verdict:**
+
+- `Run stalled:` — the agent is stuck in a tool call. A real result; it counts as an attempt.
+- `No model response:` — the endpoint accepted the request and sent nothing back. If the
+  model is merely slow, raise `run_model_wait_seconds`; if it is wedged, check that the model
+  is loaded and that its window fits the prompt (the JIT trap above). Does **not** count as an
+  attempt.
+- `Model endpoint failing:` — the provider refused repeatedly; the last error travels with the
+  verdict. Check reachability from the runner container and the model id. Does **not** count
+  as an attempt.
+
+Raise `run_model_wait_seconds` when you serve a model slower than anything measured here
+(a larger model, a longer prompt, a colder cache). Keep it below `run_timeout_seconds`
+(default 7200), or the total budget becomes the only thing that ever stops a wedged run.
+
+## The direct lanes (skip the gateway when you are iterating)
+
+Everything above assumes the gateway is in the path. It buys Langfuse tracing and per-model
+`max_tokens` caps — worth it for a benchmark run you intend to keep. It also adds a name
+mapping, and **when that mapping is wrong the failure is silent**: run `tetris-v1-K-031` used
+a LiteLLM alias that forwarded the id `qwen3.6:35b`, LM Studio answered `Invalid model
+identifier`, and the run-form preflight — which treats an unfamiliar 4xx as ambiguous —
+reported the configuration ready. A day of runs went to a name mismatch three layers away
+from the picker.
+
+For iterating over models quickly, the lab has a second, shorter path.
+
+**Setup.** One variable, on Settings → Local runtimes:
+
+```
+LMSTUDIO_BASE_URL=http://192.168.1.50:1234/v1
+```
+
+The address of the machine running LM Studio, **including `/v1`** (opencode talks to LM
+Studio's OpenAI-compatible endpoint; without the segment every completion 404s). In LM Studio,
+Developer → *Serve on local network* must be on if the lab runs on another host. No gateway
+entry, no `opencode.json` edit, no catalog refresh.
+
+**What you get.** A group at the top of the run form's model picker, **LM Studio (direct, no
+gateway)**, and a matching panel on the Settings page. Both are read straight from
+`GET /api/v0/models` on that host, which reports per model whether it is loaded and with what
+context window:
+
+```
+prism-ml/bonsai-27b — loaded, 54k ctx
+qwen/qwen3.6-35b   — not loaded (JIT would use its default window)
+```
+
+Runs address these as `lmstudio/<publisher>/<model>`, and the routing provider is written
+into the same gitignored opencode overlay the gateway catalog uses, so nothing tracked
+changes. Press **Refresh from LM Studio** after loading or ejecting a model; the list is
+cached for 15 seconds and failures are never cached.
+
+**Why the preflight is strict here.** The gateway checks fail open by design — a timeout may
+be a cold JIT load, and blocking a runnable config is worse than letting it try. The direct
+lane has no such ambiguity: one cheap GET answers *does this name exist*, *is a model behind
+it*, and *how big is its window*. So it blocks, immediately and with the reason, when
+
+- `LMSTUDIO_BASE_URL` is unset or lacks `/v1`,
+- the host does not answer,
+- the name is not one the server serves (the error lists the ones it does),
+- the model is not loaded, or
+- its loaded window is under `MIN_CONTEXT_TOKENS` (32768).
+
+None of these takes measurable time, which is the other half of the point: the gateway
+context probe sends a 32k-token prompt and a dense 27B model can spend minutes evaluating it.
+
+**Which lane to use.** Direct while you are comparing models or debugging a case; through the
+gateway for runs whose traces and costs you want in Langfuse. The two coexist — a run records
+whichever executor id it used, so the leaderboard tells them apart.
+
+### The same, for Ollama
+
+`OLLAMA_BASE_URL` gets you a second direct provider, listed from `GET /api/tags` (what is
+installed) and `GET /api/ps` (what is running, and with what window):
+
+```
+OLLAMA_BASE_URL=http://192.168.1.50:11434/v1
+```
+
+Same rules: include `/v1`, and if Ollama runs on another machine it must listen on the
+network — start it with `OLLAMA_HOST=0.0.0.0`, or it only binds loopback and the lab sees
+nothing. Runs address these as `ollama/<model>:<tag>`.
+
+**The context trap is different here, and worse by default.** LM Studio's JIT auto-load takes
+each *model's own* default window. Ollama applies one *server-wide* setting,
+`OLLAMA_CONTEXT_LENGTH`, whose default is **4096** — below the ~13.7k-token system prompt, so
+a stock Ollama host cannot run this harness at all. Nothing in the OpenAI-compatible request
+can override it (`num_ctx` is not an OpenAI parameter), so it has to be fixed on the server:
+
+```bash
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve     # or set it in the systemd unit / service env
+```
+
+Because that setting lives on the server, the preflight treats a cold Ollama model
+differently from a cold LM Studio one: LM Studio refuses to start (its window is unknowable),
+while Ollama lets the run proceed and the picker label warns instead — blocking on a number
+the lab cannot read would ground a correctly-configured host. A *running* Ollama model whose
+`/api/ps` window is under 32k is refused exactly like an LM Studio one, since there the
+shortfall is proven.
+
 ## Hard lever 3 — VS Code / Copilot settings
 
 `.github/copilot-instructions.md` is auto-detected and applied to every chat request; keep it

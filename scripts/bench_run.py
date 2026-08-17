@@ -27,12 +27,14 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import functools
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -316,10 +318,29 @@ def build_effective_skills(disabled: list[str], extra: list[str]) -> list:
                 f"❌ --extra-skill '{name}': no SKILL.md at "
                 f"{source.relative_to(REPO_ROOT)}/"
             )
+        # The linker projects every top-level item of an external skill, so a
+        # symlink here would be copied into each tool's native view and could
+        # point anywhere on the host. Staging trees are written from the DB and
+        # never contain one; if they do, something else wrote them.
+        escaping = sorted(
+            item.name
+            for item in source.rglob("*")
+            if item.is_symlink() and not _within(item.resolve(), source)
+        )
+        if escaping:
+            sys.exit(
+                f"❌ --extra-skill '{name}': symlink(s) pointing outside the "
+                f"skill: {', '.join(escaping)}"
+            )
         effective.append(
             Skill(name=name, kind=KIND_EXTERNAL, source_path=source, description="")
         )
     return effective
+
+
+def _within(target: Path, root: Path) -> bool:
+    resolved = root.resolve()
+    return target == resolved or resolved in target.parents
 
 
 def apply_skill_views(skills: list) -> None:
@@ -346,15 +367,70 @@ def restore_full_skill_views() -> None:
     apply_skill_views(discover_governed(REPO_ROOT))
 
 
+@functools.cache
+def apply_gateway_overlay(direct_models: tuple[str, ...] = ()) -> str | None:
+    """Export the opencode routing overlay and return its content hash.
+
+    A model enabled from the web lives in ``data/app/gateway-models.json``, not
+    in the git-tracked ``opencode.json``; without this the harness cannot
+    resolve ``gateway/<id>`` and the run burns every step on a routing error.
+    ``direct_models`` does the same for ``lmstudio/<id>`` executors, which have
+    no tracked provider block at all.
+
+    Injected here rather than in ``executors.build_run_environment`` because
+    ``SubprocessRunExecutor.start`` passes no ``env=`` — host-mode runs would
+    silently miss it. Both lanes reach this function.
+
+    ``functools.cache`` makes it idempotent, so the metadata writer and the harness
+    launcher can each call it without caring which runs first. It is keyed by
+    argument rather than capped at one entry because a resumed run learns its
+    executor from the stored metadata *after* the first call, and that later,
+    better-informed call must be able to rewrite the overlay. Returns ``None``
+    when nothing is added to the tracked map, which is what keeps every
+    historical ``condition_hash`` byte-identical.
+    """
+    from harness_lab_app.opencode_overlay import build_overlay
+
+    env, digest = build_overlay(REPO_ROOT, direct_models)
+    os.environ.update(env)
+    return digest
+
+
+def direct_models(args: argparse.Namespace) -> tuple[str, ...]:
+    """Models this run needs a direct provider block for.
+
+    Both host lanes: ``lmstudio/<id>`` and ``ollama/<id>``. The prefixes are
+    kept — they are what tells the overlay which provider block to write.
+    """
+    from harness_lab_app.lmstudio_direct import is_direct_model as is_lmstudio
+    from harness_lab_app.ollama_direct import is_direct_model as is_ollama
+
+    candidates: tuple[str | None, ...] = (
+        getattr(args, "executor_model", None),
+        getattr(args, "planner_model", None),
+    )
+    return tuple(sorted({str(m) for m in candidates if is_lmstudio(m) or is_ollama(m)}))
+
+
+STAGED_SKILL_HASH_ALGO = "folder_sha256_v2"
+
+
 def staged_skill_hashes(extra: list[str]) -> dict[str, str]:
-    """Content hash per staged skill — a staged-skill edit must flip the arm."""
-    from harness_lab_app.provenance import hash_file
+    """Digest per staged skill — any edit to the tree must flip the arm.
+
+    Whole-tree, not just SKILL.md (ADR-0017): a staged skill can now ship
+    ``scripts/`` and ``references/``, and changing one of those changes the
+    experiment. The consequence is deliberate and recorded: every historical
+    staged-skill arm re-bins, which is why ``metadata.json`` also carries
+    ``skills_extra_hash_algo`` so the two generations stay legible.
+    """
+    from ml_python_base.skills_sync.hashing import folder_hash
 
     out: dict[str, str] = {}
     for name in sorted(set(extra)):
-        digest = hash_file(SKILLS_STAGING_DIR / name / "SKILL.md")
-        if digest is not None:
-            out[name] = digest
+        source = SKILLS_STAGING_DIR / name
+        if source.is_dir():
+            out[name] = folder_hash(source)
     return out
 
 
@@ -363,6 +439,39 @@ def discover_subagents() -> list[str]:
     if not d.is_dir():
         return []
     return sorted(p.stem for p in d.glob("*.md") if p.stem != "README")
+
+
+def agent_workspace_path(run_id: str) -> str:
+    """The run's workspace as an absolute path the agent must write to.
+
+    Absolute, not relative, and substituted into the prompt rather than left as
+    a placeholder — both halves of the failure this fixes.
+
+    Only ``<repo>/workspace/`` is bind-mounted into the runner (``.:/app``), so
+    a file written anywhere else lives on the container's overlay filesystem and
+    is destroyed with the container. A relative ``workspace/<run>/`` is correct
+    only while the shell sits in ``/app``, and agents routinely "normalize" it
+    to ``/workspace/<run>/`` — the container root, outside the mount. Runs
+    tetris-v1-K-037 and K-039 did exactly that: 895 and 116 writes to the
+    ephemeral path, 85 minutes and an entire build lost respectively, while the
+    lab archived an empty or stale directory and recorded the run as a normal
+    completion.
+    """
+    return str((WORKSPACE_ROOT / run_id).resolve())
+
+
+def render_prompt_body(text: str, run_id: str) -> str:
+    """Substitute the run placeholders a case prompt ships with.
+
+    ``benchmarks/*/prompt_*.md`` are templates carrying ``{run_id}``, but the
+    body used to be concatenated verbatim, so the model was handed the literal
+    string ``workspace/{run_id}/main.py`` and had to guess. Plain ``replace``
+    rather than ``str.format``: prompt bodies contain braces of their own (code
+    blocks, dict literals) that ``format`` would choke on or silently eat.
+    """
+    return text.replace("{run_id}", run_id).replace(
+        "{workspace}", agent_workspace_path(run_id)
+    )
 
 
 def generate_prompt(
@@ -381,9 +490,13 @@ def generate_prompt(
     main.py) for repo-task/SWE runs, where the correct wording depends on the
     agent's working directory.
     """
+    workspace = agent_workspace_path(run_id)
     constraint = repo_note or (
-        f"> All files MUST be created in `workspace/{run_id}/`\n"
-        f"> Entry point: `workspace/{run_id}/main.py`\n"
+        f"> All files MUST be created in `{workspace}/` — that exact absolute\n"
+        f"> path. It is the only directory preserved after the run; anything\n"
+        f"> written elsewhere (for example `/workspace/{run_id}/`) is discarded\n"
+        f"> when the container exits.\n"
+        f"> Entry point: `{workspace}/main.py`\n"
     )
     header = (
         f"<!-- BENCHMARK RUN METADATA\n"
@@ -398,7 +511,9 @@ def generate_prompt(
         f"---\n\n"
     )
     prompt_path = out_dir / "prompt.md"
-    prompt_path.write_text(header + prompt_source.read_text())
+    prompt_path.write_text(
+        header + render_prompt_body(prompt_source.read_text(), run_id)
+    )
     return prompt_path
 
 
@@ -411,6 +526,10 @@ def generate_continuation_prompt(
     resumes from documented state rather than rediscovering code from scratch.
     Otherwise falls back to a generic increment prompt.
     """
+    # Absolute, for the same reason the first-step prompt is: a continuation
+    # that says "workspace/<run>/" invites the agent to resolve it outside the
+    # bind mount and quietly lose the session's work.
+    workspace = agent_workspace_path(run_id)
     plan_md: str | None = None
     if workspace_dir is not None:
         plan_file = workspace_dir / "PLAN.md"
@@ -423,7 +542,7 @@ def generate_continuation_prompt(
             f"# Tetris — Session {step_n}\n\n"
             f"You are continuing an ongoing build. Your plan and decision records are below.\n\n"
             f"---\n\n"
-            f"## Current plan (from `workspace/{run_id}/PLAN.md`)\n\n"
+            f"## Current plan (from `{workspace}/PLAN.md`)\n\n"
             f"{plan_md}\n\n"
             f"---\n\n"
             f"## Your task for this session\n\n"
@@ -431,9 +550,9 @@ def generate_continuation_prompt(
             f"2. Implement **exactly that ONE milestone**. Do not implement more than\n"
             f"   one milestone this session, and do not touch completed milestones.\n"
             f"3. Validate headlessly (a hanging window or a `timeout` is NOT success):\n"
-            f'   `BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python workspace/{run_id}/main.py; echo "exit=$?"`\n'
+            f'   `BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python {workspace}/main.py; echo "exit=$?"`\n'
             f"   A correct build prints `exit=0`.\n"
-            f"4. Update `workspace/{run_id}/PLAN.md`:\n"
+            f"4. Update `{workspace}/PLAN.md`:\n"
             f"   - Mark the milestone as `[x]` (done)\n"
             f"   - Add an ADR if you made any non-obvious architecture decision\n"
             f"   - Append to Session Log: `Session {step_n}: ✅ Milestone N — <what you built>`\n"
@@ -447,10 +566,10 @@ def generate_continuation_prompt(
             f"This is continuation step {step_n} for RUN_ID={run_id}.\n\n"
             f"Continue from the existing workspace. Do NOT restart from scratch.\n"
             f"Do NOT rewrite unrelated code.\n\n"
-            f"1. Inspect `workspace/{run_id}/main.py` and understand the current state.\n"
+            f"1. Inspect `{workspace}/main.py` and understand the current state.\n"
             f"2. Implement only the next missing Tetris milestone (exactly one).\n"
             f"3. Validate headlessly (a `timeout` is NOT success):\n"
-            f'   `BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python workspace/{run_id}/main.py; echo "exit=$?"`\n'
+            f'   `BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python {workspace}/main.py; echo "exit=$?"`\n'
             f"4. Stop after ONE verifiable increment.\n"
             f"5. State clearly what you implemented and what the next recommended increment is.\n"
             f"6. If and ONLY if the game is fully complete, end with: ALL MILESTONES COMPLETE\n"
@@ -662,6 +781,8 @@ def write_metadata(
         skills_extra_hashes=staged_skill_hashes(
             list(getattr(args, "extra_skill", []) or [])
         ),
+        skills_extra_hash_algo=STAGED_SKILL_HASH_ALGO,
+        gateway_overlay_hash=apply_gateway_overlay(direct_models(args)),
     )
     path = out_dir / "metadata.json"
     path.write_text(json.dumps(meta, indent=2))
@@ -758,6 +879,15 @@ def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
     shutil.copytree(workspace, dest, symlinks=True, ignore_dangling_symlinks=True)
     file_count = sum(1 for _ in dest.rglob("*") if _.is_file())
     print(f"  Copied workspace → data/runs/{run_id}/workspace/ ({file_count} files)")
+    if file_count == 0:
+        # An empty archive is not an empty result — it means the agent wrote
+        # somewhere that is not preserved (see `agent_workspace_path`). Say so
+        # here, loudly, because the alternative is a run that looks completed
+        # and leaves a human with nothing to score.
+        print(
+            f"  ❌ Nothing was written to {workspace} — the agent built outside "
+            "the preserved workspace, so this run produced no artifact."
+        )
 
     diff_path = out_dir / "diff.patch"
     if (dest / ".git").exists():
@@ -782,9 +912,18 @@ def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
         diff_ref = provisioned or "HEAD"
         result = _run_git(["git", "-C", str(dest), "diff", diff_ref], cwd=REPO_ROOT)
     else:
-        result = _run_git(
-            ["git", "diff", "--no-index", "/dev/null", str(dest)], cwd=REPO_ROOT
-        )
+        # Diff the archive against an empty directory, NOT against /dev/null.
+        # `git diff --no-index /dev/null <dir>` looks like it means "everything
+        # is new" but git pairs the basename and dies with
+        # `Could not access '<dir>/null'`, writing zero bytes to stdout while
+        # the error goes to a stderr nobody reads. Every build-from-scratch run
+        # therefore shipped an empty diff.patch — and `bench_audit` gates its
+        # "Código producido" section on that file being non-empty, so the audit
+        # LLM judged runs it had never seen the code of.
+        with tempfile.TemporaryDirectory() as empty:
+            result = _run_git(
+                ["git", "diff", "--no-index", empty, str(dest)], cwd=REPO_ROOT
+            )
     diff_path.write_text(result.stdout)
     diff_lines = result.stdout.count("\n")
     print(f"  diff.patch: {diff_lines} lines")
@@ -942,12 +1081,13 @@ def build_opencode_cmd(
 def _native_model(model: str | None) -> str | None:
     """Return a native model id for codex/claude, or None to use the CLI default.
 
-    The web form's executor models are gateway-namespaced (``gateway/…``) and do
-    not map to native Codex/Claude model ids, so those are ignored (the CLI uses
-    its configured default). A bare id (no ``gateway/`` prefix) is treated as an
+    The web form's executor models are namespaced by provider (``gateway/…`` for
+    LiteLLM, ``lmstudio/…`` for the direct LM Studio route) and do not map to
+    native Codex/Claude model ids, so those are ignored (the CLI uses its
+    configured default). A bare id (no provider prefix) is treated as an
     explicit native override.
     """
-    if not model or model.startswith("gateway/"):
+    if not model or model.startswith(("gateway/", "lmstudio/")):
         return None
     return model
 
@@ -1623,6 +1763,19 @@ def close_run(
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     _load_env()
+    # Headless by default for everything this process spawns, in both lanes.
+    # The docker image and the run container already set these, but a host-mode
+    # run (`make app-host`) goes through SubprocessRunExecutor, which passes no
+    # env= and would otherwise inherit a real display — where a pygame window
+    # opens, never closes, and hangs the agent's shell exactly as it did in the
+    # container. `setdefault` so an operator who deliberately exports something
+    # else still wins.
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+    # Export the routing overlay before anything builds a harness command, so a
+    # model enabled from the web — or addressed directly at LM Studio —
+    # resolves in both the docker and host lanes.
+    apply_gateway_overlay(direct_models(args))
 
     out_dir = DATA_DIR / args.run
     case_spec = _load_case_spec(out_dir)
@@ -1672,6 +1825,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args.executor_model = executor_model
     args.planner_model = planner_model
+    # A resumed run learns its models from stored metadata, after the overlay
+    # was first written; re-apply so a direct LM Studio executor is routable.
+    apply_gateway_overlay(direct_models(args))
     # Web/CLI runs pass the harness on the command line; runs.yaml rarely carries
     # it, so record the actual harness in metadata (used by the improvement cycle).
     if not run.get("harness"):

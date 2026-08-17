@@ -5,20 +5,39 @@ import type {
   ImprovementsDoc,
   CaseCreatePayload,
   CaseRecord,
+  ContextProbeResult,
   DocContent,
   DocEntry,
+  EnvSettings,
+  EnvUpdateResult,
+  GatewayModelRecord,
+  GatewayTestResult,
   HarnessSkill,
+  HealResult,
+  HealthReport,
+  LMStudioCatalog,
+  ModelRefreshResult,
+  OllamaCatalog,
+  RuntimeFacts,
   LeaderboardRunRow,
   ModelCatalog,
   OfficialReferenceRow,
   GroupIssueResult,
   ProposalIssue,
+  RunConfigPayload,
+  RunBatchPayload,
+  RunBatchResult,
   RunCreatePayload,
+  RunValidationResult,
   SaveImprovementsResult,
   SavedProposalRecord,
+  SessionState,
   RunEventRecord,
   RunRecord,
   SandboxRecord,
+  StagedSkillFileRecord,
+  StagedSkillImportChoices,
+  StagedSkillImportPreview,
   StagedSkillPromoteResult,
   StagedSkillRecord,
   SwebenchProInstance,
@@ -35,16 +54,34 @@ export class ApiError extends Error {
   }
 }
 
+/** Fired when any request comes back 401, so the shell can show the login form. */
+export const SESSION_EXPIRED_EVENT = "harness-lab:session-expired";
+
+/** Percent-encode each segment but keep the `/` separators the route expects. */
+function encodeFilePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  // A multipart upload must let the browser set its own boundary header.
+  const isFormData = typeof FormData !== "undefined" && options?.body instanceof FormData;
   const response = await fetch(path, {
+    // The session cookie is same-origin (the dev proxy and the nginx prod build
+    // both serve /api from this origin), and never sent cross-site.
+    credentials: "same-origin",
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(options?.headers ?? {})
     },
     ...options
   });
 
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith("/api/auth/")) {
+      // The session expired or the secret was rotated. Tell the shell once
+      // instead of letting every page render its own auth error.
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    }
     const text = await response.text();
     let message = text || response.statusText;
     try {
@@ -67,14 +104,52 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ status: string }>("/api/health"),
-  login: (username: string, password: string) =>
-    request<{ authenticated: boolean }>("/api/auth/login", {
+  readSession: () => request<SessionState>("/api/auth/session"),
+  login: (password: string) =>
+    request<SessionState>("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ password })
     }),
-  logout: () => request<void>("/api/auth/logout", { method: "POST" }),
+  logout: () => request<{ authenticated: boolean }>("/api/auth/logout", { method: "POST" }),
   listHarnessSkills: () => request<HarnessSkill[]>("/api/harness/skills"),
-  listModels: () => request<ModelCatalog>("/api/models"),
+  // `refresh` drops the gateway and LM Studio caches before rebuilding the
+  // list — the two halves of the picker have different cache lifetimes, so a
+  // reload has to clear both or it looks like it only half-worked.
+  listModels: (refresh = false) =>
+    request<ModelCatalog>(`/api/models${refresh ? "?refresh=true" : ""}`),
+  listLmstudioModels: (refresh = false) =>
+    request<LMStudioCatalog>(`/api/lmstudio/models${refresh ? "?refresh=true" : ""}`),
+  listOllamaModels: (refresh = false) =>
+    request<OllamaCatalog>(`/api/ollama/models${refresh ? "?refresh=true" : ""}`),
+  listModelCatalog: () => request<GatewayModelRecord[]>("/api/models/catalog"),
+  refreshModelCatalog: () =>
+    request<ModelRefreshResult>("/api/models/refresh", { method: "POST" }),
+  checkModelContext: (modelId: string, requiredTokens?: number) =>
+    request<ContextProbeResult>(
+      `/api/models/${modelId}/context-check` +
+        (requiredTokens ? `?required_tokens=${requiredTokens}` : ""),
+      { method: "POST" }
+    ),
+  updateGatewayModel: (
+    modelId: string,
+    changes: { label?: string; enabled?: boolean; is_default?: boolean }
+  ) =>
+    request<GatewayModelRecord>(`/api/models/${modelId}`, {
+      method: "PATCH",
+      body: JSON.stringify(changes)
+    }),
+  readEnvSettings: () => request<EnvSettings>("/api/settings/env"),
+  writeEnvSettings: (updates: Record<string, string>) =>
+    request<EnvUpdateResult>("/api/settings/env", {
+      method: "PUT",
+      body: JSON.stringify({ updates })
+    }),
+  readRuntimeFacts: () => request<RuntimeFacts>("/api/settings/runtime"),
+  testGateway: (baseUrl: string, token: string) =>
+    request<GatewayTestResult>("/api/settings/gateway/test", {
+      method: "POST",
+      body: JSON.stringify({ base_url: baseUrl, token })
+    }),
   listDocs: () => request<DocEntry[]>("/api/docs"),
   getDoc: (slug: string) => request<DocContent>(`/api/docs/${slug}`),
   listStagedSkills: () => request<StagedSkillRecord[]>("/api/staged-skills"),
@@ -96,6 +171,63 @@ export const api = {
   promoteStagedSkill: (name: string) =>
     request<StagedSkillPromoteResult>(`/api/staged-skills/${name}/promote`, {
       method: "POST"
+    }),
+  // Two-step import: without `confirm` the server fetches, validates and
+  // returns a preview, writing nothing (ADR-0017).
+  // `skill` narrows a catalog source down to one of its skills; without it such
+  // a source answers with `choices` instead of a preview.
+  previewStagedSkillImport: (url: string, ref: string, name: string, skill = "") =>
+    request<StagedSkillImportPreview | StagedSkillImportChoices>(
+      "/api/staged-skills/import",
+      {
+        method: "POST",
+        body: JSON.stringify({ url, ref, name, skill, confirm: false })
+      }
+    ),
+  importStagedSkill: (
+    url: string,
+    ref: string,
+    name: string,
+    replace: boolean,
+    skill = ""
+  ) =>
+    request<StagedSkillRecord>("/api/staged-skills/import", {
+      method: "POST",
+      body: JSON.stringify({ url, ref, name, skill, confirm: true, replace })
+    }),
+  uploadStagedSkill: (
+    file: File,
+    options: {
+      name?: string;
+      skill?: string;
+      confirm?: boolean;
+      replace?: boolean;
+    } = {}
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("name", options.name ?? "");
+    form.append("skill", options.skill ?? "");
+    form.append("confirm", String(options.confirm ?? false));
+    form.append("replace", String(options.replace ?? false));
+    return request<
+      StagedSkillImportPreview | StagedSkillImportChoices | StagedSkillRecord
+    >("/api/staged-skills/upload", { method: "POST", body: form });
+  },
+  listStagedSkillFiles: (name: string) =>
+    request<StagedSkillFileRecord[]>(`/api/staged-skills/${name}/files`),
+  readStagedSkillFile: (name: string, path: string) =>
+    request<StagedSkillFileRecord>(
+      `/api/staged-skills/${name}/files/${encodeFilePath(path)}`
+    ),
+  writeStagedSkillFile: (name: string, path: string, content: string) =>
+    request<StagedSkillFileRecord>(
+      `/api/staged-skills/${name}/files/${encodeFilePath(path)}`,
+      { method: "PUT", body: JSON.stringify({ content }) }
+    ),
+  deleteStagedSkillFile: (name: string, path: string) =>
+    request<void>(`/api/staged-skills/${name}/files/${encodeFilePath(path)}`, {
+      method: "DELETE"
     }),
   listCases: () => request<CaseRecord[]>("/api/cases"),
   createCase: (payload: CaseCreatePayload) =>
@@ -122,8 +254,22 @@ export const api = {
   getLeaderboard: () => request<LeaderboardRunRow[]>("/api/leaderboard"),
   getLeaderboardReference: () =>
     request<OfficialReferenceRow[]>("/api/leaderboard/reference"),
+  // Pre-creation check on a *configuration*. Not to be confused with
+  // `validateRun` below, which validates the artifacts of a finished run.
+  preflightRunConfig: (config: RunConfigPayload) =>
+    request<RunValidationResult>("/api/runs/preflight", {
+      method: "POST",
+      body: JSON.stringify(config)
+    }),
   createRun: (payload: RunCreatePayload) =>
     request<RunRecord>("/api/runs", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  // All-or-nothing: the server validates every combination before creating any,
+  // so a rejection here means nothing was queued.
+  createRunBatch: (payload: RunBatchPayload) =>
+    request<RunBatchResult>("/api/runs/batch", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
@@ -204,5 +350,11 @@ export const api = {
   stopSandbox: (runId: string, kind: string) =>
     request<{ status: string }>(`/api/runs/${runId}/sandbox?kind=${kind}`, {
       method: "DELETE"
+    }),
+  readHealth: () => request<HealthReport>("/api/health/detail"),
+  heal: (action: string) =>
+    request<HealResult>("/api/health/heal", {
+      method: "POST",
+      body: JSON.stringify({ action })
     })
 };

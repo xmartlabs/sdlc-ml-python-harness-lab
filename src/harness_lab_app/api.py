@@ -4,14 +4,32 @@ import contextlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from pydantic import BaseModel
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from harness_lab_app.artifact_service import ArtifactService
 from harness_lab_app.attribution_service import AttributionService
 from harness_lab_app.audit_service import AuditService
+from harness_lab_app.auth import (
+    SESSION_COOKIE,
+    issue_session,
+    record_failure,
+    record_success,
+    throttle_retry_after,
+    verify_password,
+)
 from harness_lab_app.case_service import CaseService
 from harness_lab_app.celery_app import (
     enqueue_audit,
@@ -23,12 +41,15 @@ from harness_lab_app.celery_app import (
     enqueue_validation,
 )
 from harness_lab_app.config import get_settings, read_env_file_value
+from harness_lab_app.constants import EXAMPLE_LMSTUDIO_URL, EXAMPLE_OLLAMA_URL
 from harness_lab_app.db import get_engine, get_session, init_db
+from harness_lab_app.gateway_catalog_service import GatewayCatalogService
 from harness_lab_app.harness_lifecycle import drafting, sanitizer
 from harness_lab_app.improvement_service import ImprovementError, ImprovementService
 from harness_lab_app.leaderboard_service import LeaderboardService
 from harness_lab_app.run_service import (
     RunAlreadyExistsError,
+    RunBatchTooLargeError,
     RunDeleteConflictError,
     RunPreflightError,
     RunService,
@@ -36,12 +57,28 @@ from harness_lab_app.run_service import (
 from harness_lab_app.sandbox_service import VALID_KINDS, SandboxService
 from harness_lab_app.schemas import (
     CaseCreate,
+    EnvUpdateRequest,
+    GatewayModelUpdate,
+    GatewayTestRequest,
     GroupIssueRequest,
+    HealRequest,
+    RunBatchCreate,
+    RunBatchRead,
     RunConfigCreate,
     RunCreate,
     StagedSkillCreate,
+    StagedSkillFileWrite,
+    StagedSkillImportRequest,
     StagedSkillUpdate,
     SwebenchImportRequest,
+)
+from harness_lab_app.session_middleware import (
+    SessionMiddleware,
+    admin_password_hash,
+    auth_enabled,
+    has_valid_session,
+    session_secret,
+    session_ttl,
 )
 from harness_lab_app.staged_skill_service import StagedSkillError, StagedSkillService
 from harness_lab_app.swebench_client import SwebenchFetchError, normalize_instance
@@ -52,9 +89,13 @@ from harness_lab_app.swebench_pro_client import (
 )
 from harness_lab_app.validation_service import ValidationService
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 
 class LoginRequest(BaseModel):
-    username: str
+    """Single-user login: there is no username, only the admin password."""
+
     password: str
 
 
@@ -89,13 +130,46 @@ def _improvements_status(runs_dir: Path, run_id: str) -> str:
     return "yes" if doc.get("proposals") else "no"
 
 
+def _gateway_endpoint() -> tuple[str, str]:
+    """The gateway base URL and token as reachable *from this process*.
+
+    Inside a container "localhost" is the container itself, so it is rewritten
+    to the docker host alias. Values come from ``.env`` on every call, which is
+    why a Settings-page edit needs no restart.
+    """
+    from harness_lab_app.executors import rewrite_localhost
+
+    base = read_env_file_value("GATEWAY_BASE_URL")
+    token = read_env_file_value("GATEWAY_TOKEN")
+    if base and Path("/.dockerenv").exists():
+        base = rewrite_localhost(base, get_settings().docker_host_alias)
+    return base, token
+
+
+def _direct_endpoint(env_key: str) -> str:
+    """A direct host's base URL as reachable *from this process*.
+
+    Same container caveat as :func:`_gateway_endpoint`: a ``localhost`` URL
+    written on the host means the container itself once the API runs in Docker,
+    so it is rewritten to the docker host alias. Empty when unset.
+    """
+    from harness_lab_app.executors import rewrite_localhost
+
+    base = read_env_file_value(env_key) or ""
+    if base and Path("/.dockerenv").exists():
+        base = rewrite_localhost(base, get_settings().docker_host_alias)
+    return base
+
+
 def _prepare_gateway_env() -> None:
     """Populate GATEWAY_BASE_URL/TOKEN from .env for in-process LLM calls.
 
     bench_audit.call_gateway reads them from os.environ, which the API process
     (especially in Docker) may not have; localhost is rewritten so a container
     can reach the host gateway. Raises a 502 HTTPException when unconfigured.
-    (Same logic as the per-run proposal-issue endpoint, extracted for reuse.)
+
+    ``read_env_file_value`` re-reads ``.env`` on every call, so a value saved
+    from the Settings page applies to the very next request — no restart.
     """
     import os
 
@@ -107,8 +181,9 @@ def _prepare_gateway_env() -> None:
         raise HTTPException(
             status_code=502,
             detail=(
-                "LLM gateway not configured — set GATEWAY_BASE_URL and GATEWAY_TOKEN "
-                "in .env, then restart the app."
+                "LLM gateway not configured — set GATEWAY_BASE_URL and "
+                "GATEWAY_TOKEN on the Settings page. The change takes effect "
+                "immediately; no restart is needed."
             ),
         )
     if Path("/.dockerenv").exists():
@@ -117,8 +192,17 @@ def _prepare_gateway_env() -> None:
     os.environ["GATEWAY_TOKEN"] = token
 
 
+def _client_key(request: Request | None) -> str:
+    """Throttle bucket for a login attempt."""
+    return request.client.host if request is not None and request.client else "unknown"
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Agentic Harness Lab")
+    # Gate every /api route that is not explicitly public. Middleware rather than
+    # a per-route dependency so routes added later are covered by default
+    # (ADR-0015).
+    app.add_middleware(SessionMiddleware)
 
     @app.on_event("startup")
     def startup() -> None:
@@ -133,18 +217,79 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/api/health/detail")
+    def health_detail(session: Session = Depends(get_session)):
+        """The drift panel (ADR-0018). Deliberately *not* public: it reports
+        gateway configuration and repository state."""
+        from harness_lab_app.health_service import collect_health
+
+        return collect_health(session)
+
+    @app.post("/api/health/heal")
+    def health_heal(data: HealRequest, session: Session = Depends(get_session)):
+        from harness_lab_app.health_service import HealthError, heal
+
+        try:
+            return heal(data.action, session)
+        except HealthError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:  # a failed repair is a 502, not a crash
+            raise HTTPException(
+                status_code=502, detail=f"{data.action} failed: {exc}"
+            ) from exc
+
+    @app.get("/api/auth/session")
+    def session_probe(request: Request = None) -> dict[str, bool]:  # type: ignore[assignment]
+        """What the SPA asks on mount: is auth on, and am I already in?
+
+        In open mode ``authenticated`` is true so the app renders as it always
+        has; the UI keys its "authentication is off" banner off ``auth_enabled``.
+        """
+        if not auth_enabled():
+            return {"authenticated": True, "auth_enabled": False}
+        return {
+            "authenticated": request is not None and has_valid_session(request),
+            "auth_enabled": True,
+        }
+
     @app.post("/api/auth/login")
-    def login(data: LoginRequest) -> dict[str, bool]:
-        settings = get_settings()
-        if (
-            data.username != settings.local_username
-            or data.password != settings.local_password
-        ):
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        return {"authenticated": True}
+    def login(
+        data: LoginRequest,
+        response: Response,
+        request: Request = None,  # type: ignore[assignment]
+    ) -> dict[str, bool]:
+        if not auth_enabled():
+            # No password configured: nothing to log into, and refusing here
+            # would strand the UI. `auth_enabled` tells it to show the banner.
+            return {"authenticated": True, "auth_enabled": False}
+
+        client = _client_key(request)
+        retry_after = throttle_retry_after(client)
+        if retry_after > 0:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many failed attempts. Try again shortly.",
+                headers={"Retry-After": str(int(retry_after) + 1)},
+            )
+        if not verify_password(data.password, admin_password_hash()):
+            record_failure(client)
+            raise HTTPException(status_code=401, detail="Invalid password")
+
+        record_success(client)
+        response.set_cookie(
+            SESSION_COOKIE,
+            issue_session(session_secret()),
+            max_age=session_ttl(),
+            httponly=True,
+            samesite="lax",
+            secure=get_settings().session_cookie_secure,
+            path="/",
+        )
+        return {"authenticated": True, "auth_enabled": True}
 
     @app.post("/api/auth/logout")
-    def logout() -> dict[str, bool]:
+    def logout(response: Response) -> dict[str, bool]:
+        response.delete_cookie(SESSION_COOKIE, path="/")
         return {"authenticated": False}
 
     @app.get("/api/harness/skills")
@@ -169,27 +314,352 @@ def create_app() -> FastAPI:
         return doc
 
     @app.get("/api/models")
-    def list_models():
+    def list_models(refresh: bool = False, session: Session = Depends(get_session)):
         # Live model discovery from LiteLLM so the run form stays in sync with
         # the gateway (the single place the user updates). Falls back to the
         # opencode.json routing map when the gateway is unreachable.
-        from harness_lab_app.executors import rewrite_localhost
+        #
+        # ``refresh`` drops both TTL caches first. It backs the run form's
+        # Reload button: the two lists come from different servers with
+        # different cache lifetimes, and having to guess which one is stale is
+        # exactly the confusion the button exists to remove.
         from harness_lab_app.gateway_models import (
             build_model_catalog,
-            list_gateway_models,
+            clear_model_cache,
+            fetch_gateway_routing_cached,
+            list_gateway_models_cached,
             read_opencode_gateway_models,
         )
+        from harness_lab_app.lmstudio_direct import clear_lmstudio_cache
+        from harness_lab_app.ollama_direct import clear_ollama_cache
 
+        if refresh:
+            clear_model_cache()
+            clear_lmstudio_cache()
+            clear_ollama_cache()
         settings = get_settings()
-        base = read_env_file_value("GATEWAY_BASE_URL")
-        token = read_env_file_value("GATEWAY_TOKEN")
-        # Inside a container "localhost" is the container itself; rewrite it to
-        # the docker host alias so the API can reach the host-side gateway.
-        if base and Path("/.dockerenv").exists():
-            base = rewrite_localhost(base, settings.docker_host_alias)
-        live = list_gateway_models(base_url=base, token=token)
+        base, token = _gateway_endpoint()
+        live = list_gateway_models_cached(base, token)
         opencode_models = read_opencode_gateway_models(settings.repo_root)
-        return build_model_catalog(live, opencode_models)
+        overlay = GatewayCatalogService(session).overlay_models()
+        # Aliases resolving to the same served model collapse into one option:
+        # they are one experimental arm, and listing both only makes the picker
+        # harder to read.
+        routing = fetch_gateway_routing_cached(base, token)
+        catalog = build_model_catalog(
+            live, opencode_models, overlay=overlay, routing=routing
+        )
+        # Direct models lead the menu: they are the only entries whose name is
+        # verified against the server that will serve them.
+        direct, direct_errors = _direct_options()
+        catalog["models"] = direct + catalog["models"]
+        catalog["direct_errors"] = direct_errors
+        return catalog
+
+    def _direct_options() -> tuple[list[dict], dict[str, str]]:
+        """Picker options for the direct sources, and why each empty one is empty.
+
+        The reasons travel with the list because an empty group is otherwise
+        indistinguishable from "no models installed", and the fix (start the
+        server, fix the URL) depends entirely on which one it was — per host,
+        since one may be up while the other is not.
+        """
+        from harness_lab_app.direct_hosts import DirectHostUnreachable
+        from harness_lab_app.lmstudio_direct import (
+            build_direct_options as build_lmstudio_options,
+            list_lmstudio_models_cached,
+        )
+        from harness_lab_app.ollama_direct import (
+            build_direct_options as build_ollama_options,
+            list_ollama_models_cached,
+        )
+
+        options: list[dict] = []
+        errors: dict[str, str] = {}
+
+        def collect(provider: str, env_key: str, read: Callable[[str], list[dict]]):
+            """Add one host's options, or record why it contributed none."""
+            base = _direct_endpoint(env_key)
+            if not base:
+                errors[provider] = f"{env_key} is not set."
+                return
+            try:
+                options.extend(read(base))
+            except DirectHostUnreachable as exc:
+                errors[provider] = str(exc)
+
+        collect(
+            "lmstudio",
+            "LMSTUDIO_BASE_URL",
+            lambda base: build_lmstudio_options(list_lmstudio_models_cached(base)),
+        )
+        collect(
+            "ollama",
+            "OLLAMA_BASE_URL",
+            lambda base: build_ollama_options(list_ollama_models_cached(base)),
+        )
+        return options, errors
+
+    @app.get("/api/lmstudio/models")
+    def list_lmstudio(refresh: bool = False):
+        """What the LM Studio host is serving right now, verbatim.
+
+        No catalog, no database, no alias map: the Settings page renders this
+        list as-is so what you see is what a run will address.
+        """
+        from harness_lab_app.lmstudio_direct import (
+            LMStudioUnreachable,
+            clear_lmstudio_cache,
+            list_lmstudio_models_cached,
+            lmstudio_root,
+        )
+
+        base = _direct_endpoint("LMSTUDIO_BASE_URL")
+        if not base:
+            return {
+                "base_url": "",
+                "reachable": False,
+                "error": (
+                    "LMSTUDIO_BASE_URL is not set — point it at your LM Studio "
+                    f"server (for example {EXAMPLE_LMSTUDIO_URL}) below."
+                ),
+                "models": [],
+            }
+        if refresh:
+            clear_lmstudio_cache()
+        try:
+            models = list_lmstudio_models_cached(base)
+        except LMStudioUnreachable as exc:
+            return {
+                "base_url": lmstudio_root(base),
+                "reachable": False,
+                "error": str(exc),
+                "models": [],
+            }
+        return {
+            "base_url": lmstudio_root(base),
+            "reachable": True,
+            "error": None,
+            "models": [model.as_dict() for model in models],
+        }
+
+    @app.get("/api/ollama/models")
+    def list_ollama(refresh: bool = False):
+        """What the Ollama host has right now, verbatim — the sibling endpoint.
+
+        ``running`` models report the context window the server is serving;
+        everything else runs at the host's ``OLLAMA_CONTEXT_LENGTH``, which this
+        cannot read remotely and which defaults far below what a run needs.
+        """
+        from harness_lab_app.direct_hosts import DirectHostUnreachable
+        from harness_lab_app.ollama_direct import (
+            clear_ollama_cache,
+            list_ollama_models_cached,
+            ollama_root,
+        )
+
+        base = _direct_endpoint("OLLAMA_BASE_URL")
+        if not base:
+            return {
+                "base_url": "",
+                "reachable": False,
+                "error": (
+                    "OLLAMA_BASE_URL is not set — point it at your Ollama server "
+                    f"(for example {EXAMPLE_OLLAMA_URL}) below."
+                ),
+                "models": [],
+            }
+        if refresh:
+            clear_ollama_cache()
+        try:
+            models = list_ollama_models_cached(base)
+        except DirectHostUnreachable as exc:
+            return {
+                "base_url": ollama_root(base),
+                "reachable": False,
+                "error": str(exc),
+                "models": [],
+            }
+        return {
+            "base_url": ollama_root(base),
+            "reachable": True,
+            "error": None,
+            "models": [model.as_dict() for model in models],
+        }
+
+    @app.get("/api/models/catalog")
+    def list_model_catalog(session: Session = Depends(get_session)):
+        """Catalog rows, each tagged with the backend heading it belongs under.
+
+        The service already returns them in backend order; tagging each row lets
+        the Settings table draw the same LM Studio → Cloud → Ollama sections the
+        run picker uses, without re-deriving the grouping in the browser.
+        """
+        from harness_lab_app.gateway_models import (
+            SOURCE_GATEWAY,
+            classify_backend,
+            classify_provider,
+        )
+
+        rows = GatewayCatalogService(session).list_models()
+        return [
+            {
+                **row.model_dump(),
+                "backend": backend,
+                "group": group_label,
+                "group_rank": rank,
+                "source": SOURCE_GATEWAY,
+                "provider": provider,
+                "provider_label": provider_label,
+            }
+            for row in rows
+            for rank, backend, group_label in (classify_backend(row.model_id),)
+            for provider, provider_label in (classify_provider(row.model_id),)
+        ]
+
+    @app.post("/api/models/refresh")
+    def refresh_model_catalog(session: Session = Depends(get_session)):
+        """Adopt whatever the gateway serves right now — the CLI-free sync."""
+        from harness_lab_app.gateway_models import (
+            clear_model_cache,
+            list_gateway_models,
+        )
+        from harness_lab_app.lmstudio_direct import clear_lmstudio_cache
+
+        base, token = _gateway_endpoint()
+        if not base or not token:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "LLM gateway not configured — set GATEWAY_BASE_URL and "
+                    "GATEWAY_TOKEN on the Settings page first."
+                ),
+            )
+        clear_model_cache()
+        # The direct list is a second half of the same menu, on a second cache.
+        # Leaving it behind is what made "Refresh" look like it half-worked.
+        clear_lmstudio_cache()
+        live = list_gateway_models(base_url=base, token=token)
+        result = GatewayCatalogService(session).refresh(live)
+        if not result["gateway_reachable"]:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "The gateway returned no models. Check that LiteLLM is up "
+                    "and the token is valid; nothing was changed."
+                ),
+            )
+        return result
+
+    @app.post("/api/models/{model_id:path}/context-check")
+    def check_model_context(model_id: str, required_tokens: int | None = None):
+        """Measure the context window a model is *actually* serving right now.
+
+        LiteLLM's declared limit is configuration; LM Studio serves whatever
+        window the model was loaded with, and a JIT auto-load quietly uses the
+        model's small default. Only a real oversized prompt tells the truth.
+        """
+        from harness_lab_app.gateway_models import (
+            MIN_CONTEXT_TOKENS,
+            clear_context_cache,
+            probe_model_context,
+        )
+
+        base, token = _gateway_endpoint()
+        if not base or not token:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "LLM gateway not configured — set GATEWAY_BASE_URL and "
+                    "GATEWAY_TOKEN on the Settings page first."
+                ),
+            )
+        # An explicit press means "measure it now", so the memoized verdict the
+        # run gate reuses is dropped rather than replayed.
+        clear_context_cache()
+        result = probe_model_context(
+            model_id,
+            base_url=base,
+            token=token,
+            required_tokens=required_tokens or MIN_CONTEXT_TOKENS,
+            timeout=180.0,
+        )
+        return result.as_dict()
+
+    @app.patch("/api/models/{model_id:path}")
+    def update_model(
+        model_id: str,
+        data: GatewayModelUpdate,
+        session: Session = Depends(get_session),
+    ):
+        from harness_lab_app.gateway_catalog_service import GatewayCatalogError
+
+        try:
+            return GatewayCatalogService(session).update_model(
+                model_id,
+                label=data.label,
+                enabled=data.enabled,
+                is_default=data.is_default,
+                options=data.options,
+            )
+        except GatewayCatalogError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/settings/gateway/test")
+    def test_gateway(data: GatewayTestRequest):
+        """Probe a base URL/token pair without persisting anything."""
+        from harness_lab_app.executors import rewrite_localhost
+        from harness_lab_app.gateway_models import list_gateway_models
+        from harness_lab_app.settings_service import UNCHANGED_SENTINEL
+
+        base = data.base_url.strip() or read_env_file_value("GATEWAY_BASE_URL")
+        token = data.token.strip()
+        # The form round-trips a masked secret; an untouched field means "use
+        # what is already stored" rather than "test with an empty token".
+        if token in ("", UNCHANGED_SENTINEL):
+            token = read_env_file_value("GATEWAY_TOKEN")
+        if not base or not token:
+            return {"ok": False, "detail": "Base URL and token are both required."}
+        if Path("/.dockerenv").exists():
+            base = rewrite_localhost(base, get_settings().docker_host_alias)
+        models = list_gateway_models(base_url=base, token=token)
+        if not models:
+            return {
+                "ok": False,
+                "detail": (
+                    "No models returned. The gateway is unreachable from this "
+                    "container, or the token is invalid."
+                ),
+            }
+        return {"ok": True, "model_count": len(models), "sample": models[:5]}
+
+    @app.get("/api/settings/env")
+    def read_env_settings():
+        from harness_lab_app.settings_service import read_settings
+
+        return read_settings()
+
+    @app.put("/api/settings/env")
+    def write_env_settings(data: EnvUpdateRequest):
+        from harness_lab_app.settings_service import (
+            SettingsError,
+            apply_settings,
+            read_settings,
+        )
+
+        try:
+            result = apply_settings(data.updates)
+        except SettingsError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # Return the fresh (masked) view so the form re-syncs without a second
+        # round-trip and never keeps a stale sentinel in its state.
+        return {**result, **read_settings()}
+
+    @app.get("/api/settings/runtime")
+    def read_runtime_settings():
+        from harness_lab_app.settings_service import read_runtime_facts
+
+        return read_runtime_facts()
 
     @app.get("/api/staged-skills")
     def list_staged_skills(session: Session = Depends(get_session)):
@@ -234,6 +704,145 @@ def create_app() -> FastAPI:
             return StagedSkillService(session).promote_skill(name)
         except StagedSkillError as exc:
             status = 404 if "not found" in str(exc) else 422
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    def _import_choices(exc) -> dict:
+        """A catalog source is not an error — it just has to be narrowed down."""
+        return {
+            "preview": False,
+            "choices": [
+                {
+                    "name": candidate.name,
+                    "path": candidate.path,
+                    "description": candidate.description,
+                }
+                for candidate in exc.candidates
+            ],
+            "detail": str(exc),
+        }
+
+    def _import_preview(imported, requested_name: str = "") -> dict:
+        """What the user reviews before anything is written."""
+        return {
+            "preview": True,
+            "choices": [],
+            "name": requested_name or imported.name,
+            "description": imported.description,
+            "source_url": imported.source_url,
+            "source_ref": imported.source_ref,
+            "source_kind": imported.source_kind,
+            "warnings": imported.warnings,
+            "total_bytes": imported.total_bytes,
+            "files": [
+                {"path": path, "size": len(blob)}
+                for path, blob in sorted(imported.files.items())
+            ],
+        }
+
+    @app.post("/api/staged-skills/import")
+    def import_staged_skill(
+        data: StagedSkillImportRequest, session: Session = Depends(get_session)
+    ):
+        from harness_lab_app.skill_import import (
+            SkillChoiceRequired,
+            SkillImportError,
+            fetch_skill,
+        )
+
+        try:
+            imported = fetch_skill(data.url, data.ref, data.skill)
+        except SkillChoiceRequired as exc:
+            return _import_choices(exc)
+        except SkillImportError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not data.confirm:
+            return _import_preview(imported, data.name)
+        try:
+            return StagedSkillService(session).import_skill(
+                imported, name=data.name, replace=data.replace
+            )
+        except (StagedSkillError, SkillImportError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/staged-skills/upload")
+    async def upload_staged_skill(
+        file: UploadFile = File(...),
+        name: str = Form(""),
+        skill: str = Form(""),
+        confirm: bool = Form(False),
+        replace: bool = Form(False),
+        session: Session = Depends(get_session),
+    ):
+        from harness_lab_app.skill_import import (
+            MAX_DOWNLOAD_BYTES,
+            SkillChoiceRequired,
+            SkillImportError,
+            import_upload,
+        )
+
+        payload = await file.read(MAX_DOWNLOAD_BYTES + 1)
+        if len(payload) > MAX_DOWNLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Upload exceeds the {MAX_DOWNLOAD_BYTES // (1024 * 1024)} "
+                    "MiB limit."
+                ),
+            )
+        try:
+            imported = import_upload(payload, file.filename or "", skill)
+        except SkillChoiceRequired as exc:
+            return _import_choices(exc)
+        except SkillImportError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not confirm:
+            return _import_preview(imported, name)
+        try:
+            return StagedSkillService(session).import_skill(
+                imported, name=name, replace=replace
+            )
+        except (StagedSkillError, SkillImportError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/staged-skills/{name}/files")
+    def list_staged_skill_files(name: str, session: Session = Depends(get_session)):
+        try:
+            return StagedSkillService(session).list_files(name)
+        except StagedSkillError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/staged-skills/{name}/files/{path:path}")
+    def read_staged_skill_file(
+        name: str, path: str, session: Session = Depends(get_session)
+    ):
+        try:
+            return StagedSkillService(session).get_file(name, path)
+        except StagedSkillError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.put("/api/staged-skills/{name}/files/{path:path}")
+    def write_staged_skill_file(
+        name: str,
+        path: str,
+        data: StagedSkillFileWrite,
+        session: Session = Depends(get_session),
+    ):
+        from harness_lab_app.skill_import import SkillImportError
+
+        try:
+            return StagedSkillService(session).put_file(name, path, data.content)
+        except (StagedSkillError, SkillImportError) as exc:
+            status = 404 if "not found" in str(exc).lower() else 422
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    @app.delete("/api/staged-skills/{name}/files/{path:path}", status_code=204)
+    def delete_staged_skill_file(
+        name: str, path: str, session: Session = Depends(get_session)
+    ):
+        try:
+            StagedSkillService(session).delete_file(name, path)
+        except StagedSkillError as exc:
+            status = 404 if "not found" in str(exc).lower() else 422
             raise HTTPException(status_code=status, detail=str(exc)) from exc
 
     @app.get("/api/cases")
@@ -326,14 +935,37 @@ def create_app() -> FastAPI:
         return {"run_ids": CaseService(session).list_case_run_ids(case_id)}
 
     @app.get("/api/runs")
-    def list_runs(session: Session = Depends(get_session)):
+    def list_runs(batch_id: str = "", session: Session = Depends(get_session)):
+        """Runs, each carrying the objective verdict the lab already computed.
+
+        Without it a run whose produced code does not even start looks exactly
+        like one waiting to be reviewed: both sit in ``awaiting_manual_score``
+        with an empty score. The smoke check has already answered the question
+        — runs K-035/K-037/K-039 failed it with exit 124, 1 and 2 — so the list
+        shows the answer instead of asking someone to open each run to find it.
+        """
+        from harness_lab_app.models import Validation
+        from harness_lab_app.run_failures import classify_failure, failure_label
+
         runs_dir = get_settings().data_runs_dir
+        verdicts = {
+            row.run_id: (row.objective or {}).get("passed")
+            for row in session.exec(select(Validation)).all()
+        }
         return [
             {
                 **run.model_dump(),
                 "improvements": _improvements_status(runs_dir, run.run_id),
+                # True/False from the automated checks; None when they have not
+                # run or the case has no objective criterion.
+                "objective_passed": verdicts.get(run.run_id),
+                # What kind of failure this was, so the list can separate "the
+                # lab broke" from "the agent did badly" without re-parsing the
+                # reason string in the browser.
+                "failure_kind": classify_failure(run.failure_reason),
+                "failure_label": failure_label(run.failure_reason),
             }
-            for run in RunService(session).list_runs()
+            for run in RunService(session).list_runs(batch_id=batch_id or None)
         ]
 
     @app.get("/api/leaderboard")
@@ -359,6 +991,23 @@ def create_app() -> FastAPI:
     ):
         return {"command": RunService(session).preview_command(run_id, config)}
 
+    @app.post("/api/runs/preflight")
+    def preflight_run_config(
+        config: RunConfigCreate, session: Session = Depends(get_session)
+    ):
+        """Run the creation preflight without creating anything.
+
+        Same checks `POST /api/runs` applies, so a green answer here means the
+        run form will not be rejected — and the slow part (probing the backend
+        and measuring its context window) is memoized, so pressing Create right
+        after costs nothing extra.
+        """
+        try:
+            RunService(session).preflight(config)
+        except RunPreflightError as exc:
+            return {"ok": False, "detail": str(exc)}
+        return {"ok": True, "detail": "Configuration looks runnable."}
+
     @app.post("/api/runs")
     def create_run(data: RunCreate, session: Session = Depends(get_session)):
         try:
@@ -367,6 +1016,28 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RunAlreadyExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/runs/batch", status_code=201)
+    def create_run_batch(
+        data: RunBatchCreate, session: Session = Depends(get_session)
+    ) -> RunBatchRead:
+        """Queue the cross-product of the requested axes as one batch.
+
+        All-or-nothing: a preflight failure on any combination rejects the whole
+        request with 422 and persists nothing, so the caller never has to unpick
+        a partially-created batch.
+        """
+        try:
+            batch_id, runs = RunService(session, enqueue=enqueue_run).create_batch(data)
+        except RunBatchTooLargeError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RunPreflightError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return RunBatchRead(
+            batch_id=batch_id,
+            count=len(runs),
+            run_ids=[run.run_id for run in runs],
+        )
 
     @app.post("/api/runs/{run_id}/score")
     def score_run(
@@ -485,33 +1156,14 @@ def create_app() -> FastAPI:
                     "synthesized from it."
                 ),
             )
-        # bench_audit.call_gateway reads GATEWAY_BASE_URL/TOKEN from os.environ, which
-        # the API process (especially in Docker) may not have. Populate them from .env,
-        # rewriting localhost so a container can reach the host gateway (as /api/models does).
-        import os
+        _prepare_gateway_env()
 
-        from harness_lab_app.executors import rewrite_localhost
-
-        base = read_env_file_value("GATEWAY_BASE_URL")
-        token = read_env_file_value("GATEWAY_TOKEN")
-        if not base or not token:
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    "LLM gateway not configured — set GATEWAY_BASE_URL and GATEWAY_TOKEN "
-                    "in .env, then restart the app."
-                ),
-            )
-        if Path("/.dockerenv").exists():
-            base = rewrite_localhost(base, get_settings().docker_host_alias)
-        os.environ["GATEWAY_BASE_URL"] = base
-        os.environ["GATEWAY_TOKEN"] = token
-
-        run_dir = get_settings().data_runs_dir / run_id
+        settings = get_settings()
+        run_dir = settings.data_runs_dir / run_id
         try:
             markdown, form = drafting.synthesize_issue(
                 run_dir,
-                repository="marcosdh1987/ml-python-base",
+                repository=settings.template_repository,
                 created_at=datetime.now(UTC),
             )
         except sanitizer.SanitizationError as exc:
@@ -527,7 +1179,7 @@ def create_app() -> FastAPI:
             ) from exc
         return {
             "run_id": run_id,
-            "repository": "marcosdh1987/ml-python-base",
+            "repository": settings.template_repository,
             "markdown": markdown,
             "form": form.to_dict(),
         }
@@ -593,7 +1245,7 @@ def create_app() -> FastAPI:
             }
             for p in selected
         ]
-        repository = "marcosdh1987/ml-python-base"
+        repository = get_settings().template_repository
         model = payload.model or drafting.DEFAULT_MODEL
         try:
             markdown, form = drafting.synthesize_group_issue(

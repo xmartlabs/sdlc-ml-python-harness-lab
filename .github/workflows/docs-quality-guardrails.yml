@@ -4,6 +4,11 @@ on:
   pull_request:
     branches:
       - "**"
+  # Also on pushes to main, so the default branch is continuously verified and
+  # not only at merge time.
+  push:
+    branches:
+      - main
 
 jobs:
   enforce-docs-and-quality:
@@ -26,7 +31,9 @@ jobs:
       - name: Install dependencies
         run: make install
 
+      # PR-only: there is no base ref to diff against on a push to main.
       - name: Enforce docs update when src/tests change
+        if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
@@ -49,3 +56,26 @@ jobs:
 
       - name: Skill-sync drift gate
         run: make check-sync
+
+  # Separate job: needs node rather than python, and runs in parallel with the
+  # Python gate instead of adding its install time to it.
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Type check and build
+        run: make check-frontend

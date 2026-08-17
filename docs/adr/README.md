@@ -41,6 +41,17 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0010 — In-platform validation sandboxes](0010-in-platform-sandboxes.md)
 - [0011 — Per-run skill ablation and staged-skill trials](0011-per-run-skill-ablation-and-staging.md)
 - [0012 — Dynamic gateway model list and opencode.json sync](0012-dynamic-gateway-model-list.md)
+- [0013 — Web backoffice with an overlay configuration model](0013-web-backoffice-and-overlay-model.md)
+- [0014 — Web-editable `.env` behind an allowlist](0014-web-editable-env-allowlist.md)
+- [0015 — Single-user session authentication](0015-single-user-session-auth.md)
+- [0016 — opencode config overlay for model routing](0016-opencode-config-overlay-for-model-routing.md)
+- [0017 — Multi-file staged skills and remote import](0017-multi-file-staged-skills-and-remote-import.md)
+- [0018 — Health and drift panel](0018-health-and-drift-panel.md)
+- [0019 — Always-on local deployment](0019-always-on-local-deployment.md)
+- [0020 — Context-window preflight and gateway alias merge](0020-context-window-preflight-and-alias-merge.md)
+- [0021 — Guarantee that a run's artifacts survive and its verdict is visible](0021-benchmark-artifact-integrity.md)
+- [0022 — Split the silence clock by what the run was waiting for](0022-watchdog-splits-model-wait-from-agent-stall.md)
+- [0023 — Queue many runs per request as an all-or-nothing cross-product](0023-batch-run-execution.md)
 
 ## Why ADRs exist
 

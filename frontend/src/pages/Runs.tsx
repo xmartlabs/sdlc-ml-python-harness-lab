@@ -5,13 +5,18 @@ import { api } from "../api";
 import { caseOptionLabel } from "../caseLabels";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
+import { ModelPicker } from "../components/ModelPicker";
 import { RunTable } from "../components/RunTable";
 import type {
   CaseRecord,
   HarnessSkill,
   ModelOption,
+  RunBatchPayload,
+  RunBatchResult,
+  RunConfigPayload,
   RunCreatePayload,
   RunRecord,
+  RunValidationResult,
   StagedSkillRecord
 } from "../types";
 
@@ -20,9 +25,21 @@ type RunsProps = {
   onCancelRun: (runId: string) => Promise<RunRecord>;
   onCloneRun: (runId: string) => Promise<RunRecord>;
   onCreateRun: (payload: RunCreatePayload) => Promise<RunRecord>;
+  onCreateRunBatch: (payload: RunBatchPayload) => Promise<RunBatchResult>;
   onDeleteRun: (runId: string, force?: boolean) => Promise<void>;
   runs: RunRecord[];
 };
+
+/** Add or remove `value` in a Set, returning a new Set (never mutating state). */
+function toggleInSet(current: Set<string>, value: string): Set<string> {
+  const next = new Set(current);
+  if (next.has(value)) {
+    next.delete(value);
+  } else {
+    next.add(value);
+  }
+  return next;
+}
 
 const HARNESS_OPTIONS = ["opencode", "codex", "claude", "antigravity"] as const;
 // Harnesses that run via the host CLI (native auth) instead of the runner
@@ -44,26 +61,12 @@ const HARNESS_NATIVE_MODELS: Record<string, ModelOption[]> = {
   codex: [{ id: "codex-mini-latest", label: "Codex Mini (latest)" }]
 };
 
-// The model menu for a harness: its native CLI models, else the live gateway list.
-function modelsForHarness(harness: string, gatewayModels: ModelOption[]): ModelOption[] {
-  return HARNESS_NATIVE_MODELS[harness] ?? gatewayModels;
-}
-
-// Ensure the currently-selected model always renders as an option even if the
-// live gateway list does not contain it (e.g. a preset value, or the API is
-// offline in preview mode), so the select never shows a blank selection.
-function withCurrent(options: ModelOption[], current: string): ModelOption[] {
-  if (!current || options.some((option) => option.id === current)) {
-    return options;
-  }
-  return [...options, { id: current, label: current }];
-}
-
 export function Runs({
   cases,
   onCancelRun,
   onCloneRun,
   onCreateRun,
+  onCreateRunBatch,
   onDeleteRun,
   runs
 }: RunsProps) {
@@ -77,6 +80,9 @@ export function Runs({
   const [executorModel, setExecutorModel] = useState(FALLBACK_EXECUTOR_MODEL);
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
   const [modelSource, setModelSource] = useState<string | null>(null);
+  // Why each direct host has no models, keyed by provider id. One may be up
+  // while the other is down, so this is per provider rather than one flag.
+  const [directErrors, setDirectErrors] = useState<Record<string, string>>({});
   // Remember the gateway default so switching back to opencode restores it.
   const [gatewayDefault, setGatewayDefault] = useState(FALLBACK_EXECUTOR_MODEL);
   const scoreMode = "manual";
@@ -84,6 +90,8 @@ export function Runs({
   const [resume, setResume] = useState(false);
   const [dryRun, setDryRun] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
+  const [validation, setValidation] = useState<RunValidationResult | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [caseRunIds, setCaseRunIds] = useState<string[]>([]);
   const [harnessSkills, setHarnessSkills] = useState<HarnessSkill[]>([]);
@@ -91,6 +99,72 @@ export function Runs({
   const [stagedSkills, setStagedSkills] = useState<StagedSkillRecord[]>([]);
   const [extraSkills, setExtraSkills] = useState<Set<string>>(new Set());
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [reloadingModels, setReloadingModels] = useState(false);
+
+  // --- Batch mode ----------------------------------------------------------
+  // Off by default, and while off every control above behaves exactly as it did
+  // before batching existed. Turning it on promotes four of the single selects
+  // into additive sets seeded from the current selection, so the batch always
+  // starts as "what I have now" and is widened from there.
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchCases, setBatchCases] = useState<Set<string>>(new Set());
+  const [batchPrompts, setBatchPrompts] = useState<Set<string>>(new Set());
+  const [batchHarnesses, setBatchHarnesses] = useState<Set<string>>(new Set());
+  const [batchExecutors, setBatchExecutors] = useState<Set<string>>(new Set());
+  const [repetitions, setRepetitions] = useState(1);
+  const [batchResult, setBatchResult] = useState<RunBatchResult | null>(null);
+  // Read from the server rather than mirrored as a constant here: a client-side
+  // copy of the cap would silently disagree with the value that actually
+  // enforces it. Null until the fetch lands (or if it fails) — the button stays
+  // enabled and the server remains the authority either way.
+  const [maxBatchRuns, setMaxBatchRuns] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .readRuntimeFacts()
+      .then((facts) => {
+        if (active) {
+          setMaxBatchRuns(facts.max_batch_runs);
+        }
+      })
+      .catch(() => {
+        // Offline / older API: leave the cap unknown and let the server decide.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const enterBatchMode = () => {
+    setBatchCases(new Set([caseId]));
+    setBatchPrompts(new Set([promptVariant]));
+    setBatchHarnesses(new Set([harness]));
+    setBatchExecutors(new Set(executorModel ? [executorModel] : []));
+    setRepetitions(1);
+    setBatchMode(true);
+  };
+
+  /**
+   * Re-read the model menu, optionally dropping the server-side caches.
+   *
+   * The gateway list and the direct LM Studio list live behind separate caches
+   * with different lifetimes, so a model loaded a moment ago can be missing
+   * from one half of the menu. `refresh` clears both — that is the whole job of
+   * the Reload button.
+   */
+  const loadModels = (refresh = false) => {
+    setReloadingModels(refresh);
+    return api
+      .listModels(refresh)
+      .then((catalog) => {
+        setModelOptions(catalog.models);
+        setModelSource(catalog.source);
+        setDirectErrors(catalog.direct_errors ?? {});
+        return catalog;
+      })
+      .finally(() => setReloadingModels(false));
+  };
 
   useEffect(() => {
     let active = true;
@@ -114,14 +188,11 @@ export function Runs({
       .catch(() => {
         // No staged skills endpoint / API offline — group stays hidden.
       });
-    api
-      .listModels()
+    loadModels()
       .then((catalog) => {
         if (!active) {
           return;
         }
-        setModelOptions(catalog.models);
-        setModelSource(catalog.source);
         if (catalog.default_executor) {
           setGatewayDefault(catalog.default_executor);
           // Adopt the gateway's default only while the form is untouched and the
@@ -140,15 +211,6 @@ export function Runs({
       active = false;
     };
   }, []);
-
-  const plannerOptions = useMemo(
-    () => withCurrent(modelOptions, plannerModel),
-    [modelOptions, plannerModel]
-  );
-  const executorOptions = useMemo(
-    () => withCurrent(modelsForHarness(harness, modelOptions), executorModel),
-    [harness, modelOptions, executorModel]
-  );
 
   // Switching harness swaps the executor menu (native CLI models vs gateway), so
   // reset the executor to that harness's default to avoid a stale/invalid pick.
@@ -188,6 +250,28 @@ export function Runs({
   );
 
   const promptVariantNames = Object.keys(selectedCase?.prompt_variants ?? { default: "" });
+
+  /**
+   * Prompt variants offered in batch mode: the union across the selected cases.
+   *
+   * Union rather than intersection because cases legitimately define different
+   * variant sets, and an intersection is empty as soon as one case is unusual —
+   * which would silently make the whole axis unselectable. The server pairs
+   * each case only with the variants it defines, so the run count has to be
+   * summed per case rather than multiplied by the size of this axis.
+   */
+  const batchPromptNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const item of cases) {
+      if (!batchCases.has(item.case_id)) {
+        continue;
+      }
+      for (const variant of Object.keys(item.prompt_variants ?? {})) {
+        names.add(variant);
+      }
+    }
+    return [...names].sort();
+  }, [batchCases, cases]);
   useEffect(() => {
     if (promptVariantNames.length === 0) {
       return;
@@ -255,30 +339,127 @@ export function Runs({
     setMaxSteps(10);
   };
 
+  // A verdict only describes the configuration that produced it, so any edit
+  // voids it rather than leaving a stale green tick above the Create button.
+  useEffect(() => {
+    setValidation(null);
+  }, [
+    caseId,
+    promptVariant,
+    harness,
+    plannerModel,
+    executorModel,
+    maxSteps,
+    resume,
+    dryRun,
+    disabledSkills,
+    extraSkills
+  ]);
+
+  const buildConfig = (): RunConfigPayload => ({
+    case_id: caseId,
+    prompt_variant: promptVariant,
+    harness,
+    planner_model: plannerModel || null,
+    executor_model: executorModel || null,
+    score_mode: scoreMode,
+    max_steps: maxSteps,
+    resume,
+    dry_run: dryRun,
+    skills_disabled: [...disabledSkills].sort(),
+    skills_extra: [...extraSkills].sort()
+  });
+
+  // Same checks Create run applies, minus the write. The slow part (measuring
+  // the executor's served context window) is memoized server-side, so creating
+  // right after a green check costs nothing extra.
+  const handleValidateRun = async () => {
+    if (selectedCase === null) {
+      return;
+    }
+    setCreateError(null);
+    setValidation(null);
+    setIsValidating(true);
+    try {
+      setValidation(await api.preflightRunConfig(buildConfig()));
+    } catch (error) {
+      setCreateError(
+        error instanceof Error ? error.message : "Unable to validate configuration"
+      );
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  // An empty executor set means "do not vary the model", which the API spells
+  // `[null]` — so it still contributes a factor of one, never zero.
+  const batchExecutorAxis: (string | null)[] =
+    batchExecutors.size > 0 ? [...batchExecutors] : [null];
+
+  // Mirrors the server: a case only runs the selected variants it defines, so
+  // the variant axis is summed per case instead of multiplied once. Selecting
+  // a case that shares no variant with the selection is rejected outright
+  // rather than silently dropped, so name those cases here.
+  const selectedCasesInBatch = cases.filter((item) => batchCases.has(item.case_id));
+  const variantsPerCase = selectedCasesInBatch.map((item) => ({
+    caseId: item.case_id,
+    count: [...batchPrompts].filter((name) =>
+      Object.hasOwn(item.prompt_variants ?? {}, name),
+    ).length,
+  }));
+  const casesWithoutVariant = variantsPerCase
+    .filter((entry) => entry.count === 0)
+    .map((entry) => entry.caseId);
+
+  const batchRunCount =
+    variantsPerCase.reduce((total, entry) => total + entry.count, 0) *
+    batchHarnesses.size *
+    batchExecutorAxis.length *
+    Math.max(repetitions, 0);
+
+  const overBatchCap = maxBatchRuns !== null && batchRunCount > maxBatchRuns;
+
+  const handleCreateBatch = async () => {
+    setCreateError(null);
+    setValidation(null);
+    setBatchResult(null);
+    setIsSaving(true);
+    try {
+      setBatchResult(
+        await onCreateRunBatch({
+          case_ids: [...batchCases],
+          prompt_variants: [...batchPrompts],
+          harnesses: [...batchHarnesses],
+          executor_models: batchExecutorAxis,
+          planner_models: [plannerModel || null],
+          repetitions,
+          score_mode: scoreMode,
+          max_steps: maxSteps,
+          dry_run: dryRun,
+          skills_disabled: [...disabledSkills].sort(),
+          skills_extra: [...extraSkills].sort()
+        })
+      );
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : "Unable to queue batch");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleCreateRun = async () => {
     if (selectedCase === null) {
       return;
     }
 
     setCreateError(null);
+    setValidation(null);
     setIsSaving(true);
     try {
       const created = await onCreateRun({
         run_id: runId.trim() || undefined,
         label: label.trim() || undefined,
-        config: {
-          case_id: caseId,
-          prompt_variant: promptVariant,
-          harness,
-          planner_model: plannerModel || null,
-          executor_model: executorModel || null,
-          score_mode: scoreMode,
-          max_steps: maxSteps,
-          resume,
-          dry_run: dryRun,
-          skills_disabled: [...disabledSkills].sort(),
-          skills_extra: [...extraSkills].sort()
-        }
+        config: buildConfig()
       });
       navigate(`/runs/${created.run_id}`);
     } catch (error) {
@@ -322,7 +503,117 @@ export function Runs({
           <button className="primary" onClick={applySdlcQwenPreset} type="button">
             Preset: Full SDLC + Qwen
           </button>
+          <button
+            onClick={() => (batchMode ? setBatchMode(false) : enterBatchMode())}
+            type="button"
+          >
+            {batchMode ? "Leave batch mode" : "Batch mode"}
+          </button>
         </div>
+        {batchMode ? (
+          <div className="batch-section">
+            <p className="muted">
+              Each list below is a dimension: every combination of the selected cases,
+              prompts, harnesses and executor models is queued, repeated{" "}
+              <strong>{repetitions}</strong>{" "}
+              {repetitions === 1 ? "time" : "times"}. Planner model, max steps, dry run
+              and the skill ablation are shared by every run in the batch.
+            </p>
+            <div className="form-grid">
+              <fieldset className="batch-axis">
+                <legend>Cases ({batchCases.size})</legend>
+                <div className="batch-options">
+                  {cases.map((item) => (
+                    <label className="skill-checkbox" key={item.case_id}>
+                      <input
+                        checked={batchCases.has(item.case_id)}
+                        onChange={() =>
+                          setBatchCases((current) => toggleInSet(current, item.case_id))
+                        }
+                        type="checkbox"
+                      />
+                      <span>{caseOptionLabel(item)}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset className="batch-axis">
+                <legend>Prompt variants ({batchPrompts.size})</legend>
+                <div className="batch-options">
+                  {batchPromptNames.map((variant) => (
+                    <label className="skill-checkbox" key={variant}>
+                      <input
+                        checked={batchPrompts.has(variant)}
+                        onChange={() =>
+                          setBatchPrompts((current) => toggleInSet(current, variant))
+                        }
+                        type="checkbox"
+                      />
+                      <span>{variant}</span>
+                    </label>
+                  ))}
+                </div>
+                <small className="muted">
+                  Union of the variants defined by the selected cases. A case without a
+                  selected variant contributes no runs for it.
+                </small>
+              </fieldset>
+              <fieldset className="batch-axis">
+                <legend>Harnesses ({batchHarnesses.size})</legend>
+                <div className="batch-options">
+                  {HARNESS_OPTIONS.map((item) => (
+                    <label className="skill-checkbox" key={item}>
+                      <input
+                        checked={batchHarnesses.has(item)}
+                        onChange={() =>
+                          setBatchHarnesses((current) => toggleInSet(current, item))
+                        }
+                        type="checkbox"
+                      />
+                      <span>{item}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset className="batch-axis">
+                <legend>Executor models ({batchExecutors.size})</legend>
+                <div className="batch-options">
+                  {modelOptions.map((option) => (
+                    <label className="skill-checkbox" key={option.id}>
+                      <input
+                        checked={batchExecutors.has(option.id)}
+                        onChange={() =>
+                          setBatchExecutors((current) => toggleInSet(current, option.id))
+                        }
+                        type="checkbox"
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                </div>
+                <small className="muted">
+                  None selected means "do not vary the model" — the harness default is
+                  used for every run.
+                </small>
+              </fieldset>
+              <label>
+                <span>Repetitions</span>
+                <input
+                  min={1}
+                  onChange={(event) =>
+                    setRepetitions(Math.max(1, Number(event.target.value) || 1))
+                  }
+                  type="number"
+                  value={repetitions}
+                />
+                <small className="muted">
+                  Trials per combination. Repeat to separate a real difference from
+                  run-to-run variance.
+                </small>
+              </label>
+            </div>
+          </div>
+        ) : null}
         <div className="form-grid">
           <label>
             <span>Run template (optional)</span>
@@ -395,36 +686,34 @@ export function Runs({
               </small>
             ) : null}
           </label>
-          <label>
-            <span>Planner model</span>
-            <select value={plannerModel} onChange={(event) => setPlannerModel(event.target.value)}>
-              <option value="">None</option>
-              {plannerOptions.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Executor model</span>
-            <select value={executorModel} onChange={(event) => setExecutorModel(event.target.value)}>
-              {executorOptions.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
+          <ModelPicker
+            allowNone
+            label="Planner model"
+            directErrors={directErrors}
+            onChange={setPlannerModel}
+            options={modelOptions}
+            value={plannerModel}
+          />
+          <ModelPicker
+            label="Executor model"
+            directErrors={directErrors}
+            nativeOptions={HARNESS_NATIVE_MODELS[harness]}
+            onChange={setExecutorModel}
+            onReload={() => void loadModels(true)}
+            options={modelOptions}
+            reloading={reloadingModels}
+            value={executorModel}
+          >
             <small className="muted">
               {HARNESS_NATIVE_MODELS[harness]
                 ? `Native ${harness} CLI models (passed to --model). Edit the list in Runs.tsx as versions ship.`
                 : modelSource === "opencode.json"
                   ? "Gateway unreachable — showing opencode.json models."
                   : modelSource === "gateway"
-                    ? "Live from your gateway (LiteLLM). Run make sync-gateway-models after adding models."
-                    : "Loading models from the gateway…"}
+                    ? "AI Gateway models are routed through LiteLLM; Direct models are read off your LM Studio host, where an alias cannot rename them in transit."
+                    : "Loading models…"}
             </small>
-          </label>
+          </ModelPicker>
           <label>
             <span>Score mode</span>
             <select value={scoreMode} disabled>
@@ -526,10 +815,90 @@ export function Runs({
           </div>
         ) : null}
         <div className="panel-actions">
-          <button className="primary" disabled={isSaving || cases.length === 0} onClick={handleCreateRun} type="button">
-            {isSaving ? "Creating..." : "Create run"}
+          <button
+            disabled={isValidating || isSaving || cases.length === 0}
+            onClick={handleValidateRun}
+            type="button"
+          >
+            {isValidating ? "Validating..." : "Validate config"}
           </button>
+          {batchMode ? (
+            <button
+              className="primary"
+              disabled={
+                isSaving ||
+                batchRunCount === 0 ||
+                overBatchCap ||
+                casesWithoutVariant.length > 0
+              }
+              onClick={handleCreateBatch}
+              type="button"
+            >
+              {isSaving
+                ? "Queueing..."
+                : `Queue ${batchRunCount} ${batchRunCount === 1 ? "run" : "runs"}`}
+            </button>
+          ) : (
+            <button
+              className="primary"
+              disabled={isSaving || cases.length === 0}
+              onClick={handleCreateRun}
+              type="button"
+            >
+              {isSaving ? "Creating..." : "Create run"}
+            </button>
+          )}
         </div>
+        {batchMode ? (
+          <p className="muted">
+            {batchRunCount === 0 ? (
+              <span className="badge error">
+                Select at least one case, prompt variant and harness.
+              </span>
+            ) : casesWithoutVariant.length > 0 ? (
+              <span className="badge error">
+                {casesWithoutVariant.join(", ")} defines none of the selected prompt
+                variants. Select a variant it has, or deselect the case.
+              </span>
+            ) : overBatchCap ? (
+              <span className="badge error">
+                {batchRunCount} runs exceeds the limit of {maxBatchRuns}. Narrow a
+                dimension, or raise HARNESS_LAB_MAX_BATCH_RUNS.
+              </span>
+            ) : (
+              <>
+                This queues <strong>{batchRunCount}</strong> containerised{" "}
+                {batchRunCount === 1 ? "run" : "runs"}, each spending model budget.
+                Each case runs only the selected variants it defines, so the count
+                can be lower than the product of the axes. Nothing is created unless
+                every combination passes preflight.
+              </>
+            )}
+          </p>
+        ) : null}
+        {batchResult ? (
+          <p className="muted">
+            <span className="badge ok">queued</span> {batchResult.count}{" "}
+            {batchResult.count === 1 ? "run" : "runs"} as{" "}
+            <code>{batchResult.batch_id}</code>. They appear in the table below as the
+            queue drains.
+          </p>
+        ) : null}
+        {validation ? (
+          <p className="muted">
+            <span className={validation.ok ? "badge ok" : "badge error"}>
+              {validation.ok ? "ready" : "blocked"}
+            </span>{" "}
+            {validation.detail}
+          </p>
+        ) : (
+          <p className="muted">
+            Validate config runs the same checks as Create run — case files, harness
+            availability, model routing, and the context window the executor is actually
+            serving — without creating anything. On a cold model the first check can take
+            up to ~40s while the backend loads it.
+          </p>
+        )}
         {createError ? <ErrorBanner message={createError} onDismiss={() => setCreateError(null)} /> : null}
         <div>
           <p className="sidebar-label">Equivalent CLI command</p>

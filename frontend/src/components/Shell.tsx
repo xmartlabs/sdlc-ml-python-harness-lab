@@ -4,6 +4,9 @@ import { NavLink } from "react-router-dom";
 
 type ShellProps = {
   children: ReactNode;
+  /** False in open mode: no password is set, so the UI warns instead of offering sign-out. */
+  authEnabled: boolean;
+  onLogout: () => void;
 };
 
 const COLLAPSED_STORAGE_KEY = "ahl.sidebar.collapsed";
@@ -15,6 +18,7 @@ const NAV_ITEMS = [
   { to: "/skills", label: "Skills", icon: "🧩", end: false },
   { to: "/improvements", label: "Improvements", icon: "💡", end: false },
   { to: "/compare", label: "Compare", icon: "⇄", end: false },
+  { to: "/health", label: "Health", icon: "🩺", end: false },
   { to: "/guide", label: "Guide", icon: "📖", end: false },
   { to: "/settings", label: "Settings", icon: "⚙", end: false }
 ] as const;
@@ -26,7 +30,7 @@ function getStoredCollapsed(): boolean {
   return window.localStorage.getItem(COLLAPSED_STORAGE_KEY) === "true";
 }
 
-export function Shell({ children }: ShellProps) {
+export function Shell({ children, authEnabled, onLogout }: ShellProps) {
   const [collapsed, setCollapsed] = useState(getStoredCollapsed);
 
   useEffect(() => {
@@ -79,10 +83,23 @@ export function Shell({ children }: ShellProps) {
           <div className="sidebar-foot">
             <p className="sidebar-label">Mode</p>
             <p className="sidebar-value">Operational shell</p>
+            {authEnabled ? (
+              <button className="button-link" onClick={onLogout} type="button">
+                Sign out
+              </button>
+            ) : null}
           </div>
         )}
       </aside>
-      <main className="workbench">{children}</main>
+      <main className="workbench">
+        {authEnabled ? null : (
+          <div className="auth-banner" role="status">
+            Authentication is off — anyone who can reach this address can drive the
+            lab. Run <code>make set-password</code> on the server to protect it.
+          </div>
+        )}
+        {children}
+      </main>
     </div>
   );
 }

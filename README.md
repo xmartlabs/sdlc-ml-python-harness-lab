@@ -31,9 +31,41 @@ all from the web UI.
 - **Behavioural audit** — an LLM reads a run's artifacts and reports skill usage, loops,
   and SDLC adherence.
 - **A/B comparison** — control vs harness-wrapped arms to isolate the harness's effect.
+- **Batch runs** — queue a whole cross-product (cases × harnesses × prompts × models ×
+  repetitions) from one form, validated all-or-nothing (see
+  [ADR-0023](docs/adr/0023-batch-run-execution.md)).
 - **Improvement loop** — turn audit findings into sanitized issues for `ml-python-base`
   and re-measure (see the [harness improvement loop](docs/harness-lifecycle/README.md)).
 - Built on **`uv` + `ruff` + `pytest`** with a read-only CI gate (`make ci`).
+
+## ⚠️ Scope: this is the lab for *one* harness
+
+Read this before cloning, so it is not a surprise afterwards.
+
+**The harness under test is the repository the lab runs from.** `repo_root` defaults
+to the working directory, and the governance surface a run sees — `.github/skills/`,
+the generated `CLAUDE.md` / `AGENTS.md` / `OPENCODE.md`, the agents, the hooks — is
+this repo's own, which is the [`ml-python-base`](https://github.com/marcosdh1987/ml-python-base)
+template. That is deliberate: it closes the improvement loop, because the harness you
+measure is the harness you then improve and re-measure.
+
+What that means in practice:
+
+- The **Harness** selector picks *which CLI drives the run* (Claude Code, OpenCode,
+  Codex, Antigravity). It does not swap the governance content those CLIs read.
+- To benchmark a **different** harness, clone that repository and run the lab inside
+  it. There is no per-run "point at this other repo" yet.
+- A run with a **skill ablation** rewrites the native skill views in the working tree
+  and restores them afterwards. Do not run benchmarks against a tree with uncommitted
+  governance changes.
+
+Making the harness a per-run input — materialised by git ref into the run's workspace
+instead of inherited from the working directory — is the main planned change. See
+[the open-source readiness plan](docs/plans/2026-08-open-source-readiness-and-batch-runs.md).
+
+Before running anything, read [SECURITY.md](SECURITY.md): runs execute untrusted model
+output with the repository mounted read-write and your `.env` in the container
+environment.
 
 ## 🗺️ How it fits together
 
@@ -109,11 +141,14 @@ suite with hard gates), see the
 |---|---|
 | **Setting up for the first time** | [Onboarding guide](docs/onboarding.md) — prerequisites, credential paths (gateway / Claude), `.env`, first run, troubleshooting |
 | **Operating the lab day-to-day** | [Web UI guide](docs/guide-web-ui.md) — every screen; [Improvement cycle](docs/improvement-cycle.md) — audit → proposals → GitHub issues |
+| **Trialling a new skill** | [Skill validation guide](docs/guide-skill-validation.md) — import from a URL, A/B it, promote it; [Skills management](docs/skills-management.md) — the governed catalog and the sync engine |
+| **Diagnosing a lab that misbehaves** | The **Health** screen ([guide](docs/guide-web-ui.md#health)) — reachability, drift and the four repairs ([ADR-0018](docs/adr/0018-health-and-drift-panel.md)); [Onboarding troubleshooting](docs/onboarding.md#5-smoke-test--your-first-run) |
 | **Improving the template** | [Improvement methodology](docs/harness-lifecycle/improvement-methodology.md) — when to trust a proposal; [Lab sync workflow](docs/harness-lifecycle/lab-sync-workflow.md) — adopt & validate a release; [Harness lifecycle](docs/harness-lifecycle/README.md) — the rigorous form |
 | **Comparing harnesses / models** | [Harness adapters](docs/harness-adapters.md) — claude/opencode/codex design; [claude & codex runbook](docs/runbook-claude-codex.md); [First-run benchmark runbook](docs/runbook-first-run.md) |
 | **Using SWE-bench lanes** | [SWE-bench cases](docs/design-swe-bench-cases.md); [SWE-bench Pro lane](docs/design-swe-bench-pro-lane.md); [Curated set](docs/swebench-curated-set.md) |
 | **Running self-hosted models** | [Local model runtime config](docs/local-model-runtime-config.md); [Task sizing](docs/task-sizing.md); [OpenCode workflow](docs/opencode-workflow.md) |
 | **Developing the lab itself** | [Agentic workflow](docs/agentic-workflow.md) — the working loop; [ADRs](docs/adr/README.md) — why things are the way they are; [Skills management](docs/skills-management.md) |
+| **Knowing what it does *not* do** | [Known limitations](docs/known-limitations.md) — accepted debt, stated up front; [SECURITY.md](SECURITY.md) — what a run container can actually reach |
 
 ## 📋 Prerequisites
 
@@ -177,6 +212,20 @@ Open **http://localhost:5173**. New here? Read the
 **[Web UI guide](docs/guide-web-ui.md)**. Claude/OpenCode/Codex all run inside the
 runner container using the auth from `.env`; see
 [docs/harness-adapters.md](docs/harness-adapters.md).
+
+Leaving the lab running on a server instead of a laptop? Protect it and switch to the
+always-on profile — one origin on `:8080`, restarts with the host, rotated logs
+([ADR-0019](docs/adr/0019-always-on-local-deployment.md)):
+
+```bash
+make set-password    # single-user password; without it the UI is open to the LAN
+make app-up-prod     # nginx :8080; the API is no longer published to the network
+```
+
+| Mode | Web UI | API | Command |
+|---|---|---|---|
+| Dev (laptop) | `:5173` (Vite) | `:8008` | `make app-up` |
+| Always-on (server) | `:8080` (nginx) | loopback only | `make app-up-prod` |
 
 ### Develop the lab (optional — only to work on the lab itself)
 
@@ -456,11 +505,14 @@ make stop-docker     # stop containers
 
 ## 🤝 Contributing
 
-1. Create a new branch
-2. Make your changes
-3. Run `make ci` to ensure quality
-4. Submit a pull request
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the quality gate, which files are
+generated (never edit those by hand), and the conventions this repo enforces.
+
+The short version: branch, change, `make format && make fix && make ci`, open a PR.
+CI fails a PR that touches `src/` or `tests/` without touching `docs/`.
+
+Security issues go through [SECURITY.md](SECURITY.md), not the issue tracker.
 
 ## 📄 License
 
-This is a template project - customize as needed for your use case.
+[Apache License 2.0](LICENSE). Copyright 2026 Marcos Soto.

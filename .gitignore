@@ -97,3 +97,10 @@ notebooks/data/experiments/*
 
 # Harness lifecycle candidate worktrees (isolated; never committed on main)
 .worktrees/
+
+
+# Benchmark scratch reports
+bench_report_*.txt
+
+# SWE-bench subject repos cloned under benchmarks/ (never a submodule)
+/benchmarks/*__*/

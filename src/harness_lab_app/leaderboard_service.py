@@ -59,11 +59,20 @@ class LeaderboardService:
         return doc if isinstance(doc, dict) else {}
 
     def list_rows(self) -> list[dict[str, Any]]:
-        """One flat row per terminal run (small dataset — stitched in Python)."""
+        """One flat row per terminal run that actually attempted the case.
+
+        Runs the lab itself broke are excluded rather than ranked. K-043/044/045
+        died in under a second because the runner image was missing, having
+        asked the model nothing — yet they counted as three attempts against it.
+        An attempt count that includes runs which never started is worse than no
+        count at all, because it looks authoritative.
+        """
+        from harness_lab_app.run_failures import is_unmeasured
+
         runs = [
             run
             for run in self.session.exec(select(Run))
-            if run.state in _TERMINAL_STATES
+            if run.state in _TERMINAL_STATES and not is_unmeasured(run.failure_reason)
         ]
         configs = {config.id: config for config in self.session.exec(select(RunConfig))}
         cases = {case.case_id: case for case in self.session.exec(select(Case))}

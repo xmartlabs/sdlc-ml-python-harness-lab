@@ -10,6 +10,7 @@ from sqlmodel.pool import StaticPool
 from harness_lab_app import tasks
 from harness_lab_app.executors import SubprocessRunExecutor
 from harness_lab_app.models import RunState
+from harness_lab_app.run_failures import is_unmeasured
 from harness_lab_app.run_service import RunService
 from harness_lab_app.schemas import RunConfigCreate, RunCreate
 from harness_lab_app.tasks import _execute_run_body, reconcile_stale_runs
@@ -203,6 +204,7 @@ def test_execute_run_timeout_marks_failed(monkeypatch: pytest.MonkeyPatch):
 
     class FakeSettings:
         run_timeout_seconds = 0
+        run_stall_seconds = 0
 
     monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
 
@@ -219,6 +221,311 @@ def test_execute_run_timeout_marks_failed(monkeypatch: pytest.MonkeyPatch):
     assert state == RunState.failed
     assert failure is not None
     assert "timed out" in failure
+
+
+def test_execute_run_stall_marks_failed(monkeypatch: pytest.MonkeyPatch):
+    """Run tetris-v1-K-034: alive, silent, and going nowhere.
+
+    The agent shelled out to a pygame process that caught SIGTERM and never
+    died; because the surviving grandchild held the stdout pipe open, opencode
+    blocked forever reading it. 47 minutes without one byte of output, state
+    "running" in the UI, and the 2-hour total timeout was the only thing that
+    would ever have ended it. A run that has stopped talking is stuck, and
+    stuck is a failure to report now, not in two hours.
+    """
+    engine = make_engine()
+    create_pending_run(engine, "task-stall-1")
+
+    class FakeSettings:
+        run_timeout_seconds = 3600  # nowhere near — the stall clock must fire
+        run_stall_seconds = 1
+
+    monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
+
+    class SilentExecutor(SubprocessRunExecutor):
+        def start(self, run_id: str, command: list[str]):
+            # Speaks once, then goes quiet without exiting — a hung tool call.
+            return super().start(
+                run_id,
+                [
+                    "python3",
+                    "-c",
+                    "print('starting milestone 3', flush=True); "
+                    "import time; time.sleep(60)",
+                ],
+            )
+
+    _execute_run_body("task-stall-1", SilentExecutor(), db_engine=engine)
+
+    state, _, failure = get_run_state(engine, "task-stall-1")
+    assert state == RunState.failed
+    assert failure is not None
+    assert "stalled" in failure
+    # The last thing it said travels with the verdict: that line is normally
+    # the tool call it is stuck inside, and the first thing anyone would read.
+    assert "starting milestone 3" in failure
+
+
+def test_a_talking_run_is_never_treated_as_stalled(monkeypatch: pytest.MonkeyPatch):
+    """Output resets the clock, so a slow-but-alive run finishes normally."""
+    engine = make_engine()
+    create_pending_run(engine, "task-chatty-1")
+
+    class FakeSettings:
+        run_timeout_seconds = 3600
+        run_stall_seconds = 2
+
+    monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
+
+    class ChattyExecutor(SubprocessRunExecutor):
+        def start(self, run_id: str, command: list[str]):
+            return super().start(
+                run_id,
+                [
+                    "python3",
+                    "-c",
+                    "import time\n"
+                    "for i in range(6):\n"
+                    "    print(f'step {i}', flush=True)\n"
+                    "    time.sleep(0.5)\n",
+                ],
+            )
+
+    _execute_run_body("task-chatty-1", ChattyExecutor(), db_engine=engine)
+
+    state, exit_code, failure = get_run_state(engine, "task-chatty-1")
+    # A manual-score case lands here rather than `completed`; what matters is
+    # that it reached its own ending instead of being killed as stalled.
+    assert state == RunState.awaiting_manual_score
+    assert exit_code == 0
+    assert failure in (None, "")
+
+
+# Verbatim opencode output. The watchdog decides what a silence means by
+# prefix-matching these, so a paraphrase would prove nothing.
+STREAM_START_LINE = (
+    "timestamp=2026-08-13T17:08:29.555Z level=INFO run=0aa06ee9 message=stream "
+    "providerID=lmstudio modelID=qwen/qwen3.6-35b-a3b"
+)
+STREAM_ERROR_LINE = (
+    "timestamp=2026-08-11T22:23:08.812Z level=ERROR run=1cf7bf13 "
+    'message="stream error" providerID=gateway modelID=nim-nemotron-super-120b '
+    'error.error="AI_APICallError: Cannot connect to API: Unable to connect."'
+)
+
+
+def _script_executor(program: str):
+    """A SubprocessRunExecutor that runs `program` instead of the real command."""
+
+    class ScriptExecutor(SubprocessRunExecutor):
+        def start(self, run_id: str, command: list[str]):
+            return super().start(run_id, ["python3", "-c", program])
+
+    return ScriptExecutor()
+
+
+def test_a_model_still_processing_the_prompt_is_not_a_stall(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Run tetris-v1-K-050, and the reason the 35B "stopped working".
+
+    The agent read its governance files, entered its first turn, and went quiet
+    at `message=stream` — waiting for the first token. Ten minutes later the
+    single silence clock killed it and the lab filed it as the agent wedging
+    itself in a tool call. It was neither wedged nor at fault: that box needs
+    318s of prompt processing before the first token of a 24k-token prompt, so
+    the threshold was simply below the model's prefill time. Every 35B run died
+    in this exact spot while the faster 9B never came close.
+    """
+    engine = make_engine()
+    create_pending_run(engine, "task-prefill-1")
+
+    class FakeSettings:
+        run_timeout_seconds = 3600
+        run_stall_seconds = 1  # a tool call gets one second here...
+        run_model_wait_seconds = 3600  # ...but the model gets an hour
+        run_max_stream_errors = 0
+
+    monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
+
+    program = (
+        f"import time\nprint({STREAM_START_LINE!r}, flush=True)\n"
+        "time.sleep(3)\nprint('first token at last', flush=True)\n"
+    )
+
+    _execute_run_body("task-prefill-1", _script_executor(program), db_engine=engine)
+
+    state, exit_code, failure = get_run_state(engine, "task-prefill-1")
+    assert state == RunState.awaiting_manual_score
+    assert exit_code == 0
+    assert failure in (None, "")
+
+
+def test_a_model_that_never_answers_is_stopped_without_blaming_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The model-wait budget still ends the run — it just says so honestly."""
+    engine = make_engine()
+    create_pending_run(engine, "task-prefill-2")
+
+    class FakeSettings:
+        run_timeout_seconds = 3600
+        run_stall_seconds = 3600
+        run_model_wait_seconds = 1
+        run_max_stream_errors = 0
+
+    monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
+
+    program = f"import time\nprint({STREAM_START_LINE!r}, flush=True)\ntime.sleep(60)\n"
+
+    _execute_run_body("task-prefill-2", _script_executor(program), db_engine=engine)
+
+    state, _, failure = get_run_state(engine, "task-prefill-2")
+    assert state == RunState.failed
+    assert failure is not None
+    assert failure.startswith("No model response:")
+    # Not a stall: the agent was not the one that stopped talking.
+    assert "stalled" not in failure
+    # And it names the knob, because only the operator can decide whether the
+    # model is too slow to be worth it or the budget is too tight.
+    assert "run_model_wait_seconds" in failure
+    assert is_unmeasured(failure) is True
+
+
+def test_a_failing_endpoint_is_given_up_on_instead_of_retried_for_two_hours(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Run tetris-v1-K-029: 123 failed requests in 70 minutes, filed as a timeout.
+
+    opencode retries a failing stream forever, so the run burned its whole
+    budget on an endpoint it could not reach and the leaderboard recorded it as
+    nemotron attempting the case. Five failures in a row is already the answer.
+    """
+    engine = make_engine()
+    create_pending_run(engine, "task-endpoint-1")
+
+    class FakeSettings:
+        run_timeout_seconds = 3600
+        run_stall_seconds = 3600
+        run_model_wait_seconds = 3600
+        run_max_stream_errors = 3
+
+    monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
+
+    # The real retry loop: setup line, failure, setup line, failure... Nothing
+    # between them is progress, so nothing between them may reset the count.
+    program = (
+        "import time\n"
+        "for _ in range(10):\n"
+        f"    print({STREAM_START_LINE!r}, flush=True)\n"
+        f"    print({STREAM_ERROR_LINE!r}, flush=True)\n"
+        "time.sleep(60)\n"
+    )
+
+    _execute_run_body("task-endpoint-1", _script_executor(program), db_engine=engine)
+
+    state, _, failure = get_run_state(engine, "task-endpoint-1")
+    assert state == RunState.failed
+    assert failure is not None
+    assert failure.startswith("Model endpoint failing:")
+    # The endpoint's own words travel with the verdict.
+    assert "Cannot connect to API" in failure
+    assert is_unmeasured(failure) is True
+
+
+def test_a_run_no_model_ever_answered_is_not_a_completed_attempt():
+    """Run instance_qutebrowser…-K-003: completed, score 0, and the model never spoke.
+
+    Both provider requests died in two seconds on a gateway config error
+    (`max_tokens` above the model's completion cap) — below the consecutive-
+    error threshold, so no watchdog verdict formed. opencode gave up, but
+    bench_run.py treated the step failure as survivable, carried on to scoring,
+    archived an empty diff and exited 0. The run went on the leaderboard as
+    "gpt-4o-mini attempted the case and resolved nothing", when it was never
+    heard from at all.
+    """
+    engine = make_engine()
+    create_pending_run(engine, "task-no-answer-1")
+    executor = FakeExecutor(
+        FakeHandle(
+            [
+                ("info", STREAM_START_LINE),
+                ("error", STREAM_ERROR_LINE),
+                ("info", STREAM_START_LINE),
+                ("error", STREAM_ERROR_LINE),
+                # bench_run.py carrying on regardless, exactly as K-003 did.
+                ("info", "opencode exited with code 1 — see steps/step-1.log"),
+                ("info", "[3/5] Scoring..."),
+                ("info", "[5/5] Archiving workspace (managed run)..."),
+                ("info", "diff.patch: 0 lines"),
+            ],
+            exit_code=0,
+        )
+    )
+
+    _execute_run_body("task-no-answer-1", executor, db_engine=engine)
+
+    state, exit_code, failure = get_run_state(engine, "task-no-answer-1")
+    assert state == RunState.failed
+    assert exit_code != 0
+    assert failure is not None
+    assert failure.startswith("Model endpoint failing:")
+    # The provider's own words travel with the verdict.
+    assert "Cannot connect to API" in failure
+    assert is_unmeasured(failure) is True
+
+
+def test_a_run_where_a_later_request_succeeds_keeps_its_result():
+    """One answered request is a measurement; only zero-for-zero is void."""
+    engine = make_engine()
+    create_pending_run(engine, "task-recovered-1")
+    executor = FakeExecutor(
+        FakeHandle(
+            [
+                ("info", STREAM_START_LINE),
+                ("error", STREAM_ERROR_LINE),
+                ("info", STREAM_START_LINE),
+                ("info", "→ Write main.py"),
+            ],
+            exit_code=0,
+        )
+    )
+
+    _execute_run_body("task-recovered-1", executor, db_engine=engine)
+
+    state, exit_code, failure = get_run_state(engine, "task-recovered-1")
+    assert state == RunState.awaiting_manual_score
+    assert exit_code == 0
+    assert failure in (None, "")
+
+
+def test_a_failure_the_run_recovers_from_does_not_end_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """One bad request between two good turns is noise, not a dead endpoint."""
+    engine = make_engine()
+    create_pending_run(engine, "task-endpoint-2")
+
+    class FakeSettings:
+        run_timeout_seconds = 3600
+        run_stall_seconds = 3600
+        run_model_wait_seconds = 3600
+        run_max_stream_errors = 2
+
+    monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
+
+    program = (
+        "for _ in range(5):\n"
+        f"    print({STREAM_ERROR_LINE!r}, flush=True)\n"
+        "    print('→ Write main.py', flush=True)\n"
+    )
+
+    _execute_run_body("task-endpoint-2", _script_executor(program), db_engine=engine)
+
+    state, exit_code, failure = get_run_state(engine, "task-endpoint-2")
+    assert state == RunState.awaiting_manual_score
+    assert exit_code == 0
+    assert failure in (None, "")
 
 
 def test_execute_run_executor_error_marks_failed():

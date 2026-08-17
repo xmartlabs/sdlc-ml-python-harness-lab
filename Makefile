@@ -338,6 +338,17 @@ sync-gateway-models:
 	uv run python scripts/sync_gateway_models.py \
 		$(if $(DRY_RUN),--dry-run,)
 
+# Protect the web UI with a single admin password (ADR-0015). Writes a PBKDF2
+# hash plus a session secret into .env; applies to the next request, no restart.
+# Usage:
+#   make set-password              # prompt twice, hidden
+#   make set-password OFF=1        # back to open mode (no authentication)
+#   make set-password ROTATE=1     # also invalidate every existing session
+set-password:
+	@uv run python scripts/set_admin_password.py \
+		$(if $(OFF),--off,) \
+		$(if $(ROTATE),--rotate-secret,)
+
 # Prepare a human-driven Antigravity run: register, workspace, prompt, capture
 # templates. Does NOT touch the opencode flow. Open Antigravity by hand, then close.
 # Usage: make bench-antigravity RUN=tetris-v1-N-001 [PROMPT=sdlc] [BENCHMARK=tetris-v1]
@@ -423,12 +434,49 @@ build-fresh:
 	@docker build --no-cache --platform=linux/amd64 -t ${IMG_NAME}:${IMAGE_TAG} -f Dockerfile.api .
 	@echo "✅ Docker image built successfully!"
 
-# Local web app stack: builds the per-run runner image first, then starts
-# api + celery worker + redis + frontend.
+# Local web app stack (dev): builds the per-run runner image first, then starts
+# api + celery worker + redis + the Vite dev server.
 app-up:
 	@echo "🚀 Starting local web app stack..."
 	@docker compose build runner sandbox
-	@docker compose up -d --build api worker redis frontend
+	@docker compose --profile dev up -d --build api worker redis frontend
+	@if [ "$$HARNESS_LAB_API_BIND_ADDR" = "0.0.0.0" ] \
+		&& ! grep -qs '^HARNESS_LAB_ADMIN_PASSWORD_HASH=.\+' .env; then \
+		echo "⚠️  API published on 0.0.0.0:8008 with NO authentication —"; \
+		echo "    anyone on your network can start runs, which execute code."; \
+		echo "    Run: make set-password"; \
+	fi
+
+# Always-on stack (prod, ADR-0019): the SPA is baked into nginx, which also
+# fronts /api, so the browser sees one origin on :8080. The API is pinned to
+# loopback — nginx is the only LAN entrance. Services restart with the host.
+#
+# The UI itself binds to 127.0.0.1 unless HARNESS_LAB_BIND_ADDR says otherwise;
+# set it to 0.0.0.0 in .env *after* `make set-password`, never before.
+app-up-prod:
+	@echo "🚀 Starting always-on stack (nginx :8080)..."
+	@grep -qs '^HARNESS_LAB_ADMIN_PASSWORD_HASH=.\+' .env \
+		|| echo "⚠️  No admin password set — the UI is open. Run: make set-password"
+	@docker compose build runner sandbox
+	@HARNESS_LAB_API_BIND_ADDR=127.0.0.1 \
+		docker compose --profile prod up -d --build api worker redis frontend-prod
+	@echo "✅ http://localhost:8080 (set HARNESS_LAB_BIND_ADDR=0.0.0.0 for LAN access)"
+
+app-down-prod:
+	@echo "🛑 Stopping always-on stack..."
+	@docker compose --profile prod down
+
+# Snapshot the state the lab cannot regenerate: the database, run artifacts,
+# staged skills and .env. Everything else is rebuildable from git.
+BACKUP_DIR ?= backups
+BACKUP_PATHS = .env data/app data/runs data/skills_staging data/reference
+backup:
+	@mkdir -p $(BACKUP_DIR)
+	@paths=""; for p in $(BACKUP_PATHS); do [ -e "$$p" ] && paths="$$paths $$p"; done; \
+		[ -n "$$paths" ] || { echo "nothing to back up"; exit 1; }; \
+		archive=$(BACKUP_DIR)/harness-lab-$$(date +%Y%m%d-%H%M%S).tar.gz; \
+		tar czf "$$archive" --exclude='data/runs/*/workspace' $$paths; \
+		echo "✅ $$archive ($$(du -h "$$archive" | cut -f1))"
 
 # Host mode: run the worker/API on the HOST with the subprocess backend so the
 # codex/claude harnesses drive your host CLI's interactive/native auth. This is an
@@ -586,6 +634,19 @@ check:
 	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD}/src pytest tests/ --cov=src --cov-report=term-missing
 	@echo "✅ Quality gate passed (read-only)."
 
+# Read-only frontend gate: type check, then a production build.
+#
+# Separate from `make check` because it needs node, which the Python-only
+# contributor path does not install. `make ci` runs both.
+# The build matters as well as tsc: vite resolves imports and fails on a module
+# tsc is happy to type-check but cannot bundle.
+check-frontend:
+	@echo "🔎 Running read-only frontend gate..."
+	@if [ ! -d frontend/node_modules ]; then cd frontend && npm ci; fi
+	@cd frontend && npm run typecheck
+	@cd frontend && npx vite build
+	@echo "✅ Frontend gate passed (read-only)."
+
 # Static type checking only.
 typecheck:
 	@if [ ! -d .venv ]; then make install; fi
@@ -597,6 +658,7 @@ ci:
 	@echo "🚀 Running full CI pipeline (read-only)..."
 	@make check
 	@make check-sync
+	@make check-frontend
 	@echo "✅ CI pipeline completed successfully!"
 
 # =============================================================================
@@ -802,9 +864,13 @@ help:
 	@echo "  make run-question        Test with a predefined question"
 	@echo "  make run-interactive     Start interactive CLI mode"
 	@echo "  make app-up              Start the local web app (api + celery worker + redis + frontend)"
+	@echo "  make app-up-prod         Start the always-on stack (nginx :8080, API not on the LAN)"
+	@echo "  make app-down-prod       Stop the always-on stack"
+	@echo "  make backup              Snapshot .env, the database and run artifacts"
 	@echo "  make app-smoke-test      Verify Docker stack health and run lifecycle"
 	@echo "  make app-runner-smoke    Run one benchmark inside the runner container (RUN=...)"
 	@echo "  make app-test            Build the frontend app"
+	@echo "  make set-password        Protect the web UI with an admin password (OFF=1 to disable)"
 	@echo ""
 	@echo "OpenCode (self-hosted / cloud, via .env):"
 	@echo "  make opencode            Launch opencode TUI with .env loaded"
@@ -850,4 +916,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean
+.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-up-prod app-down-prod backup app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models set-password case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean

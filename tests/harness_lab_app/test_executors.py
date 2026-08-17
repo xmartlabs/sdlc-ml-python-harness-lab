@@ -76,7 +76,15 @@ def test_build_run_environment_without_env_file(
 
     env = build_run_environment()
 
-    assert env == {"PYTHONUNBUFFERED": "1", "IS_SANDBOX": "1"}
+    # The SDL pair is part of the baseline, not something a case opts into: the
+    # run container has no display, and leaving that for the agent to remember
+    # is what let pygame windows hang whole runs (K-036, K-038).
+    assert env == {
+        "PYTHONUNBUFFERED": "1",
+        "IS_SANDBOX": "1",
+        "SDL_VIDEODRIVER": "dummy",
+        "SDL_AUDIODRIVER": "dummy",
+    }
 
 
 def test_subprocess_executor_streams_and_waits() -> None:

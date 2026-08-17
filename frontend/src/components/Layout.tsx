@@ -19,9 +19,11 @@ const POLL_INTERVAL_MS = 2000;
 type LayoutProps = {
   runs: RunRecord[];
   onUpdateRun: (run: RunRecord) => void;
+  authEnabled: boolean;
+  onLogout: () => void;
 };
 
-export function Layout({ runs, onUpdateRun }: LayoutProps) {
+export function Layout({ runs, onUpdateRun, authEnabled, onLogout }: LayoutProps) {
   const { runId } = useParams();
   // Keep the callback in a ref so it is not an effect dependency (it changes
   // every render and would otherwise restart the interval on each poll).
@@ -62,7 +64,7 @@ export function Layout({ runs, onUpdateRun }: LayoutProps) {
   }, [runId, trackedState]);
 
   return (
-    <Shell>
+    <Shell authEnabled={authEnabled} onLogout={onLogout}>
       <Outlet />
     </Shell>
   );

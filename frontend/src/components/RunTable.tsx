@@ -87,6 +87,35 @@ function improvementsBadge(status: RunRecord["improvements"]) {
   };
 }
 
+/**
+ * What a failure was, in two words, and whether it says anything about the run.
+ *
+ * The distinction that matters for a benchmark: a run the *lab* broke measured
+ * nothing, and reading it as a weak result would poison the comparison. A
+ * missing runner image, a restarted worker and a wedged agent are three
+ * different things, and the list used to render all of them as the bare word
+ * "failed" with the explanation buried inside the run.
+ *
+ * `lab` marks the ones where no conclusion about the model or the harness is
+ * available — retry them rather than counting them.
+ */
+type FailureSummary = { label: string; lab: boolean; detail: string };
+
+function summarizeFailure(run: RunRecord): FailureSummary | null {
+  const detail = (run.failure_reason ?? "").trim();
+  if (!detail || !run.failure_kind) {
+    return null;
+  }
+  return {
+    // The label and the kind both come from the server so this list, the
+    // leaderboard's exclusion rule and the API can never disagree about what
+    // a given failure was.
+    label: run.failure_label ?? run.failure_kind,
+    lab: run.failure_kind === "lab",
+    detail
+  };
+}
+
 // The Created cell shows the run's age; its tooltip carries the exact creation
 // timestamp plus the last execution window (start → end and how long it took),
 // which is what you actually compare runs by.
@@ -200,7 +229,17 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
       if (!needle) {
         return true;
       }
-      return [row.title, row.run.run_id, row.caseId, row.harness, row.model]
+      // batch_id is in the haystack so pasting one from the queue confirmation
+      // narrows the table to exactly that batch — no extra filter control for
+      // what is an opaque, copy-pasted id.
+      return [
+        row.title,
+        row.run.run_id,
+        row.caseId,
+        row.harness,
+        row.model,
+        row.run.batch_id ?? ""
+      ]
         .join(" ")
         .toLowerCase()
         .includes(needle);
@@ -396,6 +435,7 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
               const isActive = activeRunId === run.run_id;
               const isPending = pendingRowId === run.run_id;
               const improvements = improvementsBadge(row.improvements);
+              const failure = summarizeFailure(run);
               return (
                 <div
                   className={isActive ? "table-row runs-row active" : "table-row runs-row"}
@@ -406,6 +446,11 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
                       <strong className="run-title">{row.title}</strong>
                       <small className="run-meta">
                         {row.attempt ? <span className="badge neutral">{row.attempt}</span> : null}
+                        {row.run.batch_id ? (
+                          <span className="badge neutral" title={row.run.batch_id}>
+                            batch
+                          </span>
+                        ) : null}
                         {row.shortCase ? <span className="cell-truncate">{row.shortCase}</span> : null}
                         {row.tests ? (
                           <span className="run-tests">
@@ -430,7 +475,38 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
                         <small className="muted">—</small>
                       )}
                     </span>
-                    <StateBadge state={run.state} />
+                    <span className="run-state-cell">
+                      <StateBadge state={run.state} />
+                      {failure ? (
+                        <span
+                          className={failure.lab ? "badge warn" : "badge error"}
+                          title={failure.detail}
+                        >
+                          {failure.label}
+                        </span>
+                      ) : null}
+                      {failure?.lab ? (
+                        <small
+                          className="muted"
+                          title="Nothing about the model or the harness can be read from this run — retry it."
+                        >
+                          no result
+                        </small>
+                      ) : null}
+                      {run.objective_passed === false ? (
+                        <span
+                          className="badge error"
+                          title="The automated checks ran and failed — the produced code does not build or does not run. Open the run to see which check failed."
+                        >
+                          checks failed
+                        </span>
+                      ) : null}
+                      {run.objective_passed === true ? (
+                        <span className="badge ok" title="Automated checks passed.">
+                          checks passed
+                        </span>
+                      ) : null}
+                    </span>
                     <span>{run.score ?? "—"}</span>
                     <span>
                       <small className="run-created" title={row.createdTooltip}>

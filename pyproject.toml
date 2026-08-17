@@ -1,9 +1,17 @@
 [project]
-name = "ml-python-base"
+name = "agentic-harness-lab"
 version = "0.1.0"
-description = "Template base para proyectos de ML"
+description = "Benchmark agentic coding harnesses and models on real coding tasks"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
     "pandas",
     "nbstripout>=0.7.0",
@@ -18,6 +26,12 @@ dependencies = [
     "pyyaml>=6.0",
     "celery[redis]>=5.4",
     "docker>=7.1",
+    # Runtime dep of the api service, not just tooling: promoting a staged skill
+    # and the health drift check both call ml_python_base.skills_sync, whose
+    # renderer imports jinja2 at module level. Dockerfile.api installs with
+    # --no-dev, so keeping this in the dev group made those paths fail with
+    # ModuleNotFoundError inside the container.
+    "jinja2>=3.1",
 ]
 
 [build-system]
@@ -165,6 +179,11 @@ exclude_lines = [
     "@(abc\\.)?abstractmethod",
 ]
 
+[tool.uv.workspace]
+members = [
+    "workspace/tetris-v1-K-037",
+]
+
 [dependency-groups]
 dev = [
     "bandit>=1.9.2",
@@ -175,7 +194,4 @@ dev = [
     # Pinned exactly to the ruff-pre-commit `rev` in .pre-commit-config.yaml.
     # Both must move together or import sorting will ping-pong between them.
     "ruff==0.14.10",
-    # Tooling for the skills sync engine (src/ml_python_base/skills_sync).
-    # Kept in the dev group so it never bloats the product wheel.
-    "jinja2>=3.1",
 ]

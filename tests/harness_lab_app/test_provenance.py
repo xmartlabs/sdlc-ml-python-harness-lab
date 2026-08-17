@@ -126,6 +126,38 @@ def test_condition_hash_is_stable_and_factor_sensitive():
     assert base != compute_condition_hash("sha256:h", hotter, "sha256:p", "sha256:c")
 
 
+def test_an_absent_gateway_overlay_leaves_historical_arms_untouched():
+    """Regression guard for the rule documented in compute_condition_hash.
+
+    Every run predating the web model catalog has no overlay. Admitting the key
+    unconditionally would re-bin all of them, silently splitting arms that are
+    in fact the same.
+    """
+    model = {
+        "executor_model": "gateway/x",
+        "planner_model": None,
+        "temperature": 0.2,
+        "context_tokens": 32768,
+    }
+    base = compute_condition_hash("sha256:h", model, "sha256:p", "sha256:c")
+
+    for absent in (None, ""):
+        assert (
+            compute_condition_hash(
+                "sha256:h", model, "sha256:p", "sha256:c", gateway_overlay_hash=absent
+            )
+            == base
+        )
+
+    # A real overlay does flip the arm: options_json can change how a model runs.
+    assert (
+        compute_condition_hash(
+            "sha256:h", model, "sha256:p", "sha256:c", gateway_overlay_hash="sha256:o"
+        )
+        != base
+    )
+
+
 def test_condition_hash_ignores_provenance_only_fields(monkeypatch, tmp_path: Path):
     # Two builds with different git state but identical harness/model/prompt/case
     # must share the same condition_hash (arm identity), even though the

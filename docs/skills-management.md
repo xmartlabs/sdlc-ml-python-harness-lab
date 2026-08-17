@@ -115,6 +115,44 @@ What it does:
 9. Projects governed agents (`.github/agents/`) into `.claude/agents/` (markdown),
    `.opencode/agents/` (markdown + `permission` map), and `.codex/agents/` (TOML)
 
+## Trialling a skill from the browser (staging lane)
+
+`npx skills add ...` + `make sync-skills` puts a skill straight into the governed
+catalog. When you only want to *try* one, use the staging lane instead — it never
+touches the tracked tree, so `git status` stays clean while you A/B it.
+
+From **Skills → Import a skill** in the web UI you can:
+
+- paste a GitHub URL (repo, subdirectory, or a `blob` link), a skills.sh page
+  (`https://skills.sh/owner/repo/my-skill`), an install command
+  (`npx skills add <repo> --skill <name>`, and the `bunx` / `pnpm dlx` /
+  `git clone` / `gh repo clone` variants), the `owner/repo` shorthand, a raw
+  `SKILL.md` URL, or an archive URL — optionally pinned to a branch, tag or commit;
+- upload a `.md`, `.zip` or `.tar.gz`;
+- or write the `SKILL.md` by hand.
+
+Import is two-step: the first request returns a **preview** (file list, detected
+name and description, warnings, total size) and writes nothing; you confirm before
+anything is stored. The whole tree is kept — `scripts/`, `references/`, binary
+assets — and can be edited file by file from the same page.
+
+A catalog repo carrying many skills returns a **picker** rather than a preview —
+the import never guesses which sibling you meant. Pick one and the preview
+reloads for it; naming the skill in the URL or with `--skill <name>` goes straight
+through. Sources that are not skills at all — a project home page, an
+`install.sh` — are refused with a message naming the accepted shapes, before any
+fetch happens.
+
+Storage lives in the database; `data/skills_staging/<name>/` (git-ignored) is a
+rebuildable materialization of it, so wiping `data/` loses nothing. Details and the
+import guard set (https-only, SSRF checks, no archive traversal, size caps) are in
+[ADR-0017](adr/0017-multi-file-staged-skills-and-remote-import.md).
+
+**Promote** is the bridge between the two lanes: it copies the whole staged tree to
+`.github/skills-external/<name>/` and runs the sync engine. It never commits —
+review the diff and commit yourself. The A/B workflow is in
+[`docs/guide-skill-validation.md`](guide-skill-validation.md).
+
 ## Adapter skill regions and the drift gate
 
 Each adapter file carries a machine-managed block between sentinels:

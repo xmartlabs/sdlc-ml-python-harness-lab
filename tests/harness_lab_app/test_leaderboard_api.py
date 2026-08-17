@@ -141,3 +141,34 @@ def test_leaderboard_endpoint_returns_rows(session, data_dir):
     _seed_run(session, "one", score=10)
     rows = _endpoint(create_app(), "/api/leaderboard")(session=session)
     assert rows[0]["run_id"] == "one"
+
+
+def test_runs_the_lab_broke_are_not_counted_as_attempts(session, data_dir):
+    """K-043/044/045: the runner image was missing, so nothing was measured.
+
+    All three died in under a second having asked the model nothing, yet each
+    counted as an attempt on the leaderboard. An attempt total that includes
+    runs which never started misrepresents every condition it touches.
+    """
+    _seed_run(session, "real-attempt", state=RunState.failed, score=None)
+    for run_id in ("no-image-1", "no-image-2"):
+        run = _seed_run(session, run_id, state=RunState.failed)
+        run.failure_reason = (
+            'Executor error: RuntimeError("Runner image '
+            "'harness-lab-runner:latest' was not found locally.\")"
+        )
+        session.add(run)
+    restarted = _seed_run(session, "worker-restart", state=RunState.failed)
+    restarted.failure_reason = (
+        "Worker restarted while the run was in flight; retry to resume"
+    )
+    session.add(restarted)
+    # A genuine agent failure stays: a crash is a result.
+    crashed = _seed_run(session, "agent-crash", state=RunState.failed)
+    crashed.failure_reason = "SyntaxError: closing parenthesis does not match"
+    session.add(crashed)
+    session.commit()
+
+    run_ids = {row["run_id"] for row in LeaderboardService(session).list_rows()}
+
+    assert run_ids == {"real-attempt", "agent-crash"}

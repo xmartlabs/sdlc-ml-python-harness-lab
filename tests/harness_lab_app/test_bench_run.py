@@ -144,3 +144,103 @@ def test_read_template_ref_falls_back_to_legacy_then_empty(tmp_path):
     (tmp_path / ".template-version").write_text("ref: 'v0.3.0'\n")
     assert bench_run.read_template_ref(tmp_path) == "v0.3.0"
     assert bench_run.read_template_ref(tmp_path / "nowhere") == ""
+
+
+# -- workspace anchoring and artifact capture --------------------------------
+#
+# Runs K-037 and K-039 are the reason these exist. The case prompt shipped a
+# literal `{run_id}` placeholder and a *relative* workspace path; the agents
+# resolved it to `/workspace/<run>/` at the container root, outside the only
+# bind-mounted directory, and 895 and 116 writes respectively went to a
+# filesystem that dies with the container. The lab then archived an empty
+# directory and recorded both as ordinary completions awaiting a manual score.
+
+
+def test_the_prompt_names_an_absolute_workspace_inside_the_mount(tmp_path):
+    path = bench_run.agent_workspace_path("tetris-v1-K-099")
+
+    assert Path(path).is_absolute()
+    assert path.endswith("/workspace/tetris-v1-K-099")
+
+
+def test_case_prompt_placeholders_are_substituted(tmp_path):
+    body = (
+        "All files go inside `workspace/{run_id}/`.\n"
+        "Run: `python workspace/{run_id}/main.py`\n"
+        "# Plan — {run_id}\n"
+    )
+    rendered = bench_run.render_prompt_body(body, "tetris-v1-K-099")
+
+    # The literal placeholder reaching the model is the bug: it was handed the
+    # string "workspace/{run_id}/main.py" and had to invent a real path.
+    assert "{run_id}" not in rendered
+    assert rendered.count("tetris-v1-K-099") == 3
+
+
+def test_substitution_leaves_other_braces_alone():
+    """Why `replace` and not `str.format`: prompt bodies contain code."""
+    body = "Use `{'a': 1}` and f\"{x}\" for {run_id}"
+    assert (
+        bench_run.render_prompt_body(body, "r-1")
+        == "Use `{'a': 1}` and f\"{x}\" for r-1"
+    )
+
+
+def test_generated_prompt_tells_the_agent_where_files_survive(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_run, "WORKSPACE_ROOT", tmp_path / "workspace")
+    source = tmp_path / "body.md"
+    source.write_text("Build it in `workspace/{run_id}/`.\n")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    path = bench_run.generate_prompt(
+        run_id="tetris-v1-K-099",
+        prompt_short="sdlc_full",
+        prompt_source=source,
+        planner_model=None,
+        executor_model="lmstudio/x",
+        session_id="s",
+        out_dir=out_dir,
+    )
+    text = path.read_text()
+
+    absolute = str((tmp_path / "workspace" / "tetris-v1-K-099").resolve())
+    assert absolute in text
+    assert "{run_id}" not in text
+    # And it warns off the path the agents actually drifted to.
+    assert "/workspace/tetris-v1-K-099/" in text
+
+
+def test_finalize_workspace_produces_a_real_diff(tmp_path):
+    """`git diff --no-index /dev/null <dir>` silently produced nothing.
+
+    git pairs the basename and fails with `Could not access '<dir>/null'`,
+    writing an empty patch — and bench_audit omits its "código producido"
+    section when the patch is empty, so the auditor never saw the code.
+    """
+    workspace = tmp_path / "workspace" / "tetris-v1-K-099"
+    workspace.mkdir(parents=True)
+    (workspace / "main.py").write_text("import pygame\nprint('tetris')\n")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    diff_lines = bench_run.finalize_workspace(out_dir, workspace, "tetris-v1-K-099")
+
+    patch = (out_dir / "diff.patch").read_text()
+    assert diff_lines > 0
+    assert "main.py" in patch
+    assert "+import pygame" in patch
+    # The archive is what a human scores, so it has to survive the cleanup.
+    assert (out_dir / "workspace" / "main.py").exists()
+
+
+def test_finalize_workspace_reports_an_empty_archive(tmp_path, capsys):
+    """K-039: nothing on disk, yet the run was recorded as a completion."""
+    workspace = tmp_path / "workspace" / "tetris-v1-K-099"
+    workspace.mkdir(parents=True)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    bench_run.finalize_workspace(out_dir, workspace, "tetris-v1-K-099")
+
+    assert "produced no artifact" in capsys.readouterr().out

@@ -12,8 +12,6 @@ class Settings(BaseSettings):
 
     repo_root: Path = Field(default_factory=lambda: Path.cwd())
     database_url: str = "sqlite:///data/app/harness_lab.db"
-    local_username: str = "admin"
-    local_password: str = "admin"
     runner_mode: str = "dry_run"
     runner_python: str | None = None
 
@@ -27,9 +25,71 @@ class Settings(BaseSettings):
     host_repo_root: str = ""
     docker_host_alias: str = "host.docker.internal"
     run_timeout_seconds: int = 7200
+    # Kill a run that has produced no output for this long, even though its
+    # total budget is nowhere near spent.
+    #
+    # The total timeout above only catches runs that are too *slow*; it cannot
+    # see a run that is *stuck*, and the two look identical from outside. Run
+    # tetris-v1-K-034 is the case in point: the agent shelled out to
+    # `timeout 2 python main.py`, the pygame process caught SIGTERM and never
+    # died, and because the surviving grandchild held the stdout pipe open
+    # opencode blocked forever reading it. Not one byte of output for 47
+    # minutes, state "running" in the UI, and nothing would have moved until
+    # the 2-hour ceiling. Ten minutes of total silence is already pathological
+    # for a harness that streams its own logs — provided the run is not simply
+    # waiting on the model, which is what the next setting is for. Set to 0 to
+    # disable.
+    run_stall_seconds: int = 600
+    # The same clock, for silence while a model request is in flight.
+    #
+    # It needs its own value because the two silences differ by orders of
+    # magnitude. A local model says nothing at all while it processes the
+    # prompt, and that is not idle time: measured against the box serving
+    # qwen3.6-35b-a3b, a trivial prompt answers in 0.2s and a 24k-token one
+    # takes 318s before the first token. One 600s clock for both therefore
+    # killed every 35B run at its first turn (K-040/049/050, all dead in the
+    # same place) while the 9B — whose worst gap was 76s — sailed through,
+    # which reads as "the big model broke" and is really "the threshold was
+    # below its prefill time". Forty minutes sits far above any prefill
+    # measured here and far below the two-hour total, and a genuinely dead
+    # endpoint is caught by the error count below long before it. 0 disables.
+    run_model_wait_seconds: int = 2400
+    # Give up after this many provider requests fail back-to-back with no
+    # progress in between.
+    #
+    # opencode retries a failing stream forever, so without this a run spends
+    # its whole budget on it: tetris-v1-K-029 logged 123 consecutive "Cannot
+    # connect to API" errors over 70 minutes and was then recorded as a
+    # two-hour timeout, which blames the model for a connectivity failure.
+    # Five in a row is already conclusive — the endpoint is down, the model id
+    # is wrong, or the prompt does not fit its context. Set to 0 to disable.
+    run_max_stream_errors: int = 5
     # In-platform validation sandboxes (web terminal / noVNC desktop per run).
     sandbox_image: str = "harness-lab-sandbox:latest"
     sandbox_idle_seconds: int = 3600
+
+    # Session auth (ADR-0015). The password hash, session secret and TTL are read
+    # from `.env` per request (see session_middleware) so `make set-password`
+    # applies without a restart; only this deployment-time flag is cached here.
+    # Default false: over plain HTTP a `Secure` cookie is silently dropped, and
+    # the lab's default deployment is http://<lan-host>:8080.
+    session_cookie_secure: bool = False
+
+    # GitHub slugs the improvement cycle files issues against. Defaults point at
+    # the upstream trio this lab was built to measure; a fork retargets them via
+    # HARNESS_LAB_TEMPLATE_REPOSITORY etc. without touching code.
+    #
+    # Note these are *runtime* defaults only. Run.repository persists the slug an
+    # existing proposal was authored against (models.py), so changing them here
+    # never rewrites history.
+    template_repository: str = "marcosdh1987/ml-python-base"
+    lab_repository: str = "marcosdh1987/ai-agentic-harness-lab"
+    guide_repository: str = "marcosdh1987/harness-engineering-guide"
+
+    # Upper bound on runs created by one POST /api/runs/batch. A four-list
+    # cross-product reaches the hundreds from a single click, and each run is a
+    # Docker container plus model spend.
+    max_batch_runs: int = 50
 
     @property
     def data_runs_dir(self) -> Path:
@@ -57,6 +117,17 @@ def get_settings() -> Settings:
     return Settings()
 
 
+def env_file_path() -> Path:
+    """Location of the repository `.env`.
+
+    The single seam every reader goes through, so the file can be redirected in
+    one place. The test suite redirects it to a fixture (see
+    ``tests/harness_lab_app/conftest.py``): reading the developer's real `.env`
+    made the suite pass locally and fail on a fresh clone.
+    """
+    return get_settings().repo_root / ".env"
+
+
 def read_env_file_value(name: str, default: str = "") -> str:
     """Read a single KEY=VALUE from the repo `.env`.
 
@@ -65,7 +136,7 @@ def read_env_file_value(name: str, default: str = "") -> str:
     executors.build_run_environment so the API can preflight config without
     importing worker-only code.
     """
-    env_file = get_settings().repo_root / ".env"
+    env_file = env_file_path()
     if not env_file.exists():
         return default
     for raw in env_file.read_text().splitlines():

@@ -53,6 +53,20 @@ export type RunRecord = {
   // Improvement-synthesis status, derived from data/runs/<id>/improvements.json:
   // "yes" = proposed changes, "no" = ran but proposed none, "pending" = not run.
   improvements?: "yes" | "no" | "pending";
+  // Verdict of the automated checks: false means the produced code was run and
+  // failed. null when they have not run or the case has no objective criterion.
+  // Without this a run that does not even start is indistinguishable in the
+  // list from one merely waiting for its manual score.
+  objective_passed?: boolean | null;
+  // Why it failed, classified server-side (see run_failures.py) so the list,
+  // the leaderboard and the API share one definition. "lab" means the run
+  // measured nothing — it is excluded from the leaderboard and should be
+  // retried rather than read as a result.
+  failure_kind?: "lab" | "stalled" | "timeout" | "agent" | null;
+  failure_label?: string | null;
+  // Set when the run came from POST /api/runs/batch; null for a run created
+  // singly and for every run that predates batching.
+  batch_id?: string | null;
 };
 
 export type RunEventRecord = {
@@ -175,15 +189,61 @@ export type HarnessSkill = {
 export type StagedSkillRecord = {
   name: string;
   description: string;
+  /** Mirror of SKILL.md. Kept for compatibility; the file list is the truth. */
   content: string;
   status: "draft" | "testing" | "promoted" | "archived";
+  content_hash: string;
+  source_url: string;
+  source_ref: string;
+  source_kind: string;
+  imported_at: string | null;
   created_at: string;
   updated_at: string;
 };
 
+export type StagedSkillFileRecord = {
+  path: string;
+  content: string;
+  /** "utf-8" for text; "base64" for binary assets, which the UI cannot edit. */
+  encoding: string;
+  sha256: string;
+  size: number;
+};
+
+/** One skill inside a source that holds several — a catalog repo. */
+export type StagedSkillImportChoice = {
+  name: string;
+  path: string;
+  description: string;
+};
+
+/** What an unconfirmed import returns: reviewed by the user, never written. */
+export type StagedSkillImportPreview = {
+  preview: true;
+  choices: StagedSkillImportChoice[];
+  name: string;
+  description: string;
+  source_url: string;
+  source_ref: string;
+  source_kind: string;
+  warnings: string[];
+  total_bytes: number;
+  files: { path: string; size: number }[];
+};
+
+/**
+ * A catalog source that has not been narrowed down yet. Not an error: the user
+ * picks one of `choices` and the same source is previewed again.
+ */
+export type StagedSkillImportChoices = {
+  preview: false;
+  choices: StagedSkillImportChoice[];
+  detail: string;
+};
+
 export type StagedSkillPromoteResult = {
   name: string;
-  written: string;
+  written: string[];
   synced: boolean;
   next_steps: string;
 };
@@ -208,9 +268,90 @@ export type RunCreatePayload = {
   config: RunConfigPayload;
 };
 
+/**
+ * One request that expands into the cross-product of its axes.
+ *
+ * Every array is a dimension; the scalars are shared by every generated run.
+ * There is no `resume` and no `run_id`/`label`: resuming targets one specific
+ * workspace, and N generated runs each take the next auto-assigned id.
+ */
+export type RunBatchPayload = {
+  case_ids: string[];
+  prompt_variants: string[];
+  harnesses: string[];
+  executor_models: (string | null)[];
+  planner_models: (string | null)[];
+  repetitions: number;
+  score_mode: string;
+  max_steps: number;
+  dry_run: boolean;
+  skills_disabled?: string[];
+  skills_extra?: string[];
+};
+
+export type RunBatchResult = {
+  batch_id: string;
+  count: number;
+  run_ids: string[];
+};
+
+/**
+ * Verdict of the pre-creation check on a run configuration.
+ *
+ * These are the same checks `POST /api/runs` applies, so `ok: true` means the
+ * form will not be rejected for configuration reasons; it is not a promise that
+ * the run itself will succeed.
+ */
+export type RunValidationResult = {
+  ok: boolean;
+  detail: string;
+};
+
 export type ModelOption = {
   id: string;
   label: string;
+  // False when neither opencode.json nor the enabled web catalog can route the
+  // id: the gateway serves it, but a run using it would fail at launch.
+  routable?: boolean;
+  // Other gateway ids that the router resolves to this same backend model.
+  // They are hidden from the picker so one model appears once.
+  aliases?: string[];
+  // Serving backend ("lmstudio" | "cloud" | "ollama") and its display heading.
+  // The API returns models pre-sorted by group_rank, so rendering in order
+  // reproduces the intended hierarchy: LM Studio → Cloud → Ollama.
+  backend?: string;
+  group?: string;
+  group_rank?: number;
+  // The picker's two upper tiers. `source` is how the model is *reached* —
+  // through the LiteLLM gateway, or straight at a local host — which is a
+  // different axis from ModelCatalog.source (where the *list* came from).
+  // `provider` is the vendor: lmstudio, ollama, openai, anthropic, google,
+  // nvidia, other.
+  source?: "gateway" | "direct";
+  provider?: string;
+  provider_label?: string;
+  // Direct models only: what the host reports about the model right now.
+  loaded?: boolean;
+  loaded_context?: number | null;
+  max_context?: number | null;
+};
+
+/**
+ * Outcome of measuring the context window a model is *actually* serving.
+ *
+ * `status` is "ok" when the model accepted a prompt of `required_tokens`,
+ * "insufficient" when it refused one and named a smaller window, and "unknown"
+ * when the probe could not reach a verdict — the run gate only blocks on
+ * "insufficient", so an unreachable backend never stops a run.
+ */
+export type ContextProbeResult = {
+  model: string;
+  status: "ok" | "insufficient" | "unknown";
+  ok: boolean;
+  required_tokens: number;
+  context_tokens: number | null;
+  prompt_tokens: number | null;
+  detail: string;
 };
 
 export type ModelCatalog = {
@@ -219,6 +360,142 @@ export type ModelCatalog = {
   source: string;
   models: ModelOption[];
   default_executor: string;
+  // Why a direct provider has no models (server off, URL unset), keyed by
+  // provider id. Per provider because one host can be up while the other is
+  // down — an empty group with no reason is unactionable.
+  direct_errors?: Record<string, string>;
+};
+
+/** One model as the LM Studio host reports it, with no gateway in between. */
+export type LMStudioModel = {
+  // Prefixed id the run form uses ("lmstudio/prism-ml/bonsai-27b").
+  id: string;
+  // The id LM Studio itself registers ("prism-ml/bonsai-27b").
+  bare_id: string;
+  type: string;
+  state: string;
+  loaded: boolean;
+  // The window it is serving right now; null unless it is loaded, because an
+  // unloaded model gets whatever default a JIT auto-load picks.
+  loaded_context: number | null;
+  max_context: number | null;
+  arch: string;
+  quantization: string;
+};
+
+export type LMStudioCatalog = {
+  base_url: string;
+  reachable: boolean;
+  error: string | null;
+  models: LMStudioModel[];
+};
+
+/** One model as the Ollama host reports it, with no gateway in between. */
+export type OllamaModel = {
+  // Prefixed id the run form uses ("ollama/qwen3:32b").
+  id: string;
+  // The id Ollama itself registers ("qwen3:32b").
+  bare_id: string;
+  state: string;
+  running: boolean;
+  // The window the server serves for this model; only knowable while it runs.
+  // Anything else gets the host's OLLAMA_CONTEXT_LENGTH, which defaults to
+  // 4096 — far below what a run needs, and not readable from here.
+  context_length: number | null;
+  parameter_size: string;
+  quantization: string;
+  family: string;
+};
+
+export type OllamaCatalog = {
+  base_url: string;
+  reachable: boolean;
+  error: string | null;
+  models: OllamaModel[];
+};
+
+export type EnvSettingItem = {
+  key: string;
+  label: string;
+  group: string;
+  is_secret: boolean;
+  help_text: string;
+  is_set: boolean;
+  // Secrets come back masked; writing the mask back means "leave unchanged".
+  value: string;
+};
+
+/**
+ * `auth_enabled` false means the lab runs in open mode — no password has been
+ * set, so every request is allowed and the UI shows a warning banner.
+ */
+export type SessionState = {
+  authenticated: boolean;
+  auth_enabled: boolean;
+};
+
+export type EnvSettings = {
+  items: EnvSettingItem[];
+  warnings: string[];
+  env_path: string;
+};
+
+export type EnvUpdateResult = EnvSettings & {
+  written: string[];
+  backup: string | null;
+};
+
+export type RuntimeFacts = {
+  repo_root: string;
+  database_url: string;
+  execution_backend: string;
+  runner_image: string;
+  sandbox_image: string;
+  docker_host_alias: string;
+  redis_url: string;
+  run_timeout_seconds: number;
+  // Seconds of silence, with no model request in flight, after which a run is
+  // killed as stuck; 0 = disabled.
+  run_stall_seconds: number;
+  // The same silence while the model owes the run a first token. Much larger:
+  // a local model says nothing while it processes the prompt.
+  run_model_wait_seconds: number;
+  // Consecutive failed provider requests tolerated before giving up.
+  run_max_stream_errors: number;
+  // Ceiling on the cross-product of one POST /api/runs/batch. Read rather
+  // than mirrored in the client, so the two can never disagree.
+  max_batch_runs: number;
+};
+
+export type GatewayModelRecord = {
+  id: number;
+  model_id: string;
+  label: string;
+  enabled: boolean;
+  is_default: boolean;
+  live: boolean;
+  options_json: Record<string, unknown>;
+  first_seen_at: string;
+  last_seen_at: string;
+  // Serving backend and its display heading. Rows arrive pre-sorted by
+  // group_rank so the table sections match the run picker's ordering.
+  backend?: string;
+  group?: string;
+  group_rank?: number;
+};
+
+export type ModelRefreshResult = {
+  added: string[];
+  stale: string[];
+  total: number;
+  gateway_reachable: boolean;
+};
+
+export type GatewayTestResult = {
+  ok: boolean;
+  detail?: string;
+  model_count?: number;
+  sample?: string[];
 };
 
 export type DocEntry = {
@@ -357,4 +634,28 @@ export type GroupIssueResult = {
   form: ProposalIssueForm;
   proposal_ids: number[];
   source_run_ids: string[];
+};
+
+/** One row of the health panel (ADR-0018). */
+export type HealthCheck = {
+  id: string;
+  label: string;
+  status: "ok" | "warn" | "error" | "unknown";
+  detail: string;
+  latency_ms: number | null;
+  /** The allowlisted repair for this row, or null when nothing to fix. */
+  heal: string | null;
+  /** Offending paths / run ids, when the check can name them. */
+  items: string[];
+};
+
+export type HealthReport = {
+  status: "ok" | "warn" | "error" | "unknown";
+  checks: HealthCheck[];
+};
+
+export type HealResult = {
+  action: string;
+  ok: boolean;
+  detail: string;
 };

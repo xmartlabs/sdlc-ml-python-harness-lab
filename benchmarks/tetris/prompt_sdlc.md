@@ -1,7 +1,7 @@
 # Tetris — SDLC Mode: Plan + Execute
 
 You are building a Tetris game in Python (pygame) from scratch.
-All files go inside `workspace/{run_id}/`. Entry point: `workspace/{run_id}/main.py`.
+All files go inside `{workspace}/`. Entry point: `{workspace}/main.py`.
 
 ---
 
@@ -18,7 +18,7 @@ Keep them in mind while you work.
 
 ## Phase 1 — Plan (before any code)
 
-Create `workspace/{run_id}/PLAN.md` with the following structure:
+Create `{workspace}/PLAN.md` with the following structure:
 
 ```markdown
 # Tetris Build Plan — {run_id}
@@ -69,7 +69,7 @@ So validation is deterministic and does not block on an open window:
 - Run and check the exit code:
 
   ```bash
-  BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python workspace/{run_id}/main.py; echo "exit=$?"
+  BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy python {workspace}/main.py; echo "exit=$?"
   ```
 
 - A correct build prints `exit=0`. Do NOT interpret a `timeout` as success.

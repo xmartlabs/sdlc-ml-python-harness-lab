@@ -1,6 +1,10 @@
 # ADR-0012 — Dynamic gateway model list and opencode.json sync
 
-- Status: accepted
+- Status: accepted; the manual-sync half is superseded by
+  [ADR-0016](0016-opencode-config-overlay-for-model-routing.md), which makes a model
+  routable from the browser without editing `opencode.json`. Decision 1 (LiteLLM is
+  discovery, `opencode.json` is routing) still holds; `make sync-gateway-models` is
+  now the promotion path rather than the only way to use a new model.
 - Date: 2026-07-20
 - Relates to: ADR-0002 (Celery/Docker execution, `.env` host URLs), the audit
   gateway client (`scripts/bench_audit.py`)

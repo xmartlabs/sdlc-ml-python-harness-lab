@@ -207,8 +207,9 @@ Backend:
 Frontend:
 
 - [x] Add a React/Vite frontend.
-- [ ] Add login (backend `POST /api/auth/login`/`logout` exist; no login page
-      or session gating in the frontend yet).
+- [x] Add login (`Login.tsx` + a session gate in `App.tsx`; a 401 anywhere
+      re-renders the form. Open mode shows a banner instead —
+      `docs/adr/0015-single-user-session-auth.md`).
 - [x] Add dashboard.
 - [x] Add case management.
 - [ ] Add case create/edit/delete/clone flows (create is wired in `Cases.tsx`;
@@ -229,6 +230,7 @@ Initial API surface (all implemented in `src/harness_lab_app/api.py`):
 
 - [x] `POST /api/auth/login`
 - [x] `POST /api/auth/logout`
+- [x] `GET /api/auth/session`
 - [x] `GET /api/cases`
 - [x] `POST /api/cases`
 - [x] `GET /api/cases/{case_id}`
@@ -422,9 +424,10 @@ Acceptance criteria:
 - [x] Queue: Celery and Redis (broker only), one Docker container per run —
       replaced the initial DB-polling `worker.py` (removed). See
       `docs/adr/0002-celery-docker-per-run-execution.md`.
-- [x] Auth: local username and password (`POST /api/auth/login` checks
-      `settings.local_username`/`local_password`; not yet gated in the
-      frontend — see Phase 3).
+- [x] Auth: single-user password + signed session cookie, enforced by
+      middleware over every `/api/` route. Off by default (open mode); enable
+      with `make set-password`. The plaintext `admin`/`admin` default is gone.
+      See `docs/adr/0015-single-user-session-auth.md`.
 - [x] Artifact storage: filesystem under `data/runs` (`ArtifactService`
       indexes `data_runs_dir`).
 - [ ] Tracking integrations: consume Langfuse, LiteLLM, and MLflow outputs

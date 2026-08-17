@@ -225,3 +225,54 @@ def test_staged_skill_hashes(temp_repo):
     (staged / "SKILL.md").write_text("v2")
     assert bench_run.staged_skill_hashes(["delta"]) != first
     assert bench_run.staged_skill_hashes(["absent"]) == {}
+
+
+def test_staged_skill_hash_covers_the_whole_tree(temp_repo):
+    """ADR-0017: a supporting file is part of the arm, not decoration.
+
+    Hashing only SKILL.md let an edit to `scripts/` reuse a previous arm's
+    ``condition_hash`` — two different harnesses binned as one.
+    """
+    staged = temp_repo / "data" / "skills_staging" / "delta"
+    (staged / "scripts").mkdir(parents=True)
+    (staged / "SKILL.md").write_text("v1")
+    (staged / "scripts" / "run.sh").write_text("echo hi\n")
+    before = bench_run.staged_skill_hashes(["delta"])
+
+    (staged / "scripts" / "run.sh").write_text("echo bye\n")
+    assert bench_run.staged_skill_hashes(["delta"]) != before
+
+    # And adding a file is a change too.
+    (staged / "references").mkdir()
+    (staged / "references" / "notes.md").write_text("notes\n")
+    assert bench_run.staged_skill_hashes(["delta"]) != before
+
+
+def test_staged_skill_hash_algo_is_recorded():
+    """The label that keeps the two generations of staged arms legible."""
+    assert bench_run.STAGED_SKILL_HASH_ALGO == "folder_sha256_v2"
+
+
+def test_build_effective_skills_refuses_an_escaping_symlink(temp_repo):
+    """A staged skill is projected by symlink; an escaping link would leak
+    arbitrary host files into the agent's context."""
+    secret = temp_repo / "secret.txt"
+    secret.write_text("token\n")
+    staged = temp_repo / "data" / "skills_staging" / "epsilon"
+    staged.mkdir(parents=True)
+    (staged / "SKILL.md").write_text("---\nname: epsilon\n---\n")
+    (staged / "leak.txt").symlink_to(secret)
+
+    with pytest.raises(SystemExit, match="symlink"):
+        bench_run.build_effective_skills([], ["epsilon"])
+
+
+def test_build_effective_skills_allows_an_internal_symlink(temp_repo):
+    staged = temp_repo / "data" / "skills_staging" / "zeta"
+    (staged / "scripts").mkdir(parents=True)
+    (staged / "SKILL.md").write_text("---\nname: zeta\n---\n")
+    (staged / "scripts" / "run.sh").write_text("echo hi\n")
+    (staged / "alias.sh").symlink_to(staged / "scripts" / "run.sh")
+
+    effective = bench_run.build_effective_skills([], ["zeta"])
+    assert "zeta" in [skill.name for skill in effective]
