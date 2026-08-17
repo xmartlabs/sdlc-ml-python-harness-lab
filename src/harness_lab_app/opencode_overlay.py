@@ -242,3 +242,20 @@ def routable_model_ids(repo_root: Path) -> set[str]:
     """
     tracked = read_tracked_gateway(repo_root).get("models") or {}
     return set(tracked) | set(read_catalog_models(repo_root))
+
+
+def declared_output_limit(repo_root: Path, model: str) -> int | None:
+    """``limit.output`` for one gateway model, or ``None`` when undeclared.
+
+    opencode sends its own default completion budget for any model that
+    declares no output limit, and a model whose real cap is lower refuses every
+    request (run K-003, gpt-4o-mini at 16384). Declaring the truth here is the
+    documented fix — so the preflight probe has to read the same number back,
+    or it would keep rejecting the configuration it asked the user to write.
+    """
+    bare = model[len("gateway/") :] if model.startswith("gateway/") else model
+    models = read_tracked_gateway(repo_root).get("models") or {}
+    entry = models.get(bare) or read_catalog_models(repo_root).get(bare) or {}
+    limit = entry.get("limit") if isinstance(entry, dict) else None
+    output = limit.get("output") if isinstance(limit, dict) else None
+    return output if isinstance(output, int) and output > 0 else None

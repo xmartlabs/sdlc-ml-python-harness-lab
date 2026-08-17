@@ -345,13 +345,23 @@ class RunService:
             return None
         from harness_lab_app.executors import rewrite_localhost
         from harness_lab_app.gateway_models import probe_gateway_model
+        from harness_lab_app.opencode_overlay import declared_output_limit
 
         base = read_env_file_value("GATEWAY_BASE_URL") or ""
         if not base:
             return None
         if Path("/.dockerenv").exists():
             base = rewrite_localhost(base, get_settings().docker_host_alias)
-        return probe_gateway_model(executor, base_url=base, token=token)
+        # Probe with the budget the run will send: the model's declared
+        # `limit.output` when opencode.json states one, opencode's default
+        # otherwise. Probing the default against a model that declares a lower
+        # cap would reject the configuration this check tells users to write.
+        return probe_gateway_model(
+            executor,
+            base_url=base,
+            token=token,
+            budget=declared_output_limit(get_settings().repo_root, executor),
+        )
 
     def _check_executor_context(self, executor: str, token: str) -> None:
         """Reject an executor whose context window cannot hold the harness.

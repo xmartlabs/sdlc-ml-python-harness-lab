@@ -268,11 +268,14 @@ def probe_gateway_model(
     base_url: str,
     token: str,
     timeout: float = 12.0,
+    budget: int | None = None,
 ) -> str | None:
     """Cheap health probe for a gateway-routed model before a run is created.
 
     Sends one completion through the gateway **with the request shape the run
-    will use** — same completion budget, see ``OPENCODE_COMPLETION_BUDGET``.
+    will use** — same completion budget. ``budget`` is the model's declared
+    ``limit.output`` when opencode.json states one, and ``OPENCODE_COMPLETION_BUDGET``
+    (opencode's default for an undeclared model) when it does not.
     Returns a short error detail when the run is provably doomed: the backend
     serving the model is unreachable, or the request shape itself is refused
     (a run would burn every step on the same rejection). Returns ``None`` when
@@ -282,6 +285,7 @@ def probe_gateway_model(
     base = base_url.rstrip("/")
     if not base or not token:
         return None
+    max_tokens = budget or OPENCODE_COMPLETION_BUDGET
     body = json.dumps(
         {
             # LiteLLM registers bare ids; sending opencode's `gateway/` prefix
@@ -293,7 +297,7 @@ def probe_gateway_model(
             # The run's budget, not a token-count: generation still stops at
             # the model's short answer, but cap validation happens against the
             # number the run will actually send.
-            "max_tokens": OPENCODE_COMPLETION_BUDGET,
+            "max_tokens": max_tokens,
         }
     ).encode()
     req = urllib.request.Request(
@@ -337,11 +341,10 @@ def probe_gateway_model(
             snippet = " ".join(payload.split())[:200]
             return (
                 f"the model refuses the completion budget every request of "
-                f"the run will carry (max_tokens="
-                f"{OPENCODE_COMPLETION_BUDGET}): {snippet}. opencode sends "
-                f"that budget for any model that declares no output limit — "
-                f"cap max_tokens for this model at the gateway, or declare "
-                f"`limit.output` for it in opencode.json"
+                f"the run will carry (max_tokens={max_tokens}): {snippet}. "
+                f"opencode sends that budget for any model that declares no "
+                f"output limit — cap max_tokens for this model at the gateway, "
+                f"or declare `limit.output` for it in opencode.json"
             )
         return None  # auth/validation/etc — other layers surface those
     except Exception:

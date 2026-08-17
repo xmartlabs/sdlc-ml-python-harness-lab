@@ -54,21 +54,40 @@ correct and the run is properly excluded from the leaderboard; only the number i
 the message is wrong. The fix is freezing the count when the verdict forms
 (reporting the peak, not the final value) in `tasks._stream_run`.
 
-### No model declares a completion-token cap
+### Most models declare no completion-token cap
 
-Every `gateway/*` entry in `opencode.json` carries only a display name — no
-`limit`, no options — so the `max_tokens` opencode sends is whatever it picks for
-an unknown model (observed: 32000, in `…qutebrowser…-K-003`). Providers that
-enforce a smaller completion cap — OpenAI models via LiteLLM reject anything
-above 16384 — refuse every request before a token is generated.
+A `gateway/*` entry in `opencode.json` that carries only a display name leaves
+opencode to pick the `max_tokens` it sends for an unknown model (observed:
+32000, in `…qutebrowser…-K-003`). Providers that enforce a smaller completion
+cap — OpenAI's `gpt-4o` and `gpt-4o-mini` reject anything above 16384 — refuse
+every request before a token is generated.
 
-Two guards now surround this, but neither removes it: the preflight probe sends
-the same completion budget the run will carry, so "validate config" and run
-creation fail fast with the provider's own numbers; and a run that slips through
-anyway is voided as **endpoint down** rather than recorded as a completed
-attempt (see [guide-web-ui.md](guide-web-ui.md)). The model itself remains
-unusable until a `limit.output` is declared for it or the cap is set at the
-gateway — the guards report the misconfiguration, they do not fix it.
+The six OpenAI entries now declare a `limit` block with the real numbers, read
+from the gateway's own `/model/info`. The remaining ~39 entries do not. That is
+tolerable rather than fixed: the ones in use accept 32000 today, and nothing
+keeps a declaration honest when a provider changes a cap.
+
+Two guards surround what is left. The preflight probe sends the same completion
+budget the run will carry — the declared `limit.output` when there is one,
+opencode's default when there is not — so "validate config" and run creation
+fail fast with the provider's own numbers. And a run that slips through anyway
+is voided as **endpoint down** rather than recorded as a completed attempt (see
+[guide-web-ui.md](guide-web-ui.md)).
+
+Note which number is which: for `gpt-4o-mini` the 16384 is the *output* cap,
+fixed by OpenAI and not raisable at any layer. Its context window is 128000,
+comfortably past the harness minimum of 32768 (`MIN_CONTEXT_TOKENS`).
+
+### A billing failure is reported as an unreachable endpoint
+
+An exhausted account answers HTTP 429 `You have no credits remaining` to every
+request, including the preflight probe. That falls through the probe's marker
+lists to "ambiguous", so "validate config" reports green; the run then dies on
+five back-to-back stream errors and is correctly voided (`…qutebrowser…-K-005`).
+The verdict is right and the provider's sentence is stored verbatim in the
+failure reason, but the advice above it — check reachability, model id and
+context window — sends the reader to the wrong place. A quota marker set
+alongside `_COMPLETION_CAP_MARKERS` would let both layers name billing directly.
 
 ### The batch endpoint has no HTTP-level test
 

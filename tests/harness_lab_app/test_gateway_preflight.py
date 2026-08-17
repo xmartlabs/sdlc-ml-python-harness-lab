@@ -122,6 +122,57 @@ def test_probe_asks_for_the_completion_budget_the_run_will_ask_for(monkeypatch):
     assert bodies[0]["max_tokens"] == gateway_models.OPENCODE_COMPLETION_BUDGET
 
 
+def test_probe_asks_for_the_declared_limit_when_opencode_declares_one(monkeypatch):
+    """A model that declares ``limit.output`` is probed with *that* number.
+
+    Declaring the truth in ``opencode.json`` is the documented fix for the
+    K-003 rejection, so a probe that keeps asking for opencode's 32000 default
+    would block the very configuration it told the user to write.
+    """
+    import json
+
+    bodies: list[dict] = []
+
+    def _capture(req, timeout=0):
+        bodies.append(json.loads(req.data))
+        raise TimeoutError()
+
+    monkeypatch.setattr(gateway_models.urllib.request, "urlopen", _capture)
+    probe_gateway_model(
+        "gateway/gpt-4o-mini", base_url="https://gw/v1", token="t", budget=16384
+    )
+    assert bodies[0]["max_tokens"] == 16384
+
+
+def test_declared_output_limit_reads_the_tracked_opencode_config(tmp_path):
+    """The number the probe must use comes from the same file opencode reads."""
+    import json as _json
+
+    (tmp_path / "opencode.json").write_text(
+        _json.dumps(
+            {
+                "provider": {
+                    "gateway": {
+                        "models": {
+                            "gpt-4o-mini": {
+                                "limit": {"context": 128000, "output": 16384}
+                            },
+                            "gpt-4o": {"name": "no limit declared"},
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert opencode_overlay.declared_output_limit(tmp_path, "gpt-4o-mini") == 16384
+    # Undeclared stays undeclared: the caller falls back to opencode's default.
+    assert opencode_overlay.declared_output_limit(tmp_path, "gpt-4o") is None
+    assert (
+        opencode_overlay.declared_output_limit(tmp_path, "gateway/gpt-4o-mini") == 16384
+    )
+
+
 def test_probe_blocks_a_model_whose_completion_cap_is_below_the_budget(monkeypatch):
     """The K-003 rejection, heard at preflight instead of after queueing."""
     error = _http_error(
