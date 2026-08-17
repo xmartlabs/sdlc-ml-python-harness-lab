@@ -193,6 +193,12 @@ class StreamOutcome:
     # and the last one's text. The evidence behind an "endpoint" verdict.
     stream_errors: int = 0
     last_error: str = ""
+    # Lifetime totals, never reset: requests handed to the provider (retries
+    # included) and how many failed. `failed_requests >= model_requests > 0`
+    # means the model was never heard from at all — the evidence behind
+    # voiding a run that otherwise ended cleanly (see `_never_answered_failure`).
+    model_requests: int = 0
+    failed_requests: int = 0
 
 
 def _stream_run(
@@ -230,6 +236,8 @@ def _stream_run(
     silent_seconds = 0.0
     stream_errors = 0
     last_error = ""
+    model_requests = 0
+    failed_requests = 0
     awaiting_model = False
     stopped = False
     started = time.monotonic()
@@ -278,15 +286,26 @@ def _stream_run(
         session.commit()
         tail.append(message)
         awaiting_model = run_failures.awaits_model_response(message)
+        if run_failures.is_model_request(message):
+            model_requests += 1
         if run_failures.is_stream_error(message):
             stream_errors += 1
+            failed_requests += 1
             last_error = message
             if stop_reason is None and 0 < max_stream_errors <= stream_errors:
                 stop_reason = "endpoint"
         elif not run_failures.is_retry_noise(message):
             # Real work happened, so whatever failed before was survivable.
             stream_errors = 0
-    return StreamOutcome(stop_reason, tail, silent_seconds, stream_errors, last_error)
+    return StreamOutcome(
+        stop_reason,
+        tail,
+        silent_seconds,
+        stream_errors,
+        last_error,
+        model_requests,
+        failed_requests,
+    )
 
 
 def _with_tail(message: str, tail: str, heading: str) -> str:
@@ -344,6 +363,40 @@ def _endpoint_failure(outcome: StreamOutcome, tail: str) -> str:
         "Check that the endpoint is reachable from the runner container and "
         "that the model id and context window are configured "
         "(docs/local-model-runtime-config.md)."
+    )
+    error = outcome.last_error.strip()
+    if error:
+        return _with_tail(message, error[-600:], "Last error:")
+    return _with_tail(message, tail, "Last output:")
+
+
+def _model_never_answered(outcome: StreamOutcome) -> bool:
+    """True when the run made model requests and not one of them was answered."""
+    return 0 < outcome.model_requests <= outcome.failed_requests
+
+
+def _never_answered_failure(outcome: StreamOutcome, tail: str) -> str:
+    """The verdict for a run that ended on its own without one model response.
+
+    The watchdog verdicts all require the run to still be alive when the
+    threshold trips. Run instance_qutebrowser…-K-003 slipped past every one of
+    them: both provider requests died in two seconds on a gateway config error
+    (`max_tokens` above the model's completion cap) — fewer errors than
+    `run_max_stream_errors` — opencode gave up, and the harness script carried
+    on to scoring, archived an empty diff and exited 0. Recorded as
+    `completed`, score 0, it read as "the model attempted the case and
+    resolved nothing" on the leaderboard, when the model was never heard from.
+    Sharing the `Model endpoint failing:` prefix keeps the taxonomy in
+    :mod:`harness_lab_app.run_failures` a closed set.
+    """
+    message = (
+        f"Model endpoint failing: all {outcome.model_requests} provider "
+        "requests made by this run failed, so it ended without a single model "
+        "response. The harness may still have exited cleanly and archived an "
+        "empty result, but nothing was learned about the model, so this does "
+        "not count as an attempt. The request itself is being rejected — "
+        "check the model id, context window and completion-token cap at the "
+        "gateway (docs/local-model-runtime-config.md)."
     )
     error = outcome.last_error.strip()
     if error:
@@ -431,12 +484,22 @@ def _execute_run_body(
                 )
             else:
                 failure = None
-                if exit_code != 0:
+                if _model_never_answered(outcome):
+                    # Checked before the exit code: a clean exit earned by
+                    # archiving an empty result is still not a measurement.
+                    failure = _never_answered_failure(
+                        outcome, "\n".join(outcome.tail)[-600:]
+                    )
+                elif exit_code != 0:
                     failure = (
                         "\n".join(outcome.tail)[-1000:] or "Run failed with no output"
                     )
-                service.mark_finished(run_id, exit_code, failure)
-                if exit_code == 0:
+                service.mark_finished(
+                    run_id,
+                    exit_code if failure is None or exit_code != 0 else -1,
+                    failure,
+                )
+                if failure is None:
                     _run_objective_validation(session, run_id)
                     _autoscore_objective_case(session, run_id)
             # Attribution is useful for any run that produced step logs

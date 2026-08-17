@@ -173,7 +173,7 @@ A failed run also says *why*, in one word, with the full reason on hover:
 |---|---|---|
 | **lab error** | Never started — runner image missing, Docker unreachable, bad config | No |
 | **worker restarted** | Killed mid-flight by a restart; retry resumes it | No |
-| **endpoint down** | `run_max_stream_errors` provider requests failed back-to-back | No |
+| **endpoint down** | `run_max_stream_errors` provider requests failed back-to-back — or the run ended, however cleanly, with every model request it ever made having failed | No |
 | **no response** | The provider accepted the request and answered nothing for `run_model_wait_seconds` | No |
 | **stalled** | Ran, then went quiet for `run_stall_seconds` with no model request in flight | Yes |
 | **timed out** | Exceeded `run_timeout_seconds` | Yes |
@@ -226,6 +226,17 @@ Four budgets end a run that will not end itself, and they catch different things
   provider requests with no progress between them. opencode retries a failing
   stream forever, so without this a run spends its entire budget on an endpoint it
   cannot reach.
+
+One failure shape slips past all four budgets: the run *ends on its own* before
+any threshold trips. Run `…qutebrowser…-K-003` made two provider requests, both
+rejected in two seconds by a gateway configuration error (`max_tokens` above the
+model's completion cap) — fewer than `run_max_stream_errors` — and the harness
+script then carried on to scoring, archived an empty diff and exited 0. Recorded
+as completed, it would have gone on the leaderboard as the model attempting the
+case and resolving nothing. The lab therefore checks one more thing at the end
+of every run: if it made model requests and **not one of them was answered**, the
+run is marked failed as **endpoint down** regardless of its exit code, and does
+not count as an attempt.
 
 A stalled run is marked **failed** with the reason and the last thing it said
 before going quiet — normally the tool call it is wedged inside. Run

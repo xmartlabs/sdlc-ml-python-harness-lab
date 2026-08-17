@@ -84,11 +84,17 @@ def is_unmeasured(reason: str | None) -> bool:
 # that separate them live here beside the taxonomy they feed rather than inline
 # in the watchdog loop.
 
+# Emitted once per request opencode hands to the provider, retries included.
+# The trailing space is load-bearing: `message="stream error"` is the opposite
+# situation. Counting these against the stream errors is what lets the end of a
+# run answer "did the model ever speak?" — a run whose every request failed
+# measured nothing, whatever its exit code says.
+_MODEL_REQUEST_MARKER = "message=stream "
+
 # Emitted when opencode hands a request to the provider. Nothing follows until
 # the first token comes back, so a run sitting on one of these is waiting on the
-# model, not stuck in a tool call. The trailing space on `message=stream ` is
-# load-bearing: `message="stream error"` is the opposite situation.
-_MODEL_WAIT_MARKERS = ("message=stream ", "llm runtime selected")
+# model, not stuck in a tool call.
+_MODEL_WAIT_MARKERS = (_MODEL_REQUEST_MARKER, "llm runtime selected")
 
 # A provider request that failed outright. opencode retries these forever, so a
 # run of them is the signature of one that will spend its whole time budget
@@ -109,6 +115,11 @@ _RETRY_NOISE_MARKERS = (
 def awaits_model_response(line: str) -> bool:
     """True when this line leaves a model request in flight."""
     return any(marker in line for marker in _MODEL_WAIT_MARKERS)
+
+
+def is_model_request(line: str) -> bool:
+    """True when this line hands a fresh request to the provider."""
+    return _MODEL_REQUEST_MARKER in line
 
 
 def is_stream_error(line: str) -> bool:

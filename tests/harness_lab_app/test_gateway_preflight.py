@@ -99,6 +99,53 @@ def test_probe_blocks_when_the_backend_rejects_the_forwarded_name(monkeypatch, p
     assert "LM Studio (direct, no gateway)" in detail
 
 
+def test_probe_asks_for_the_completion_budget_the_run_will_ask_for(monkeypatch):
+    """Run instance_qutebrowser…-K-003: preflight green, every real request refused.
+
+    The probe used to send ``max_tokens: 1``, which the gateway accepted.
+    opencode sends 32000 for every model that declares no output limit, which
+    LiteLLM refused for gpt-4o-mini (cap 16384) — so "validate config" showed
+    green for a configuration whose every request was going to fail. A probe
+    that does not ask for what the run will ask for approves a request the run
+    never makes.
+    """
+    import json
+
+    bodies: list[dict] = []
+
+    def _capture(req, timeout=0):
+        bodies.append(json.loads(req.data))
+        raise TimeoutError()  # fail open; the request shape is the assertion
+
+    monkeypatch.setattr(gateway_models.urllib.request, "urlopen", _capture)
+    probe_gateway_model("gateway/gpt-4o-mini", base_url="https://gw/v1", token="t")
+    assert bodies[0]["max_tokens"] == gateway_models.OPENCODE_COMPLETION_BUDGET
+
+
+def test_probe_blocks_a_model_whose_completion_cap_is_below_the_budget(monkeypatch):
+    """The K-003 rejection, heard at preflight instead of after queueing."""
+    error = _http_error(
+        400,
+        "litellm.BadRequestError: OpenAIException - max_tokens is too large: "
+        "32000. This model supports at most 16384 completion tokens, whereas "
+        "you provided 32000.",
+    )
+
+    def _raise(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(gateway_models.urllib.request, "urlopen", _raise)
+    detail = probe_gateway_model(
+        "gateway/gpt-4o-mini", base_url="https://gw/v1", token="t"
+    )
+    assert detail is not None
+    assert "completion budget" in detail
+    # The provider's own numbers travel with the verdict...
+    assert "16384" in detail
+    # ...and the fix is named, on both of its ends.
+    assert "gateway" in detail and "opencode.json" in detail
+
+
 def _config(model: str = "gateway/lmstudio-qwen3.6-35b-build") -> RunCreate:
     return RunCreate(
         run_id="probe-run",

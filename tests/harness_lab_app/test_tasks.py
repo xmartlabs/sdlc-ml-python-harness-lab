@@ -433,6 +433,72 @@ def test_a_failing_endpoint_is_given_up_on_instead_of_retried_for_two_hours(
     assert is_unmeasured(failure) is True
 
 
+def test_a_run_no_model_ever_answered_is_not_a_completed_attempt():
+    """Run instance_qutebrowser…-K-003: completed, score 0, and the model never spoke.
+
+    Both provider requests died in two seconds on a gateway config error
+    (`max_tokens` above the model's completion cap) — below the consecutive-
+    error threshold, so no watchdog verdict formed. opencode gave up, but
+    bench_run.py treated the step failure as survivable, carried on to scoring,
+    archived an empty diff and exited 0. The run went on the leaderboard as
+    "gpt-4o-mini attempted the case and resolved nothing", when it was never
+    heard from at all.
+    """
+    engine = make_engine()
+    create_pending_run(engine, "task-no-answer-1")
+    executor = FakeExecutor(
+        FakeHandle(
+            [
+                ("info", STREAM_START_LINE),
+                ("error", STREAM_ERROR_LINE),
+                ("info", STREAM_START_LINE),
+                ("error", STREAM_ERROR_LINE),
+                # bench_run.py carrying on regardless, exactly as K-003 did.
+                ("info", "opencode exited with code 1 — see steps/step-1.log"),
+                ("info", "[3/5] Scoring..."),
+                ("info", "[5/5] Archiving workspace (managed run)..."),
+                ("info", "diff.patch: 0 lines"),
+            ],
+            exit_code=0,
+        )
+    )
+
+    _execute_run_body("task-no-answer-1", executor, db_engine=engine)
+
+    state, exit_code, failure = get_run_state(engine, "task-no-answer-1")
+    assert state == RunState.failed
+    assert exit_code != 0
+    assert failure is not None
+    assert failure.startswith("Model endpoint failing:")
+    # The provider's own words travel with the verdict.
+    assert "Cannot connect to API" in failure
+    assert is_unmeasured(failure) is True
+
+
+def test_a_run_where_a_later_request_succeeds_keeps_its_result():
+    """One answered request is a measurement; only zero-for-zero is void."""
+    engine = make_engine()
+    create_pending_run(engine, "task-recovered-1")
+    executor = FakeExecutor(
+        FakeHandle(
+            [
+                ("info", STREAM_START_LINE),
+                ("error", STREAM_ERROR_LINE),
+                ("info", STREAM_START_LINE),
+                ("info", "→ Write main.py"),
+            ],
+            exit_code=0,
+        )
+    )
+
+    _execute_run_body("task-recovered-1", executor, db_engine=engine)
+
+    state, exit_code, failure = get_run_state(engine, "task-recovered-1")
+    assert state == RunState.awaiting_manual_score
+    assert exit_code == 0
+    assert failure in (None, "")
+
+
 def test_a_failure_the_run_recovers_from_does_not_end_it(
     monkeypatch: pytest.MonkeyPatch,
 ):

@@ -41,7 +41,34 @@ with declarative gates, and is reachable only from the lifecycle CLI. It should
 become a *producer* of batches rather than a second execution path. Deferred, not
 rejected — see ADR-0023.
 
-## Testing
+## Run failure reporting
+
+### The "endpoint down" verdict can misreport its error count
+
+When the watchdog stops a run after `run_max_stream_errors` consecutive provider
+failures, the loop keeps draining the lines already in flight — and the first
+non-error line among them resets the very counter the verdict is about to quote.
+Run `…ansible…-K-015` was stopped after 5 back-to-back failures and its stored
+reason reads "0 provider requests failed back-to-back". The verdict itself is
+correct and the run is properly excluded from the leaderboard; only the number in
+the message is wrong. The fix is freezing the count when the verdict forms
+(reporting the peak, not the final value) in `tasks._stream_run`.
+
+### No model declares a completion-token cap
+
+Every `gateway/*` entry in `opencode.json` carries only a display name — no
+`limit`, no options — so the `max_tokens` opencode sends is whatever it picks for
+an unknown model (observed: 32000, in `…qutebrowser…-K-003`). Providers that
+enforce a smaller completion cap — OpenAI models via LiteLLM reject anything
+above 16384 — refuse every request before a token is generated.
+
+Two guards now surround this, but neither removes it: the preflight probe sends
+the same completion budget the run will carry, so "validate config" and run
+creation fail fast with the provider's own numbers; and a run that slips through
+anyway is voided as **endpoint down** rather than recorded as a completed
+attempt (see [guide-web-ui.md](guide-web-ui.md)). The model itself remains
+unusable until a `limit.output` is declared for it or the cap is set at the
+gateway — the guards report the misconfiguration, they do not fix it.
 
 ### The batch endpoint has no HTTP-level test
 

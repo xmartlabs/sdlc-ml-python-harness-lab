@@ -246,6 +246,21 @@ _MODEL_UNKNOWN_MARKERS = (
     "unknown model",
 )
 
+# The completion budget opencode sends for every gateway model that declares no
+# output limit — which today is all of them: the `gateway/*` entries in
+# opencode.json carry only display names (docs/known-limitations.md). Observed
+# in run instance_qutebrowser…-K-003. The probe must ask for what the run will
+# ask for: probing with ``max_tokens: 1`` approved a request shape the run
+# never sends, and a model whose completion cap is below opencode's default
+# passed preflight green only to refuse every real request in two seconds.
+OPENCODE_COMPLETION_BUDGET = 32000
+
+# The provider validated the request against the model's completion cap and
+# refused it — LiteLLM/OpenAI phrasing, from the same K-003 rejection. Not
+# ambiguous: the number is fixed per model, so every request the run makes
+# gets the same answer.
+_COMPLETION_CAP_MARKERS = ("max_tokens is too large",)
+
 
 def probe_gateway_model(
     model: str,
@@ -256,12 +271,13 @@ def probe_gateway_model(
 ) -> str | None:
     """Cheap health probe for a gateway-routed model before a run is created.
 
-    Sends a 1-token completion through the gateway. Returns a short error detail
-    when the backend serving the model is **provably unreachable** (a run would
-    burn every step on stream errors — e.g. the LM Studio / Ollama host is off);
-    returns ``None`` when healthy or ambiguous. Fail-open on ambiguity: a slow
-    response may just be a JIT model load, and this probe must never block a
-    runnable configuration.
+    Sends one completion through the gateway **with the request shape the run
+    will use** — same completion budget, see ``OPENCODE_COMPLETION_BUDGET``.
+    Returns a short error detail when the run is provably doomed: the backend
+    serving the model is unreachable, or the request shape itself is refused
+    (a run would burn every step on the same rejection). Returns ``None`` when
+    healthy or ambiguous. Fail-open on ambiguity: a slow response may just be
+    a JIT model load, and this probe must never block a runnable configuration.
     """
     base = base_url.rstrip("/")
     if not base or not token:
@@ -274,7 +290,10 @@ def probe_gateway_model(
             # fired. Normalize, always.
             "model": normalize_model_name(model),
             "messages": [{"role": "user", "content": "ping"}],
-            "max_tokens": 1,
+            # The run's budget, not a token-count: generation still stops at
+            # the model's short answer, but cap validation happens against the
+            # number the run will actually send.
+            "max_tokens": OPENCODE_COMPLETION_BUDGET,
         }
     ).encode()
     req = urllib.request.Request(
@@ -300,7 +319,9 @@ def probe_gateway_model(
         if exc.code >= 500 and any(m in lowered for m in _BACKEND_DOWN_MARKERS):
             return (
                 f"the gateway reported a connection error reaching the backend "
-                f"that serves this model (HTTP {exc.code})"
+                f"that serves this model (HTTP {exc.code}). This usually means "
+                f"the self-hosted server behind it (LM Studio / Ollama / NIM) "
+                f"is off — start it, or pick another model"
             )
         if any(m in lowered for m in _MODEL_UNKNOWN_MARKERS):
             snippet = " ".join(payload.split())[:200]
@@ -311,6 +332,16 @@ def probe_gateway_model(
                 f"gateway, or pick the model from the "
                 f"'{LMSTUDIO_GROUP_LABEL}' group, which addresses the host "
                 f"directly and cannot be renamed in transit"
+            )
+        if any(m in lowered for m in _COMPLETION_CAP_MARKERS):
+            snippet = " ".join(payload.split())[:200]
+            return (
+                f"the model refuses the completion budget every request of "
+                f"the run will carry (max_tokens="
+                f"{OPENCODE_COMPLETION_BUDGET}): {snippet}. opencode sends "
+                f"that budget for any model that declares no output limit — "
+                f"cap max_tokens for this model at the gateway, or declare "
+                f"`limit.output` for it in opencode.json"
             )
         return None  # auth/validation/etc — other layers surface those
     except Exception:

@@ -300,12 +300,14 @@ class RunService:
                 )
             detail = self._probe_gateway_executor(executor, token or "")
             if detail:
+                # The detail carries its own diagnosis and fix (backend down,
+                # bad alias, refused completion budget) — do not editorialize
+                # over it here; an "unreachable" framing was wrong for two of
+                # the three.
                 raise RunPreflightError(
-                    f"Executor model '{executor}' looks unreachable: {detail}. "
-                    "This usually means the self-hosted server behind it "
-                    "(LM Studio / Ollama / NIM) is off — start it (or pick "
-                    "another model) and retry. Without this check the run would "
-                    "burn every step on stream errors."
+                    f"Executor model '{executor}' failed the gateway "
+                    f"preflight: {detail}. Without this check the run would "
+                    "burn every step on the same error."
                 )
             self._check_executor_context(executor, token or "")
         if config.skills_disabled:
