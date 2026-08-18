@@ -59,6 +59,36 @@ items, coerces unknown enums, and returns `{"items": [], "parse_error": ...}`
 on total failure — the audit.md is already written by then, so findings trouble
 can never fail the audit. The UI treats findings as optional garnish.
 
+## 2026-08-18 — A gateway card can be routable and dead, and `os.environ/` hides it
+
+Every `gateway/lmstudio-qwen3.6-35b*` card failed while the same model answered fine
+on the Direct lane. Nothing was mis-named: `/model/info` showed
+`lmstudio-qwen3.6-35b` -> `lm_studio/qwen/qwen3.6-35b-a3b` @ `http://192.168.0.223:1234/v1`,
+exactly LM Studio's id, and 19 completed runs on that alias prove the wiring. The rig
+was simply off — ping 100% loss, ARP incomplete — and the Direct lane looked alive
+only because its 15s TTL cache still held the last good listing.
+
+Two structural findings behind it:
+
+- **`os.environ/VAR` does not disable a card when the variable is unset.** LiteLLM
+  resolves it to `None` and then sends the request to its *own* default host. The
+  deployed gateway serves `lmstudio-qwen3.5-9b-mac16` with `api_base: null` — a card
+  that can never work but advertises itself as available.
+- **Fallback targets are not validated at startup.** `gemini-2.0-flash` sat in the
+  chain after Google retired it (404 verified), so the escalation a powered-off GPU
+  depends on was dead while the config read as configured.
+
+**Why it matters:** the lab's `routable` flag answered "can this harness address the
+id?", never "is the machine behind it serving the model?", so a dead card looked
+launchable and the failure got blamed on the model or the alias.
+**How to apply:** `build_model_catalog` now takes the `DirectHostProbe` list the
+Direct lane already collected (no extra round-trip) and marks self-hosted gateway
+cards `reachable: false` with a reason — host down, id absent from that host, or no
+`api_base` declared. It fails open: an unprobed host keeps its verdict `None`. When a
+gateway card fails, check the backend host before touching the alias. In ai-gateway,
+`test_every_fallback_alias_is_a_declared_card` is now the startup check LiteLLM does
+not do.
+
 <!-- Add new learnings above this line -->
 
 

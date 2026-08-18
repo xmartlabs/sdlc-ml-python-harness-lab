@@ -106,7 +106,29 @@ function metadataFor(option: ModelOption | undefined): string | null {
   if (option.routable === false) {
     return "Not routable — enable it on the Settings page before running it.";
   }
+  if (option.reachable === false) {
+    return `Backend unavailable — ${option.unreachable_reason ?? "the machine behind this card is not serving it"}.`;
+  }
   return null;
+}
+
+/**
+ * The warning a model carries in the collapsed `<select>`, where only the
+ * option text is visible.
+ *
+ * Two different failures, kept apart on purpose: an id this harness cannot
+ * address is fixed on the Settings page, while a card whose serving machine is
+ * off is fixed by starting that machine. Collapsing both into one word would
+ * send the operator to the wrong place.
+ */
+function warningFor(option: ModelOption): string {
+  if (option.routable === false) {
+    return " — not routable";
+  }
+  if (option.reachable === false) {
+    return " — backend unavailable";
+  }
+  return "";
 }
 
 /**
@@ -311,9 +333,7 @@ export function ModelPicker({
             {allowNone ? <option value="">None</option> : null}
             {visible.map((option) => (
               <option key={option.id} value={option.id}>
-                {option.routable === false
-                  ? `${option.label} — not routable`
-                  : option.label}
+                {`${option.label}${warningFor(option)}`}
               </option>
             ))}
           </select>

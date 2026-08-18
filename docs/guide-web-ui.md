@@ -71,6 +71,16 @@ Where you launch and track runs. The **New run** form:
      model's loaded window, or *not routable* for a gateway model nothing can
      reach (enable it on the Settings page first).
 
+  A gateway card can be routable and still be dead, and those are different
+  problems: *not routable* means this harness has no way to address the id,
+  *backend unavailable* means the machine behind the card is not serving it —
+  the LAN host is off, or the card declares no `api_base` and LiteLLM would
+  silently send the request to its own default host. The picker reuses the
+  direct-host probe it already ran for the Direct source, so the check costs no
+  extra round-trip, and it fails open: a host nothing probed keeps its verdict
+  open rather than being hidden. Dead cards still sort below working ones and
+  carry the reason in the line under the select and as a badge in Settings.
+
   Gateway models come **live from LiteLLM** — add one to the gateway, press
   **Refresh from gateway** in Settings, and it appears here and becomes routable,
   no hand-edited lists. Direct models come from the host itself, carrying the two

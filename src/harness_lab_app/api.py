@@ -92,6 +92,8 @@ from harness_lab_app.validation_service import ValidationService
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from harness_lab_app.gateway_models import DirectHostProbe
+
 
 class LoginRequest(BaseModel):
     """Single-user login: there is no username, only the admin password."""
@@ -346,59 +348,93 @@ def create_app() -> FastAPI:
         # they are one experimental arm, and listing both only makes the picker
         # harder to read.
         routing = fetch_gateway_routing_cached(base, token)
+        # Read the LAN hosts first: the same probe that fills the direct group
+        # tells the gateway group which of its cards point at a machine that is
+        # currently down, so a dead backend costs one round-trip, not two.
+        direct, direct_errors, probes = _direct_options()
         catalog = build_model_catalog(
-            live, opencode_models, overlay=overlay, routing=routing
+            live, opencode_models, overlay=overlay, routing=routing, probes=probes
         )
         # Direct models lead the menu: they are the only entries whose name is
         # verified against the server that will serve them.
-        direct, direct_errors = _direct_options()
         catalog["models"] = direct + catalog["models"]
         catalog["direct_errors"] = direct_errors
         return catalog
 
-    def _direct_options() -> tuple[list[dict], dict[str, str]]:
-        """Picker options for the direct sources, and why each empty one is empty.
+    def _direct_options() -> tuple[list[dict], dict[str, str], list[DirectHostProbe]]:
+        """Picker options for the direct sources, why each empty one is empty,
+        and what each host answered.
 
         The reasons travel with the list because an empty group is otherwise
         indistinguishable from "no models installed", and the fix (start the
         server, fix the URL) depends entirely on which one it was — per host,
         since one may be up while the other is not.
+
+        The probes travel with it for a second consumer: gateway cards forward
+        to these very hosts, so one reading serves both groups. Without it the
+        run form said "LM Studio host did not answer" under the direct heading
+        while listing the gateway aliases for that same host as launchable.
         """
-        from harness_lab_app.direct_hosts import DirectHostUnreachable
+        from harness_lab_app.direct_hosts import DirectHostUnreachable, host_root
+        from harness_lab_app.gateway_models import DirectHostProbe
         from harness_lab_app.lmstudio_direct import (
+            LMSTUDIO_PROVIDER_LABEL,
             build_direct_options as build_lmstudio_options,
             list_lmstudio_models_cached,
         )
         from harness_lab_app.ollama_direct import (
+            OLLAMA_PROVIDER_LABEL,
             build_direct_options as build_ollama_options,
             list_ollama_models_cached,
         )
 
         options: list[dict] = []
         errors: dict[str, str] = {}
+        probes: list[DirectHostProbe] = []
 
-        def collect(provider: str, env_key: str, read: Callable[[str], list[dict]]):
-            """Add one host's options, or record why it contributed none."""
+        def collect(
+            provider: str,
+            env_key: str,
+            label: str,
+            read: Callable[[str], tuple[list[dict], set[str]]],
+        ) -> None:
+            """Add one host's options and its probe, or record why it has none."""
             base = _direct_endpoint(env_key)
             if not base:
                 errors[provider] = f"{env_key} is not set."
                 return
+            root = host_root(base)
             try:
-                options.extend(read(base))
+                host_options, model_ids = read(base)
             except DirectHostUnreachable as exc:
                 errors[provider] = str(exc)
+                probes.append(
+                    DirectHostProbe(
+                        root=root, label=label, reachable=False, error=str(exc)
+                    )
+                )
+                return
+            options.extend(host_options)
+            probes.append(
+                DirectHostProbe(
+                    root=root,
+                    label=label,
+                    reachable=True,
+                    model_ids=frozenset(model_ids),
+                )
+            )
 
-        collect(
-            "lmstudio",
-            "LMSTUDIO_BASE_URL",
-            lambda base: build_lmstudio_options(list_lmstudio_models_cached(base)),
-        )
-        collect(
-            "ollama",
-            "OLLAMA_BASE_URL",
-            lambda base: build_ollama_options(list_ollama_models_cached(base)),
-        )
-        return options, errors
+        def lmstudio(base: str) -> tuple[list[dict], set[str]]:
+            models = list_lmstudio_models_cached(base)
+            return build_lmstudio_options(models), {m.id for m in models}
+
+        def ollama(base: str) -> tuple[list[dict], set[str]]:
+            models = list_ollama_models_cached(base)
+            return build_ollama_options(models), {m.id for m in models}
+
+        collect("lmstudio", "LMSTUDIO_BASE_URL", LMSTUDIO_PROVIDER_LABEL, lmstudio)
+        collect("ollama", "OLLAMA_BASE_URL", OLLAMA_PROVIDER_LABEL, ollama)
+        return options, errors, probes
 
     @app.get("/api/lmstudio/models")
     def list_lmstudio(refresh: bool = False):

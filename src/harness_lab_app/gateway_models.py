@@ -28,7 +28,10 @@ import urllib.request
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from harness_lab_app.direct_hosts import host_root
+
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
 # Cloudflare in front of the gateway bans the default urllib user-agent
@@ -640,6 +643,94 @@ def clear_context_cache() -> None:
     _context_cache.clear()
 
 
+# -- backend liveness --------------------------------------------------------
+
+# LiteLLM prefixes the upstream id with the provider it speaks. Only the
+# self-hosted ones are listed: a card whose target carries one of these is
+# served by a machine on this LAN, which is the only case the direct lane can
+# answer for. A cloud target (``openai/gpt-4o``) never matches, so its api_base
+# being empty stays what it is — normal — instead of reading as a broken card.
+SELF_HOSTED_PREFIXES = ("lm_studio/", "ollama_chat/", "ollama/")
+
+
+@dataclass(frozen=True)
+class DirectHostProbe:
+    """What the lab just learned by asking a serving host itself.
+
+    The direct lane already queries LM Studio and Ollama on every
+    ``/api/models`` render, so a gateway alias that forwards to one of those
+    same hosts inherits the answer for free: same machine, same models, no
+    second round-trip.
+
+    ``model_ids`` are the ids that host registered, in its own spelling
+    (``qwen/qwen3.6-35b-a3b``, ``qwen3.6:27b``) — the same spelling LiteLLM
+    carries after its provider prefix, which is what makes the join possible.
+    """
+
+    root: str
+    label: str
+    reachable: bool
+    model_ids: frozenset[str] = frozenset()
+    error: str | None = None
+
+
+def strip_backend_prefix(target: str) -> str:
+    """``lm_studio/qwen/qwen3.6-35b-a3b`` -> ``qwen/qwen3.6-35b-a3b``.
+
+    Exactly one prefix goes. LM Studio publishers are part of the id, so
+    ``lm_studio/openai/gpt-oss-20b`` must keep its second ``openai/``: that is
+    the publisher, not a provider.
+    """
+    for prefix in SELF_HOSTED_PREFIXES:
+        if target.startswith(prefix):
+            return target[len(prefix) :]
+    return target
+
+
+def backend_unavailable_reason(
+    entry: dict, probes: Sequence[DirectHostProbe]
+) -> str | None:
+    """Why a gateway alias cannot answer right now, or ``None``.
+
+    ``routable`` answers a different question — whether this harness knows how
+    to *address* the id — and a card can be perfectly routable and still be
+    pointed at a machine that is powered off. That gap is the whole reason this
+    exists: the run form used to list ``lmstudio-qwen3.6-35b`` as launchable
+    while every request to it died on a connection error, and the operator only
+    found out after burning a run.
+
+    Fail-open, deliberately. Anything this cannot decide — a cloud card, a host
+    the lab does not probe, an alias LiteLLM would not describe — returns
+    ``None`` and keeps its place in the menu. A wrong "unavailable" hides a
+    model that works; a missing one costs a preflight message that
+    :func:`probe_gateway_model` still emits at launch.
+    """
+    target = str(entry.get("target") or "")
+    if not target.startswith(SELF_HOSTED_PREFIXES):
+        return None
+    api_base = str(entry.get("api_base") or "")
+    if not api_base:
+        return (
+            "the gateway card declares no api_base, so LiteLLM would send the "
+            "request to its own default host — set the card's api_base "
+            "environment variable in the gateway"
+        )
+    root = host_root(api_base)
+    probe = next((p for p in probes if p.root == root), None)
+    if probe is None:
+        return None
+    if not probe.reachable:
+        detail = f" ({probe.error})" if probe.error else ""
+        return f"the {probe.label} host at {root} is not answering{detail}"
+    bare = strip_backend_prefix(target)
+    if probe.model_ids and bare not in probe.model_ids:
+        return (
+            f"{probe.label} at {root} does not serve `{bare}` — the gateway "
+            f"alias points at an id that host does not have"
+        )
+    return None
+
+
 # -- alias de-duplication ----------------------------------------------------
 
 
@@ -834,6 +925,7 @@ def build_model_catalog(
     default_executor: str = DEFAULT_EXECUTOR_MODEL,
     overlay: dict[str, dict] | None = None,
     routing: dict[str, dict] | None = None,
+    probes: Sequence[DirectHostProbe] | None = None,
 ) -> dict:
     """Compose the ``/api/models`` payload for the run form.
 
@@ -852,6 +944,12 @@ def build_model_catalog(
     swallowed names under ``aliases``. Without it the list degrades to one row
     per alias, which is correct but noisy.
 
+    ``probes`` are the direct lane's readings of the LAN hosts (see
+    :class:`DirectHostProbe`). They answer the second half of "can I run this":
+    ``routable`` says the id can be addressed, ``reachable`` says the machine
+    behind it is up and serving that model. A card can be routable and dead —
+    the case this catalog exists to stop shipping to the run form.
+
     Every model carries the ``backend``/``group``/``group_rank`` triple from
     :func:`classify_backend`, and the list is returned pre-sorted in that order
     (see :data:`BACKEND_GROUPS`) so every consumer renders the same hierarchy
@@ -860,6 +958,8 @@ def build_model_catalog(
     picker (see :data:`PROVIDER_RULES`).
     """
     overlay = overlay or {}
+    probes = probes or []
+    routing = routing or {}
     if live_ids:
         source = "gateway"
         bare_ids = live_ids
@@ -874,6 +974,12 @@ def build_model_catalog(
         if routing
         else [(bid, []) for bid in bare_ids]
     )
+    # Aliases in one group share a routing key, hence one api_base and one
+    # upstream id, so the canonical member's verdict is the group's verdict.
+    unavailable = {
+        canonical: backend_unavailable_reason(routing.get(canonical, {}), probes)
+        for canonical, _ in grouped
+    }
     models = [
         {
             "id": gateway_model_id(canonical),
@@ -882,6 +988,10 @@ def build_model_catalog(
                 bid in opencode_models or bid in overlay
                 for bid in (canonical, *aliases)
             ),
+            # None where nothing could be decided (cloud card, unprobed host):
+            # the menu shows it normally rather than guessing at it.
+            "reachable": None if unavailable[canonical] is None else False,
+            "unreachable_reason": unavailable[canonical],
             "aliases": [gateway_model_id(alias) for alias in aliases],
             "backend": backend,
             "group": group_label,
@@ -904,13 +1014,15 @@ def build_model_catalog(
     # and because "l" sorts before "Q", it pushed every curated model, the
     # default executor included, to the bottom of its own group.
     #
-    # ``routable`` stays ahead of it: a model that would fail at launch belongs
-    # below one that works, however nicely it is named. Labels compare
-    # case-insensitively so capitalisation does not outrank a bare id.
+    # ``routable`` and ``reachable`` stay ahead of it: a model that would fail
+    # at launch belongs below one that works, however nicely it is named — an
+    # unaddressable id first, then one whose serving machine is down. Labels
+    # compare case-insensitively so capitalisation does not outrank a bare id.
     models.sort(
         key=lambda m: (
             m["group_rank"],
             not m["routable"],
+            m["reachable"] is False,
             m["label"] == normalize_model_name(str(m["id"])),
             str(m["label"]).lower(),
         )

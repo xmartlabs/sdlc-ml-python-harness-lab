@@ -7,12 +7,15 @@ from pathlib import Path
 from harness_lab_app import gateway_models
 from harness_lab_app.gateway_models import (
     DEFAULT_EXECUTOR_MODEL,
+    DirectHostProbe,
+    backend_unavailable_reason,
     build_model_catalog,
     classify_backend,
     classify_provider,
     gateway_model_id,
     normalize_model_name,
     read_opencode_gateway_models,
+    strip_backend_prefix,
 )
 
 OPENCODE = {
@@ -360,6 +363,127 @@ def test_a_merged_entry_is_routable_when_any_member_is():
     )
     assert catalog["models"][0]["id"] == "gateway/lmstudio-qwen3.6-35b"
     assert catalog["models"][0]["routable"] is True
+
+
+# -- backend liveness --------------------------------------------------------
+
+HOST_DOWN = DirectHostProbe(
+    root="http://host:1234",
+    label="LM Studio",
+    reachable=False,
+    error="timed out",
+)
+HOST_UP = DirectHostProbe(
+    root="http://host:1234",
+    label="LM Studio",
+    reachable=True,
+    model_ids=frozenset({"qwen/qwen3.6-35b-a3b"}),
+)
+
+
+def test_strip_backend_prefix_keeps_the_lm_studio_publisher():
+    """``lm_studio/openai/...`` carries the provider AND the publisher."""
+    assert strip_backend_prefix("lm_studio/openai/gpt-oss-20b") == "openai/gpt-oss-20b"
+    assert strip_backend_prefix("ollama_chat/qwen3.6:27b") == "qwen3.6:27b"
+    assert strip_backend_prefix("openai/gpt-4o") == "openai/gpt-4o"
+
+
+def test_a_card_is_unavailable_when_its_host_is_not_answering():
+    reason = backend_unavailable_reason(ROUTING["lmstudio-qwen3.6-35b"], [HOST_DOWN])
+    assert reason is not None
+    assert "http://host:1234" in reason
+    assert "timed out" in reason
+
+
+def test_a_card_is_unavailable_when_the_host_does_not_have_that_model():
+    """The alias resolves, the machine is up, and the id is simply not there."""
+    entry = {
+        "target": "lm_studio/google/gemma-4-31b-qat",
+        "api_base": "http://host:1234/v1",
+        "params": {},
+    }
+    reason = backend_unavailable_reason(entry, [HOST_UP])
+    assert reason is not None
+    assert "google/gemma-4-31b-qat" in reason
+
+
+def test_a_card_the_host_serves_is_available():
+    assert (
+        backend_unavailable_reason(ROUTING["lmstudio-qwen3.6-35b"], [HOST_UP]) is None
+    )
+
+
+def test_a_self_hosted_card_with_no_api_base_is_unavailable_without_a_probe():
+    """The real ``lmstudio-qwen3.5-9b-mac16``: its env var was never set.
+
+    LiteLLM falls back to its own default host, so the card cannot work — and
+    that is decidable from the routing alone, before any machine is asked.
+    """
+    entry = {"target": "lm_studio/qwen/qwen3.5-9b", "api_base": None, "params": {}}
+    reason = backend_unavailable_reason(entry, [])
+    assert reason is not None
+    assert "api_base" in reason
+
+
+def test_a_cloud_card_is_never_judged_by_a_lan_probe():
+    """``openai/gpt-5.5`` has no api_base because it needs none."""
+    assert backend_unavailable_reason(ROUTING["gpt-5.5"], [HOST_DOWN]) is None
+
+
+def test_an_unprobed_host_leaves_the_verdict_open():
+    """Fail-open: a host the lab does not read must not read as broken."""
+    elsewhere = DirectHostProbe(
+        root="http://other:1234", label="LM Studio", reachable=False
+    )
+    assert (
+        backend_unavailable_reason(ROUTING["lmstudio-qwen3.6-35b"], [elsewhere]) is None
+    )
+
+
+def test_the_catalog_reports_why_a_card_cannot_answer():
+    catalog = build_model_catalog(
+        ["lmstudio-qwen3.6-35b-build", "gpt-5.5"],
+        OPENCODE,
+        routing=ROUTING,
+        probes=[HOST_DOWN],
+    )
+    by_id = {m["id"]: m for m in catalog["models"]}
+    assert by_id["gateway/lmstudio-qwen3.6-35b-build"]["reachable"] is False
+    assert (
+        "not answering"
+        in by_id["gateway/lmstudio-qwen3.6-35b-build"]["unreachable_reason"]
+    )
+    # Undecidable, not healthy: the field must stay open for a cloud card.
+    assert by_id["gateway/gpt-5.5"]["reachable"] is None
+    assert by_id["gateway/gpt-5.5"]["unreachable_reason"] is None
+
+
+def test_the_catalog_leaves_every_verdict_open_without_probes():
+    """No probes is the pre-existing behaviour, unchanged."""
+    catalog = build_model_catalog(["lmstudio-qwen3.6-35b"], OPENCODE, routing=ROUTING)
+    assert catalog["models"][0]["reachable"] is None
+
+
+def test_the_menu_sinks_a_dead_backend_below_a_working_one():
+    """Both are routable and curated; only one has a machine behind it."""
+    catalog = build_model_catalog(
+        ["lmstudio-qwen3.6-35b-build", "lmstudio-gemma4-31b"],
+        {
+            "lmstudio-qwen3.6-35b-build": {"name": "AAA down"},
+            "lmstudio-gemma4-31b": {"name": "ZZZ up"},
+        },
+        routing={
+            **ROUTING,
+            "lmstudio-gemma4-31b": {
+                "target": "lm_studio/qwen/qwen3.6-35b-a3b",
+                "api_base": "http://other:1234/v1",
+                "params": {"temperature": 0.9},
+            },
+        },
+        probes=[HOST_DOWN],
+    )
+    # "AAA down" sorts first by label and still lands last: liveness outranks it.
+    assert [m["label"] for m in catalog["models"]] == ["ZZZ up", "AAA down"]
 
 
 # -- context preflight -------------------------------------------------------

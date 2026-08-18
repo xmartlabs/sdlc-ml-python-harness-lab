@@ -313,6 +313,13 @@ export type ModelOption = {
   // False when neither opencode.json nor the enabled web catalog can route the
   // id: the gateway serves it, but a run using it would fail at launch.
   routable?: boolean;
+  // False when the machine behind a gateway card is provably not serving it
+  // right now — the LAN host is down, or the alias names a model it does not
+  // have. Null when undecidable (a cloud card, a host the lab does not probe),
+  // which is why this is not just `routable` with a wider meaning: one asks
+  // whether the id can be addressed, the other whether anything is listening.
+  reachable?: boolean | null;
+  unreachable_reason?: string | null;
   // Other gateway ids that the router resolves to this same backend model.
   // They are hidden from the picker so one model appears once.
   aliases?: string[];

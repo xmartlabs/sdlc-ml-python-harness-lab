@@ -461,6 +461,53 @@ def test_reloading_the_run_form_menu_drops_both_caches(session, monkeypatch):
     assert sorted(cleared) == ["direct", "gateway"]
 
 
+def test_a_dead_host_marks_the_gateway_cards_that_point_at_it(session, monkeypatch):
+    """One probe, two groups.
+
+    The run form used to say "LM Studio did not answer" under the direct
+    heading while the gateway aliases for that same machine sat above it
+    looking launchable — the trap that sends a run to a powered-off box.
+    """
+    monkeypatch.setattr(
+        api_module,
+        "read_env_file_value",
+        lambda key: ("http://h:1234/v1" if key == "LMSTUDIO_BASE_URL" else ""),
+    )
+    monkeypatch.setattr(
+        lmstudio_direct,
+        "list_lmstudio_models_cached",
+        lambda *_a, **_k: (_ for _ in ()).throw(LMStudioUnreachable("server is off")),
+    )
+    monkeypatch.setattr(
+        gateway_models,
+        "list_gateway_models_cached",
+        lambda *_a, **_k: ["lmstudio-qwen3.6-35b", "gpt-5.5"],
+    )
+    monkeypatch.setattr(
+        gateway_models,
+        "fetch_gateway_routing_cached",
+        lambda *_a, **_k: {
+            "lmstudio-qwen3.6-35b": {
+                "target": "lm_studio/qwen/qwen3.6-35b-a3b",
+                "api_base": "http://h:1234/v1",
+                "params": {},
+            },
+            "gpt-5.5": {"target": "openai/gpt-5.5", "api_base": None, "params": {}},
+        },
+    )
+
+    catalog = _endpoint("/api/models")(refresh=True, session=session)
+
+    by_id = {m["id"]: m for m in catalog["models"]}
+    assert by_id["gateway/lmstudio-qwen3.6-35b"]["reachable"] is False
+    assert (
+        "server is off" in by_id["gateway/lmstudio-qwen3.6-35b"]["unreachable_reason"]
+    )
+    # The cloud card shares no machine with the dead host and keeps its place.
+    assert by_id["gateway/gpt-5.5"]["reachable"] is None
+    assert catalog["direct_errors"]["lmstudio"] == "server is off"
+
+
 def test_the_endpoint_explains_why_the_list_is_empty(monkeypatch):
     """An empty group with no reason is unactionable — the fix depends on why."""
     monkeypatch.setattr(api_module, "read_env_file_value", lambda _k: "")

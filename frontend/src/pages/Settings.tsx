@@ -112,6 +112,10 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
   const [facts, setFacts] = useState<RuntimeFacts | null>(null);
   const [models, setModels] = useState<GatewayModelRecord[]>([]);
   const [routable, setRoutable] = useState<Record<string, boolean>>({});
+  // Why a card's serving machine cannot answer, keyed by bare model id. Empty
+  // for every card the lab cannot decide on, so absence means "no verdict",
+  // not "healthy".
+  const [unreachable, setUnreachable] = useState<Record<string, string>>({});
   // model_id -> canonical id it was merged into, for ids the gateway router
   // resolves to a backend model another id already covers.
   const [mergedInto, setMergedInto] = useState<Record<string, string>>({});
@@ -148,15 +152,20 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
       .then((catalog) => {
         const flags: Record<string, boolean> = {};
         const merged: Record<string, string> = {};
+        const down: Record<string, string> = {};
         for (const model of catalog.models) {
           const bare = model.id.replace(/^gateway\//, "");
           flags[bare] = model.routable !== false;
+          if (model.reachable === false) {
+            down[bare] = model.unreachable_reason ?? "backend unavailable";
+          }
           for (const alias of model.aliases ?? []) {
             merged[alias.replace(/^gateway\//, "")] = bare;
           }
         }
         setRoutable(flags);
         setMergedInto(merged);
+        setUnreachable(down);
       })
       .catch(() => {});
   };
@@ -582,6 +591,11 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
                     {model.live ? null : <span className="badge warn">not served</span>}
                     {routable[model.model_id] === false ? (
                       <span className="badge error">not routable</span>
+                    ) : null}
+                    {unreachable[model.model_id] ? (
+                      <span className="badge error" title={unreachable[model.model_id]}>
+                        backend unavailable
+                      </span>
                     ) : null}
                     {model.is_default ? <span className="badge neutral">default</span> : null}
                     {mergedInto[model.model_id] ? (
