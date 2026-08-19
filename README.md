@@ -121,9 +121,27 @@ you improve. The full loop, tied to it:
    make template-remote-setup             # first time only — see "Template governance"
    make harness-status                    # current version vs latest (vX.Y.Z)
    make harness-sync-preview REF=vX.Y.Z   # read-only diff of the new governance
-   make harness-sync-branch  REF=vX.Y.Z   # adopt it in an isolated candidate worktree
+   make harness-sync-clean  REF=vX.Y.Z    # only if a candidate for that REF exists
+   make harness-sync-branch REF=vX.Y.Z    # prepare it in an isolated candidate worktree
    #   light alternative: make template-sync REF=vX.Y.Z
    ```
+
+   `harness-sync-branch` refuses to overwrite an existing candidate, so **run
+   `harness-sync-clean` first when re-preparing the same REF** — the error names the
+   command. It also refuses a dirty `main`, and `git status --porcelain` counts
+   untracked files, so `git reset --hard` alone will not satisfy it: `git stash -u`
+   or remove the stray files.
+
+   The candidate is left **uncommitted** in its worktree. Review it, run the gate
+   there, and only then commit and merge it yourself:
+
+   ```bash
+   git -C .worktrees/harness-candidate-vX.Y.Z --no-pager diff HEAD
+   (cd .worktrees/harness-candidate-vX.Y.Z && make check && make check-sync)
+   ```
+
+   To discard instead, `make harness-sync-clean REF=vX.Y.Z` — it force-removes the
+   worktree, so anything uncommitted in there is gone.
 
    Then re-run the case (same harness/model/prompt) and compare its **Attribution** +
    **Audit** against the earlier run: did the symptom improve? Did the success
@@ -440,6 +458,7 @@ assessments of AI-assisted coding skill (and what a template can/can't influence
 | `make harness-status` | Installed template version vs latest release + drift |
 | `make harness-sync-preview REF=vX.Y.Z` | Read-only diff of a candidate template release |
 | `make harness-sync-branch REF=vX.Y.Z` | Prepare a candidate in an isolated worktree |
+| `make harness-sync-clean REF=vX.Y.Z` | Discard a candidate worktree and its branch (required before re-preparing the same REF) |
 | `make harness-proposal RUN=<id>` | Draft a sanitized improvement issue for the template |
 | `make template-remote-setup` | Add or update the `template` upstream remote |
 | `make template-sync REF=vX.Y.Z` | Legacy selective governance sync from a tag |
@@ -474,7 +493,14 @@ make template-remote-setup TEMPLATE_REPO=https://github.com/<you>/ml-python-base
 make harness-status                   # installed version vs latest release + drift
 make harness-sync-preview REF=vX.Y.Z  # read-only diff of a candidate release
 make harness-sync-branch  REF=vX.Y.Z  # prepare the candidate in an isolated worktree
+make harness-sync-clean   REF=vX.Y.Z  # discard it — also required before re-preparing
 ```
+
+Preconditions worth knowing before the first run: `harness-sync-branch` needs a clean
+`main` (untracked files count — `git stash -u`) and no existing candidate for that REF.
+The candidate it prepares is uncommitted; reviewing, committing, and merging it is
+still a manual step, so `make harness-status` keeps reporting the old version until
+you do.
 
 Full flow (installed state, isolated candidate worktree, adoption, compatibility): see
 **[docs/harness-lifecycle/lab-sync-workflow.md](docs/harness-lifecycle/lab-sync-workflow.md)**.
