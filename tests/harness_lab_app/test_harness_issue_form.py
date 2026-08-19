@@ -122,3 +122,16 @@ def test_leaking_field_is_blocked() -> None:
     )
     with pytest.raises(sanitizer.SanitizationError):
         issue_form.build_issue_form(leaky, repository="marcosdh1987/ml-python-base")
+
+
+def test_validation_field_masks_case_ids_and_declares_lab_scope() -> None:
+    form = issue_form.build_issue_form(
+        _proposal(artifacts=[".github/standards.md"]),
+        repository="marcosdh1987/ml-python-base",
+    )
+    validation = next(f for f in form.fields if f.id == "validation")
+    assert "lab-executed" in validation.label
+    assert sanitizer.VALIDATION_SCOPE_NOTE in validation.value
+    # Lab-internal case ids never reach the public form — only aliases do.
+    assert "systematic-debugging-v1" not in validation.value
+    assert "case-1" in validation.value

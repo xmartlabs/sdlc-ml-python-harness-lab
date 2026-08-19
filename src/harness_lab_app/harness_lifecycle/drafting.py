@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from harness_lab_app.harness_lifecycle import (
+    artifacts,
     issue_form,
     metrics,
     proposals,
@@ -47,8 +48,10 @@ SYSTEM_PROMPT = (
     "You convert a single agent-run behavioral audit into ONE governed harness "
     "improvement proposal. Output ONLY a JSON object with keys: title (str), "
     "observation {failure_mode, expected_behavior, evidence_summary}, "
-    "affected_artifacts (list of exact repo paths under .github/ or adapters/"
-    "templates), suggested_change (str), suggested_cases (list of case ids), "
+    "affected_artifacts (list of exact repo paths copied VERBATIM from the "
+    "'Template file listing' block in the user message — never invent, combine, "
+    "or guess a path; a path not in that listing does not exist), "
+    "suggested_change (str), suggested_cases (list of case ids), "
     "success_criteria (list of {metric, operator in [lte,gte,eq,lt,gt], value}), "
     "confidence in [low,medium,high]. "
     "Each success_criteria.metric MUST be one of the lab's measurable metrics: "
@@ -60,6 +63,11 @@ SYSTEM_PROMPT = (
     "that none of these metrics can capture (e.g. whether governance docs were read, "
     "whether a formal verify gate was invoked) only as prose inside suggested_change, "
     "never as a success_criteria entry. "
+    "success_criteria and suggested_cases run ONLY in the lab, never in the "
+    "template repo — so suggested_change MUST end with a short 'Template-side "
+    "acceptance:' list of checks the implementer can run locally in the template "
+    "(quality gate green, the named files carry the new wording, adapter copies "
+    "stay identical). "
     "Describe aggregate behavior only; never include secrets, tokens, local paths, "
     "or raw logs."
 )
@@ -85,23 +93,44 @@ def parse_draft(raw: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
+def template_listing() -> list[str]:
+    """The template's governed file listing (ground truth for artifact paths)."""
+    return artifacts.template_artifact_listing(REPO_ROOT)
+
+
 def synthesize_draft(
-    run_dir: Path, model: str, gateway: Callable[[str, str, str], str]
+    run_dir: Path,
+    model: str,
+    gateway: Callable[[str, str, str], str],
+    listing: list[str] | None = None,
 ) -> dict:
     audit = (run_dir / "audit.md").read_text(encoding="utf-8")[:40000]
-    return parse_draft(gateway(model, SYSTEM_PROMPT, audit))
+    user_message = audit
+    listing_block = artifacts.render_listing_block(listing or [])
+    if listing_block:
+        user_message = f"{listing_block}\n\n{audit}"
+    return parse_draft(gateway(model, SYSTEM_PROMPT, user_message))
 
 
 def draft_to_proposal(
-    draft: dict, *, proposal_id: str, created_at: datetime, source: ProposalSource
+    draft: dict,
+    *,
+    proposal_id: str,
+    created_at: datetime,
+    source: ProposalSource,
+    allowed_artifacts: list[str] | None = None,
 ) -> Proposal:
+    affected = list(draft.get("affected_artifacts", []))
+    # Fail closed on hallucinated paths (issues #43/#47 named files that do not
+    # exist in the template). Skipped when no ground truth is available.
+    artifacts.validate_affected_artifacts(affected, allowed_artifacts or [])
     return proposals.build_proposal(
         proposal_id=proposal_id,
         title=draft["title"],
         created_at=created_at,
         source=source,
         observation=Observation(**draft["observation"]),
-        affected_artifacts=list(draft.get("affected_artifacts", [])),
+        affected_artifacts=affected,
         suggested_change=SuggestedChange(summary=draft["suggested_change"]),
         validation=ProposalValidation(
             suggested_cases=list(draft.get("suggested_cases", [])),
@@ -128,12 +157,14 @@ def synthesize_proposal(
     """
     gateway = gateway or load_gateway()
     evidence = proposals.extract_run_evidence(run_dir)
-    draft = synthesize_draft(run_dir, model, gateway)
+    listing = template_listing()
+    draft = synthesize_draft(run_dir, model, gateway, listing)
     return draft_to_proposal(
         draft,
         proposal_id=f"HEP-{created_at.year}-000",
         created_at=created_at,
         source=ProposalSource(repository=repository, runs=[evidence]),
+        allowed_artifacts=listing,
     )
 
 
@@ -165,18 +196,25 @@ GROUP_SYSTEM_PROMPT = (
     "overlapping suggestions, keep the highest-signal changes, and unify the "
     "affected artifacts. Output ONLY a JSON object with keys: title (str), "
     "observation {failure_mode, expected_behavior, evidence_summary}, "
-    "affected_artifacts (list of exact repo paths under .github/ or adapters/"
-    "templates), suggested_change (str), suggested_cases (list of case ids), "
+    "affected_artifacts (list of exact repo paths copied VERBATIM from the "
+    "'Template file listing' block in the user message — never invent, combine, "
+    "or guess a path; a path not in that listing does not exist), "
+    "suggested_change (str), suggested_cases (list of case ids), "
     "success_criteria (list of {metric, operator in [lte,gte,eq,lt,gt], value}), "
     "confidence in [low,medium,high]. "
     "The user message opens with a 'Target surface' directive derived from the "
     "harness that produced these runs — your affected_artifacts MUST edit exactly "
     "that surface (a single harness's adapter, or the shared .github/ layer when "
-    "the evidence spans harnesses). "
+    "the evidence spans harnesses), using only paths from the listing. "
     "Each success_criteria.metric MUST be one of the lab's measurable metrics: "
     f"{_METRIC_CATALOG}. Do NOT invent metric names — the lab automatically fails "
     "any criterion whose metric it cannot compute. Express any goal none of these "
     "metrics can capture only as prose inside suggested_change. "
+    "success_criteria and suggested_cases run ONLY in the lab, never in the "
+    "template repo — so suggested_change MUST end with a short 'Template-side "
+    "acceptance:' list of checks the implementer can run locally in the template "
+    "(quality gate green, the named files carry the new wording, adapter copies "
+    "stay identical). "
     "Describe aggregate behavior only; never include run identifiers, case-run "
     "codes, secrets, tokens, local filesystem paths, hostnames, or raw logs — "
     "the input proposals are private and unsanitized, your output is public."
@@ -194,9 +232,15 @@ _GROUP_TOTAL_CLIP = 40000
 # syncs out to all of them. Generic tool names + repo paths — never private data.
 _HARNESS_SURFACE = {
     "claude": "the claude adapter (CLAUDE.md and .claude/ skills/subagents)",
-    "opencode": "the opencode adapter (AGENTS.md and opencode.json)",
-    "codex": "the codex adapter (AGENTS.md / Codex config)",
-    "antigravity": "the antigravity adapter (.agents/ workspace mirror)",
+    "opencode": (
+        "the opencode adapter (OPENCODE.md, opencode.json, and .opencode/ "
+        "plugin/agents)"
+    ),
+    "codex": "the codex adapter (AGENTS.md and .codex/ skills/agents)",
+    "antigravity": (
+        "the antigravity adapter (.agents/ workspace mirror and "
+        ".agents/rules/GEMINI.md)"
+    ),
 }
 _SHARED_SURFACE = "the governed .github/ layer (synced to every harness adapter)"
 
@@ -277,7 +321,11 @@ def _mask_run_ids(text: str, pseudonyms: dict[str, str]) -> str:
     return text
 
 
-def build_group_user_message(items: list[dict], audits: dict[str, str]) -> str:
+def build_group_user_message(
+    items: list[dict],
+    audits: dict[str, str],
+    listing: list[str] | None = None,
+) -> str:
     """Render selected proposals (+ optional per-run audit excerpts) as one prompt.
 
     ``items`` are unsanitized proposal snapshots ({title, kind, target, body,
@@ -298,6 +346,9 @@ def build_group_user_message(items: list[dict], audits: dict[str, str]) -> str:
         "Consolidate the following improvement proposals into one proposal.",
         directive,
     ]
+    listing_block = artifacts.render_listing_block(listing or [])
+    if listing_block:
+        blocks.append(listing_block)
     for index, item in enumerate(items, start=1):
         lines = [f"## Proposal {index}: {item.get('title', '')}"]
         for label, key in (
@@ -349,13 +400,15 @@ def synthesize_group_issue(
         audit_path = run_dir / "audit.md"
         if audit_path.exists():
             audits[run_dir.name] = audit_path.read_text(encoding="utf-8")
-    user_message = build_group_user_message(items, audits)
+    listing = template_listing()
+    user_message = build_group_user_message(items, audits, listing)
     draft = parse_draft(gateway(model, GROUP_SYSTEM_PROMPT, user_message))
     proposal = draft_to_proposal(
         draft,
         proposal_id=f"HEP-{created_at.year}-000",
         created_at=created_at,
         source=ProposalSource(repository=repository, runs=evidence_list),
+        allowed_artifacts=listing,
     )
     # Deterministic scope header from the selection's harness (secret-free, so it
     # is safe to prepend after sanitization) — the authoritative statement of

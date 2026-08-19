@@ -21,7 +21,7 @@ _DRAFT = {
         "expected_behavior": "Reframe the hypothesis after the retry budget.",
         "evidence_summary": "Seen in two independent runs.",
     },
-    "affected_artifacts": [".github/skills/systematic_debugging/SKILL.md"],
+    "affected_artifacts": [".github/skills/systematic_debugging.md"],
     "suggested_change": "Add an explicit retry budget and hypothesis reset rule.",
     "suggested_cases": ["systematic-debugging-v1"],
     "success_criteria": [

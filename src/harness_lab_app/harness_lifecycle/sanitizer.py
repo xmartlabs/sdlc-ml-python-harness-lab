@@ -68,6 +68,24 @@ def assert_clean(text: str) -> None:
         raise SanitizationError(f"Public output blocked; detected: {kinds}.")
 
 
+def mask_case_ids(cases: list[str]) -> list[str]:
+    """Stable ``case-N`` aliases for lab-internal case ids (sorted for order).
+
+    Case ids are lab-local benchmark imports; the real ids stay in the lab's
+    proposal records, only the aliases reach public output.
+    """
+    return [f"case-{index}" for index, _ in enumerate(sorted(cases), start=1)]
+
+
+# One-line reminder rendered wherever validation criteria go public: the
+# metrics/cases are computed by the lab's regression re-run, never by the
+# template repo (issue #47 read as an acceptance checklist for the implementer).
+VALIDATION_SCOPE_NOTE = (
+    "Executed by the lab against the released template tag — not reproducible "
+    "in the template repo. Case ids are lab-internal aliases."
+)
+
+
 def _render_success_criteria(proposal: Proposal) -> str:
     lines = []
     for c in proposal.validation.success_criteria:
@@ -84,7 +102,7 @@ def build_public_issue(proposal: Proposal) -> str:
     """
     obs = proposal.observation
     artifacts = "\n".join(f"- {a}" for a in proposal.affected_artifacts) or "- (none)"
-    cases = ", ".join(proposal.validation.suggested_cases) or "(none)"
+    cases = ", ".join(mask_case_ids(proposal.validation.suggested_cases)) or "(none)"
     condition_hashes = (
         "\n".join(f"- {r.condition_hash}" for r in proposal.source.runs) or "- (none)"
     )
@@ -104,7 +122,8 @@ _Harness improvement proposal {proposal.proposal_id}._
 ### Suggested change
 {proposal.suggested_change.summary}
 
-### Validation
+### Validation (lab-executed)
+_{VALIDATION_SCOPE_NOTE}_
 - cases: {cases}
 - success_criteria:
 {_render_success_criteria(proposal)}

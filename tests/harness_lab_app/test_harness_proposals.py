@@ -59,7 +59,7 @@ def _proposal(proposal_id: str = "HEP-2026-014") -> Proposal:
             expected_behavior="Reframe the hypothesis after the retry budget.",
             evidence_summary="Seen in two independent runs.",
         ),
-        affected_artifacts=[".github/skills/systematic_debugging/SKILL.md"],
+        affected_artifacts=[".github/skills/systematic_debugging.md"],
         suggested_change=SuggestedChange(
             summary="Add a retry budget and hypothesis reset rule."
         ),

@@ -17,7 +17,7 @@ _DRAFT = {
         "expected_behavior": "Reset the hypothesis after a retry budget.",
         "evidence_summary": "Seen across the debugging steps of one run.",
     },
-    "affected_artifacts": [".github/skills/systematic_debugging/SKILL.md"],
+    "affected_artifacts": [".github/skills/systematic_debugging.md"],
     "suggested_change": "Add an explicit retry budget and hypothesis reset rule.",
     "suggested_cases": ["systematic-debugging-v1"],
     "success_criteria": [
@@ -72,7 +72,7 @@ def test_synthesize_issue_markdown_is_sanitized(tmp_path: Path) -> None:
     )
     # Allowlisted content is present...
     assert "Reset the hypothesis after a retry budget." in markdown
-    assert ".github/skills/systematic_debugging/SKILL.md" in markdown
+    assert ".github/skills/systematic_debugging.md" in markdown
     # ...and private evidence (run id / local paths) is not surfaced.
     assert "dbg-K-001" not in markdown
     assert "/Users/marcos" not in markdown

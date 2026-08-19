@@ -155,8 +155,9 @@ def _render_affected(proposal: Proposal) -> str:
 
 
 def _render_validation(proposal: Proposal) -> str:
-    lines = ["cases:"]
-    lines += [f"  - {c}" for c in proposal.validation.suggested_cases] or ["  - (none)"]
+    lines = [f"({sanitizer.VALIDATION_SCOPE_NOTE})", "cases:"]
+    masked = sanitizer.mask_case_ids(proposal.validation.suggested_cases)
+    lines += [f"  - {c}" for c in masked] or ["  - (none)"]
     lines.append("success_criteria:")
     if proposal.validation.success_criteria:
         for c in proposal.validation.success_criteria:
@@ -217,7 +218,7 @@ def build_issue_form(
         ),
         FormField(
             "validation",
-            "Validation criteria",
+            "Validation criteria (lab-executed)",
             _render_validation(proposal),
             "textarea",
         ),

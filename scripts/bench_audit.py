@@ -153,6 +153,18 @@ _HARNESS_PROFILE: dict[str, str] = {
 }
 
 
+# The adapter file whose rules the audited agent actually saw, per harness.
+# Paths are relative to REPO_ROOT (the bench working tree mirrors the template's
+# adapter layout). An unmapped harness falls back to OPENCODE.md with an
+# explicit warning in the audit inputs.
+_HARNESS_RULES_FILE: dict[str, str] = {
+    "opencode": "OPENCODE.md",
+    "claude": "CLAUDE.md",
+    "codex": "AGENTS.md",
+    "antigravity": ".agents/rules/GEMINI.md",
+}
+
+
 def harness_from_metadata(metadata_text: str | None) -> str:
     """The harness id recorded in metadata.json (empty if absent)."""
     if not metadata_text:
@@ -340,8 +352,20 @@ def build_inputs(run: dict, out_dir: Path) -> dict:
     usage = read_text_if_exists(out_dir / "usage.json")
     diff = read_text_if_exists(out_dir / "diff.patch")
     prompt = read_text_if_exists(out_dir / "prompt.md")
-    rules = read_text_if_exists(REPO_ROOT / "OPENCODE.md")
     log_text, log_sources = gather_logs(out_dir)
+
+    # The rules corpus must match the harness that drove the run — auditing a
+    # claude/codex run against OPENCODE.md judges it by the wrong rulebook.
+    harness = detect_harness(metadata, log_text)
+    rules_name = _HARNESS_RULES_FILE.get(harness)
+    rules_warning = ""
+    if rules_name is None:
+        rules_name = "OPENCODE.md"
+        rules_warning = (
+            f"harness '{harness or 'unknown'}' has no mapped rules file; "
+            "defaulting to OPENCODE.md — treat rule-adherence findings with care"
+        )
+    rules = read_text_if_exists(REPO_ROOT / rules_name)
 
     return {
         "metadata": metadata,
@@ -349,6 +373,9 @@ def build_inputs(run: dict, out_dir: Path) -> dict:
         "diff": diff,
         "prompt": prompt,
         "rules": rules,
+        "rules_source": rules_name,
+        "rules_warning": rules_warning,
+        "harness": harness,
         "log_text": log_text,
         "log_sources": log_sources,
         "score": run.get("result_level"),
@@ -375,10 +402,10 @@ def build_user_message(run_id: str, inp: dict) -> str:
     if inp["usage"]:
         sections.append("\n## usage.json\n```json\n" + inp["usage"].strip() + "\n```")
     if inp["rules"]:
-        sections.append(
-            "\n## Corpus de reglas disponible (OPENCODE.md)\n"
-            + clip(inp["rules"].strip(), RULES_CLIP_CHARS)
-        )
+        rules_header = f"\n## Corpus de reglas disponible ({inp['rules_source']})\n"
+        if inp.get("rules_warning"):
+            rules_header += f"> ⚠️ {inp['rules_warning']}\n"
+        sections.append(rules_header + clip(inp["rules"].strip(), RULES_CLIP_CHARS))
     if inp["prompt"]:
         sections.append(
             "\n## Prompt entregado al agente (prompt.md)\n"
@@ -559,7 +586,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Would write:   {(out_dir / 'audit.md').relative_to(REPO_ROOT)}")
         return 0
 
-    harness = detect_harness(inp["metadata"], inp["log_text"])
+    harness = inp["harness"]
     preamble = harness_preamble(harness)
     print(f"🔎 Auditing {args.run} ({harness or 'harness?'}) with {auditor_model} ...")
     body = call_gateway(auditor_model, preamble + SYSTEM_PROMPT, user_msg)

@@ -82,7 +82,7 @@ def _proposal_with_secret_in_private_field() -> Proposal:
             expected_behavior="Reframe the hypothesis after the retry budget.",
             evidence_summary="Seen in two runs.",
         ),
-        affected_artifacts=[".github/skills/systematic_debugging/SKILL.md"],
+        affected_artifacts=[".github/skills/systematic_debugging.md"],
         suggested_change=SuggestedChange(summary="Add a retry budget."),
         confidence="high",
     )
@@ -96,7 +96,7 @@ def test_public_issue_omits_private_fields_and_passes_scan() -> None:
     assert "dbg-K-001" not in issue
     # Allowlisted content is present.
     assert "Reframe the hypothesis" in issue
-    assert ".github/skills/systematic_debugging/SKILL.md" in issue
+    assert ".github/skills/systematic_debugging.md" in issue
     # And the rendered issue passes the secret scan.
     sanitizer.assert_clean(issue)
 
@@ -107,3 +107,15 @@ def test_public_issue_raises_when_allowlisted_field_leaks() -> None:
     p.suggested_change.summary = "Set GATEWAY_TOKEN=supersecretvalue123 in env"
     with pytest.raises(sanitizer.SanitizationError):
         sanitizer.build_public_issue(p)
+
+
+def test_public_issue_masks_case_ids_and_declares_lab_scope() -> None:
+    p = _proposal_with_secret_in_private_field()
+    p.validation.suggested_cases = [
+        "instance_internetarchive__openlibrary-abc123-K-004",
+        "instance_ansible__ansible-def456-K-004",
+    ]
+    issue = sanitizer.build_public_issue(p)
+    assert "instance_internetarchive__openlibrary-abc123-K-004" not in issue
+    assert "case-1, case-2" in issue
+    assert sanitizer.VALIDATION_SCOPE_NOTE in issue
