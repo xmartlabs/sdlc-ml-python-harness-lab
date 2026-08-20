@@ -5,7 +5,7 @@
 #   desktop  -> Xvfb + fluxbox + x11vnc + noVNC on :6080 (see a pygame window)
 # The worker mounts an ephemeral COPY of the run's workspace at /work, so
 # exploring/running the code never mutates the archived artifact.
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

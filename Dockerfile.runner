@@ -2,7 +2,7 @@
 # container, launched by the Celery worker (one container per run, SWE-bench
 # style). Includes the opencode CLI + conductor plugin that the CLI flow
 # installs on the host via brew/npm (see the bench-run target in Makefile).
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
