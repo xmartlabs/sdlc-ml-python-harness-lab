@@ -6,7 +6,7 @@
 # the API on the same origin, which is what makes the session cookie and the
 # Origin check in session_middleware.py trivially correct (ADR-0015).
 
-FROM node:22-slim AS build
+FROM node:26-slim AS build
 
 WORKDIR /app/frontend
 
