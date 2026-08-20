@@ -50,3 +50,20 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # ADR-0024: nothing in CI builds a container, so an image bump arrives
+      # green by virtue of being untested. Interpreter and runtime lines move
+      # deliberately, together with the gate that verifies them — never as a
+      # standalone Dockerfile edit.
+      #
+      # Python is pinned to 3.11 in .python-version, requires-python, the ruff
+      # target-version, the classifiers, the CI job, and a uv.lock resolved for
+      # it. Moving the image alone would run an interpreter no gate executes.
+      - dependency-name: "python"
+        update-types:
+          ["version-update:semver-major", "version-update:semver-minor"]
+      # The Node major and `node-version` in docs-quality-guardrails.yml are one
+      # decision. Currently 24 (active LTS); majors are taken by hand so the
+      # deployment unit never lands on a Current release line.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
