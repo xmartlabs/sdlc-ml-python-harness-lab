@@ -1,0 +1,86 @@
+Agentic Harness Lab
+Copyright 2026 Marcos Soto
+
+This product includes software developed for the Agentic Harness Lab project.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+================================================================================
+THIRD-PARTY COMPONENTS
+================================================================================
+
+The Apache-2.0 license above covers the original work in this repository. It
+does NOT relicense the third-party material listed below: each component stays
+under whatever license its upstream author granted, and that license travels
+with it. This file exists so that the obligation is visible to anyone who
+redistributes this repository.
+
+--------------------------------------------------------------------------------
+1. Vendored agent skills
+--------------------------------------------------------------------------------
+
+Source of truth:   .github/skills-external/
+Generated mirrors: .agents/skills/, .claude/skills/, .codex/skills/,
+                   .opencode/skills/
+
+These directories contain skills authored by third parties and vendored into
+this repository by the sync engine (src/ml_python_base/skills_sync). The
+mirrors are generated copies of the same upstream content, so a redistribution
+of this repository redistributes each component five times. `skills-lock.json`
+records content hashes and sync timestamps; it does not record provenance.
+
+1.1 Superpowers skill collection
+    Upstream project: Superpowers (https://github.com/obra/superpowers)
+    Author:           Jesse Vincent (obra)
+
+    Components:
+      brainstorming
+      executing-plans
+      finishing-a-development-branch
+      requesting-code-review
+      subagent-driven-development
+      test-driven-development
+      using-git-worktrees
+      writing-clearly-and-concisely
+      writing-plans
+
+    Seven of these reference the upstream `superpowers:` skill namespace and
+    `~/.config/superpowers/` directly in their SKILL.md; `test-driven-
+    development` and `writing-clearly-and-concisely` are attributed to the same
+    collection by their sync origin rather than by in-file evidence.
+
+    UPSTREAM LICENSE: NOT YET CONFIRMED. No LICENSE file accompanied these
+    components when they were vendored, and none of them carries author or
+    license frontmatter. The upstream terms MUST be confirmed and recorded here
+    -- including the upstream copyright notice, if its license requires
+    retaining one -- before this repository is distributed outside the
+    organization.
+
+1.2 ui-ux-pro-max
+    Upstream project: not recorded at sync time.
+    Author:           not recorded at sync time.
+
+    UPSTREAM LICENSE: NOT YET CONFIRMED, and the provenance itself is unknown --
+    nothing in this repository records where this component was imported from.
+    Establish its origin and terms, or remove it, before external distribution.
+
+--------------------------------------------------------------------------------
+2. The Elements of Style
+--------------------------------------------------------------------------------
+
+File: .github/skills-external/writing-clearly-and-concisely/elements-of-style.md
+      (and its four generated mirrors)
+
+An adaptation of "The Elements of Style" by William Strunk Jr., first published
+1918. The original text is in the public domain in the United States. No
+restriction applies to its redistribution here.
+
+================================================================================
+
+Maintainers: when adding an external skill, record its upstream URL, author and
+license in this file at import time. Recovering provenance afterwards is the
+expensive path, as sections 1.1 and 1.2 show.

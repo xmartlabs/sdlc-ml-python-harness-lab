@@ -1,0 +1,61 @@
+task_id: tetris-v1
+version: "1"
+status: active
+category: game-build
+tags: [pygame, single-file, incremental]
+
+description: >
+  Build a playable Tetris game in Python using pygame.
+  Single file (main.py), starting from ml-python-base at a frozen commit.
+  Scoring is manual: run the game, observe behavior, record the functional level.
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+target_level: 10
+complexity: medium
+
+validation: manual
+validation_note: >
+  Run `python main.py` in the workspace and observe the window.
+  Score against scoring.md. See benchmarks/tetris/README.md for the full
+  operator workflow. Do not automate until level >= 2 is reliably reachable
+  across cells.
+
+# Objective validation: a headless smoke run establishes the floor (rubric
+# level_2 "runs without crashing"). The generated main.py honors BENCH_SMOKE=1
+# to start and exit without opening a real window. {workspace} is substituted
+# with workspace/<run_id> at validation time.
+validation_commands:
+  - "BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy timeout 45 python {workspace}/main.py"
+
+constraints:
+  - Single Python file: main.py
+  - pygame only, no external assets (sprites, sounds)
+  - Entry point: python main.py
+  - No modifications to the base repo outside main.py
+
+success_criteria:
+  level_0: no useful code produced
+  level_1: files generated but does not run
+  level_2: runs without crashing
+  level_3: opens a window
+  level_4: shows a piece
+  level_5: piece falls
+  level_6: lateral movement works
+  level_7: rotation works
+  level_8: collisions and lock work
+  level_9: clears lines and score
+  level_10: playable — score, game over, reasonable controls, no blocking bugs
+
+prompts:
+  naive:       benchmarks/tetris/prompt_naive.md        # variant id: tetris_naive_v1
+  incremental: benchmarks/tetris/prompt_incremental.md  # variant id: tetris_incremental_v1
+  conductor:   benchmarks/tetris/prompt_conductor.md    # variant id: tetris_conductor_v1
+  sdlc:        benchmarks/tetris/prompt_sdlc.md         # variant id: tetris_sdlc_v1
+  sdlc_full:   benchmarks/tetris/prompt_sdlc_full.md    # variant id: tetris_sdlc_full_v1
+
+experiment_matrix: benchmarks/tetris/runs.yaml
+scoring_rubric:    benchmarks/tetris/scoring.md
+results_table:     benchmarks/tetris/results.csv
+report:            reports/2026-06-tetris-v1.md

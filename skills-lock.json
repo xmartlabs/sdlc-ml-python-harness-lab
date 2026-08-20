@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "generatedAt": "2026-06-09T13:47:23Z",
+  "skills": {
+    "brainstorming": {
+      "source": "synced-local",
+      "sourceType": "directory",
+      "path": ".github/skills-external/brainstorming",
+      "skillFile": ".github/skills-external/brainstorming/SKILL.md",
+      "computedHash": "bba47904a7f6bbee3bf8a107ebbe84e65d392be683bbb898ded736b29e415f90",
+      "syncedAt": "2026-06-09T13:17:12Z"
+    },
+    "executing-plans": {
+      "source": "synced-local",
+      "sourceType": "directory",
+      "path": ".github/skills-external/executing-plans",
+      "skillFile": ".github/skills-external/executing-plans/SKILL.md",
+      "computedHash": "e2102f11631433939f162d383d769f8257d859d6639e0e14969cda3ef0a95eca",
+      "syncedAt": "2026-06-09T13:47:23Z"
+    },
+    "finishing-a-development-branch": {
+      "source": "synced-local",
+      "sourceType": "directory",
+      "path": ".github/skills-external/finishing-a-development-branch",
+      "skillFile": ".github/skills-external/finishing-a-development-branch/SKILL.md",
+      "computedHash": "5c8d4b59aedb14c94e2f5d787a3265e858e8f53d4ceffe7ff1c15878a52b0e91",
+      "syncedAt": "2026-06-09T13:47:23Z"
+    },
+    "requesting-code-review": {
+      "source": "synced-local",
+      "sourceType": "directory",
+      "path": ".github/skills-external/requesting-code-review",
+      "skillFile": ".github/skills-external/requesting-code-review/SKILL.md",
+      "computedHash": "5a3a44a3667800e2dc836829c6b92fada51e6dc58ac144ec05fe59f47d6bcd84",
+      "syncedAt": "2026-06-09T13:47:23Z"
+    },
+    "subagent-driven-development": {
+      "source": "synced-local",
+      "sourceType": "directory",
+      "path": ".github/skills-external/subagent-driven-development",
+      "skillFile": ".github/skills-external/subagent-driven-development/SKILL.md",
+      "computedHash": "905a2b9be59b734dbe166525ad31dcaaf712a75926135adee1f554557aba5744",
+      "syncedAt": "2026-06-09T13:47:23Z"
+    },
+    "test-driven-development": {
+      "source": "synced-local",
+      "sourceType": "directory",
+      "path": ".github/skills-external/test-driven-development",
+      "skillFile": ".github/skills-external/test-driven-development/SKILL.md",
+      "computedHash": "7dee67b4af6bdccc7a914ca34533184d64592d0f5b23aeae631538168db14994",
+      "syncedAt": "2026-06-09T13:47:23Z"
+    },
+    "ui-ux-pro-max": {
+      "source": "synced-local",
+      "sourceType": "directory",
+      "path": ".github/skills-external/ui-ux-pro-max",
+      "skillFile": ".github/skills-external/ui-ux-pro-max/SKILL.md",
+      "computedHash": "485e00c93759d7ef1d2ae22c4f46c68a1151f8cb8b2ebc9765907c74e6bca9e8",
+      "syncedAt": "2026-06-01T16:45:04Z"
+    },
+    "using-git-worktrees": {
+      "source": "synced-local",
+      "sourceType": "directory",
+      "path": ".github/skills-external/using-git-worktrees",
+      "skillFile": ".github/skills-external/using-git-worktrees/SKILL.md",
+      "computedHash": "085a45ee3de432bdb2768011591d9a882cb6c759e2317f379226451c5618fe8e",
+      "syncedAt": "2026-06-09T13:47:23Z"
+    },
+    "writing-clearly-and-concisely": {
+      "source": "synced-local",
+      "sourceType": "directory",
+      "path": ".github/skills-external/writing-clearly-and-concisely",
+      "skillFile": ".github/skills-external/writing-clearly-and-concisely/SKILL.md",
+      "computedHash": "1448ea19147b339ce37ae70551b233bb329d6bdfa46f0bf627b43b6133372233",
+      "syncedAt": "2026-06-09T13:47:23Z"
+    },
+    "writing-plans": {
+      "source": "synced-local",
+      "sourceType": "directory",
+      "path": ".github/skills-external/writing-plans",
+      "skillFile": ".github/skills-external/writing-plans/SKILL.md",
+      "computedHash": "4fd4627d2c02367879c0307d7249270bed633317ff9be82e926a6d57bf5d331b",
+      "syncedAt": "2026-06-09T13:47:23Z"
+    }
+  }
+}

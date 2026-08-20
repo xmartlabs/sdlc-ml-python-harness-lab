@@ -1,0 +1,24 @@
+# Gitleaks configuration for the pre-commit secret-scanning hook.
+#
+# Start from the upstream ruleset and subtract only what this repository can
+# prove is a false positive. Every entry below is justified; do not add path
+# exclusions, and never allowlist a value because it is "probably fine".
+
+[extend]
+useDefault = true
+
+# `virtual_key` in benchmarks/*/runs.yaml is a human-readable *label* for a
+# gateway key, not the key itself. See harnesses/metadata-standard.md ("The
+# `virtual_key` field in `runs.yaml` names the key per cell") and its only
+# consumer, scripts/create_run.py, which reads it as `tag_label`. The values
+# look like `bench-conductor-gpt55-qwen35b`; the hyphenated model names give
+# them enough entropy to trip the generic-api-key rule.
+#
+# Deliberately matched on the line only, with no `paths` entry. A `paths` key
+# here would be OR-ed with the regex by gitleaks and would silently exclude the
+# entire file from scanning, so a genuine credential added to the same
+# runs.yaml would go unreported.
+[[allowlists]]
+description = "runs.yaml virtual_key is a key label, not a key value"
+regexTarget = "line"
+regexes = ['''(?i)^\s*virtual_key\s*:\s*bench-[a-z0-9._-]+\s*$''']

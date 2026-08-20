@@ -1,0 +1,53 @@
+task_id: cli-textstats-v1
+version: "1"
+status: active
+category: agentic-build
+tags: [cli, single-file, stdlib, objective]
+
+description: >
+  Build a single-file Python CLI (main.py, stdlib only) that reads text from
+  stdin and reports simple statistics via subcommands. Objective validation: a
+  fixed set of input/output assertions runs against the produced main.py, so the
+  functional floor is scored automatically (no manual step needed to establish
+  "it works"). A realistic, self-contained agentic coding task for comparing
+  harnesses and models without any external dataset.
+
+# build_from_scratch: the agent works in a fresh workspace and produces main.py.
+# subject_repo is provenance only (not cloned), mirroring tetris-v1.
+subject_repo: ml-python-base
+
+target_level: 6
+complexity: low
+
+validation: objective
+validation_note: >
+  See the I/O contract in the prompt. Each validation command exercises one
+  subcommand with a fixed input and asserts the exact stdout, so a passing run
+  proves the core behavior. {workspace} is substituted at validation time.
+
+# Objective validation: exit-code assertions (not gameable by a self-check the
+# agent writes). Every command must exit 0. Uses only stdlib + POSIX shell.
+validation_commands:
+  - "test \"$(printf 'alpha beta gamma' | python {workspace}/main.py words)\" = \"3\""
+  - "test \"$(printf 'one\\n\\ntwo\\n' | python {workspace}/main.py lines)\" = \"2\""
+  - "test \"$(printf 'Cat cat dog' | python {workspace}/main.py unique)\" = \"2\""
+
+constraints:
+  - Single Python file: main.py
+  - Python standard library only (no third-party packages)
+  - Entry point: python main.py <subcommand>
+  - Reads the full input text from stdin
+  - Output is the integer result plus a trailing newline, nothing else
+
+success_criteria:
+  level_0: no useful code produced
+  level_1: files generated but does not run
+  level_2: runs without crashing on a subcommand
+  level_3: one subcommand returns the correct result
+  level_4: two subcommands correct
+  level_5: all three subcommands correct (all objective checks pass)
+  level_6: all checks pass, code is clean and handles empty input gracefully
+
+prompts:
+  naive: benchmarks/cli-textstats/prompt_naive.md
+  sdlc: benchmarks/cli-textstats/prompt_sdlc.md

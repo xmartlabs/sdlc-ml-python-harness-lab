@@ -1,0 +1,155 @@
+# Two ways to run the lab (ADR-0019):
+#
+#   make app-up        dev profile  — Vite on :5173, API published on :8009
+#   make app-up-prod   prod profile — nginx on :8080, API not published
+#
+# Every long-lived service restarts with the host and rotates its logs: an
+# always-on lab that streams run output fills a disk in weeks otherwise.
+
+# Anchors keep the policy in one place instead of six copies that drift apart.
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  api:
+    <<: [*restart, *logging]
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      HARNESS_LAB_REPO_ROOT: /app
+      HARNESS_LAB_DATABASE_URL: sqlite:////app/data/app/harness_lab.db
+      HARNESS_LAB_RUNNER_PYTHON: /opt/venv/bin/python
+      HARNESS_LAB_REDIS_URL: redis://redis:6379/0
+    volumes:
+      - .:/app
+    ports:
+      # Loopback by default. Authentication is only enforced once an admin
+      # password exists (see session_middleware.auth_enabled), so publishing on
+      # every interface would put an unauthenticated code-execution API on the
+      # LAN for anyone who has not run `make set-password` yet. Opt in with
+      # HARNESS_LAB_API_BIND_ADDR=0.0.0.0 — `make app-up-prod` keeps this on
+      # 127.0.0.1 regardless, because there nginx is the only LAN entrance.
+      #
+      # Only the *host* side is configurable. The container always listens on
+      # 8008, so nginx and the Vite proxy keep addressing `api:8008` inside the
+      # compose network no matter what a host publishes — a deploy whose 8009
+      # is already taken sets HARNESS_LAB_API_PORT and nothing else moves.
+      - "${HARNESS_LAB_API_BIND_ADDR:-127.0.0.1}:${HARNESS_LAB_API_PORT:-8009}:8008"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  redis:
+    <<: [*restart, *logging]
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    <<: [*restart, *logging]
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    # Concurrency is deliberately 1: bench_run.py mutates repo-root shared
+    # state (BENCH_CONTEXT.md, benchmarks/*/runs.yaml), same as the CLI flow.
+    command:
+      [
+        "celery",
+        "-A",
+        "harness_lab_app.celery_app",
+        "worker",
+        "-Q",
+        "runs",
+        "--loglevel=info",
+        "--concurrency=1",
+      ]
+    environment:
+      HARNESS_LAB_REPO_ROOT: /app
+      HARNESS_LAB_DATABASE_URL: sqlite:////app/data/app/harness_lab.db
+      HARNESS_LAB_RUNNER_PYTHON: /opt/venv/bin/python
+      HARNESS_LAB_REDIS_URL: redis://redis:6379/0
+      HARNESS_LAB_EXECUTION_BACKEND: docker
+      HARNESS_LAB_RUNNER_IMAGE: harness-lab-runner:latest
+      # Host path of the repo: runner containers are siblings created through
+      # the host daemon, so their bind mounts must use host paths.
+      HARNESS_LAB_HOST_REPO_ROOT: ${PWD}
+    volumes:
+      - .:/app
+      # Docker-out-of-docker: the worker launches one runner container per
+      # run through the host daemon. Root-equivalent host access — keep this
+      # mount on the worker service only.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # Build-only entry so `docker compose build runner` produces the image the
+  # worker launches per run; it is never started as a service.
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    image: harness-lab-runner:latest
+    profiles:
+      - build-only
+
+  # Build-only entry for the per-run validation sandbox image (web terminal /
+  # noVNC desktop). Launched on demand by the worker, never started here.
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    image: harness-lab-sandbox:latest
+    profiles:
+      - build-only
+
+  # Dev frontend: Vite with hot reload, source mounted from the host.
+  frontend:
+    <<: [*restart, *logging]
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    profiles:
+      - dev
+    environment:
+      VITE_API_BASE_URL: /api
+    volumes:
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # Prod frontend: the SPA baked into nginx, which also fronts /api so the
+  # browser sees a single origin. Bound to loopback by default — set
+  # HARNESS_LAB_BIND_ADDR=0.0.0.0 in .env only after `make set-password`.
+  frontend-prod:
+    <<: [*restart, *logging]
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend.prod
+    profiles:
+      - prod
+    ports:
+      - "${HARNESS_LAB_BIND_ADDR:-127.0.0.1}:8080:80"
+    depends_on:
+      api:
+        condition: service_healthy

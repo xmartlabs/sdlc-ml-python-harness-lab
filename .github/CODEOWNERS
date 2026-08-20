@@ -1,0 +1,36 @@
+# Code owners are requested for review automatically on every pull request.
+#
+# A GitHub *user* handle is used rather than an org team, because a CODEOWNERS
+# entry naming a team that does not exist — or that lacks write access to the
+# repository — is silently ignored, and the failure looks exactly like nobody
+# being assigned. Once an `xmartlabs` team owns this repo, replace @marcosdh1987
+# below with `@xmartlabs/<team>` and confirm on a test PR that the review
+# request actually appears.
+
+# Default owner for everything not matched more specifically below.
+*                       @marcosdh1987
+
+# Governance. These files define how every agent and contributor works in this
+# repo; a change here is a policy change, not a code change.
+/.github/architecture.md        @marcosdh1987
+/.github/standards.md           @marcosdh1987
+/.github/domain-boundaries.md   @marcosdh1987
+/.github/automation.md          @marcosdh1987
+/.github/orchestration.md       @marcosdh1987
+/.github/sdlc.md                @marcosdh1987
+/.github/portability.md         @marcosdh1987
+/.github/agents/                @marcosdh1987
+/.github/skills/                @marcosdh1987
+
+# Vendored third-party skills carry attribution obligations recorded in NOTICE.
+/.github/skills-external/       @marcosdh1987
+/NOTICE                         @marcosdh1987
+
+# Licensing, security posture, and CI. Getting these wrong is the expensive kind
+# of mistake.
+/LICENSE                        @marcosdh1987
+/SECURITY.md                    @marcosdh1987
+/.github/workflows/             @marcosdh1987
+/.gitleaks.toml                 @marcosdh1987
+/.gitignore                     @marcosdh1987
+/.dockerignore                  @marcosdh1987

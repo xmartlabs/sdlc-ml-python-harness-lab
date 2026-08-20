@@ -1,0 +1,52 @@
+# Dependabot keeps the four dependency surfaces of this repo current.
+#
+# Grouped and rate-limited on purpose: the point is a small number of reviewable
+# PRs, not a queue nobody merges. Every PR still has to pass the same read-only
+# gate as any other change (`make check`, `make check-sync`, `make check-frontend`).
+version: 2
+
+updates:
+  # Python. `uv` reads pyproject.toml and refreshes uv.lock, which is committed
+  # and is what CI installs from.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      python-dev:
+        # Lint/test tooling moves often and is low risk to batch.
+        patterns: ["ruff", "mypy", "bandit", "pytest*", "pre-commit"]
+      python-runtime:
+        patterns: ["*"]
+        exclude-patterns: ["ruff", "mypy", "bandit", "pytest*", "pre-commit"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # Pinned exactly to the ruff-pre-commit `rev` in .pre-commit-config.yaml.
+      # Bumping one without the other makes `make fix` and the hook fight over
+      # import order, so ruff is upgraded by hand in both files at once.
+      - dependency-name: "ruff"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      frontend:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Base images for the api, runner, sandbox, and frontend Dockerfiles.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"

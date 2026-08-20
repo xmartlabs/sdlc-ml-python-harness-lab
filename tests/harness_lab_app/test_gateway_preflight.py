@@ -1,0 +1,330 @@
+"""Preflight gateway probe: fail fast when a model's backend is provably down.
+
+Root cause this guards (runs K-004/K-005): a ``gateway/lmstudio-…`` executor
+whose LM Studio host is off — LiteLLM returns 5xx "Connection error" for every
+call and the run burns all its steps on opaque stream errors.
+"""
+
+from __future__ import annotations
+
+import io
+import urllib.error
+
+import pytest
+
+from harness_lab_app import gateway_models, opencode_overlay, run_service
+from harness_lab_app.gateway_models import probe_gateway_model
+from harness_lab_app.run_service import RunPreflightError, RunService
+from harness_lab_app.schemas import RunConfigCreate, RunCreate
+
+
+def _http_error(code: int, payload: str) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        url="https://gw/v1/chat/completions",
+        code=code,
+        msg="err",
+        hdrs=None,  # type: ignore[arg-type]
+        fp=io.BytesIO(payload.encode()),
+    )
+
+
+def test_probe_flags_backend_connection_error(monkeypatch):
+    error = _http_error(
+        500,
+        "litellm.InternalServerError: OpenAIException - Connection error."
+        "No fallback model group found for lmstudio-qwen3.6-35b-build",
+    )
+
+    def _raise(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(gateway_models.urllib.request, "urlopen", _raise)
+    detail = probe_gateway_model(
+        "gateway/lmstudio-qwen3.6-35b-build", base_url="https://gw/v1", token="t"
+    )
+    assert detail is not None and "connection error" in detail.lower()
+
+
+@pytest.mark.parametrize(
+    "raiser",
+    [
+        lambda: (_ for _ in ()).throw(TimeoutError("model loading")),
+        lambda: (_ for _ in ()).throw(urllib.error.URLError("gateway down")),
+    ],
+)
+def test_probe_fails_open_on_ambiguity(monkeypatch, raiser):
+    # Timeouts / unreachable gateway are ambiguous (JIT load, transient net):
+    # the probe must never block a possibly-runnable config.
+    monkeypatch.setattr(
+        gateway_models.urllib.request, "urlopen", lambda *_a, **_k: raiser()
+    )
+    assert probe_gateway_model("gateway/x", base_url="https://gw/v1", token="t") is None
+
+
+def test_probe_ignores_non_connection_http_errors(monkeypatch):
+    error = _http_error(401, "invalid api key")
+
+    def _raise(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(gateway_models.urllib.request, "urlopen", _raise)
+    assert probe_gateway_model("gateway/x", base_url="https://gw/v1", token="t") is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"error":{"message":"Invalid model identifier","code":"model_not_found"}}',
+        "The model `qwen3.6:35b` does not exist",
+    ],
+)
+def test_probe_blocks_when_the_backend_rejects_the_forwarded_name(monkeypatch, payload):
+    """Run tetris-v1-K-031: a wrong alias target used to pass as ambiguous.
+
+    LiteLLM forwarded ``qwen3.6:35b`` to LM Studio, the server answered
+    ``Invalid model identifier``, and this probe read the unfamiliar 4xx as
+    ambiguous and reported the config runnable. A named model the backend
+    rejects is the one thing a preflight must never wave through: no retry or
+    warm-up changes the answer.
+    """
+
+    def _raise(*_args, **_kwargs):
+        raise _http_error(400, payload)
+
+    monkeypatch.setattr(gateway_models.urllib.request, "urlopen", _raise)
+    detail = probe_gateway_model("gateway/x", base_url="https://gw/v1", token="t")
+    assert detail is not None
+    assert "rejected the model name" in detail
+    # And it points at the lane that cannot suffer this failure at all.
+    assert "LM Studio (direct, no gateway)" in detail
+
+
+def test_probe_asks_for_the_completion_budget_the_run_will_ask_for(monkeypatch):
+    """Run instance_qutebrowser…-K-003: preflight green, every real request refused.
+
+    The probe used to send ``max_tokens: 1``, which the gateway accepted.
+    opencode sends 32000 for every model that declares no output limit, which
+    LiteLLM refused for gpt-4o-mini (cap 16384) — so "validate config" showed
+    green for a configuration whose every request was going to fail. A probe
+    that does not ask for what the run will ask for approves a request the run
+    never makes.
+    """
+    import json
+
+    bodies: list[dict] = []
+
+    def _capture(req, timeout=0):
+        bodies.append(json.loads(req.data))
+        raise TimeoutError()  # fail open; the request shape is the assertion
+
+    monkeypatch.setattr(gateway_models.urllib.request, "urlopen", _capture)
+    probe_gateway_model("gateway/gpt-4o-mini", base_url="https://gw/v1", token="t")
+    assert bodies[0]["max_tokens"] == gateway_models.OPENCODE_COMPLETION_BUDGET
+
+
+def test_probe_asks_for_the_declared_limit_when_opencode_declares_one(monkeypatch):
+    """A model that declares ``limit.output`` is probed with *that* number.
+
+    Declaring the truth in ``opencode.json`` is the documented fix for the
+    K-003 rejection, so a probe that keeps asking for opencode's 32000 default
+    would block the very configuration it told the user to write.
+    """
+    import json
+
+    bodies: list[dict] = []
+
+    def _capture(req, timeout=0):
+        bodies.append(json.loads(req.data))
+        raise TimeoutError()
+
+    monkeypatch.setattr(gateway_models.urllib.request, "urlopen", _capture)
+    probe_gateway_model(
+        "gateway/gpt-4o-mini", base_url="https://gw/v1", token="t", budget=16384
+    )
+    assert bodies[0]["max_tokens"] == 16384
+
+
+def test_declared_output_limit_reads_the_tracked_opencode_config(tmp_path):
+    """The number the probe must use comes from the same file opencode reads."""
+    import json as _json
+
+    (tmp_path / "opencode.json").write_text(
+        _json.dumps(
+            {
+                "provider": {
+                    "gateway": {
+                        "models": {
+                            "gpt-4o-mini": {
+                                "limit": {"context": 128000, "output": 16384}
+                            },
+                            "gpt-4o": {"name": "no limit declared"},
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert opencode_overlay.declared_output_limit(tmp_path, "gpt-4o-mini") == 16384
+    # Undeclared stays undeclared: the caller falls back to opencode's default.
+    assert opencode_overlay.declared_output_limit(tmp_path, "gpt-4o") is None
+    assert (
+        opencode_overlay.declared_output_limit(tmp_path, "gateway/gpt-4o-mini") == 16384
+    )
+
+
+def test_probe_blocks_a_model_whose_completion_cap_is_below_the_budget(monkeypatch):
+    """The K-003 rejection, heard at preflight instead of after queueing."""
+    error = _http_error(
+        400,
+        "litellm.BadRequestError: OpenAIException - max_tokens is too large: "
+        "32000. This model supports at most 16384 completion tokens, whereas "
+        "you provided 32000.",
+    )
+
+    def _raise(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(gateway_models.urllib.request, "urlopen", _raise)
+    detail = probe_gateway_model(
+        "gateway/gpt-4o-mini", base_url="https://gw/v1", token="t"
+    )
+    assert detail is not None
+    assert "completion budget" in detail
+    # The provider's own numbers travel with the verdict...
+    assert "16384" in detail
+    # ...and the fix is named, on both of its ends.
+    assert "gateway" in detail and "opencode.json" in detail
+
+
+def _config(model: str = "gateway/lmstudio-qwen3.6-35b-build") -> RunCreate:
+    return RunCreate(
+        run_id="probe-run",
+        config=RunConfigCreate(
+            case_id="tetris-v1", prompt_variant="sdlc", executor_model=model
+        ),
+    )
+
+
+def test_preflight_rejects_when_backend_is_down(session, monkeypatch):
+    monkeypatch.delenv("HARNESS_LAB_DISABLE_GATEWAY_PROBE", raising=False)
+    service = RunService(session)
+    monkeypatch.setattr(
+        service, "_probe_gateway_executor", lambda *_a: "backend unreachable"
+    )
+    with pytest.raises(RunPreflightError, match="unreachable"):
+        service.create_run(_config())
+
+
+def test_preflight_rejects_a_model_opencode_cannot_route(session, monkeypatch):
+    """A model the gateway serves but opencode has no provider entry for.
+
+    This is the failure the web model catalog exists to prevent: it used to
+    surface only after the run had started burning steps.
+    """
+    monkeypatch.delenv("HARNESS_LAB_DISABLE_GATEWAY_PROBE", raising=False)
+    monkeypatch.setattr(
+        opencode_overlay, "routable_model_ids", lambda _root: {"gpt-5.5"}
+    )
+    with pytest.raises(RunPreflightError, match="not routable"):
+        RunService(session).create_run(_config("gateway/never-declared"))
+
+
+def test_preflight_accepts_a_model_the_overlay_makes_routable(session, monkeypatch):
+    monkeypatch.delenv("HARNESS_LAB_DISABLE_GATEWAY_PROBE", raising=False)
+    monkeypatch.setattr(
+        opencode_overlay, "routable_model_ids", lambda _root: {"brand-new"}
+    )
+    service = RunService(session)
+    monkeypatch.setattr(service, "_probe_gateway_executor", lambda *_a: None)
+
+    run = service.create_run(_config("gateway/brand-new"))
+    assert run.run_id == "probe-run"
+
+
+def test_preflight_fails_open_when_the_routing_map_is_unreadable(session, monkeypatch):
+    """An unreadable opencode.json must not block every run."""
+    monkeypatch.delenv("HARNESS_LAB_DISABLE_GATEWAY_PROBE", raising=False)
+    monkeypatch.setattr(opencode_overlay, "routable_model_ids", lambda _root: set())
+    service = RunService(session)
+    monkeypatch.setattr(service, "_probe_gateway_executor", lambda *_a: None)
+
+    assert service.create_run(_config("gateway/anything")).run_id == "probe-run"
+
+
+def test_preflight_env_kill_switch_skips_probe(session, monkeypatch):
+    # The autouse fixture sets the kill switch; the probe must not run at all.
+    called = []
+    monkeypatch.setattr(
+        gateway_models,
+        "probe_gateway_model",
+        lambda *_a, **_k: called.append(1) or "down",
+    )
+    run = RunService(session).create_run(_config())
+    assert run.run_id == "probe-run"
+    assert called == []
+
+
+# -- context window gate -----------------------------------------------------
+
+
+def _probe_result(status: str, context_tokens: int | None = None):
+    from harness_lab_app.gateway_models import ContextProbeResult
+
+    return ContextProbeResult(
+        model="m",
+        status=status,
+        required_tokens=32768,
+        context_tokens=context_tokens,
+        prompt_tokens=None,
+        detail="probe says " + status,
+    )
+
+
+def test_preflight_rejects_a_context_window_too_small_for_the_harness(
+    session, monkeypatch
+):
+    """Run K-020: LM Studio auto-loaded an 8k window and all 4432 steps died.
+
+    The harness system prompt alone is ~13.7k tokens, so the model rejected
+    every single call in 0.4s. Two and a half hours of wall clock for nothing —
+    which is why this is a hard gate, not a warning.
+    """
+    monkeypatch.delenv("HARNESS_LAB_DISABLE_GATEWAY_PROBE", raising=False)
+    monkeypatch.setattr(run_service, "read_env_file_value", lambda _k: "https://gw/v1")
+    monkeypatch.setattr(
+        gateway_models,
+        "probe_model_context_cached",
+        lambda *_a, **_k: _probe_result("insufficient", 8192),
+    )
+    service = RunService(session)
+    monkeypatch.setattr(service, "_probe_gateway_executor", lambda *_a: None)
+    with pytest.raises(RunPreflightError, match="8192"):
+        service.create_run(_config())
+
+
+@pytest.mark.parametrize("status", ["ok", "unknown"])
+def test_the_context_gate_only_blocks_on_a_proven_shortfall(
+    session, monkeypatch, status
+):
+    """Fail open: an inconclusive probe must never stop a runnable config."""
+    monkeypatch.delenv("HARNESS_LAB_DISABLE_GATEWAY_PROBE", raising=False)
+    monkeypatch.setattr(
+        gateway_models,
+        "probe_model_context_cached",
+        lambda *_a, **_k: _probe_result(status),
+    )
+    service = RunService(session)
+    monkeypatch.setattr(service, "_probe_gateway_executor", lambda *_a: None)
+    assert service.create_run(_config()).run_id == "probe-run"
+
+
+def test_the_context_gate_honours_the_kill_switch(session, monkeypatch):
+    called: list[int] = []
+    monkeypatch.setattr(
+        gateway_models,
+        "probe_model_context_cached",
+        lambda *_a, **_k: called.append(1) or _probe_result("insufficient", 8192),
+    )
+    assert RunService(session).create_run(_config()).run_id == "probe-run"
+    assert called == []

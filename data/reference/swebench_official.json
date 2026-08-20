@@ -1,0 +1,58 @@
+[
+  {
+    "dataset": "verified",
+    "agent": "Lingxi v1.5",
+    "model": "Kimi K2",
+    "pct_resolved": 71.2,
+    "date": "2025-10-14",
+    "source_url": "https://www.swebench.com/"
+  },
+  {
+    "dataset": "verified",
+    "agent": "OpenHands",
+    "model": "Qwen3-Coder-480B-A35B-Instruct",
+    "pct_resolved": 69.6,
+    "date": "2025-08-05",
+    "source_url": "https://www.swebench.com/"
+  },
+  {
+    "dataset": "verified",
+    "agent": "mini-SWE-agent",
+    "model": "Kimi K2 Thinking",
+    "pct_resolved": 63.4,
+    "date": "2025-12-10",
+    "source_url": "https://www.swebench.com/"
+  },
+  {
+    "dataset": "verified",
+    "agent": "mini-SWE-agent",
+    "model": "Minimax M2",
+    "pct_resolved": 61.0,
+    "date": "2025-11-24",
+    "source_url": "https://www.swebench.com/"
+  },
+  {
+    "dataset": "verified",
+    "agent": "EntroPO + R2E",
+    "model": "Qwen3-Coder-30B-A3B-Instruct",
+    "pct_resolved": 60.4,
+    "date": "2025-09-01",
+    "source_url": "https://www.swebench.com/"
+  },
+  {
+    "dataset": "verified",
+    "agent": "mini-SWE-agent",
+    "model": "DeepSeek V3.2 Reasoner",
+    "pct_resolved": 60.0,
+    "date": "2025-12-01",
+    "source_url": "https://www.swebench.com/"
+  },
+  {
+    "dataset": "verified",
+    "agent": "mini-SWE-agent",
+    "model": "Devstral small (2512)",
+    "pct_resolved": 56.4,
+    "date": "2025-12-09",
+    "source_url": "https://www.swebench.com/"
+  }
+]

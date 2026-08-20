@@ -1,0 +1,43 @@
+# Sandbox image: an in-platform, per-run validation environment. One image, two
+# modes selected by the MODE env var (set by the worker when it launches a
+# container per run + kind):
+#   terminal -> ttyd web shell on :7681 (headless: pytest, python, inspect)
+#   desktop  -> Xvfb + fluxbox + x11vnc + noVNC on :6080 (see a pygame window)
+# The worker mounts an ephemeral COPY of the run's workspace at /work, so
+# exploring/running the code never mutates the archived artifact.
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_LINK_MODE=copy \
+    PATH="/opt/venv/bin:${PATH}" \
+    DISPLAY=:0 \
+    MODE=terminal
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl git bash procps \
+        xvfb x11vnc fluxbox xterm novnc websockify \
+    && rm -rf /var/lib/apt/lists/*
+
+# ttyd static binary (web terminal), architecture-aware (arm64 on Apple Silicon).
+ARG TTYD_VERSION=1.7.7
+RUN arch="$(dpkg --print-architecture)"; \
+    case "$arch" in amd64) t=x86_64 ;; arm64) t=aarch64 ;; *) t=x86_64 ;; esac; \
+    curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${t}" \
+        -o /usr/local/bin/ttyd \
+    && chmod +x /usr/local/bin/ttyd
+
+# uv for editable installs inside the sandbox (SWE-bench: uv pip install -e .);
+# pygame so the Tetris (build_from_scratch) workspace can run in desktop mode.
+RUN pip install --no-cache-dir uv \
+    && uv venv /opt/venv \
+    && uv pip install --python /opt/venv/bin/python --no-cache pygame
+
+COPY scripts/sandbox_entrypoint.sh /usr/local/bin/sandbox-entrypoint.sh
+RUN chmod +x /usr/local/bin/sandbox-entrypoint.sh
+
+WORKDIR /work
+EXPOSE 7681 6080
+ENTRYPOINT ["/usr/local/bin/sandbox-entrypoint.sh"]

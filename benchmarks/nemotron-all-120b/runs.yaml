@@ -1,0 +1,84 @@
+experiment_id: nemotron-all-120b
+benchmark_id: tetris-v1
+
+runs:
+  - run_id: tetris-v1-I-001
+    benchmark_id: tetris-v1
+    experiment_id: nemotron-all-120b
+    case_id: tetris-v1
+    methodology: conductor-nemotron-homogeneous
+    harness: opencode-conductor
+    planner_model: nemotron-super-120b
+    executor_model: nemotron-super-120b
+    gateway_model_aliases: [gateway/nemotron-120b-planner, gateway/nemotron-120b-executor]
+    prompt_variant: nemotron_planner_v1
+    langfuse_session_id: bench-tetris-v1-I-001
+    estimated_input_tokens:
+    estimated_output_tokens:
+    actual_input_tokens:
+    actual_output_tokens:
+    estimated_cost_usd:
+    actual_cost_usd:
+    total_wall_time_minutes:
+    turns:
+    human_interventions:
+    functional_score:
+    engineering_score:
+    reproducibility_score:
+    verdict:
+    recommendation:
+    status: pending
+
+  - run_id: tetris-v1-I-002
+    benchmark_id: tetris-v1
+    experiment_id: nemotron-all-120b
+    case_id: tetris-v1
+    methodology: conductor-nemotron-homogeneous
+    harness: opencode-conductor
+    planner_model: nemotron-super-120b
+    executor_model: nemotron-super-120b
+    gateway_model_aliases: [gateway/nemotron-120b-planner, gateway/nemotron-120b-executor]
+    prompt_variant: nemotron_planner_v1
+    langfuse_session_id: bench-tetris-v1-I-002
+    estimated_input_tokens:
+    estimated_output_tokens:
+    actual_input_tokens:
+    actual_output_tokens:
+    estimated_cost_usd:
+    actual_cost_usd:
+    total_wall_time_minutes:
+    turns:
+    human_interventions:
+    functional_score:
+    engineering_score:
+    reproducibility_score:
+    verdict:
+    recommendation:
+    status: pending
+
+  - run_id: tetris-v1-I-003
+    benchmark_id: tetris-v1
+    experiment_id: nemotron-all-120b
+    case_id: tetris-v1
+    methodology: conductor-nemotron-homogeneous
+    harness: opencode-conductor
+    planner_model: nemotron-super-120b
+    executor_model: nemotron-super-120b
+    gateway_model_aliases: [gateway/nemotron-120b-planner, gateway/nemotron-120b-executor]
+    prompt_variant: nemotron_planner_v1
+    langfuse_session_id: bench-tetris-v1-I-003
+    estimated_input_tokens:
+    estimated_output_tokens:
+    actual_input_tokens:
+    actual_output_tokens:
+    estimated_cost_usd:
+    actual_cost_usd:
+    total_wall_time_minutes:
+    turns:
+    human_interventions:
+    functional_score:
+    engineering_score:
+    reproducibility_score:
+    verdict:
+    recommendation:
+    status: pending

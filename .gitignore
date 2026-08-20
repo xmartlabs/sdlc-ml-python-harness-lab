@@ -1,0 +1,115 @@
+.venv/
+venv/
+env/
+.env
+
+# Python cache and compiled artifacts
+*.pyc
+__pycache__/
+dash/__pycache__/
+webapp01/__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments
+instance/
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Build and distribution
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Linting and code quality
+.mypy_cache/
+.ruff_cache/
+.pylint.d/
+security-report.json
+bandit-report.json
+semgrep-report.json
+
+# Local tool/agent configuration (per-developer, never shared)
+#
+# `.claude/settings.local.json` holds machine-specific gateway endpoints and
+# per-developer API keys. It was previously only covered by an individual's
+# global gitignore, which does not protect anyone who clones this repo.
+.claude/settings.local.json
+.codex/settings.local.json
+.opencode/settings.local.json
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Promptflow temps
+.promptflow/
+
+# Brainstorming visual companion sessions
+.superpowers/
+
+# Benchmark active workspace (cleaned up by make bench-close; archived to data/runs/)
+/workspace/
+BENCH_CONTEXT.md
+
+# Milvus temps
+milvus/volumes/*
+volumes/*
+
+# App logs
+flow/logger/data/*
+notebooks/memory/data/*
+notebooks/chat_history.db
+chat_history.db
+notebooks/azure-sdk.ipynb
+notebooks/data/users.db
+
+# LangGraph
+.langgraph_api/
+
+# Logger data
+src/logger/data/*
+
+# Local web app MVP
+data/app/
+# SWE-bench Pro eval staging (containerized run_script/parser scratch)
+data/tmp/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# CI/CD temps
+.venv-ci/
+test-reports/
+
+# Evaluation results
+notebooks/data/evaluation/results/*
+notebooks/data/experiments/*
+
+# OS files
+.DS_Store
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+.pylintrc
+
+# Harness lifecycle candidate worktrees (isolated; never committed on main)
+.worktrees/
+
+
+# Benchmark scratch reports
+bench_report_*.txt
+
+# SWE-bench subject repos cloned under benchmarks/ (never a submodule)
+/benchmarks/*__*/

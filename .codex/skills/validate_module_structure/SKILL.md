@@ -1,0 +1,1 @@
+../../../.github/skills/validate_module_structure.md

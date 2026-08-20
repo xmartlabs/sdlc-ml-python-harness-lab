@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a change to the harness lab.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        What you are trying to do that the repo makes hard today. Describe the
+        situation, not the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What you would add or change, and roughly where it would live.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Harness adapters / benchmark runs
+        - Web app (API or frontend)
+        - Agent skills and governance
+        - Build, CI, or tooling
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Delete this if you have not considered any; do not pad it.

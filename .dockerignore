@@ -1,0 +1,38 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+.mypy_cache
+htmlcov
+frontend/node_modules
+frontend/dist
+frontend/.vite
+.superpowers
+workspace
+data/app
+
+# Run artifacts: 15 GB and growing, with no build-time consumer. The services
+# that read them get the real directory through the compose bind mount
+# (`- .:/app`), so keeping them out of the build context costs nothing at
+# runtime and stops every `docker build` from shipping the archive to the
+# daemon.
+data/runs
+data/tmp
+
+# Harness lifecycle candidate worktrees — never part of an image.
+.worktrees
+
+# Local tool/agent configuration. Machine-specific and secret-bearing
+# (gateway endpoints, per-developer API keys); nothing in the image reads it.
+.claude/settings.local.json
+
+# Local scan and coverage output.
+.coverage
+security-report.json
+bandit-report.json
+semgrep-report.json
+
+# NOTE: `.env` is deliberately NOT excluded. See SECURITY.md, "Credentials and
+# the image boundary" — run containers need it to authenticate the harness
+# under test, and excluding it here breaks Claude Code inside the runner.

@@ -1,0 +1,36 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_LINK_MODE=copy \
+    PATH="/opt/venv/bin:${PATH}"
+
+WORKDIR /app
+
+# git + docker CLI (client only): the SWE-bench Pro lane provisions workspaces
+# from per-instance images and runs containerized validation — the worker
+# shells out to `docker` against the socket mounted on the worker service only
+# (docs/design-swe-bench-pro-lane.md). The api service never uses either.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends git curl ca-certificates; \
+    arch="$(uname -m)"; \
+    curl -fsSL "https://download.docker.com/linux/static/stable/${arch}/docker-27.5.1.tgz" \
+      | tar -xz --strip-components=1 -C /usr/local/bin docker/docker; \
+    apt-get purge -y curl; \
+    apt-get autoremove -y; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock ./
+COPY README.md ./README.md
+COPY src ./src
+RUN uv sync --no-dev --frozen || uv sync --no-dev
+
+COPY . .
+
+EXPOSE 8008
+
+CMD ["uvicorn", "harness_lab_app.api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8008", "--log-level", "info"]

@@ -1,0 +1,43 @@
+name: Bug report
+description: Something behaves differently than documented.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >-
+        The exact commands. If it involves a benchmark run, include the harness
+        and model, and the `runs.yaml` cell if you have one.
+      placeholder: |
+        1. make install
+        2. make bench-open RUN=...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: >-
+        Error text or logs. Redact API keys, gateway URLs, and LAN addresses
+        before pasting — this is a public tracker.
+      render: shell
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: "OS, Python version, and whether you ran on the host or in Docker."
+      placeholder: "macOS 15.5, Python 3.11.9, docker compose"
+    validations:
+      required: true

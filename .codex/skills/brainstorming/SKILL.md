@@ -1,0 +1,1 @@
+../../../.github/skills-external/brainstorming/SKILL.md

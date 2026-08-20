@@ -1,0 +1,60 @@
+# Runner image: executes exactly one benchmark run (scripts/bench_run.py) per
+# container, launched by the Celery worker (one container per run, SWE-bench
+# style). Includes the opencode CLI + conductor plugin that the CLI flow
+# installs on the host via brew/npm (see the bench-run target in Makefile).
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_LINK_MODE=copy \
+    # This container has no display, so say so rather than leaving every SDL
+    # program to discover it. Without this a pygame app opens a window that
+    # never closes, and the agent's shell waits on it forever.
+    SDL_VIDEODRIVER=dummy \
+    SDL_AUDIODRIVER=dummy \
+    PATH="/opt/venv/bin:${PATH}"
+
+# node 20 is required by opencode and the conductor plugin.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl git \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock ./
+COPY README.md ./README.md
+COPY src ./src
+RUN uv sync --no-dev --frozen || uv sync --no-dev
+
+# pygame is not an app dependency; it is the runtime the build_from_scratch
+# (Tetris) case needs for its headless objective validation (SDL dummy driver).
+# jinja2 lives in the dev group (skills_sync renderer), but bench_run needs the
+# renderer inside the container for per-run skill ablation (ADR-0011).
+RUN uv pip install --python /opt/venv/bin/python --no-cache pygame jinja2
+
+# opencode CLI (host equivalent: brew install anomalyco/tap/opencode) and the
+# conductor plugin the Makefile installs into ~/.config/opencode.
+ARG OPENCODE_VERSION=latest
+RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" \
+    && mkdir -p /root/.config/opencode \
+    && npm install --prefix /root/.config/opencode opencode-conductor-plugin \
+    && opencode --version
+
+# Claude Code CLI so the `claude` harness runs inside the container too (whole
+# lab in Docker). Auth comes from .env at runtime — CLAUDE_CODE_OAUTH_TOKEN
+# (long-lived subscription token from `claude setup-token`) or ANTHROPIC_API_KEY.
+# See docs/harness-adapters.md.
+RUN npm install -g @anthropic-ai/claude-code && claude --version
+
+# Fallback copy of the repo; at runtime the host repo is bind-mounted over /app
+# so runs.yaml/workspace/data land on the host filesystem.
+COPY . .
+
+# The command is supplied per run by the executor, e.g.:
+#   /opt/venv/bin/python scripts/bench_run.py --case tetris-v1 --run ... --score-mode manual
+CMD ["/opt/venv/bin/python", "scripts/bench_run.py", "--help"]

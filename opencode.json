@@ -1,0 +1,112 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["OPENCODE.md", "LOCAL_AGENT.md", "BENCH_CONTEXT.md"],
+  "model": "{env:OPENCODE_MODEL}",
+  "small_model": "{env:OPENCODE_SMALL_MODEL}",
+  "agent": {
+    "plan": {
+      "model": "{env:OPENCODE_MODEL_PLAN}",
+      "temperature": 0.2
+    },
+    "build": {
+      "model": "{env:OPENCODE_MODEL}",
+      "temperature": 0.2
+    },
+    "conductor": {
+      "model": "{env:OPENCODE_MODEL_PLAN}",
+      "temperature": 0.2
+    }
+  },
+  "provider": {
+    "gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "AI Gateway (LiteLLM :4000)",
+      "options": {
+        "baseURL": "{env:GATEWAY_BASE_URL}",
+        "apiKey": "{env:GATEWAY_TOKEN}"
+      },
+      "models": {
+        "lmstudio-qwen3.6-35b-build": { "name": "Qwen3.6 35B build (local, capped)" },
+        "lmstudio-qwen3.6-27b-build": { "name": "Qwen3.6 27B build (local, capped)" },
+        "ollama-qwen3.6-35b-build": { "name": "Qwen3.6 35B build (Ollama, capped)" },
+        "ollama-qwen3.6-27b-build": { "name": "Qwen3.6 27B build (Ollama, capped)" },
+        "lmstudio-qwen3.5-9b": { "name": "Qwen3.5 9B (local, direct)" },
+        "gpt-5.5": { "name": "GPT-5.5 (cloud, plan — default)", "limit": {"context": 1050000, "output": 128000} },
+        "gpt-5": { "name": "GPT-5 (cloud, plan — cheaper)", "limit": {"context": 272000, "output": 128000} },
+        "claude-sonnet-4.6": { "name": "Claude Sonnet 4.6 (cloud, plan — last resort, Bedrock ~2x)" },
+        "nim-nemotron-super-120b": { "name": "Nemotron Super 120B (NVIDIA NIM, via gateway)" },
+        "auto": { "name": "Auto router (complexity-tiered)" },
+        "bedrock-claude-fable-5": { "name": "bedrock-claude-fable-5" },
+        "claude-fable-5": { "name": "claude-fable-5" },
+        "claude-haiku-4-5-20251001": { "name": "claude-haiku-4-5-20251001" },
+        "claude-haiku-4.5": { "name": "claude-haiku-4.5" },
+        "claude-haiku-4.5-oauth": { "name": "claude-haiku-4.5-oauth" },
+        "claude-opus-4-8": { "name": "claude-opus-4-8" },
+        "claude-opus-4.8": { "name": "claude-opus-4.8" },
+        "claude-opus-4.8-oauth": { "name": "claude-opus-4.8-oauth" },
+        "claude-sonnet": { "name": "claude-sonnet" },
+        "claude-sonnet-5": { "name": "claude-sonnet-5" },
+        "claude-sonnet-5-oauth": { "name": "claude-sonnet-5-oauth" },
+        "gemini-3.1-flash-lite": { "name": "gemini-3.1-flash-lite" },
+        "gemini-3.5-flash": { "name": "gemini-3.5-flash" },
+        "gpt-4o": { "name": "gpt-4o", "limit": {"context": 128000, "output": 16384} },
+        "gpt-4o-mini": { "name": "gpt-4o-mini", "limit": {"context": 128000, "output": 16384} },
+        "gpt-5.4-mini": { "name": "gpt-5.4-mini", "limit": {"context": 272000, "output": 128000} },
+        "gpt-5.4-nano": { "name": "gpt-5.4-nano", "limit": {"context": 272000, "output": 128000} },
+        "lmstudio-gemma4-31b": { "name": "lmstudio-gemma4-31b" },
+        "lmstudio-gpt-oss-20b": { "name": "lmstudio-gpt-oss-20b" },
+        "lmstudio-qwen3-coder": { "name": "lmstudio-qwen3-coder" },
+        "lmstudio-qwen3.6-27b": { "name": "lmstudio-qwen3.6-27b" },
+        "lmstudio-qwen3.6-35b": { "name": "lmstudio-qwen3.6-35b" },
+        "nim-kimi-k2.6": { "name": "nim-kimi-k2.6" },
+        "nim-llama3.3-70b": { "name": "nim-llama3.3-70b" },
+        "nim-llama4-maverick-17b": { "name": "nim-llama4-maverick-17b" },
+        "nim-nemotron-ultra-550b": { "name": "nim-nemotron-ultra-550b" },
+        "nim-qwen3-next-80b": { "name": "nim-qwen3-next-80b" },
+        "ollama-gemma4-26b": { "name": "ollama-gemma4-26b" },
+        "ollama-gpt-oss-20b": { "name": "ollama-gpt-oss-20b" },
+        "ollama-llama3.2-vision": { "name": "ollama-llama3.2-vision" },
+        "ollama-qwen3-coder": { "name": "ollama-qwen3-coder" },
+        "ollama-qwen3.6-27b": { "name": "ollama-qwen3.6-27b" },
+        "ollama-qwen3.6-35b": { "name": "ollama-qwen3.6-35b" }
+      }
+    },
+    "nvidia": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "NVIDIA NIM (free cloud)",
+      "options": {
+        "baseURL": "https://integrate.api.nvidia.com/v1",
+        "apiKey": "{env:NVIDIA_API_KEY}"
+      },
+      "models": {
+        "nemotron-super-120b": {
+          "name": "Nemotron Super 120B (NVIDIA NIM, free tier)",
+          "modelId": "nvidia/nemotron-3-super-120b-a12b"
+        }
+      }
+    },
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (self-hosted)",
+      "options": {
+        "baseURL": "{env:OLLAMA_BASE_URL}"
+      },
+      "models": {
+        "qwen2.5-coder:32b": { "name": "Qwen2.5 Coder 32B (large tier)" },
+        "qwen2.5-coder:14b": { "name": "Qwen2.5 Coder 14B (mid tier)" },
+        "llama3.1:8b": { "name": "Llama 3.1 8B (small tier)" }
+      }
+    },
+    "lmstudio": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LM Studio (self-hosted)",
+      "options": {
+        "baseURL": "{env:LMSTUDIO_BASE_URL}"
+      },
+      "models": {
+        "qwen/qwen3-coder-30b": { "name": "Qwen3 Coder 30B (LM Studio)" },
+        "openai/gpt-oss-20b": { "name": "GPT-OSS 20B (LM Studio)" }
+      }
+    }
+  }
+}
