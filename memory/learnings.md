@@ -593,4 +593,40 @@ a local model looks hung, check GPU load before the harness: a prefilling model 
 it, a stuck tool call does not. See
 [ADR-0022](../docs/adr/0022-watchdog-splits-model-wait-from-agent-stall.md).
 
+## A green check on a Dependabot PR can mean "never tested"
+
+`docs-quality-guardrails.yml` has two jobs: a Python gate (`make check`) and a
+frontend gate (`make check-frontend`). **Neither builds a container.** So a
+base-image PR — nginx, node, python — reports ✅ without a single line of it being
+executed. The check is measuring the absence of a test, not the presence of a pass.
+
+Building `Dockerfile.frontend.prod` by hand found a bug that had been live the whole
+time and had nothing to do with any bump: the `HEALTHCHECK` probed
+`http://localhost/`, which resolves to `::1` first inside the container, while
+`deploy/nginx.conf` declares only `listen 80` (IPv4). Every probe got
+`ECONNREFUSED`, so the production frontend container reported `unhealthy` for its
+entire life while serving traffic perfectly. It reproduces identically on
+`nginx:1.27-alpine`, so it predates the upgrade — CI simply had no way to see it.
+
+The same sweep showed Dependabot's one-major-per-PR split creating *unmergeable*
+PRs: `@vitejs/plugin-react@6` requires `vite@^8` and `vite@8` breaks
+`plugin-react@4`, so each PR fails `npm ci` alone and only passes together. Five
+frontend PRs also share one `package-lock.json`. Merging them one at a time is not
+a slower path to the same place — for two of them it is not a path at all.
+
+**Why it matters:** dependency PRs are where review attention is thinnest and the
+green check does the most work. When the gate does not cover the artifact being
+changed, the check is decoration, and the temptation is to batch-merge on it. The
+upgrade was also genuinely security-relevant — `npm audit` went from 4 findings
+(2 high on postcss/nanoid, 2 moderate on react-router including an open-redirect
+CVE bypass) to 0 — so the cost of getting it wrong was real in both directions.
+
+**How to apply:** before merging anything that changes a Dockerfile, build the image
+and exercise it (`/`, a client-side route, a hashed asset, and the healthcheck) —
+`make check` will not. When two Dependabot PRs fail on each other's peer ranges,
+stop trying to sequence them and replace the set with one verified branch. Base
+images now move only with the gate that verifies them, enforced by `ignore` rules in
+`.github/dependabot.yml`; see
+[ADR-0024](../docs/adr/0024-base-images-track-ci-verified-toolchains.md).
+
 <!-- Add new learnings above this line -->

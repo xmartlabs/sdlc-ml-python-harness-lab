@@ -48,35 +48,35 @@ from create_run import (
 TRANSCRIPT_TEMPLATE = """\
 # Antigravity transcript — {run_id}
 
-> Pegá acá el transcript / walkthrough del Agent Manager de Antigravity si lo
-> podés exportar (lo que sea: la conversación, la lista de tareas, los pasos).
-> Si no podés exportarlo, dejá este archivo vacío y completá notes.md — el audit
-> degrada elegante y usa lo que esté presente.
+> Paste the transcript / walkthrough from Antigravity's Agent Manager here if
+> you can export it (anything: the conversation, the task list, the steps).
+> If you cannot export it, leave this file empty and fill in notes.md — the
+> audit degrades gracefully and uses whatever is present.
 
 """
 
 NOTES_TEMPLATE = """\
-# Observaciones humanas — {run_id}
+# Human observations — {run_id}
 
-Completá lo que puedas observar mientras corrés Antigravity. Esto alimenta el
-audit prescriptivo de `.agents/rules/GEMINI.md` y las skills.
+Record what you can observe while running Antigravity. This feeds the
+prescriptive audit of `.agents/rules/GEMINI.md` and the skills.
 
-## ¿Leyó/aplicó las reglas?
-- ¿Mencionó o siguió `.agents/rules/GEMINI.md` (governance, runtime rules)?:
-- ¿Qué skills descubrió o invocó?:
-- ¿Qué skills relevantes ignoró o nunca tocó?:
+## Did it read and apply the rules?
+- Did it mention or follow `.agents/rules/GEMINI.md` (governance, runtime rules)?:
+- Which skills did it discover or invoke?:
+- Which relevant skills did it ignore or never touch?:
 
-## Desvíos de las reglas
-- ¿Dónde se desvió del SDLC (plan -> implement -> test -> verify)?:
-- ¿Creó/modificó archivos fuera de `workspace/{run_id}/`?:
+## Departures from the rules
+- Where did it depart from the SDLC (plan -> implement -> test -> verify)?:
+- Did it create or modify files outside `workspace/{run_id}/`?:
 
-## Fricciones
-- ¿Dónde se trabó o necesitó intervención humana?:
-- Intervenciones (qué tuviste que corregir a mano):
+## Friction
+- Where did it get stuck or need human intervention?:
+- Interventions (what you had to fix by hand):
 
-## Otros
-- Screenshots dejadas en este dir (paths):
-- Notas libres:
+## Other
+- Screenshots left in this dir (paths):
+- Free-form notes:
 """
 
 
@@ -159,21 +159,21 @@ def main(argv: list[str] | None = None) -> int:
     print("=" * 66)
     print(f"  Workspace:   workspace/{args.run}/")
     print(f"  Prompt:      {rel_out}/prompt.md  (variant: {prompt_short})")
-    print(f"  Transcript:  {rel_out}/transcript.md  (pegá el del Agent Manager)")
-    print(f"  Notes:       {rel_out}/notes.md  (completá las observaciones)")
+    print(f"  Transcript:  {rel_out}/transcript.md  (paste the Agent Manager one)")
+    print(f"  Notes:       {rel_out}/notes.md  (fill in your observations)")
     print()
     print("-" * 66)
-    print("  NEXT STEP — Abrí Antigravity a mano")
+    print("  NEXT STEP — open Antigravity by hand")
     print("-" * 66)
-    print("  1. Abrí el proyecto en Antigravity (IDE o panel).")
-    print("     Lee .agents/rules/GEMINI.md + .agents/skills/ automáticamente.")
+    print("  1. Open the project in Antigravity (IDE or panel).")
+    print("     It reads .agents/rules/GEMINI.md + .agents/skills/ automatically.")
     if clipped:
-        print("  2. Pegá el prompt:  Cmd+V  (ya está en el clipboard ✓)")
+        print("  2. Paste the prompt: Cmd+V  (already on the clipboard \u2713)")
     else:
-        print(f"  2. Copiá el prompt: cat {rel_out}/prompt.md | pbcopy")
-        print("     y pegalo en Antigravity.")
-    print(f"  3. Trabajá la tarea dentro de workspace/{args.run}/")
-    print(f"  4. Pegá el transcript en {rel_out}/transcript.md y completá notes.md")
+        print(f"  2. Copy the prompt: cat {rel_out}/prompt.md | pbcopy")
+        print("     then paste it into Antigravity.")
+    print(f"  3. Do the task inside workspace/{args.run}/")
+    print(f"  4. Paste the transcript into {rel_out}/transcript.md, fill in notes.md")
     print()
     print("  Al terminar:")
     print(f"    make bench-close RUN={args.run} SCORE=<0-10> INTERVENTIONS=<N>")

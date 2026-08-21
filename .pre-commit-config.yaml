@@ -22,3 +22,11 @@ repos:
     rev: 0.7.1
     hooks:
       - id: nbstripout
+
+  # Secret scanning. This repo legitimately contains token-shaped strings —
+  # sanitizer test vectors and documented placeholders — so findings are
+  # allowlisted in .gitleaks.toml rather than by disabling the hook.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.28.0
+    hooks:
+      - id: gitleaks

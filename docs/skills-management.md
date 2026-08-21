@@ -201,3 +201,20 @@ What it does:
 4. Recreates `.github/skills-external/` as an empty folder
 5. Refreshes `.claude/skills/` so external native links are removed
 6. Refreshes `.agents/skills/` so only governed internal skills remain available to Antigravity
+
+## Attribution of external skills
+
+External skills are third-party work. This repository is Apache-2.0, which does
+not relicense them — each keeps its upstream terms, and those terms are
+redistributed along with the content. The sync engine copies every external
+skill into four native mirrors (`.agents/`, `.claude/`, `.codex/`, `.opencode/`),
+so one import becomes five copies to account for.
+
+`skills-lock.json` records content hashes and sync timestamps, not provenance,
+and it is regenerated on every sync — it is not the place for attribution.
+[NOTICE](../NOTICE) is.
+
+**When you import an external skill, add its upstream URL, author and license to
+[NOTICE](../NOTICE) in the same change.** One component already in the tree —
+`writing-clearly-and-concisely` — was imported without that record and its terms
+are still unresolved; recovering provenance afterwards is the expensive path.

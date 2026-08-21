@@ -1,0 +1,127 @@
+Agentic Harness Lab
+Copyright 2026 Marcos Soto
+
+This product includes software developed for the Agentic Harness Lab project.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+================================================================================
+THIRD-PARTY COMPONENTS
+================================================================================
+
+The Apache-2.0 license above covers the original work in this repository. It
+does NOT relicense the third-party material listed below: each component stays
+under whatever license its upstream author granted, and that license travels
+with it. This file exists so that the obligation is visible to anyone who
+redistributes this repository.
+
+--------------------------------------------------------------------------------
+1. Vendored agent skills
+--------------------------------------------------------------------------------
+
+Source of truth:   .github/skills-external/
+Generated mirrors: .agents/skills/, .claude/skills/, .codex/skills/,
+                   .opencode/skills/
+
+These directories contain skills authored by third parties and vendored into
+this repository by the sync engine (src/ml_python_base/skills_sync). The
+mirrors are generated copies of the same upstream content, so a redistribution
+of this repository redistributes each component five times. `skills-lock.json`
+records content hashes and sync timestamps; it does not record provenance.
+This file does.
+
+1.1 Superpowers skill collection
+    Upstream project: Superpowers (https://github.com/obra/superpowers)
+    Upstream path:    skills/<skill-name>/SKILL.md
+    Author:           Jesse Vincent (obra)
+    License:          MIT (see section 3 for the full text)
+    Copyright:        Copyright (c) 2025 Jesse Vincent
+
+    Components:
+      brainstorming
+      executing-plans
+      finishing-a-development-branch
+      requesting-code-review
+      subagent-driven-development
+      test-driven-development
+      using-git-worktrees
+      writing-plans
+
+    Each of the eight is present under `skills/` in the upstream repository
+    under that name. Seven also reference the upstream `superpowers:` skill
+    namespace and `~/.config/superpowers/` directly in their SKILL.md.
+
+1.2 ui-ux-pro-max
+    Upstream project: UI/UX Pro Max Skill
+                      (https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
+    Upstream path:    .claude/skills/ui-ux-pro-max/SKILL.md
+    Author:           Next Level Builder (nextlevelbuilder)
+    License:          MIT (see section 3 for the full text)
+    Copyright:        Copyright (c) 2024 Next Level Builder
+
+    Only SKILL.md is vendored here. The upstream skill also ships a `data/`
+    directory (color, font, and chart catalogs, some carrying their own font
+    licenses); none of it is present in this repository. If that data is ever
+    imported, its licenses must be recorded here at that time.
+
+1.3 writing-clearly-and-concisely
+    Upstream project: NOT CONFIRMED.
+    Author:           NOT CONFIRMED.
+    License:          NOT CONFIRMED.
+
+    This component was vendored alongside the Superpowers collection and is
+    attributed to it by sync origin, but it does not appear under `skills/` in
+    obra/superpowers as of 2026-08-20, and it carries no author or license
+    frontmatter of its own. Its terms MUST be confirmed and recorded here --
+    including the upstream copyright notice, if its license requires retaining
+    one -- or the component removed, before this repository is redistributed.
+
+    Its bundled `elements-of-style.md` is covered separately by section 2.
+
+--------------------------------------------------------------------------------
+2. The Elements of Style
+--------------------------------------------------------------------------------
+
+File: .github/skills-external/writing-clearly-and-concisely/elements-of-style.md
+      (and its four generated mirrors)
+
+An adaptation of "The Elements of Style" by William Strunk Jr., first published
+1918. The original text is in the public domain in the United States. No
+restriction applies to its redistribution here.
+
+--------------------------------------------------------------------------------
+3. MIT License
+--------------------------------------------------------------------------------
+
+The components in sections 1.1 and 1.2 are licensed under the MIT License. The
+license requires that the copyright notice and the permission notice below be
+included in all copies or substantial portions of the software; the applicable
+copyright lines are stated in each section above.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+
+================================================================================
+
+Maintainers: when adding an external skill, record its upstream URL, author and
+license in this file at import time. Recovering provenance afterwards is the
+expensive path, as section 1.3 shows.

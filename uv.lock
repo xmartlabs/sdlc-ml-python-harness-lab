@@ -16,10 +16,7 @@ dependencies = [
     { name = "celery", extra = ["redis"] },
     { name = "docker" },
     { name = "fastapi" },
-    { name = "ipykernel" },
     { name = "jinja2" },
-    { name = "nbstripout" },
-    { name = "pandas" },
     { name = "pydantic-settings" },
     { name = "python-multipart" },
     { name = "pyyaml" },
@@ -30,7 +27,10 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "bandit" },
+    { name = "ipykernel" },
     { name = "mypy" },
+    { name = "nbstripout" },
+    { name = "pandas" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -42,10 +42,7 @@ requires-dist = [
     { name = "celery", extras = ["redis"], specifier = ">=5.4" },
     { name = "docker", specifier = ">=7.1" },
     { name = "fastapi", specifier = ">=0.115.0" },
-    { name = "ipykernel" },
     { name = "jinja2", specifier = ">=3.1" },
-    { name = "nbstripout", specifier = ">=0.7.0" },
-    { name = "pandas" },
     { name = "pydantic-settings", specifier = ">=2.6.0" },
     { name = "python-multipart", specifier = ">=0.0.12" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -56,7 +53,10 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "bandit", specifier = ">=1.9.2" },
+    { name = "ipykernel" },
     { name = "mypy", specifier = ">=1.11" },
+    { name = "nbstripout", specifier = ">=0.7.0" },
+    { name = "pandas" },
     { name = "pre-commit", specifier = ">=3.8.0" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-cov", specifier = ">=7.0.0" },

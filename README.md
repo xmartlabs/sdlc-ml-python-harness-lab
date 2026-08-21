@@ -542,3 +542,10 @@ Security issues go through [SECURITY.md](SECURITY.md), not the issue tracker.
 ## 📄 License
 
 [Apache License 2.0](LICENSE). Copyright 2026 Marcos Soto.
+
+Vendored third-party components — the external agent skills under
+`.github/skills-external/` and their generated mirrors — keep their own
+upstream licenses. See [NOTICE](NOTICE) before redistributing.
+
+Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) ·
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) · [SECURITY.md](SECURITY.md)

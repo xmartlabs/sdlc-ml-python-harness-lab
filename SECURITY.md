@@ -7,9 +7,20 @@ repository's Security tab. Please do not open a public issue for a
 vulnerability. Include what you did, what happened, and what you expected;
 a proof of concept helps but is not required.
 
-Expect an acknowledgement within a week. This is a personal project, not a
-funded product — there is no bounty and no formal SLA, and being told that
-plainly is more useful than a promise that will not be kept.
+GitHub Security Advisories is the only reporting channel. There is no security
+mailbox to write to, and no maintainer email is published — a private advisory
+keeps the report and the fix in one place until it is ready to disclose.
+
+Expect an acknowledgement within a week. The project is maintained on a
+best-effort basis: there is no bounty, and no SLA on a fix. Being told that
+plainly is more useful than a promise that will not be kept. If a report is
+valid and you want the credit, you will be named in the advisory.
+
+### Supported versions
+
+The default branch is the only supported version. There are no maintenance
+branches and no backports; fixes land on `main`. If you have pinned a commit,
+you are responsible for pulling the fix forward.
 
 ## Threat model, stated plainly
 
@@ -60,12 +71,43 @@ The `IS_SANDBOX=1` variable set for run containers is **not** a security
 control. It exists so Claude Code will accept `--dangerously-skip-permissions`
 in a headless context. Do not read it as a sandbox guarantee.
 
+### Credentials and the image boundary
+
+The harness under test has to authenticate. Claude Code, opencode and the
+gateway all need live credentials *inside* the run container, so `.env` is
+deliberately available there by three paths, and it is worth knowing all three:
+
+1. **Runtime environment.** `build_run_environment()`
+   ([executors.py](src/harness_lab_app/executors.py)) reads the host `.env`,
+   rewrites `localhost` URLs to `host.docker.internal`, and passes the result as
+   the container's environment.
+2. **Bind mount.** Compose mounts the repository at `/app`, and `.env` is in the
+   repository, so the file itself is readable inside the container.
+3. **Image layer.** `.dockerignore` does **not** exclude `.env`, and
+   [Dockerfile.api](Dockerfile.api) / [Dockerfile.runner](Dockerfile.runner)
+   both `COPY . .`. Your credentials are therefore baked into
+   `harness-lab-api` and `harness-lab-runner` at build time.
+
+(3) is the one that outlives the run. Excluding `.env` from the build context
+would break Claude Code in the runner, so the file stays — and the cost of that
+choice is that **the built images are secret-bearing artifacts**:
+
+- **Never push these images to a registry**, public or private. Nothing in this
+  repository pushes them today; keep it that way, and do not add an image-build
+  job to CI without excluding `.env` in that path first.
+- Do not share them with `docker save`, and do not use them as a base image.
+- After rotating any key in `.env`, **rebuild** — the old value survives in the
+  previous image layers until you do.
+- Use scoped, revocable keys with spend limits, as stated above. This is the
+  concrete reason why.
+
 ### What follows from this
 
 - Do not run the lab on a shared or multi-tenant machine.
 - Do not point it at a repository containing anything you would not show the
   model.
-- Treat every `.env` key as disclosed to whatever model a run invokes.
+- Treat every `.env` key as disclosed to whatever model a run invokes, and
+  as present in any image you built (see above).
 - The in-app validation sandboxes (web terminal, noVNC desktop) execute run
   output interactively and carry the same properties.
 

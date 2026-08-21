@@ -13,9 +13,6 @@ classifiers = [
     "Topic :: Software Development :: Testing",
 ]
 dependencies = [
-    "pandas",
-    "nbstripout>=0.7.0",
-    "ipykernel",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "sqlmodel>=0.0.22",
@@ -42,11 +39,11 @@ build-backend = "hatchling.build"
 packages = ["src/ml_python_base", "src/harness_lab_app"]
 
 [tool.ruff]
-# Configuración general de Ruff
+# General Ruff configuration
 line-length = 88
 target-version = "py311"
 
-# Directorios a incluir y excluir
+# Directories to include and exclude
 include = ["*.py", "*.pyi", "**/pyproject.toml"]
 extend-exclude = [
     ".venv",
@@ -62,32 +59,32 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-# Reglas habilitadas (compatible con Black, Flake8, isort, pyupgrade, bugbear)
+# Enabled rule sets (compatible with Black, Flake8, isort, pyupgrade, bugbear)
 select = [
     "E",      # pycodestyle errors
     "W",      # pycodestyle warnings
     "F",      # pyflakes
-    "I",      # isort (ordenar imports)
+    "I",      # isort (import ordering)
     "B",      # flake8-bugbear
     "C4",     # flake8-comprehensions
-    "UP",     # pyupgrade (modernizar código Python)
+    "UP",     # pyupgrade (modernize Python syntax)
     "ARG",    # flake8-unused-arguments
-    "C90",    # mccabe (complejidad)
-    "T20",    # flake8-print (detectar prints olvidados)
+    "C90",    # mccabe (cyclomatic complexity)
+    "T20",    # flake8-print (catch forgotten prints)
     "SIM",    # flake8-simplify
     "TCH",    # flake8-type-checking
     "RUF",    # Ruff-specific rules
 ]
 
-# Ignorar reglas específicas si es necesario
+# Rules deliberately disabled
 ignore = [
-    "E501",   # line too long (lo maneja el formatter)
-    "B008",   # do not perform function calls in argument defaults (común en FastAPI)
-    "C901",   # too complex (ajustar según necesidades del proyecto)
-    "W191",   # indentation contains tabs (lo maneja el formatter)
+    "E501",   # line too long (the formatter handles it)
+    "B008",   # do not perform function calls in argument defaults (idiomatic in FastAPI)
+    "C901",   # too complex (tune the threshold per project needs)
+    "W191",   # indentation contains tabs (the formatter handles it)
 ]
 
-# Permitir autofix para estas reglas
+# Allow autofix for every enabled rule
 fixable = ["ALL"]
 unfixable = []
 
@@ -98,10 +95,10 @@ unfixable = []
 "src/harness_lab_app/api.py" = ["TC001"]
 "tests/**/*.py" = [
     "ARG001",
-    "ARG002",  # Fixtures de pytest pueden parecer no usados
+    "ARG002",  # pytest fixtures can look unused
     "TCH001",
     "TCH002",
-    "TCH003",  # No exigir bloques TYPE_CHECKING en tests
+    "TCH003",  # Do not require TYPE_CHECKING blocks in tests
 ]
 # The skills sync CLI legitimately prints user-facing progress to stdout.
 "src/ml_python_base/skills_sync/cli.py" = ["T201"]
@@ -111,7 +108,7 @@ unfixable = []
 "scripts/*.py" = ["T201"]
 
 [tool.ruff.lint.isort]
-# Configuración compatible con Black.
+# Black-compatible configuration.
 # The package is imported as `ml_python_base` (src-layout), so the import
 # name — not the directory — is what isort must recognize as first-party.
 known-first-party = ["ml_python_base"]
@@ -119,11 +116,11 @@ combine-as-imports = true
 force-wrap-aliases = true
 
 [tool.ruff.lint.mccabe]
-# Complejidad ciclomática máxima
+# Maximum cyclomatic complexity
 max-complexity = 10
 
 [tool.ruff.format]
-# Configuración del formatter (compatible con Black)
+# Formatter configuration (Black-compatible)
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
@@ -142,7 +139,7 @@ no_implicit_optional = true
 exclude = ['(^|/)__pycache__/']
 
 [tool.pytest.ini_options]
-# Configuración de pytest
+# pytest configuration
 testpaths = ["tests"]
 python_files = "test_*.py"
 python_functions = "test_*"
@@ -157,7 +154,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-# Configuración de coverage
+# coverage configuration
 source = ["src"]
 omit = [
     "tests/*",
@@ -167,7 +164,7 @@ omit = [
 ]
 
 [tool.coverage.report]
-# Reportes de cobertura
+# Coverage reporting
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
@@ -194,4 +191,13 @@ dev = [
     # Pinned exactly to the ruff-pre-commit `rev` in .pre-commit-config.yaml.
     # Both must move together or import sorting will ping-pong between them.
     "ruff==0.14.10",
+    # Notebook tooling. Nothing under src/, scripts/, or adapters/ imports these
+    # — they exist for `make install` (registers the Jupyter kernel), the
+    # `nbstripout notebooks/*.ipynb` step in `make format`/`make fix`, and
+    # notebooks/base.ipynb itself. Keeping them out of `[project].dependencies`
+    # means `uv sync --no-dev` (Dockerfile.api, Dockerfile.runner) no longer
+    # pulls pandas and the full Jupyter stack into the runtime images.
+    "pandas",
+    "nbstripout>=0.7.0",
+    "ipykernel",
 ]

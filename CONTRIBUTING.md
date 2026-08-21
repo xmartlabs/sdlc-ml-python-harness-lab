@@ -93,5 +93,10 @@ into governance improvements, and a proposal grounded in a run beats an opinion.
 
 ## Reporting problems
 
-Bugs and feature requests go to GitHub issues. Security issues do not — see
-[SECURITY.md](SECURITY.md).
+Bugs and feature requests go to GitHub issues; there is a template for each.
+Security issues do not — report them privately, see [SECURITY.md](SECURITY.md).
+
+## Code of conduct
+
+Participation is covered by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). It is
+short; read it once.

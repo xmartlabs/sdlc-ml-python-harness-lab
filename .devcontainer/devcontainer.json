@@ -1,5 +1,5 @@
 {
-  "name": "ML Python Base Dev",
+  "name": "Agentic Harness Lab Dev",
   "build": {
     "dockerfile": "Dockerfile",
     "context": ".."
@@ -27,9 +27,9 @@
       }
     }
   },
-  // Usamos tu Makefile para instalar todo automáticamente al crear el contenedor
+  // Reuse the Makefile so container creation and local setup cannot drift apart.
   "postCreateCommand": "make install",
 
-  // Usuario remoto (vscode es el default en las imágenes de Microsoft)
+  // Remote user (vscode is the default in Microsoft's devcontainer images)
   "remoteUser": "vscode"
 }
