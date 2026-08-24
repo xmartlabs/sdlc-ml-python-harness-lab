@@ -255,21 +255,21 @@ def test_normalize_instance_shapes_spec(monkeypatch):
     assert spec["install_pins"] == ["Werkzeug<3"]
 
 
-def test_write_case_spec_skips_non_swe_case_with_subject_repo(tmp_path, monkeypatch):
+def test_write_case_spec_never_provisions_a_non_repo_case(tmp_path, monkeypatch):
     # Regression: Tetris carries subject_repo for provenance but is NOT a repo
-    # task — it must not get a case_spec.json (which would try to clone it).
+    # task — its spec must leave `repo` empty, or the runner would try to clone
+    # `ml-python-base` as if it were an owner/repo slug.
+    import json
     from types import SimpleNamespace
 
     from harness_lab_app import tasks
     from harness_lab_app.models import Case, CaseType
 
     monkeypatch.setattr(
-        tasks, "get_settings", lambda: SimpleNamespace(data_runs_dir=tmp_path)
+        tasks,
+        "get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path, repo_root=tmp_path),
     )
-    # A stale spec from a prior run reusing this id must be cleaned up.
-    run_dir = tmp_path / "tetris-run-1"
-    run_dir.mkdir()
-    (run_dir / "case_spec.json").write_text("{}")
 
     with _session() as session:
         session.add(
@@ -283,5 +283,31 @@ def test_write_case_spec_skips_non_swe_case_with_subject_repo(tmp_path, monkeypa
         )
         session.commit()
         tasks._write_case_spec(session, "tetris-run-1", "tetris-v1", "sdlc")
+
+    spec = json.loads((tmp_path / "tetris-run-1" / "case_spec.json").read_text())
+    assert spec["repo"] == ""
+    assert spec["case_type"] == "build_from_scratch"
+
+
+def test_write_case_spec_drops_a_stale_spec_when_the_case_is_gone(
+    tmp_path, monkeypatch
+):
+    # A run id can be reused; acting on a stranger's provisioning data would be
+    # worse than having no spec at all.
+    from types import SimpleNamespace
+
+    from harness_lab_app import tasks
+
+    monkeypatch.setattr(
+        tasks,
+        "get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path, repo_root=tmp_path),
+    )
+    run_dir = tmp_path / "ghost-run-1"
+    run_dir.mkdir()
+    (run_dir / "case_spec.json").write_text("{}")
+
+    with _session() as session:
+        tasks._write_case_spec(session, "ghost-run-1", "no-such-case", "default")
 
     assert not (run_dir / "case_spec.json").exists()

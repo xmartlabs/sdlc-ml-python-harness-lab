@@ -53,6 +53,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0022 — Split the silence clock by what the run was waiting for](0022-watchdog-splits-model-wait-from-agent-stall.md)
 - [0023 — Queue many runs per request as an all-or-nothing cross-product](0023-batch-run-execution.md)
 - [0024 — Pin container base images to the toolchain CI verifies](0024-base-images-track-ci-verified-toolchains.md)
+- [0025 — The DB is the source of truth for every case](0025-db-is-the-source-of-truth-for-every-case.md)
 
 ## Why ADRs exist
 

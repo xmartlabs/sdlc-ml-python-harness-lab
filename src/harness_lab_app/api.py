@@ -900,11 +900,19 @@ def create_app() -> FastAPI:
     def update_case(
         case_id: str, data: CaseCreate, session: Session = Depends(get_session)
     ):
-        return CaseService(session).update_case(case_id, data)
+        # These four are driven by the case editor in the browser, so an
+        # unknown id is an ordinary 404, not a 500 traceback in the panel.
+        try:
+            return CaseService(session).update_case(case_id, data)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.delete("/api/cases/{case_id}")
     def delete_case(case_id: str, session: Session = Depends(get_session)):
-        return CaseService(session).delete_case(case_id)
+        try:
+            return CaseService(session).delete_case(case_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/cases/{case_id}/clone")
     def clone_case(
@@ -913,11 +921,18 @@ def create_app() -> FastAPI:
         new_name: str,
         session: Session = Depends(get_session),
     ):
-        return CaseService(session).clone_case(case_id, new_case_id, new_name)
+        try:
+            return CaseService(session).clone_case(case_id, new_case_id, new_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/cases/{case_id}/sync")
     def sync_case(case_id: str, session: Session = Depends(get_session)):
-        return {"task_path": str(CaseService(session).sync_case_to_yaml(case_id))}
+        try:
+            path = CaseService(session).sync_case_to_yaml(case_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"task_path": str(path)}
 
     @app.post("/api/cases/import-swebench")
     def import_swebench(

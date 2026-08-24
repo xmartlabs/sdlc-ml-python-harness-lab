@@ -611,6 +611,15 @@ app-reset-db:
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	uv run python scripts/reset_db.py $(if $(PURGE),--purge-disk,)
 
+# Compact the application database: drop artifact index rows the indexer no
+# longer writes (workspace/ trees, runs that were deleted) and VACUUM the file.
+# Non-destructive to runs — the artifact index rebuilds from disk on demand.
+# Pass DRY=1 to only report what would be removed.
+app-db-compact:
+	@if [ ! -d .venv ]; then make install; fi
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	uv run python scripts/db_maintenance.py $(if $(DRY),--dry-run,)
+
 # Stop Docker container
 stop-docker:
 	@echo "🛑 Stopping Docker container..."

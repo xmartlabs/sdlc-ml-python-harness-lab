@@ -16,7 +16,8 @@ const HEAL_LABEL: Record<string, string> = {
   skills_sync: "Re-sync skill views",
   materialize_staged_skills: "Rebuild staging tree",
   refresh_models: "Refresh model catalog",
-  reconcile_runs: "Reconcile stuck runs"
+  reconcile_runs: "Reconcile stuck runs",
+  build_runner_image: "Build runner image"
 };
 
 function formatLatency(ms: number | null): string {
