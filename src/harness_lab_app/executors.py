@@ -36,6 +36,44 @@ _HOST_URL_ENV_VARS = (
 )
 
 
+# The one skill catalog a run is allowed to see, and the mirrors of it that must
+# stay hidden.
+#
+# `adapters/registry.toml` materializes the same governed skills once per AI
+# tool — `.claude/skills` (symlinks), `.agents/skills` (copies, Antigravity
+# cannot follow symlinks), `.opencode/skills` and `.codex/skills`. On the host
+# that is correct: each tool reads its own directory. In the runner it is not,
+# because the whole repo is bind-mounted at /app and opencode scans all four,
+# so the same 24 skills are discovered four times.
+#
+# The cost is not the "duplicate skill name" warnings (240 of them in run
+# tetris-v1-K-064); it is that the skill catalog is part of the system prompt,
+# re-sent and re-prefilled on every turn of every step. Four copies of 428 KB
+# of SKILL.md is minutes per turn against a local model.
+#
+# Masking is done with empty tmpfs mounts rather than by deleting directories,
+# because the host tree is the tools' source of truth and a run must never
+# mutate it. `tests/harness_lab_app/test_executors.py` asserts this list still
+# covers every tool in the registry.
+RUNNER_SKILLS_DIR = ".claude/skills"
+RUNNER_MASKED_SKILL_DIRS = (
+    ".agents/skills",
+    ".opencode/skills",
+    ".codex/skills",
+)
+
+
+def runner_skill_masks(mount_root: str = "/app") -> dict[str, str]:
+    """tmpfs mounts that hide every duplicate skill catalog from a run.
+
+    Keys are absolute container paths, values the docker-py tmpfs options
+    string (empty = defaults). Mounted over the repo bind, so opencode
+    discovers exactly one catalog: :data:`RUNNER_SKILLS_DIR`.
+    """
+    root = mount_root.rstrip("/")
+    return {f"{root}/{directory}": "" for directory in RUNNER_MASKED_SKILL_DIRS}
+
+
 def rewrite_localhost(url: str, alias: str) -> str:
     """Rewrite localhost/127.0.0.1 host references to the docker host alias."""
     return _LOCALHOST_RE.sub(alias, url)
@@ -220,6 +258,9 @@ class DockerRunExecutor:
             name=name,
             working_dir="/app",
             volumes={host_repo_root: {"bind": "/app", "mode": "rw"}},
+            # Empty tmpfs over the duplicate skill catalogs: one catalog in the
+            # system prompt instead of four (see RUNNER_MASKED_SKILL_DIRS).
+            tmpfs=runner_skill_masks(),
             environment=build_run_environment(),
             extra_hosts={settings.docker_host_alias: "host-gateway"},
             labels={"harness-lab.run-id": run_id},
@@ -239,9 +280,9 @@ class DockerRunExecutor:
             client.images.get(image)
         except Exception as exc:
             raise RuntimeError(
-                f"Runner image '{image}' was not found locally. Build it with "
-                "`make app-up` (or `docker compose build runner`) before "
-                "starting the worker."
+                f"Runner image '{image}' was not found locally. Build it from "
+                "the web UI: Health -> Docker runtime -> 'Build runner image' "
+                "(or `make app-up` from a shell)."
             ) from exc
 
     @staticmethod

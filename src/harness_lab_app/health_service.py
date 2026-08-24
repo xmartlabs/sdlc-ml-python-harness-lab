@@ -8,8 +8,8 @@ Two rules shape this module:
 - **The API never touches the docker socket.** Docker facts come from the
   worker through a Celery control command (ADR-0002), so the api container can
   answer "is the runtime usable?" without ever being able to launch anything.
-- **Healing is an allowlist, not a command runner.** ``heal()`` dispatches four
-  named actions; anything else is refused before any work happens.
+- **Healing is an allowlist, not a command runner.** ``heal()`` dispatches a
+  fixed set of named actions; anything else is refused before any work happens.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ HEAL_ACTIONS = (
     "materialize_staged_skills",
     "refresh_models",
     "reconcile_runs",
+    "build_runner_image",
 )
 
 # A run that has been `running` longer than this without ending is almost
@@ -52,6 +53,12 @@ HEAL_ACTIONS = (
 _ORPHAN_RUN_SECONDS = 6 * 60 * 60
 
 _WORKER_REPLY_TIMEOUT = 3.0
+
+# Worker facts cost a 3 s broadcast, and both the health panel and every run
+# preflight want them. Docker state does not change on a shorter horizon than
+# this, so serve repeat callers from the cache.
+_FACTS_TTL_SECONDS = 30.0
+_facts_cache: tuple[float, dict[str, Any]] | None = None
 
 
 class HealthError(ValueError):
@@ -134,6 +141,26 @@ def _worker_facts() -> dict[str, Any]:
     return {}
 
 
+def worker_facts(*, refresh: bool = False) -> dict[str, Any]:
+    """Cached :func:`_worker_facts`, for callers outside the health panel.
+
+    ``refresh=True`` bypasses the cache — use it right after a heal action that
+    is supposed to have changed what the worker sees.
+    """
+    global _facts_cache
+    now = time.monotonic()
+    if not refresh and _facts_cache is not None:
+        cached_at, facts = _facts_cache
+        if now - cached_at < _FACTS_TTL_SECONDS:
+            return facts
+    try:
+        facts = _worker_facts()
+    except Exception:
+        facts = {}
+    _facts_cache = (now, facts)
+    return facts
+
+
 def _check_worker(facts: dict[str, Any]) -> tuple[str, str, list[str]]:
     if not facts:
         return ERROR, "No worker replied — runs will stay pending.", []
@@ -152,7 +179,7 @@ def _check_docker(facts: dict[str, Any]) -> tuple[str, str, list[str]]:
         return (
             WARN,
             f"Runner image {facts.get('runner_image')!r} is missing — "
-            "build it with `make app-up`.",
+            "runs cannot start. Use Build runner image to build it here.",
             [],
         )
     return OK, f"Docker {facts.get('docker_version', '?')}, runner image present.", []
@@ -255,15 +282,18 @@ def _check_orphan_runs(session: Session) -> tuple[str, str, list[str]]:
 
 def collect_health(session: Session) -> dict:
     """Every check, worst first. Never raises."""
-    facts = {}
-    with contextlib.suppress(Exception):
-        facts = _worker_facts()
+    facts = worker_facts(refresh=True)
 
     checks = [
         _timed("gateway", "AI gateway", _check_gateway),
         _timed("redis", "Redis broker", _check_redis),
         _timed("worker", "Celery worker", lambda: _check_worker(facts)),
-        _timed("docker", "Docker runtime", lambda: _check_docker(facts)),
+        _timed(
+            "docker",
+            "Docker runtime",
+            lambda: _check_docker(facts),
+            "build_runner_image",
+        ),
         _timed(
             "skills_drift", "Generated skill views", _check_skills_drift, "skills_sync"
         ),
@@ -324,6 +354,22 @@ def heal(action: str, session: Session) -> dict:
         report = service.refresh(list_gateway_models(base_url=base, token=token))
         service.write_overlay_file()
         return {"action": action, "ok": True, "detail": "Catalog refreshed.", **report}
+
+    if action == "build_runner_image":
+        from harness_lab_app.celery_app import enqueue_build_runner_image
+
+        enqueue_build_runner_image()
+        # The build takes minutes; the panel re-checks the docker row rather
+        # than holding the request open, so drop the stale "image missing".
+        worker_facts(refresh=True)
+        return {
+            "action": action,
+            "ok": True,
+            "detail": (
+                "Runner image build queued on the worker. It takes a few "
+                "minutes; re-check this panel when it finishes."
+            ),
+        }
 
     # reconcile_runs: only the worker owns the docker socket, so the API asks
     # rather than acts (ADR-0002).

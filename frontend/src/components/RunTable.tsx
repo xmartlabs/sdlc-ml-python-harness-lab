@@ -122,11 +122,18 @@ function summarizeFailure(run: RunRecord): FailureSummary | null {
 function createdTooltip(run: RunRecord): string {
   const lines = [`Created: ${formatRunDate(run.created_at)}`];
   if (run.started_at) {
-    const duration = formatDuration(run.started_at, run.ended_at);
+    const queued = formatDuration(run.created_at, run.started_at);
+    const executed = formatDuration(run.started_at, run.ended_at);
     const ended = run.ended_at ? formatRunDate(run.ended_at) : "still running";
     lines.push(`Last run: ${formatRunDate(run.started_at)} → ${ended}`);
-    if (duration) {
-      lines.push(`Duration: ${duration}`);
+    // Queue time is not the harness being slow — with a single worker a batch
+    // queues behind itself — so it is reported apart from execution time
+    // instead of being folded into one "duration".
+    if (queued) {
+      lines.push(`Queued for: ${queued}`);
+    }
+    if (executed) {
+      lines.push(`Execution: ${executed}`);
     }
   } else {
     lines.push("Last run: not started yet");

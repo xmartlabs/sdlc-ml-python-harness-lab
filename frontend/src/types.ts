@@ -19,6 +19,11 @@ export type CaseRecord = {
   prompt_variants?: Record<string, string>;
   tags?: string[];
   success_criteria?: Record<string, string>;
+  step_prompts?: string[];
+  scoring_rubric?: string;
+  constraints?: string[];
+  validation_commands?: string[];
+  max_steps?: number;
 };
 
 export type CaseCreatePayload = {

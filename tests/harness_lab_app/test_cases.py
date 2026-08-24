@@ -85,3 +85,60 @@ def test_sync_case_to_yaml_writes_task_file(tmp_path: Path, session, monkeypatch
 
     assert task_path.exists()
     assert task_path.read_text().startswith("task_id: custom-case")
+
+
+def test_update_case_keeps_a_db_only_case_unsynced(session):
+    """`modified_since_sync` is a drift warning about a YAML file on disk.
+
+    A case created in the browser has no such file, so every edit would raise a
+    false alarm about drift from nothing.
+    """
+    service = CaseService(session)
+    service.create_case(
+        CaseCreate(
+            case_id="ui-case",
+            name="UI case",
+            type=CaseType.multi_step,
+            prompt_variants={"default": "Build it."},
+        )
+    )
+
+    updated = service.update_case(
+        "ui-case",
+        CaseCreate(
+            case_id="ui-case",
+            name="UI case renamed",
+            type=CaseType.multi_step,
+            prompt_variants={"default": "Build it better."},
+        ),
+    )
+
+    assert updated.name == "UI case renamed"
+    assert updated.sync_state == CaseSyncState.not_synced
+
+
+def test_update_case_flags_drift_once_a_case_has_been_synced(session):
+    service = CaseService(session)
+    case = service.create_case(
+        CaseCreate(
+            case_id="synced-case",
+            name="Synced case",
+            type=CaseType.repo_task,
+            prompt_variants={"default": "Do the thing."},
+        )
+    )
+    case.sync_state = CaseSyncState.synced
+    session.add(case)
+    session.commit()
+
+    updated = service.update_case(
+        "synced-case",
+        CaseCreate(
+            case_id="synced-case",
+            name="Synced case",
+            type=CaseType.repo_task,
+            prompt_variants={"default": "Do the other thing."},
+        ),
+    )
+
+    assert updated.sync_state == CaseSyncState.modified_since_sync

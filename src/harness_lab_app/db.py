@@ -2,7 +2,7 @@ import hashlib
 from collections.abc import Generator
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlmodel import Session, SQLModel, create_engine
 
 from harness_lab_app.config import get_settings
@@ -25,7 +25,40 @@ def get_engine():
         if settings.database_url.startswith("sqlite")
         else {}
     )
-    return create_engine(settings.database_url, connect_args=connect_args)
+    engine = create_engine(settings.database_url, connect_args=connect_args)
+    if settings.database_url.startswith("sqlite"):
+        _tune_sqlite(engine)
+    return engine
+
+
+def _tune_sqlite(engine) -> None:
+    """Make SQLite survive a worker that writes while the UI reads.
+
+    The default rollback journal takes a database-wide exclusive lock on every
+    commit, and `_stream_run` commits once per log line of a running benchmark —
+    so the API polling the same file competed with thousands of writes a minute
+    and surfaced them as `database is locked`. WAL lets readers run against the
+    last committed snapshot while a write is in flight.
+
+    `synchronous=NORMAL` is the pairing WAL is designed for: durable across a
+    process crash, and only at risk of losing the last commits if the host loses
+    power — an acceptable trade for a lab's run log. `busy_timeout` turns the
+    remaining contention into a short wait instead of an immediate error.
+
+    Applied per connection because `synchronous` and `busy_timeout` are
+    connection-scoped; `journal_mode` is a property of the file and simply
+    re-confirms itself after the first connection sets it.
+    """
+
+    @event.listens_for(engine, "connect")
+    def _set_pragmas(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+        finally:
+            cursor.close()
 
 
 engine = get_engine()

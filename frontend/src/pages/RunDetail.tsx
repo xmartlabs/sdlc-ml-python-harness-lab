@@ -8,6 +8,7 @@ import { LogViewer } from "../components/LogViewer";
 import { Markdown } from "../components/Markdown";
 import { SandboxPanel } from "../components/SandboxPanel";
 import { StateBadge } from "../components/StateBadge";
+import { formatDuration, formatRunDate } from "../dates";
 import type {
   AttributionRecord,
   AuditRecord,
@@ -532,11 +533,29 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
         </div>
         <div>
           <span>Started</span>
-          <strong>{run.started_at ?? "—"}</strong>
+          <strong>{formatRunDate(run.started_at)}</strong>
         </div>
         <div>
           <span>Ended</span>
-          <strong>{run.ended_at ?? "—"}</strong>
+          <strong>{formatRunDate(run.ended_at)}</strong>
+        </div>
+        {/*
+          Wall clock between created and ended answers "how long did I wait",
+          never "how slow was the model". The worker runs at concurrency 1, so
+          a batch queues behind itself and a run can sit for hours before its
+          container starts. Keeping the two apart is what makes a slow harness
+          distinguishable from a busy one.
+        */}
+        <div>
+          <span>Queued for</span>
+          <strong>{formatDuration(run.created_at, run.started_at) || "—"}</strong>
+        </div>
+        <div>
+          <span>Execution</span>
+          <strong>
+            {formatDuration(run.started_at, run.ended_at) ||
+              (run.started_at ? "running" : "—")}
+          </strong>
         </div>
         <div>
           <span>Failure</span>

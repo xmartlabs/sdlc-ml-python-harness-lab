@@ -295,6 +295,47 @@ def test_retry_run_rebuilds_command_with_resume():
         assert run.run_id == retried.run_id
 
 
+def test_mark_finished_reports_the_failure_reason_over_the_exit_code():
+    with make_session() as session:
+        service = RunService(session)
+        service.create_run(
+            RunCreate(
+                run_id="finish-reason-1",
+                config=RunConfigCreate(
+                    case_id="tetris-v1", prompt_variant="sdlc", dry_run=True
+                ),
+            )
+        )
+        service.mark_running("finish-reason-1")
+        service.mark_finished("finish-reason-1", 137, "Run timed out after 7200s")
+
+        messages = [e.message for e in service.list_events("finish-reason-1")]
+
+        # The watchdog killed the container, so 137 is the harness's own signal,
+        # not a crash: the reason leads and the code stays as context.
+        assert "Run timed out after 7200s (exit code 137)" in messages
+        assert "Run exited with 137" not in messages
+
+
+def test_mark_finished_falls_back_to_the_exit_code_without_a_reason():
+    with make_session() as session:
+        service = RunService(session)
+        service.create_run(
+            RunCreate(
+                run_id="finish-reason-2",
+                config=RunConfigCreate(
+                    case_id="tetris-v1", prompt_variant="sdlc", dry_run=True
+                ),
+            )
+        )
+        service.mark_running("finish-reason-2")
+        service.mark_finished("finish-reason-2", 1)
+
+        messages = [e.message for e in service.list_events("finish-reason-2")]
+
+        assert "Run exited with 1" in messages
+
+
 def test_score_run_updates_fields_and_state():
     with make_session() as session:
         service = RunService(session)
@@ -489,3 +530,57 @@ def test_run_list_carries_the_objective_verdict(session):
     assert verdicts["good-run"] is True
     # Never validated: absent, not "failed" — the two mean different things.
     assert verdicts["unchecked-run"] is None
+
+
+def test_preflight_refuses_a_run_the_missing_runner_image_would_kill(monkeypatch):
+    """Without this the run is persisted, queued, and dies in ~17 ms — a failed
+    run in the history for something one button fixes."""
+    monkeypatch.setattr(
+        "harness_lab_app.health_service.worker_facts",
+        lambda **_kwargs: {
+            "backend": "docker",
+            "docker_ok": True,
+            "runner_image_present": False,
+            "runner_image": "harness-lab-runner:latest",
+        },
+    )
+    with make_session() as session:
+        service = RunService(session)
+        with pytest.raises(RunPreflightError, match="Build runner image"):
+            service.create_run(
+                RunCreate(
+                    run_id="no-image-1",
+                    config=RunConfigCreate(
+                        case_id="tetris-v1",
+                        prompt_variant="sdlc",
+                        executor_model="lmstudio/stub",
+                    ),
+                )
+            )
+
+
+def test_preflight_is_silent_about_the_image_when_no_worker_replies(monkeypatch):
+    """A slow or absent worker is the worker check's story to tell; blocking
+    every run on it would be worse than the failure it prevents."""
+    monkeypatch.setattr(
+        "harness_lab_app.health_service.worker_facts", lambda **_kwargs: {}
+    )
+    with make_session() as session:
+        RunService(session)._check_runner_image()
+
+
+def test_preflight_does_not_ask_about_the_image_for_a_dry_run(monkeypatch):
+    def _explode(**_kwargs):
+        raise AssertionError("dry runs never touch the runner image")
+
+    monkeypatch.setattr("harness_lab_app.health_service.worker_facts", _explode)
+    with make_session() as session:
+        run = RunService(session).create_run(
+            RunCreate(
+                run_id="dry-no-image-1",
+                config=RunConfigCreate(
+                    case_id="tetris-v1", prompt_variant="sdlc", dry_run=True
+                ),
+            )
+        )
+    assert run.state == RunState.pending
