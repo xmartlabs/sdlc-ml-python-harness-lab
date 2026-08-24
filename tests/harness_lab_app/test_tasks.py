@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,6 +15,27 @@ from harness_lab_app.run_failures import is_unmeasured
 from harness_lab_app.run_service import RunService
 from harness_lab_app.schemas import RunConfigCreate, RunCreate
 from harness_lab_app.tasks import _execute_run_body, reconcile_stale_runs
+
+
+class RunSettings:
+    """Only the settings ``_execute_run_body`` reads, with inert defaults.
+
+    Each test subclasses this and overrides the one clock it is exercising.
+    ``data_runs_dir`` is filled in per test by :func:`_stage_dir`: the worker
+    stages ``case_spec.json`` for every case type now, so even a run whose case
+    row is absent touches the run directory.
+    """
+
+    run_timeout_seconds = 3600
+    run_stall_seconds = 3600
+    run_model_wait_seconds = 3600
+    run_max_stream_errors = 0
+    data_runs_dir = Path("/nonexistent")
+
+
+@pytest.fixture(autouse=True)
+def _stage_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(RunSettings, "data_runs_dir", tmp_path / "runs")
 
 
 def make_engine():
@@ -202,7 +224,7 @@ def test_execute_run_timeout_marks_failed(monkeypatch: pytest.MonkeyPatch):
     engine = make_engine()
     create_pending_run(engine, "task-timeout-1")
 
-    class FakeSettings:
+    class FakeSettings(RunSettings):
         run_timeout_seconds = 0
         run_stall_seconds = 0
 
@@ -236,7 +258,7 @@ def test_execute_run_stall_marks_failed(monkeypatch: pytest.MonkeyPatch):
     engine = make_engine()
     create_pending_run(engine, "task-stall-1")
 
-    class FakeSettings:
+    class FakeSettings(RunSettings):
         run_timeout_seconds = 3600  # nowhere near — the stall clock must fire
         run_stall_seconds = 1
 
@@ -271,7 +293,7 @@ def test_a_talking_run_is_never_treated_as_stalled(monkeypatch: pytest.MonkeyPat
     engine = make_engine()
     create_pending_run(engine, "task-chatty-1")
 
-    class FakeSettings:
+    class FakeSettings(RunSettings):
         run_timeout_seconds = 3600
         run_stall_seconds = 2
 
@@ -340,7 +362,7 @@ def test_a_model_still_processing_the_prompt_is_not_a_stall(
     engine = make_engine()
     create_pending_run(engine, "task-prefill-1")
 
-    class FakeSettings:
+    class FakeSettings(RunSettings):
         run_timeout_seconds = 3600
         run_stall_seconds = 1  # a tool call gets one second here...
         run_model_wait_seconds = 3600  # ...but the model gets an hour
@@ -368,7 +390,7 @@ def test_a_model_that_never_answers_is_stopped_without_blaming_it(
     engine = make_engine()
     create_pending_run(engine, "task-prefill-2")
 
-    class FakeSettings:
+    class FakeSettings(RunSettings):
         run_timeout_seconds = 3600
         run_stall_seconds = 3600
         run_model_wait_seconds = 1
@@ -404,7 +426,7 @@ def test_a_failing_endpoint_is_given_up_on_instead_of_retried_for_two_hours(
     engine = make_engine()
     create_pending_run(engine, "task-endpoint-1")
 
-    class FakeSettings:
+    class FakeSettings(RunSettings):
         run_timeout_seconds = 3600
         run_stall_seconds = 3600
         run_model_wait_seconds = 3600
@@ -506,7 +528,7 @@ def test_a_failure_the_run_recovers_from_does_not_end_it(
     engine = make_engine()
     create_pending_run(engine, "task-endpoint-2")
 
-    class FakeSettings:
+    class FakeSettings(RunSettings):
         run_timeout_seconds = 3600
         run_stall_seconds = 3600
         run_model_wait_seconds = 3600
@@ -587,3 +609,121 @@ def test_reconcile_ignores_finished_runs():
     assert reconciled == 0
     state, _, _ = get_run_state(engine, "task-done-1")
     assert state == RunState.awaiting_manual_score
+
+
+def test_case_spec_is_written_for_a_case_that_only_exists_in_the_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A case authored in the browser has no benchmarks/<id>/task.yaml.
+
+    Without a spec the runner exits with "Unknown case" milliseconds after the
+    run is queued, which is exactly what a UI-created case used to do.
+    """
+    import json
+    from types import SimpleNamespace
+
+    from harness_lab_app.models import Case, CaseType
+
+    engine = make_engine()
+    monkeypatch.setattr(
+        tasks,
+        "get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path, repo_root=tmp_path),
+    )
+    with Session(engine) as session:
+        session.add(
+            Case(
+                case_id="doom-like",
+                name="Doom-like Game",
+                type=CaseType.multi_step,
+                prompt_variants={"default": "Build a Doom-like game."},
+                step_prompts=["Set up the loop.", "Add raycasting."],
+                constraints=["Pure Python."],
+                success_criteria={"runs": "The game starts."},
+                max_steps=3,
+            )
+        )
+        session.commit()
+        tasks._write_case_spec(session, "doom-run-1", "doom-like", "default")
+
+    spec = json.loads((tmp_path / "doom-run-1" / "case_spec.json").read_text())
+    assert spec["case_type"] == "multi_step"
+    assert spec["case_id"] == "doom-like"
+    assert spec["prompt"] == "Build a Doom-like game."
+    assert spec["step_prompts"] == ["Set up the loop.", "Add raycasting."]
+    assert spec["max_steps"] == 3
+    assert spec["constraints"] == ["Pure Python."]
+    assert spec["success_criteria"] == {"runs": "The game starts."}
+    # Empty repo is what tells the runner there is nothing to clone.
+    assert spec["repo"] == ""
+
+
+def test_a_prompt_stored_as_a_path_reaches_the_runner_as_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Cases imported from task.yaml store a repo-relative path, not a prompt.
+
+    The runner container has no benchmark layout knowledge, so the worker — the
+    process that can read the repo — resolves it.
+    """
+    import json
+    from types import SimpleNamespace
+
+    from harness_lab_app.models import Case, CaseType
+
+    engine = make_engine()
+    prompt_file = tmp_path / "benchmarks" / "tetris" / "prompt_naive.md"
+    prompt_file.parent.mkdir(parents=True)
+    prompt_file.write_text("Build Tetris.\nNo libraries.\n")
+    monkeypatch.setattr(
+        tasks,
+        "get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path / "runs", repo_root=tmp_path),
+    )
+    with Session(engine) as session:
+        session.add(
+            Case(
+                case_id="tetris-v1",
+                name="Tetris",
+                type=CaseType.build_from_scratch,
+                prompt_variants={"naive": "benchmarks/tetris/prompt_naive.md"},
+            )
+        )
+        session.commit()
+        tasks._write_case_spec(session, "tetris-run-2", "tetris-v1", "naive")
+
+    spec = json.loads(
+        (tmp_path / "runs" / "tetris-run-2" / "case_spec.json").read_text()
+    )
+    assert spec["prompt"] == "Build Tetris.\nNo libraries.\n"
+
+
+def test_an_unresolvable_prompt_path_is_passed_through_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A one-line prompt is a prompt, even when it looks like a path."""
+    import json
+    from types import SimpleNamespace
+
+    from harness_lab_app.models import Case, CaseType
+
+    engine = make_engine()
+    monkeypatch.setattr(
+        tasks,
+        "get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path, repo_root=tmp_path),
+    )
+    with Session(engine) as session:
+        session.add(
+            Case(
+                case_id="terse",
+                name="Terse",
+                type=CaseType.single_prompt,
+                prompt_variants={"default": "Fix src/app.py"},
+            )
+        )
+        session.commit()
+        tasks._write_case_spec(session, "terse-run-1", "terse", "default")
+
+    spec = json.loads((tmp_path / "terse-run-1" / "case_spec.json").read_text())
+    assert spec["prompt"] == "Fix src/app.py"

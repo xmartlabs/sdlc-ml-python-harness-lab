@@ -235,6 +235,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  getCase: (caseId: string) => request<CaseRecord>(`/api/cases/${caseId}`),
+  updateCase: (caseId: string, payload: CaseCreatePayload) =>
+    request<CaseRecord>(`/api/cases/${caseId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  // Soft delete: the API flips status to `deleted` and returns the case.
+  deleteCase: (caseId: string) =>
+    request<CaseRecord>(`/api/cases/${caseId}`, { method: "DELETE" }),
+  cloneCase: (caseId: string, newCaseId: string, newName: string) =>
+    request<CaseRecord>(
+      `/api/cases/${caseId}/clone?new_case_id=${encodeURIComponent(
+        newCaseId
+      )}&new_name=${encodeURIComponent(newName)}`,
+      { method: "POST" }
+    ),
+  syncCase: (caseId: string) =>
+    request<{ task_path: string }>(`/api/cases/${caseId}/sync`, { method: "POST" }),
   listCaseRunIds: (caseId: string) =>
     request<{ run_ids: string[] }>(`/api/cases/${caseId}/run-ids`),
   importSwebench: (instanceId: string) =>

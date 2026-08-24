@@ -268,6 +268,18 @@ whose elapsed time is absurd for what it is — a `timeout 2` alive for 47 minut
 Traffic on your model host is the other signal, and it separates the two silences:
 a stuck agent is blocked in a tool call, a prefilling model has your GPU pinned.
 
+When a budget ends a run, the harness stops the container itself, so the exit code
+that follows is its own SIGKILL (137) rather than anything the agent did. The run's
+last event therefore leads with the reason and keeps the code as context — `Run
+timed out after 7200s (exit code 137)` — instead of the bare `Run exited with 137`
+that read like a crash the lab never had.
+
+Run detail reports **Queued for** and **Execution** separately for the same reason.
+The worker runs at concurrency 1, so a batch queues behind itself and a run can sit
+for hours before its container starts; a single created-to-ended duration cannot
+tell a slow model from a busy queue, which is exactly the question you are asking
+when a run looks slow.
+
 The clocks are visible read-only under Settings → Runtime facts. Any of them can be
 disabled with `0` (`HARNESS_LAB_RUN_STALL_SECONDS`,
 `HARNESS_LAB_RUN_MODEL_WAIT_SECONDS`, `HARNESS_LAB_RUN_MAX_STREAM_ERRORS`); see
@@ -286,6 +298,36 @@ The catalog of tasks. Three ways to get realistic cases:
   exit-code validation, e.g. `benchmarks/cli-textstats/`
   (`make case-import TASK=…`). Great for trying a new model on a self-contained
   task with an objective floor.
+
+#### Managing a case from the browser
+
+Selecting a case opens the **case editor** below the list. Everything a case is
+made of is editable there, and nothing about the create → edit → run loop needs
+a shell.
+
+- **Case ID is fixed.** It is the key every run in the history joins on, so
+  renaming it would orphan past results. Use **Clone** to start a variant.
+- **Prompt variants** are the strategies you want to compare — one prompt each,
+  named. The run form picks one by name, and the leaderboard groups by it.
+- **Step prompts** apply to `multi_step` cases: step 1 uses the prompt variant,
+  and each entry drives the step with the same number. Leave the list empty and
+  the runner falls back to its generic continuation prompt.
+- **Validation commands** run in the sandbox after the agent finishes; a
+  non-zero exit fails the objective score. `{run_id}` and `{workspace}` are
+  substituted.
+- **SWE-bench cases are read-only.** Their prompts and test lists *are* the
+  benchmark; editing them would silently invalidate every comparison already
+  recorded. Clone one to build a variant you can change.
+
+A case created here lives in the database only, which is all the runner needs:
+the worker stages the case as `data/runs/<run-id>/case_spec.json` before the
+container starts. That is what the `not_synced` badge means — not a problem, and
+not something to fix before running.
+
+**Sync to YAML** is the export path, not a prerequisite. It writes
+`benchmarks/<case-id>/task.yaml` plus one prompt file per variant, so the case
+can be committed to the repo and driven from the CLI lane. After a sync, later
+edits show as `modified_since_sync` until you export again.
 
 ### Skills
 Two tiers: the **governed catalog** (read-only, shipped with the harness) and
@@ -367,11 +409,18 @@ refreshing every 30 seconds:
 - **Run queue** — runs active for over six hours, which usually means a worker died
   under them.
 
-A failing row carries its own **repair button**. There are exactly four repairs —
+A failing row carries its own **repair button**. There are exactly five repairs —
 re-sync skill views, rebuild the staging tree, refresh the model catalog, reconcile
-stuck runs — and nothing else can be triggered from the browser. Repairs are never
-automatic: `skills_sync` rewrites tracked files and reconciling fails live runs, so
-both wait for you to ask.
+stuck runs, build the runner image — and nothing else can be triggered from the
+browser. Repairs are never automatic: `skills_sync` rewrites tracked files and
+reconciling fails live runs, so both wait for you to ask.
+
+**Build runner image** covers the one condition that used to send you to a
+terminal on a fresh machine. The build runs on the worker (the only process with
+the socket) against its own `/app` mount of the repo, takes a few minutes, and
+does not hold the request open — re-check the panel when it finishes. Until the
+image exists, creating a run is refused at preflight rather than queued and
+killed milliseconds later.
 
 ### Settings
 The backoffice: everything you would otherwise change with a shell on the server.

@@ -139,7 +139,11 @@ class CaseService:
         for field_name, value in payload.items():
             setattr(case, field_name, value)
         case.updated_at = utc_now()
-        case.sync_state = CaseSyncState.modified_since_sync
+        # "Modified since sync" only means something for a case that was synced
+        # once: a case that lives only in the DB stays `not_synced`, otherwise
+        # every edit raises a drift alarm about a YAML file that never existed.
+        if case.sync_state == CaseSyncState.synced:
+            case.sync_state = CaseSyncState.modified_since_sync
         self.session.add(case)
         self.session.commit()
         self.session.refresh(case)

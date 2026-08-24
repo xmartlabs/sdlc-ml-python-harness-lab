@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -31,11 +32,13 @@ from harness_lab_app.executors import (
     container_name_for_run,
     get_executor,
 )
-from harness_lab_app.models import CaseType, Run, RunEvent, RunState
+from harness_lab_app.models import Case, CaseType, Run, RunEvent, RunState
 from harness_lab_app.run_service import RunService
 from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.sandbox_service import SandboxService
 from harness_lab_app.schemas import RunConfigCreate
+
+logger = logging.getLogger(__name__)
 
 _AUDIT_TIMEOUT_SECONDS = 300
 _SANDBOX_PORTS = {"terminal": "7681/tcp", "desktop": "6080/tcp"}
@@ -66,32 +69,60 @@ def _config_payload(session: Session, run: Run) -> RunConfigCreate:
     )
 
 
+def _case_prompt_text(case: Case, prompt_variant: str) -> str:
+    """The prompt body for a variant, whatever form the case stores it in.
+
+    Cases created from the web (and every SWE-bench import) store the prompt
+    *text* in ``prompt_variants``. Cases imported from a ``benchmarks/<id>/
+    task.yaml`` store a repo-relative *path* instead, because that is what the
+    YAML says. The runner only ever wants text, so resolve the path here — on
+    the worker, which can read the repo — rather than teaching the container
+    about benchmark layout.
+    """
+    raw = case.prompt_variants.get(prompt_variant, "")
+    if not raw or "\n" in raw:
+        return raw
+    candidate = get_settings().repo_root / raw
+    try:
+        if candidate.is_file():
+            return candidate.read_text()
+    except OSError:
+        return raw
+    return raw
+
+
 def _write_case_spec(
     session: Session, run_id: str, case_id: str, prompt_variant: str
 ) -> None:
-    """Stage a repo-task's provisioning spec for the DB-blind runner container.
+    """Stage the case, as the DB holds it, for the DB-blind runner container.
 
-    For SWE-bench / repo-task cases the runner must clone a subject repo before
-    the agent runs, but the container has no DB access. The worker (which does)
-    writes case_spec.json into the run dir on the host; because the repo is
+    The runner container has no DB access, so the worker (which does) writes
+    case_spec.json into the run dir on the host; because the repo is
     bind-mounted at /app, bench_run.py reads it at data/runs/<id>/case_spec.json
-    (ADR-0009). No-op for non-repo cases (e.g. Tetris).
+    (ADR-0009).
+
+    Written for *every* case type, not only SWE-bench: without it a case that
+    exists only in the DB — anything created from the web UI — has no
+    benchmarks/<id>/task.yaml for bench_run.py to load, and the run dies with
+    "Unknown case". A non-empty ``repo`` (an ``owner/repo`` slug) is what marks
+    a spec as needing workspace provisioning; the generic branch leaves it
+    empty. NOTE: a case may carry a ``subject_repo`` for provenance that is NOT
+    cloneable (Tetris says ``ml-python-base``), so type — not subject_repo — is
+    the gate.
     """
     try:
         case = CaseService(session).get_case(case_id)
     except ValueError:
+        # No case row: drop any spec left over from a prior run reusing this id
+        # rather than letting the runner act on a stranger's provisioning data.
+        (get_settings().data_runs_dir / run_id / "case_spec.json").unlink(
+            missing_ok=True
+        )
         return
     run_dir = get_settings().data_runs_dir / run_id
     stale_spec = run_dir / "case_spec.json"
-    # Only SWE-bench cases provision a repo. NOTE: other cases (e.g. Tetris) may
-    # carry a subject_repo field for provenance that is NOT a cloneable
-    # owner/repo, so type — not subject_repo — is the gate.
-    if case.type not in (CaseType.swe_bench_instance, CaseType.swe_pro_instance):
-        # Remove any spec left over from a prior run reusing this id, so the
-        # runner does not mistake this for a repo task.
-        stale_spec.unlink(missing_ok=True)
-        return
     meta = case.metadata_json or {}
+    spec: dict[str, Any]
     if case.type == CaseType.swe_pro_instance:
         # Pro lane (docs/design-swe-bench-pro-lane.md): docker-image
         # provisioning + containerized validation. NOTE: the gold patch is
@@ -110,9 +141,9 @@ def _write_case_spec(
                 meta.get("selected_test_files_to_run", "[]")
             ),
             "prompt_variant": prompt_variant,
-            "prompt": case.prompt_variants.get(prompt_variant, ""),
+            "prompt": _case_prompt_text(case, prompt_variant),
         }
-    else:
+    elif case.type == CaseType.swe_bench_instance:
         spec = {
             "case_type": str(case.type),
             "repo": case.subject_repo or "",
@@ -125,7 +156,23 @@ def _write_case_spec(
             "fail_to_pass": json.loads(meta.get("fail_to_pass", "[]")),
             "pass_to_pass": json.loads(meta.get("pass_to_pass", "[]")),
             "prompt_variant": prompt_variant,
-            "prompt": case.prompt_variants.get(prompt_variant, ""),
+            "prompt": _case_prompt_text(case, prompt_variant),
+        }
+    else:
+        # Everything the DB is the sole source of truth for: single_prompt,
+        # multi_step, build_from_scratch, bugfix, repo_task. `repo` stays empty
+        # so the runner provisions nothing and works in a bare workspace.
+        spec = {
+            "case_type": str(case.type),
+            "case_id": case.case_id,
+            "repo": "",
+            "base_commit": case.base_commit or "",
+            "prompt_variant": prompt_variant,
+            "prompt": _case_prompt_text(case, prompt_variant),
+            "step_prompts": list(case.step_prompts),
+            "max_steps": case.max_steps,
+            "constraints": list(case.constraints),
+            "success_criteria": dict(case.success_criteria),
         }
     run_dir.mkdir(parents=True, exist_ok=True)
     stale_spec.write_text(json.dumps(spec, indent=2))
@@ -1058,6 +1105,39 @@ def reconcile_runs() -> int:
     """
     init_db()
     return reconcile_stale_runs()
+
+
+@celery_app.task(name="harness_lab_app.tasks.build_runner_image", acks_late=True)
+def build_runner_image() -> dict[str, Any]:
+    """The health panel's heal button for a missing runner image.
+
+    Runs on the worker because building needs the docker socket, which only the
+    worker holds (ADR-0002). The build context is the worker's own ``/app`` bind
+    mount of the repo, so no host-path translation is involved. Takes minutes;
+    the health panel re-checks the docker row afterwards rather than waiting.
+    """
+    settings = get_settings()
+    if settings.execution_backend != "docker":
+        return {"ok": True, "detail": "Execution backend is not docker; nothing to do."}
+    try:
+        import docker  # local import: only the worker needs the socket
+
+        client = docker.from_env()
+        _, logs = client.images.build(
+            path=str(settings.repo_root),
+            dockerfile="Dockerfile.runner",
+            tag=settings.runner_image,
+            rm=True,
+        )
+        for entry in logs:
+            line = str(entry.get("stream", "")).rstrip()
+            if line:
+                logger.info("build_runner_image: %s", line)
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        logger.error("build_runner_image failed: %s", detail)
+        return {"ok": False, "detail": detail}
+    return {"ok": True, "detail": f"Built {settings.runner_image}"}
 
 
 @control_command()

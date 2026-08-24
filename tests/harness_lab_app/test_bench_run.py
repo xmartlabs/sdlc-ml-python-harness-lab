@@ -244,3 +244,51 @@ def test_finalize_workspace_reports_an_empty_archive(tmp_path, capsys):
     bench_run.finalize_workspace(out_dir, workspace, "tetris-v1-K-099")
 
     assert "produced no artifact" in capsys.readouterr().out
+
+
+def test_case_spec_loads_even_without_a_repo(tmp_path):
+    """A DB-native case has no subject repo, and that is not a reason to
+    discard its spec: the spec is the only description the runner gets."""
+    (tmp_path / "case_spec.json").write_text(
+        '{"case_type": "multi_step", "case_id": "doom-like", "repo": "", '
+        '"prompt": "Build it."}'
+    )
+
+    spec = bench_run._load_case_spec(tmp_path)
+
+    assert spec is not None
+    assert spec["case_id"] == "doom-like"
+    assert bench_run.spec_provisions_repo(spec) is False
+
+
+def test_case_spec_marks_a_swe_case_as_provisioning(tmp_path):
+    (tmp_path / "case_spec.json").write_text(
+        '{"case_type": "swe_bench_instance", "repo": "pallets/flask"}'
+    )
+
+    assert bench_run.spec_provisions_repo(bench_run._load_case_spec(tmp_path)) is True
+
+
+def test_a_bare_repo_name_is_not_a_cloneable_slug(tmp_path):
+    """Tetris carries ``subject_repo: ml-python-base`` for provenance only."""
+    assert bench_run.spec_provisions_repo({"repo": "ml-python-base"}) is False
+    assert bench_run.spec_provisions_repo(None) is False
+
+
+def test_missing_or_corrupt_case_spec_is_absent_not_fatal(tmp_path):
+    assert bench_run._load_case_spec(tmp_path) is None
+    (tmp_path / "case_spec.json").write_text("{not json")
+    assert bench_run._load_case_spec(tmp_path) is None
+
+
+def test_case_step_prompt_carries_the_author_text_and_the_workspace(tmp_path):
+    """A UI-authored step must not be rewritten into the Tetris framing."""
+    path = bench_run.generate_case_step_prompt(
+        "doom-like-K-001", 2, tmp_path, "Add collision detection."
+    )
+    text = path.read_text()
+
+    assert path.name == "step-2-prompt.md"
+    assert "Add collision detection." in text
+    assert bench_run.agent_workspace_path("doom-like-K-001") in text
+    assert "ALL MILESTONES COMPLETE" in text
