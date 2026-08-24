@@ -262,6 +262,20 @@ sed "s|__REPO_ROOT__|$PWD|g" deploy/harness-lab.plist \
 launchctl load ~/Library/LaunchAgents/com.harnesslab.stack.plist
 ```
 
+An always-on lab also accumulates database. The artifact index is rebuilt from
+disk on demand, so it is safe to compact:
+
+```bash
+make app-db-compact DRY=1   # report what would go
+make app-db-compact         # delete stale rows, then VACUUM
+```
+
+It drops index rows the indexer no longer writes — `workspace/` trees from before
+that exclusion existed, and runs deleted from the UI — and returns the freed pages
+to the filesystem. On the reference laptop this took the database from 595 MB to
+115 MB; no run, score or artifact on disk is touched. The database itself runs in
+WAL mode, so the UI reads a consistent snapshot while a benchmark writes its log.
+
 One thing does not travel: the in-platform **sandboxes** (web terminal / noVNC
 desktop) hand the browser a `localhost` URL, so they only work from the server itself.
 Runs, scoring and comparison are unaffected.

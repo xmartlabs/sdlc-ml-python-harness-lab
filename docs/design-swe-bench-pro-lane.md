@@ -113,6 +113,13 @@ case_spec.json or `metadata_json`** — the bind mount makes that file readable
 by the agent; it exists only transiently in the normalized spec for
 golden-patch self-tests.
 
+Since [ADR-0025](adr/0025-db-is-the-source-of-truth-for-every-case.md) the spec
+is staged for **every** case type, not just the SWE ones, so its presence no
+longer means "this is a repo task". The discriminator is the `repo` field:
+`bench_run.py` provisions a workspace only when it holds an `owner/repo` slug,
+which the Pro branch always sets and a UI-authored case leaves empty. Nothing in
+the Pro lane changes as a result — the branch is still selected by `case_type`.
+
 ### Implementation notes (as wired)
 
 - **Worker pre-provisioning:** `tasks._provision_pro_workspace` shells out to

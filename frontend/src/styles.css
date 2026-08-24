@@ -1944,3 +1944,12 @@ button.ghost {
   max-height: 190px;
   overflow-y: auto;
 }
+
+/* Case editor: one bordered block per prompt variant, so a long list of
+   prompts still reads as separate items rather than one wall of textareas. */
+.case-variant {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+}

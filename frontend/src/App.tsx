@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { api, SESSION_EXPIRED_EVENT } from "./api";
+import { CaseEditor } from "./components/CaseEditor";
 import { Layout } from "./components/Layout";
 import { RunDetailRoute } from "./components/RunDetailRoute";
 import { Cases } from "./pages/Cases";
@@ -154,6 +155,16 @@ export default function App() {
     return created;
   };
 
+  const upsertCase = (item: CaseRecord) => {
+    setCases((current) => [item, ...current.filter((row) => row.case_id !== item.case_id)]);
+    setSelectedCaseId(item.case_id);
+  };
+
+  const removeCase = (caseId: string) => {
+    setCases((current) => current.filter((row) => row.case_id !== caseId));
+    setSelectedCaseId((current) => (current === caseId ? null : current));
+  };
+
   const importSwebench = async (instanceId: string) => {
     const imported = await api.importSwebench(instanceId);
     setCases((current) => [imported, ...current.filter((item) => item.case_id !== imported.case_id)]);
@@ -287,13 +298,13 @@ export default function App() {
                 selectedCaseId={selectedCaseId}
               />
               {selectedCase !== null ? (
-                <section className="panel">
-                  <div className="panel-head">
-                    <h2>Selected case</h2>
-                    <span className="muted">{selectedCase.sync_state}</span>
-                  </div>
-                  <p>{selectedCase.description}</p>
-                </section>
+                <CaseEditor
+                  caseRecord={selectedCase}
+                  key={selectedCase.case_id}
+                  onCloned={upsertCase}
+                  onDeleted={removeCase}
+                  onSaved={upsertCase}
+                />
               ) : null}
             </>
           }

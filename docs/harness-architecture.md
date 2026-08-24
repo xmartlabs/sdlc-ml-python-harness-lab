@@ -60,6 +60,24 @@ adapter file.
 3. Add the `<!-- BEGIN/END GENERATED SKILLS -->` sentinels to `CURSOR.md`.
 4. Run `make sync-skills`. The native view and adapter region are generated. No
    Makefile change is required.
+5. If `link_strategy` is not `none`, add the new `native_skills_dir` to
+   `RUNNER_MASKED_SKILL_DIRS` in `src/harness_lab_app/executors.py`.
+
+### Why step 5 exists
+
+Each tool gets its own materialized catalog, which is right on your machine and
+wrong inside a run: the runner bind-mounts the whole repository at `/app`, so the
+agent discovers every catalog at once and loads the same governed skills two, three
+or four times. The cost is not the duplicate-name warnings — 240 of them in run
+`tetris-v1-K-064` — but that the catalog is part of the system prompt, re-sent and
+re-prefilled on every turn of every step. Against a local model, four copies of
+428 KB of `SKILL.md` is minutes per turn.
+
+So a run sees exactly one catalog (`RUNNER_SKILLS_DIR`, `.claude/skills`) and the
+others are hidden behind empty tmpfs mounts. Masking rather than deleting keeps the
+host tree — the tools' source of truth, and what `make check-sync` gates — untouched
+by a run. `tests/harness_lab_app/test_executors.py` fails if the mask list falls
+behind the registry, which is what makes step 5 a reminder rather than a trap.
 
 ## Agents and the SDLC
 

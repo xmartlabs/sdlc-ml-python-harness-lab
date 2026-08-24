@@ -169,6 +169,20 @@ def test_a_missing_runner_image_is_a_warning_not_an_error():
     assert status == module.WARN
 
 
+def test_a_missing_runner_image_points_at_the_button_not_the_shell():
+    """Self-management is the point: the remedy must be in the panel."""
+    _, detail, _ = module._check_docker(
+        {
+            "backend": "docker",
+            "docker_ok": True,
+            "runner_image_present": False,
+            "runner_image": "harness-lab-runner:latest",
+        }
+    )
+    assert "Build runner image" in detail
+    assert "make app-up" not in detail
+
+
 def test_the_subprocess_backend_does_not_need_docker():
     status, _, _ = module._check_docker({"backend": "subprocess"})
     assert status == module.OK
@@ -245,6 +259,47 @@ def test_reconcile_runs_is_delegated_to_the_worker(isolated, monkeypatch):
     assert result["ok"] is True
 
 
+def test_building_the_runner_image_is_delegated_to_the_worker(isolated, monkeypatch):
+    """Same rule as reconcile_runs: only the worker holds the socket, and only
+    the worker can build (ADR-0002)."""
+    published: list[str] = []
+    monkeypatch.setattr(
+        "harness_lab_app.celery_app.enqueue_build_runner_image",
+        lambda: published.append("build"),
+    )
+    monkeypatch.setattr(module, "worker_facts", lambda **_kwargs: {})
+    with _session() as session:
+        result = module.heal("build_runner_image", session)
+
+    assert published == ["build"]
+    assert result["ok"] is True
+    assert "minutes" in result["detail"]
+
+
+def test_the_docker_row_carries_its_own_heal_button(isolated, monkeypatch):
+    monkeypatch.setattr(module, "worker_facts", lambda **_kwargs: {})
+    with _session() as session:
+        report = module.collect_health(session)
+
+    docker_row = next(row for row in report["checks"] if row["id"] == "docker")
+    assert docker_row["heal"] == "build_runner_image"
+
+
+def test_worker_facts_are_cached_between_callers(monkeypatch):
+    """A 3 s broadcast per run preflight would make batch creation crawl."""
+    calls: list[int] = []
+    monkeypatch.setattr(module, "_facts_cache", None, raising=False)
+    monkeypatch.setattr(
+        module, "_worker_facts", lambda: (calls.append(1), {"backend": "docker"})[1]
+    )
+
+    first = module.worker_facts(refresh=True)
+    second = module.worker_facts()
+
+    assert first == second
+    assert len(calls) == 1
+
+
 def test_materialize_rebuilds_the_staging_tree(isolated, monkeypatch):
     calls: list[str] = []
 
@@ -272,6 +327,7 @@ def test_the_allowlist_is_the_documented_set():
         "materialize_staged_skills",
         "refresh_models",
         "reconcile_runs",
+        "build_runner_image",
     }
 
 

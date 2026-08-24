@@ -94,6 +94,18 @@ def enqueue_reconcile_runs() -> None:
     )
 
 
+def enqueue_build_runner_image() -> None:
+    """Publish the runner-image build the health panel's heal button asks for.
+
+    The API cannot build it itself: only the worker holds the docker socket
+    (ADR-0002). Raises if the broker is unreachable."""
+    celery_app.send_task(
+        "harness_lab_app.tasks.build_runner_image",
+        queue="runs",
+        retry=False,
+    )
+
+
 def enqueue_container_cleanup(run_id: str) -> None:
     """Publish a container-teardown task after a run is deleted (worker owns the
     docker socket); raises if the broker is unreachable."""

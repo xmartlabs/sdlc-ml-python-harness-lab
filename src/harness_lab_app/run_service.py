@@ -241,6 +241,30 @@ class RunService:
     def preview_command(self, run_id: str, config: RunConfigCreate) -> list[str]:
         return self.adapter.build_command(run_id, config)
 
+    def _check_runner_image(self) -> None:
+        """Refuse a docker-backed run when the runner image is not built yet.
+
+        Without this the run is persisted, queued, and dies in the executor
+        milliseconds later with a container-level error — a failed run in the
+        history for a condition the operator can fix with one button. The
+        worker is the only process that can see the image (ADR-0002), and its
+        answer is cached, so this costs nothing in the common case. Silence
+        when no worker replies: that is the worker check's story to tell, and
+        guessing here would block runs whenever the broadcast is slow.
+        """
+        from harness_lab_app.health_service import worker_facts
+
+        facts = worker_facts()
+        if not facts or facts.get("backend") != "docker":
+            return
+        if facts.get("docker_ok") and not facts.get("runner_image_present"):
+            raise RunPreflightError(
+                f"Runner image {facts.get('runner_image')!r} is not built, so "
+                "the run would fail immediately. Open Health and use "
+                "'Build runner image' — it builds on the worker and takes a "
+                "few minutes."
+            )
+
     def preflight(self, config: RunConfigCreate) -> None:
         """Reject configs that cannot possibly run, before persisting/enqueuing.
 
@@ -254,6 +278,7 @@ class RunService:
         """
         if config.dry_run:
             return
+        self._check_runner_image()
         if config.harness in ("codex", "claude"):
             # These harnesses drive their own CLI with native auth (no gateway
             # model/token). Host/subprocess mode uses your host login directly.
@@ -757,12 +782,27 @@ class RunService:
             RunEvent(
                 run_id=run_id,
                 level="info" if exit_code == 0 else "error",
-                message=f"Run exited with {exit_code}",
+                message=self._finish_message(exit_code, failure_reason),
             )
         )
         self.session.commit()
         self.session.refresh(run)
         return run
+
+    @staticmethod
+    def _finish_message(exit_code: int, failure_reason: str | None) -> str:
+        """The closing event of a run, as a reader should see it.
+
+        When the watchdog stops a run it already knows why ("Run timed out
+        after 7200s") and then kills the container, so the exit code that
+        follows is the harness's own SIGKILL. Reporting the raw code on its own
+        line made every watchdog stop end in a red `Run exited with 137`, which
+        reads as a crash the lab did not have; the code is kept as a
+        parenthetical for anyone debugging the executor.
+        """
+        if exit_code == 0 or not failure_reason:
+            return f"Run exited with {exit_code}"
+        return f"{failure_reason} (exit code {exit_code})"
 
     def score_run(
         self, run_id: str, score: int, interventions: int, notes: str = ""

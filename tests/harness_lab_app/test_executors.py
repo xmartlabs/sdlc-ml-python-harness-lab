@@ -7,11 +7,14 @@ import pytest
 
 from harness_lab_app import executors
 from harness_lab_app.executors import (
+    RUNNER_MASKED_SKILL_DIRS,
+    RUNNER_SKILLS_DIR,
     DockerRunExecutor,
     SubprocessRunExecutor,
     build_run_environment,
     container_name_for_run,
     rewrite_localhost,
+    runner_skill_masks,
 )
 
 
@@ -181,6 +184,13 @@ def test_docker_executor_configures_container(
         == "http://host.docker.internal:4000/v1"
     )
     assert kwargs["labels"] == {"harness-lab.run-id": "tetris-v1-K-001"}
+    # One skill catalog reaches the agent; the per-tool mirrors are masked.
+    assert kwargs["tmpfs"] == {
+        "/app/.agents/skills": "",
+        "/app/.opencode/skills": "",
+        "/app/.codex/skills": "",
+    }
+    assert f"/app/{RUNNER_SKILLS_DIR}" not in kwargs["tmpfs"]
     assert messages == ["step one", "step two"]
     assert exit_code == 0
     assert container.removed is True
@@ -211,3 +221,34 @@ def test_docker_executor_stop_stops_container(
     assert container.stopped is True
     assert handle.wait() == 137
     assert container.removed is True
+
+
+def test_runner_skill_masks_never_hides_the_catalog_in_use() -> None:
+    masks = runner_skill_masks()
+
+    assert f"/app/{RUNNER_SKILLS_DIR}" not in masks
+    assert all(path.startswith("/app/") for path in masks)
+    assert set(masks.values()) == {""}
+
+
+def test_runner_skill_masks_cover_every_tool_in_the_registry() -> None:
+    """The mask list must not drift from ``adapters/registry.toml``.
+
+    Adding an AI tool there materializes a fifth skill catalog into the repo,
+    which the runner would then load on top of the one it is measuring. The
+    registry is the source of truth; this test is the tripwire that says so
+    when a tool is added and :data:`RUNNER_MASKED_SKILL_DIRS` is not updated.
+    """
+    import tomllib
+
+    registry = tomllib.loads(
+        (Path(__file__).resolve().parents[2] / "adapters" / "registry.toml").read_text()
+    )
+    materialized = {
+        entry["native_skills_dir"]
+        for entry in registry["tool"]
+        if entry.get("native_skills_dir")
+        and entry.get("link_strategy", "none") != "none"
+    }
+
+    assert materialized - {RUNNER_SKILLS_DIR} == set(RUNNER_MASKED_SKILL_DIRS)

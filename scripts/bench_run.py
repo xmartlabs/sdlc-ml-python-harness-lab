@@ -579,6 +579,32 @@ def generate_continuation_prompt(
     return path
 
 
+def generate_case_step_prompt(
+    run_id: str, step_n: int, steps_dir: Path, step_text: str
+) -> Path:
+    """Write step N's prompt from the case's own ``step_prompts`` list.
+
+    A multi-step case authored in the web UI carries one instruction per step.
+    Neither generic continuation prompt fits it: one is Tetris-framed, the
+    other SWE-bench-framed. Use the author's text and add only the continuity
+    the agent needs (which step it is, and where its work lives).
+    """
+    workspace = agent_workspace_path(run_id)
+    text = (
+        f"<!-- Case step {step_n} for RUN_ID={run_id} -->\n\n"
+        f"This is step {step_n} of an ongoing task (RUN_ID={run_id}).\n\n"
+        f"Continue from the existing workspace at `{workspace}`. Do NOT restart "
+        f"from scratch and do NOT rewrite unrelated code.\n\n"
+        f"## Your task for this step\n\n"
+        f"{step_text.strip()}\n\n"
+        f"When this step is done, state what you changed. If the whole task is "
+        f"complete, end with: ALL MILESTONES COMPLETE\n"
+    )
+    path = steps_dir / f"step-{step_n}-prompt.md"
+    path.write_text(text)
+    return path
+
+
 def generate_swe_continuation_prompt(
     run_id: str,
     step_n: int,
@@ -936,7 +962,12 @@ def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
 
 
 def _load_case_spec(out_dir: Path) -> dict | None:
-    """Return the repo-task provisioning spec written by the worker, or None."""
+    """Return the case as the worker staged it from the DB, or None.
+
+    The worker writes this for every case type (ADR-0009), so its presence
+    means "the DB described this run", not "this is a repo task" — use
+    :func:`spec_provisions_repo` for that question.
+    """
     path = out_dir / "case_spec.json"
     if not path.exists():
         return None
@@ -944,10 +975,17 @@ def _load_case_spec(out_dir: Path) -> dict | None:
         spec = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
-    # Guard: only treat as a repo task when `repo` looks like a cloneable
-    # "owner/repo" (a bare name like a provenance subject_repo is not).
-    repo = spec.get("repo", "")
-    return spec if "/" in repo else None
+    return spec if isinstance(spec, dict) else None
+
+
+def spec_provisions_repo(spec: dict | None) -> bool:
+    """Whether this case needs a subject repo cloned before the agent runs.
+
+    Only a cloneable ``owner/repo`` counts: a case may carry a bare
+    ``subject_repo`` for provenance (Tetris says ``ml-python-base``), and a
+    DB-native case leaves the field empty.
+    """
+    return "/" in (spec or {}).get("repo", "")
 
 
 def provision_workspace(workspace: Path, spec: dict) -> None:
@@ -1779,12 +1817,31 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir = DATA_DIR / args.run
     case_spec = _load_case_spec(out_dir)
+    # A spec exists for every DB case; only some of them clone a subject repo.
+    # Everything downstream that used to test `case_spec is not None` was really
+    # asking this question.
+    provisions_repo = spec_provisions_repo(case_spec)
+    # Per-step instructions authored on the case (multi_step in the web UI).
+    case_step_prompts: list[str] = [
+        str(item) for item in (case_spec or {}).get("step_prompts", []) if str(item)
+    ]
 
-    if case_spec is not None:
-        # Repo-task / SWE-bench lane (ADR-0009): everything the runner needs is
-        # in case_spec.json — no benchmarks/<case>/ task.yaml/prompts required.
-        runs_path = None
+    runs_path = RUNS_FILES.get(args.case)
+    if runs_path is not None:
+        # Curated benchmark lane: benchmarks/<case>/ owns the task, the prompt
+        # files and the experiment matrix. Kept first so a case that has both a
+        # checked-in benchmark and a DB row keeps its historical semantics.
+        task = load_task_yaml(runs_path)
+        run = resolve_or_synthesize_run(runs_path, args.run, args)
+        if run.get("status") == "completed":
+            sys.exit(f"Run {args.run} is already completed. Use a new run_id.")
+        prompt_short, prompt_source = resolve_prompt_file(task, args.prompt, run)
+    elif case_spec is not None:
+        # DB lane (ADR-0009): everything the runner needs is in case_spec.json —
+        # no benchmarks/<case>/ task.yaml/prompts required. Serves SWE-bench
+        # imports and every case created from the web UI alike.
         task = {
+            "task_id": case_spec.get("case_id") or args.case,
             "subject_repo": case_spec.get("repo", ""),
             "base_commit": case_spec.get("base_commit", ""),
             "prompts": {},
@@ -1792,7 +1849,7 @@ def main(argv: list[str] | None = None) -> int:
         run = {
             "run_id": args.run,
             "status": "pending",
-            "prompt_variant": case_spec.get("prompt_variant", "swe_default"),
+            "prompt_variant": case_spec.get("prompt_variant") or "swe_default",
             "langfuse_session_id": f"bench-{args.run}",
             "executor_model": args.executor_model or "",
             "planner_model": args.planner_model or "",
@@ -1803,16 +1860,12 @@ def main(argv: list[str] | None = None) -> int:
         prompt_source = out_dir / "_prompt_source.md"
         prompt_source.write_text(case_spec.get("prompt", ""))
     else:
-        runs_path = RUNS_FILES.get(args.case)
-        if runs_path is None:
-            sys.exit(
-                f"Unknown case '{args.case}'. Known cases: {list(RUNS_FILES.keys())}"
-            )
-        task = load_task_yaml(runs_path)
-        run = resolve_or_synthesize_run(runs_path, args.run, args)
-        if run.get("status") == "completed":
-            sys.exit(f"Run {args.run} is already completed. Use a new run_id.")
-        prompt_short, prompt_source = resolve_prompt_file(task, args.prompt, run)
+        sys.exit(
+            f"Unknown case '{args.case}'. Known benchmarks: "
+            f"{list(RUNS_FILES.keys())}. A case that lives only in the DB is "
+            "staged by the worker as data/runs/<run-id>/case_spec.json — start "
+            "it from the web UI, not by hand."
+        )
 
     session_id = run.get("langfuse_session_id", f"bench-{args.run}")
 
@@ -1948,7 +2001,7 @@ def main(argv: list[str] | None = None) -> int:
         validate_workspace(workspace, args.run, args.resume, fresh=args.fresh)
     workspace.mkdir(parents=True, exist_ok=True)
 
-    if case_spec is not None:
+    if provisions_repo and case_spec is not None:
         provision_workspace(workspace, case_spec)
 
     # Control-arm hygiene (harness A/B): Claude Code auto-loads CLAUDE.md and
@@ -1957,15 +2010,11 @@ def main(argv: list[str] | None = None) -> int:
     # arm therefore runs from inside the subject repo (truly bare context);
     # the harness variant keeps the repo-root cwd so the surface is available.
     agent_cwd: Path | None = None
-    if (
-        args.harness == "claude"
-        and case_spec is not None
-        and prompt_short == "swe_default"
-    ):
+    if args.harness == "claude" and provisions_repo and prompt_short == "swe_default":
         agent_cwd = workspace
 
     repo_note: str | None = None
-    if case_spec is not None:
+    if provisions_repo:
         repo_note = (
             "> The subject repository is your current working directory — "
             "make all changes inside it.\n"
@@ -2083,7 +2132,7 @@ def main(argv: list[str] | None = None) -> int:
             if max_steps > 1:
                 if step_n == 1:
                     step_prompt_path = prompt_path
-                elif case_spec is not None:
+                elif provisions_repo and case_spec is not None:
                     # SWE-bench lane: keep the agent on the issue (the generic
                     # continuation prompt is game-build framed and derails it).
                     step_prompt_path = generate_swe_continuation_prompt(
@@ -2093,6 +2142,16 @@ def main(argv: list[str] | None = None) -> int:
                         case_spec,
                         last_swe_eval,
                         in_repo_cwd=agent_cwd is not None,
+                    )
+                elif step_n - 1 < len(case_step_prompts):
+                    # The case author wrote this step; neither canned
+                    # continuation prompt (Tetris / SWE-bench) applies. The list
+                    # is 1:1 with steps, and step 1 already used the case prompt.
+                    step_prompt_path = generate_case_step_prompt(
+                        args.run,
+                        step_n,
+                        steps_dir,
+                        case_step_prompts[step_n - 1],
                     )
                 else:
                     step_prompt_path = generate_continuation_prompt(
@@ -2145,7 +2204,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 break
 
-            if case_spec is not None:
+            if provisions_repo and case_spec is not None:
                 # SWE-bench lane: the stop criterion is objective — evaluate the
                 # F2P/P2P subset now and stop the loop the moment it resolves.
                 swe_eval = swe_step_evaluation(workspace, case_spec)
@@ -2180,7 +2239,7 @@ def main(argv: list[str] | None = None) -> int:
 
             if max_steps > 1:
                 step_text = step_log.read_text()
-                if case_spec is None and detect_stop_signal(step_text):
+                if not provisions_repo and detect_stop_signal(step_text):
                     print(f"  Agent signaled completion at step {step_n}.")
                     break
                 if step_n < max_steps:

@@ -77,9 +77,10 @@ export function ArtifactsPanel({ runId }: ArtifactsPanelProps) {
   };
 
   const selectedArtifact = artifacts.find((item) => item.name === selected) ?? null;
-  // Workspace files can be numerous; keep the list focused on run artifacts.
+  // The server stopped indexing workspace/ (a cloned repo is tens of thousands
+  // of files nothing here lists), but runs indexed before that still carry
+  // those rows, so the filter stays until they are re-indexed.
   const topLevel = artifacts.filter((item) => !item.name.startsWith("workspace/"));
-  const workspaceCount = artifacts.length - topLevel.length;
   const listed = topLevel.slice(0, MAX_LISTED);
 
   return (
@@ -88,9 +89,7 @@ export function ArtifactsPanel({ runId }: ArtifactsPanelProps) {
         <button disabled={loading} onClick={handleRefresh} type="button">
           {loading ? "Indexing..." : artifacts.length === 0 ? "Index artifacts" : "Refresh"}
         </button>
-        {workspaceCount > 0 ? (
-          <span className="muted">+ {workspaceCount} workspace files (use the Terminal tab to browse)</span>
-        ) : null}
+        <span className="muted">Workspace files are not indexed — use the Terminal tab to browse them</span>
       </div>
       {error ? <p className="muted">{error}</p> : null}
       {listed.length === 0 ? (
