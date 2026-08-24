@@ -57,3 +57,23 @@ Per run + kind, launch an ephemeral **sandbox container** that mounts an
 - Native-window execution on the host (`uv run --with pygame python …`) stays a
   valid, zero-infra alternative for GUI, but the in-browser desktop keeps
   everything on the platform as the user wanted.
+
+## Amendment (2026-08-24) — a browser in the sandbox
+
+The desktop mode could show a pygame window but not an HTML page: neither
+`xdg-open` nor any browser existed in the image, so a lab whose output *is* a
+web page (`index.html`) could only be read as source. Chromium is now installed
+(`INSTALL_BROWSER=1`, the default; build with `0` to keep the image lean) along
+with a helper, `scripts/sandbox_open_html.sh`, installed as `open-html` and
+symlinked as `xdg-open`:
+
+- **desktop mode** — `open-html index.html` opens a Chromium window on the
+  noVNC desktop. `--no-first-run` is required: without it Debian's *Additional
+  Terms of Service* dialog covers the page.
+- **terminal mode** — there is no display, so the same command renders the page
+  headless to `/work/page.png` (override with `SHOT_PATH`), which lands in the
+  run's sandbox copy on the host.
+
+`--no-sandbox` is unavoidable (no user namespaces in the container) and
+consistent with this being a local, single-user tool. Cost: the image grows from
+~870 MB to ~1.33 GB, build-only and cached.

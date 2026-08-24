@@ -2,7 +2,8 @@
 # modes selected by the MODE env var (set by the worker when it launches a
 # container per run + kind):
 #   terminal -> ttyd web shell on :7681 (headless: pytest, python, inspect)
-#   desktop  -> Xvfb + fluxbox + x11vnc + noVNC on :6080 (see a pygame window)
+#   desktop  -> Xvfb + fluxbox + x11vnc + noVNC on :6080 (see a pygame window,
+#               or an HTML page in Chromium via `open-html index.html`)
 # The worker mounts an ephemeral COPY of the run's workspace at /work, so
 # exploring/running the code never mutates the archived artifact.
 FROM python:3.11-slim
@@ -21,6 +22,17 @@ RUN apt-get update \
         xvfb x11vnc fluxbox xterm novnc websockify \
     && rm -rf /var/lib/apt/lists/*
 
+# Chromium, so a lab that produces an HTML page can be *seen*, not just read:
+# `open-html index.html` opens a window on the desktop, or renders a headless
+# screenshot when there is no display (terminal mode). Build with
+# `--build-arg INSTALL_BROWSER=0` to keep the image lean when no lane needs it.
+ARG INSTALL_BROWSER=1
+RUN if [ "$INSTALL_BROWSER" = "1" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends chromium fonts-liberation \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # ttyd static binary (web terminal), architecture-aware (arm64 on Apple Silicon).
 ARG TTYD_VERSION=1.7.7
 RUN arch="$(dpkg --print-architecture)"; \
@@ -36,7 +48,9 @@ RUN pip install --no-cache-dir uv \
     && uv pip install --python /opt/venv/bin/python --no-cache pygame
 
 COPY scripts/sandbox_entrypoint.sh /usr/local/bin/sandbox-entrypoint.sh
-RUN chmod +x /usr/local/bin/sandbox-entrypoint.sh
+COPY scripts/sandbox_open_html.sh /usr/local/bin/open-html
+RUN chmod +x /usr/local/bin/sandbox-entrypoint.sh /usr/local/bin/open-html \
+    && ln -sf /usr/local/bin/open-html /usr/local/bin/xdg-open
 
 WORKDIR /work
 EXPOSE 7681 6080

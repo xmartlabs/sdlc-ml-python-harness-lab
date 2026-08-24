@@ -219,6 +219,17 @@ Create the run and you land on its **detail page**: live logs, artifacts, the
 validation & score panel, attribution, LLM audit, and in-platform sandboxes
 (web terminal / desktop) to poke at the produced workspace.
 
+Inside either sandbox, a run whose output is a web page opens with `open-html`:
+
+```bash
+open-html index.html   # desktop: a Chromium window; terminal: /work/page.png
+```
+
+On the **desktop** sandbox it opens a Chromium window next to the xterm; on the
+**terminal** sandbox there is no display, so it renders the page headless to
+`/work/page.png` (set `SHOT_PATH` to change that) — download it from the
+artifacts panel or read it from `data/runs/<id>/sandbox-terminal/`.
+
 #### When a run stops making progress
 
 Four budgets end a run that will not end itself, and they catch different things:
