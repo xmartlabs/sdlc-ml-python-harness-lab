@@ -172,3 +172,34 @@ def test_runs_the_lab_broke_are_not_counted_as_attempts(session, data_dir):
     run_ids = {row["run_id"] for row in LeaderboardService(session).list_rows()}
 
     assert run_ids == {"real-attempt", "agent-crash"}
+
+
+def test_chain_depth_counts_the_links_and_stops_at_an_unknown_parent():
+    parents = {"a": None, "a-C-001": "a", "a-C-001-C-001": "a-C-001", "orphan": "gone"}
+    assert service_module.chain_depth("a", parents) == 0
+    assert service_module.chain_depth("a-C-001", parents) == 1
+    assert service_module.chain_depth("a-C-001-C-001", parents) == 2
+    # A force-deleted parent: report the one link we can see, not a guess.
+    assert service_module.chain_depth("orphan", parents) == 1
+
+
+def test_chain_depth_survives_a_cycle():
+    parents = {"a": "b", "b": "a"}
+    assert service_module.chain_depth("a", parents) == 1
+
+
+def test_rows_expose_lineage_so_continuations_can_be_excluded(session, data_dir):
+    """A continued run was steered by a human; the dashboard must be able to tell."""
+    session.add(Case(case_id="tetris-v1", name="tetris", type=CaseType.multi_step))
+    parent = _seed_run(session, "tetris-v1-K-900", score=6)
+    child = _seed_run(session, "tetris-v1-K-900-C-001", score=9)
+    child.parent_run_id = parent.run_id
+    session.add(child)
+    session.commit()
+
+    rows = {row["run_id"]: row for row in LeaderboardService(session).list_rows()}
+
+    assert rows["tetris-v1-K-900"]["chain_depth"] == 0
+    assert rows["tetris-v1-K-900"]["parent_run_id"] is None
+    assert rows["tetris-v1-K-900-C-001"]["chain_depth"] == 1
+    assert rows["tetris-v1-K-900-C-001"]["parent_run_id"] == "tetris-v1-K-900"

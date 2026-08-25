@@ -93,6 +93,9 @@ class RunConfig(SQLModel, table=True):
     max_steps: int = 1
     resume: bool = False
     dry_run: bool = False
+    # Follow-up instruction for a continuation run (ADR-0026). Empty for every
+    # ordinary run: it replaces the case prompt only when the run has a parent.
+    continuation_prompt: str = ""
     skills_disabled: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     skills_extra: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     runner_adapter: str = "bench_run"
@@ -118,6 +121,10 @@ class Run(SQLModel, table=True):
     # created singly, and for every run that predates batching — the column is
     # a grouping label, never a required key.
     batch_id: str | None = Field(default=None, index=True)
+    # The run this one continues from, seeding its workspace (ADR-0026). Null
+    # for an original run, and for every run that predates continuations — no
+    # backfill invents lineage that never existed.
+    parent_run_id: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utc_now)
 
 

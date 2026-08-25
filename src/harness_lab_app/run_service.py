@@ -53,6 +53,43 @@ class RunBatchTooLargeError(ValueError):
     """Raised when a batch's cross-product exceeds ``max_batch_runs``."""
 
 
+class RunContinueError(ValueError):
+    """Raised when a run cannot be continued (not terminal, or no workspace)."""
+
+
+# States a run can be continued from: it has stopped, and whatever it built is
+# final. `pending`/`running` are excluded because the workspace is still moving,
+# and `scoring`/`auditing` because those are transient post-processing steps
+# whose artifacts are not written yet.
+CONTINUABLE_STATES = frozenset(
+    {
+        RunState.completed,
+        RunState.awaiting_manual_score,
+        RunState.failed,
+        RunState.cancelled,
+    }
+)
+
+
+def continuation_source_dir(parent_run_id: str) -> Path | None:
+    """Where a continuation's workspace is seeded from, or None if nowhere.
+
+    Two sources, in order. The archive under ``data/runs/<id>/workspace`` is the
+    normal one: a `--fresh` run copies its workspace there and deletes the live
+    tree. The live ``workspace/<id>`` is the fallback for a run that never got
+    to archive — killed by the watchdog, cancelled mid-step — which is exactly
+    the case worth rescuing rather than discarding.
+    """
+    settings = get_settings()
+    archived = settings.data_runs_dir / parent_run_id / "workspace"
+    if archived.is_dir():
+        return archived
+    live = settings.workspace_dir / parent_run_id
+    if live.is_dir():
+        return live
+    return None
+
+
 def _resolve_variants(
     data: RunBatchCreate, defined: Mapping[str, Sequence[str]]
 ) -> dict[str, list[str]]:
@@ -165,6 +202,12 @@ def _preflight_key(config: RunConfigCreate) -> tuple:
 
 
 def _resume_config(config: RunConfig) -> RunConfigCreate:
+    """The stored config as a resumed one, for rebuilding a retry's command.
+
+    The skills ablation is carried across on purpose: ``build_command`` turns it
+    into ``--disable-skill`` / ``--extra-skill`` flags, so dropping it here would
+    silently retry an ablation arm with the full harness.
+    """
     return RunConfigCreate(
         case_id=config.case_id,
         prompt_variant=config.prompt_variant,
@@ -175,6 +218,9 @@ def _resume_config(config: RunConfig) -> RunConfigCreate:
         max_steps=config.max_steps,
         resume=True,
         dry_run=config.dry_run,
+        continuation_prompt=config.continuation_prompt,
+        skills_disabled=list(config.skills_disabled),
+        skills_extra=list(config.skills_extra),
     )
 
 
@@ -635,6 +681,30 @@ class RunService:
             candidate += 1
         return f"{prefix}{candidate:03d}"
 
+    def _next_continuation_run_id(self, parent_run_id: str) -> str:
+        """Return the next free `<parent>-C-NNN` id (ADR-0026).
+
+        Suffixing the parent keeps the chain readable everywhere a run id
+        appears — directory listings, logs, the runs table — without a join.
+        Uniqueness is checked against the DB *and* the on-disk dirs for the same
+        reason as `_next_run_id`: a stale workspace must never be inherited by a
+        run that did not create it.
+        """
+        prefix = f"{parent_run_id}-C-"
+        pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+        max_n = 0
+        for run in self.session.exec(select(Run)).all():
+            match = pattern.match(run.run_id)
+            if match:
+                max_n = max(max_n, int(match.group(1)))
+        settings = get_settings()
+        candidate = max_n + 1
+        while (settings.data_runs_dir / f"{prefix}{candidate:03d}").exists() or (
+            settings.workspace_dir / f"{prefix}{candidate:03d}"
+        ).exists():
+            candidate += 1
+        return f"{prefix}{candidate:03d}"
+
     def _resolve_run_id(self, data: RunCreate) -> str:
         """Pick the run id: an explicit run_id/label (409 on dup), else generate."""
         explicit = (data.label or data.run_id or "").strip()
@@ -656,7 +726,11 @@ class RunService:
         return run
 
     def _persist_run(
-        self, run_id: str, config: RunConfigCreate, batch_id: str | None = None
+        self,
+        run_id: str,
+        config: RunConfigCreate,
+        batch_id: str | None = None,
+        parent_run_id: str | None = None,
     ) -> Run:
         """Write the config + run rows. No preflight, no publish.
 
@@ -675,6 +749,7 @@ class RunService:
             state=RunState.pending,
             command=command,
             batch_id=batch_id,
+            parent_run_id=parent_run_id,
         )
         self.session.add(run)
         self.session.add(RunEvent(run_id=run_id, message="Run queued"))
@@ -754,8 +829,82 @@ class RunService:
             max_steps=config.max_steps,
             resume=False,
             dry_run=config.dry_run,
+            # Same arm, new trial: the ablation is part of the arm, so a clone
+            # that dropped it would quietly compare a different condition.
+            skills_disabled=list(config.skills_disabled),
+            skills_extra=list(config.skills_extra),
         )
         return self.create_run(RunCreate(config=new_config))
+
+    def list_children(self, run_id: str) -> list[Run]:
+        """Runs continuing from this one, oldest first."""
+        statement = (
+            select(Run)
+            .where(Run.parent_run_id == run_id)
+            .order_by(cast("Any", Run.created_at))
+        )
+        return list(self.session.exec(statement))
+
+    def continue_run(
+        self, parent_run_id: str, prompt: str, max_steps: int | None = None
+    ) -> Run:
+        """Queue a child run seeded from a terminal run's workspace (ADR-0026).
+
+        The parent is not touched. Its score, validation and provenance keep
+        describing the execution that actually produced them; the follow-up
+        instruction — a human intervention — belongs to a new run that carries
+        its own artifacts and its own `condition_hash`.
+
+        The child inherits the whole arm (harness, models, skills ablation) so
+        the only deliberate difference is the prompt, and runs with
+        ``resume=True`` so the runner keeps the seeded workspace instead of
+        resetting it.
+        """
+        parent = self.get_run(parent_run_id)
+        if parent.state not in CONTINUABLE_STATES:
+            raise RunContinueError(
+                f"Run '{parent_run_id}' is {parent.state.value}, so its workspace "
+                "is still moving. Wait for it to finish (or cancel it) before "
+                "continuing."
+            )
+        if continuation_source_dir(parent_run_id) is None:
+            raise RunContinueError(
+                f"Run '{parent_run_id}' has no workspace left to continue from. "
+                "It was deleted, or the run never produced one. Use 'Run again' "
+                "to start a fresh trial."
+            )
+        prompt_text = prompt.strip()
+        if not prompt_text:
+            raise RunContinueError("A continuation needs a follow-up prompt.")
+
+        config = self.get_run_config(parent.run_config_id)
+        new_config = RunConfigCreate(
+            case_id=config.case_id,
+            prompt_variant=config.prompt_variant,
+            harness=config.harness,
+            planner_model=config.planner_model,
+            executor_model=config.executor_model,
+            score_mode=config.score_mode,
+            max_steps=max_steps or config.max_steps,
+            resume=True,
+            dry_run=config.dry_run,
+            continuation_prompt=prompt_text,
+            skills_disabled=list(config.skills_disabled),
+            skills_extra=list(config.skills_extra),
+        )
+        self.preflight(new_config)
+        run_id = self._next_continuation_run_id(parent_run_id)
+        run = self._persist_run(run_id, new_config, parent_run_id=parent_run_id)
+        self.session.add(
+            RunEvent(run_id=run_id, message=f"Continues run {parent_run_id}")
+        )
+        self.session.add(
+            RunEvent(run_id=parent_run_id, message=f"Continued by run {run_id}")
+        )
+        self.session.commit()
+        self.session.refresh(run)
+        self._publish(run_id)
+        return run
 
     def mark_running(self, run_id: str) -> Run:
         run = self.get_run(run_id)
@@ -903,6 +1052,16 @@ class RunService:
         if run.state == RunState.running and not force:
             raise RunDeleteConflictError(
                 f"Run '{run_id}' is running. Cancel it first, or delete with force."
+            )
+        children = self.list_children(run_id)
+        if children and not force:
+            # Its children were seeded from this workspace; deleting it leaves
+            # them pointing at a run that no longer exists and makes their
+            # chain_depth unexplainable. Same reasoning as the running guard.
+            names = ", ".join(child.run_id for child in children)
+            raise RunDeleteConflictError(
+                f"Run '{run_id}' has continuations ({names}). Delete those "
+                "first, or delete with force."
             )
         for model in (Validation, Attribution, Audit, Sandbox, Artifact, RunEvent):
             rows = self.session.exec(select(model).where(model.run_id == run_id)).all()

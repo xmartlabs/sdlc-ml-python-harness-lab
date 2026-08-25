@@ -74,8 +74,15 @@ def collect_cost(run_dir: Path) -> dict[str, Any]:
     }
 
 
-def collect_effort(run_dir: Path, interventions: int | None) -> dict[str, Any]:
-    """Effort dimension: agent steps and human interventions."""
+def collect_effort(
+    run_dir: Path, interventions: int | None, continuations: int = 0
+) -> dict[str, Any]:
+    """Effort dimension: agent steps and human interventions.
+
+    ``continuations`` is the run's chain depth (ADR-0026). Each link is a human
+    who read the workspace and wrote a new instruction — effort the run's own
+    step count cannot see, because the earlier steps belong to another run.
+    """
     usage = _read_json(run_dir / "usage.json")
     steps = usage.get("steps") if usage else None
     if steps is None:
@@ -83,7 +90,11 @@ def collect_effort(run_dir: Path, interventions: int | None) -> dict[str, Any]:
         if steps_dir.is_dir():
             logs = list(steps_dir.glob("step-*.log"))
             steps = len(logs) or None
-    return {"steps": steps, "interventions": interventions}
+    return {
+        "steps": steps,
+        "interventions": interventions,
+        "continuations": continuations,
+    }
 
 
 def build_validation_spec(case: Case, run_id: str) -> dict[str, Any]:

@@ -257,3 +257,38 @@ def test_validate_run_endpoint_persists_nothing():
             session,
         )
         assert RunService(session).list_runs() == []
+
+
+def test_continue_run_endpoint_404_when_the_parent_is_missing():
+    from harness_lab_app.schemas import RunContinueRequest
+
+    app = create_app()
+    continue_run = _route_endpoint(app, "/api/runs/{run_id}/continue", method="POST")
+    with _session() as session:
+        with pytest.raises(HTTPException) as exc:
+            continue_run("ghost", RunContinueRequest(prompt="keep going"), session)
+        assert exc.value.status_code == 404
+
+
+def test_continue_run_endpoint_409_when_the_run_has_not_stopped():
+    from harness_lab_app.schemas import RunContinueRequest
+
+    app = create_app()
+    continue_run = _route_endpoint(app, "/api/runs/{run_id}/continue", method="POST")
+    with _session() as session:
+        service = _seed_run(session, "api-cont-1")
+        service.mark_running("api-cont-1")
+        with pytest.raises(HTTPException) as exc:
+            continue_run("api-cont-1", RunContinueRequest(prompt="more"), session)
+        assert exc.value.status_code == 409
+
+
+def test_continue_request_rejects_an_empty_prompt():
+    """Re-running the original prompt is what retry is for."""
+    from pydantic import ValidationError
+
+    from harness_lab_app.schemas import RunContinueRequest
+
+    with pytest.raises(ValidationError):
+        RunContinueRequest(prompt="   ")
+    assert RunContinueRequest(prompt="  do X  ").prompt == "do X"

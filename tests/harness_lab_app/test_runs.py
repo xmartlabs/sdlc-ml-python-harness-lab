@@ -584,3 +584,160 @@ def test_preflight_does_not_ask_about_the_image_for_a_dry_run(monkeypatch):
             )
         )
     assert run.state == RunState.pending
+
+
+def _seed_workspace(tmp_path, run_id: str, *, archived: bool = True) -> None:
+    """Give a run something to be continued from."""
+    if archived:
+        target = tmp_path / "data" / "runs" / run_id / "workspace"
+    else:
+        target = tmp_path / "workspace" / run_id
+    target.mkdir(parents=True)
+    (target / "main.py").write_text("print('parent')\n")
+
+
+def _patch_dirs(monkeypatch, tmp_path) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        run_service_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            data_runs_dir=tmp_path / "data" / "runs",
+            workspace_dir=tmp_path / "workspace",
+            repo_root=tmp_path,
+        ),
+    )
+
+
+def test_continue_run_creates_a_child_with_a_suffixed_id(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    with make_session() as session:
+        service = RunService(session)
+        parent = service.create_run(
+            RunCreate(config=_stub_config(case_id="cont-a", max_steps=6))
+        )
+        _seed_workspace(tmp_path, parent.run_id)
+        service.mark_finished(parent.run_id, 0)
+
+        child = service.continue_run(parent.run_id, "  now add scoring  ")
+
+        assert child.run_id == f"{parent.run_id}-C-001"
+        assert child.parent_run_id == parent.run_id
+        config = service.get_run_config(child.run_config_id)
+        # The prompt is the only deliberate difference: same arm, same budget,
+        # resumed so the runner keeps the seeded workspace.
+        assert config.continuation_prompt == "now add scoring"
+        assert config.resume is True
+        assert config.max_steps == 6
+        assert config.executor_model == "stub-executor"
+        assert "--resume" in child.command
+
+        # A second continuation of the same parent is a sibling, not a link.
+        sibling = service.continue_run(parent.run_id, "try another angle")
+        assert sibling.run_id == f"{parent.run_id}-C-002"
+
+
+def test_continue_run_can_chain_and_override_the_step_budget(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    with make_session() as session:
+        service = RunService(session)
+        parent = service.create_run(RunCreate(config=_stub_config(case_id="cont-b")))
+        _seed_workspace(tmp_path, parent.run_id)
+        service.mark_finished(parent.run_id, 0)
+
+        child = service.continue_run(parent.run_id, "step one", max_steps=3)
+        _seed_workspace(tmp_path, child.run_id)
+        service.mark_finished(child.run_id, 0)
+        grandchild = service.continue_run(child.run_id, "step two")
+
+        assert service.get_run_config(child.run_config_id).max_steps == 3
+        assert grandchild.run_id == f"{parent.run_id}-C-001-C-001"
+        assert grandchild.parent_run_id == child.run_id
+
+
+def test_continue_run_seeds_from_a_live_workspace_when_the_run_never_archived(
+    monkeypatch, tmp_path
+):
+    # A run killed by the watchdog leaves workspace/<id> behind and never
+    # archives — that is exactly the workspace worth rescuing.
+    _patch_dirs(monkeypatch, tmp_path)
+    with make_session() as session:
+        service = RunService(session)
+        parent = service.create_run(RunCreate(config=_stub_config(case_id="cont-c")))
+        _seed_workspace(tmp_path, parent.run_id, archived=False)
+        service.mark_finished(parent.run_id, 1, "Run timed out after 7200s")
+
+        child = service.continue_run(parent.run_id, "finish the last test")
+        assert child.parent_run_id == parent.run_id
+
+
+def test_continue_run_refuses_a_run_that_is_still_going(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    with make_session() as session:
+        service = RunService(session)
+        parent = service.create_run(RunCreate(config=_stub_config(case_id="cont-d")))
+        _seed_workspace(tmp_path, parent.run_id)
+        service.mark_running(parent.run_id)
+
+        with pytest.raises(run_service_module.RunContinueError) as excinfo:
+            service.continue_run(parent.run_id, "do more")
+        assert "running" in str(excinfo.value)
+
+
+def test_continue_run_refuses_when_the_workspace_is_gone(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    with make_session() as session:
+        service = RunService(session)
+        parent = service.create_run(RunCreate(config=_stub_config(case_id="cont-e")))
+        service.mark_finished(parent.run_id, 0)
+
+        with pytest.raises(run_service_module.RunContinueError) as excinfo:
+            service.continue_run(parent.run_id, "do more")
+        assert "no workspace" in str(excinfo.value)
+
+
+def test_continue_run_requires_a_prompt(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    with make_session() as session:
+        service = RunService(session)
+        parent = service.create_run(RunCreate(config=_stub_config(case_id="cont-f")))
+        _seed_workspace(tmp_path, parent.run_id)
+        service.mark_finished(parent.run_id, 0)
+
+        with pytest.raises(run_service_module.RunContinueError):
+            service.continue_run(parent.run_id, "   ")
+
+
+def test_delete_run_refuses_a_parent_unless_forced(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    with make_session() as session:
+        service = RunService(session)
+        parent = service.create_run(RunCreate(config=_stub_config(case_id="cont-g")))
+        _seed_workspace(tmp_path, parent.run_id)
+        service.mark_finished(parent.run_id, 0)
+        child = service.continue_run(parent.run_id, "keep going")
+
+        with pytest.raises(RunDeleteConflictError) as excinfo:
+            service.delete_run(parent.run_id)
+        assert child.run_id in str(excinfo.value)
+
+        service.delete_run(parent.run_id, force=True)
+        assert (
+            session.exec(select(Run).where(Run.run_id == parent.run_id)).first() is None
+        )
+
+
+def test_continued_run_id_avoids_a_stale_workspace_on_disk(monkeypatch, tmp_path):
+    # Same RESUME trap _next_run_id guards: a leftover directory must never be
+    # inherited by a run that did not create it.
+    _patch_dirs(monkeypatch, tmp_path)
+    with make_session() as session:
+        service = RunService(session)
+        parent = service.create_run(RunCreate(config=_stub_config(case_id="cont-h")))
+        _seed_workspace(tmp_path, parent.run_id)
+        service.mark_finished(parent.run_id, 0)
+        (tmp_path / "workspace" / f"{parent.run_id}-C-001").mkdir(parents=True)
+
+        child = service.continue_run(parent.run_id, "keep going")
+        assert child.run_id == f"{parent.run_id}-C-002"
