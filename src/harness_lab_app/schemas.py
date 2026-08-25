@@ -57,6 +57,9 @@ class RunConfigCreate(BaseModel):
     max_steps: int = 1
     resume: bool = False
     dry_run: bool = False
+    # Follow-up instruction that replaces the case prompt for a continuation
+    # run (ADR-0026). Set by RunService.continue_run, not by the run form.
+    continuation_prompt: str = ""
     # Per-run harness ablation: governed skills to hide from the agent for this
     # run (empty = full harness, the historical default arm).
     skills_disabled: list[str] = Field(default_factory=list)
@@ -137,6 +140,35 @@ class EnvUpdateRequest(BaseModel):
     """
 
     updates: dict[str, str] = Field(default_factory=dict)
+
+
+class RunContinueRequest(BaseModel):
+    """Continue a terminal run with a follow-up prompt (ADR-0026).
+
+    ``max_steps`` left unset inherits the parent's budget, which is what the
+    operator picked for this case in the first place.
+    """
+
+    prompt: str
+    max_steps: int | None = None
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(
+                "prompt is required: a continuation exists to give the agent a "
+                "new instruction. To re-run the original prompt, use retry."
+            )
+        return normalized
+
+    @field_validator("max_steps")
+    @classmethod
+    def validate_max_steps(cls, value: int | None) -> int | None:
+        if value is not None and value < 1:
+            raise ValueError("max_steps must be at least 1")
+        return value
 
 
 class RunCreate(BaseModel):

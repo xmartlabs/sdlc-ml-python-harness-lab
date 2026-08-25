@@ -89,6 +89,47 @@ gateway card fails, check the backend host before touching the alias. In ai-gate
 `test_every_fallback_alias_is_a_declared_card` is now the startup check LiteLLM does
 not do.
 
+## Continuing a run: a child run was the cheap design, and two bugs sat next to it
+
+**What happened:** adding "continue a finished run with a new prompt" looked like
+it needed runner support — step offsets, merged usage, re-opened artifacts. It
+needed none. Modelling the continuation as a *new run* whose workspace is copied
+from the parent means it owns its own `data/runs/<id>/`, so there is nothing to
+offset or merge. Two flags that already existed did the rest: `--resume` makes
+`validate_workspace` keep the seeded tree, and `provision_workspace`
+short-circuits on an existing `.git`, so a rehydrated SWE workspace is not
+re-cloned. The only genuinely new code was one `shutil.copytree` and a prompt
+header telling the agent the inherited workspace is its own.
+
+The one place the lane mattered: a curated case (`RUNS_FILES`) resolves its
+prompt from `benchmarks/<case>/`, ignoring `case_spec.json` entirely — so a
+continuation had to override `_prompt_source.md` *after* the lane branch, not
+inside the DB branch.
+
+Two adjacent defects surfaced while wiring it, both in the same shape — a
+`RunConfigCreate` rebuilt field by field, silently dropping the fields added
+later:
+
+- `tasks._config_payload` omitted `skills_disabled`/`skills_extra`, and
+  `execute_run` overwrites `run.command` with what it rebuilds. **The skills
+  ablation never reached the container.** The stored preview command had the
+  `--disable-skill` flags; the executed one did not. Every ablation arm run
+  before 2026-08-24 measured the full harness.
+- `_resume_config` (retry) and `clone_run` dropped the same two fields, so a
+  retry or clone quietly changed arms.
+
+**Why it matters:** ADR-0011's whole point is that an ablation is a distinct
+condition. A silent drop does not fail — it produces a plausible number for a
+condition that was never run, which is worse than an error.
+
+**How to apply:** when a feature can be expressed as a new row rather than a
+mutation of an existing one, price that first — immutable artifacts make most of
+the hard parts disappear. And treat every hand-rolled `RunConfigCreate(...)` as a
+place a future field will be dropped: `_config_payload`, `_resume_config`,
+`clone_run` and `continue_run` must all be updated together when the schema
+grows. See [ADR-0026](../docs/adr/0026-run-continuation-as-child-runs.md) and
+[guide-run-continuation.md](../docs/guide-run-continuation.md).
+
 <!-- Add new learnings above this line -->
 
 
@@ -628,5 +669,46 @@ stop trying to sequence them and replace the set with one verified branch. Base
 images now move only with the gate that verifies them, enforced by `ignore` rules in
 `.github/dependabot.yml`; see
 [ADR-0024](../docs/adr/0024-base-images-track-ci-verified-toolchains.md).
+
+## Continuing a run: a child run was the cheap design, and two bugs sat next to it
+
+**What happened:** adding "continue a finished run with a new prompt" looked like
+it needed runner support — step offsets, merged usage, re-opened artifacts. It
+needed none. Modelling the continuation as a *new run* whose workspace is copied
+from the parent means it owns its own `data/runs/<id>/`, so there is nothing to
+offset or merge. Two flags that already existed did the rest: `--resume` makes
+`validate_workspace` keep the seeded tree, and `provision_workspace`
+short-circuits on an existing `.git`, so a rehydrated SWE workspace is not
+re-cloned. The only genuinely new code was one `shutil.copytree` and a prompt
+header telling the agent the inherited workspace is its own.
+
+The one place the lane mattered: a curated case (`RUNS_FILES`) resolves its
+prompt from `benchmarks/<case>/`, ignoring `case_spec.json` entirely — so a
+continuation had to override `_prompt_source.md` *after* the lane branch, not
+inside the DB branch.
+
+Two adjacent defects surfaced while wiring it, both in the same shape — a
+`RunConfigCreate` rebuilt field by field, silently dropping the fields added
+later:
+
+- `tasks._config_payload` omitted `skills_disabled`/`skills_extra`, and
+  `execute_run` overwrites `run.command` with what it rebuilds. **The skills
+  ablation never reached the container.** The stored preview command had the
+  `--disable-skill` flags; the executed one did not. Every ablation arm run
+  before 2026-08-24 measured the full harness.
+- `_resume_config` (retry) and `clone_run` dropped the same two fields, so a
+  retry or clone quietly changed arms.
+
+**Why it matters:** ADR-0011's whole point is that an ablation is a distinct
+condition. A silent drop does not fail — it produces a plausible number for a
+condition that was never run, which is worse than an error.
+
+**How to apply:** when a feature can be expressed as a new row rather than a
+mutation of an existing one, price that first — immutable artifacts make most of
+the hard parts disappear. And treat every hand-rolled `RunConfigCreate(...)` as a
+place a future field will be dropped: `_config_payload`, `_resume_config`,
+`clone_run` and `continue_run` must all be updated together when the schema
+grows. See [ADR-0026](../docs/adr/0026-run-continuation-as-child-runs.md) and
+[guide-run-continuation.md](../docs/guide-run-continuation.md).
 
 <!-- Add new learnings above this line -->

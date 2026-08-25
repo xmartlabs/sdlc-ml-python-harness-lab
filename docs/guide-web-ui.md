@@ -102,7 +102,9 @@ Where you launch and track runs. The **New run** form:
   [the direct lane](local-model-runtime-config.md#the-direct-lanes-skip-the-gateway-when-you-are-iterating).
 - **Score mode** — web runs are `manual` (interactive is CLI-only). SWE-bench
   cases auto-score objectively regardless.
-- **Max steps**, **Resume**, **Dry run** — run controls.
+- **Max steps**, **Resume**, **Dry run** — run controls. Max steps is
+  prefilled from the selected case's own `max_steps`, so a one-step case
+  does not silently advertise a ten-step budget.
 - **Skills** ablation — disable governed skills or enable experimental staged
   skills *for this run only*, to A/B the harness. A non-empty ablation makes the
   run a distinct arm (`condition_hash`). See [ADR-0011](adr/0011-per-run-skill-ablation-and-staging.md).
@@ -286,6 +288,18 @@ timed out after 7200s (exit code 137)` — instead of the bare `Run exited with 
 that read like a crash the lab never had.
 
 Run detail reports **Queued for** and **Execution** separately for the same reason.
+
+#### Continue — push a stopped run further
+
+Once a run has stopped, its detail page offers **Continue**: write a
+follow-up prompt and the lab queues a *child* run whose workspace is seeded
+from this one's final state (`<parent>-C-001`). The parent is not modified,
+so its score and provenance keep describing what actually produced them.
+
+A continuation is a human intervention, so continued runs are hidden from
+the Dashboard by default — tick *include continuations* to see them. Full
+walkthrough: [Continuing a run](guide-run-continuation.md),
+[ADR-0026](adr/0026-run-continuation-as-child-runs.md).
 The worker runs at concurrency 1, so a batch queues behind itself and a run can sit
 for hours before its container starts; a single created-to-ended duration cannot
 tell a slow model from a busy queue, which is exactly the question you are asking

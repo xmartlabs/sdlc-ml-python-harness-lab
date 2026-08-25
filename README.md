@@ -158,7 +158,7 @@ suite with hard gates), see the
 | If you are… | Start here |
 |---|---|
 | **Setting up for the first time** | [Onboarding guide](docs/onboarding.md) — prerequisites, credential paths (gateway / Claude), `.env`, first run, troubleshooting |
-| **Operating the lab day-to-day** | [Web UI guide](docs/guide-web-ui.md) — every screen; [Improvement cycle](docs/improvement-cycle.md) — audit → proposals → GitHub issues |
+| **Operating the lab day-to-day** | [Web UI guide](docs/guide-web-ui.md) — every screen; [Continuing a run](docs/guide-run-continuation.md) — push a stopped run further with a new prompt; [Improvement cycle](docs/improvement-cycle.md) — audit → proposals → GitHub issues |
 | **Trialling a new skill** | [Skill validation guide](docs/guide-skill-validation.md) — import from a URL, A/B it, promote it; [Skills management](docs/skills-management.md) — the governed catalog and the sync engine |
 | **Diagnosing a lab that misbehaves** | The **Health** screen ([guide](docs/guide-web-ui.md#health)) — reachability, drift and the four repairs ([ADR-0018](docs/adr/0018-health-and-drift-panel.md)); [Onboarding troubleshooting](docs/onboarding.md#5-smoke-test--your-first-run) |
 | **Improving the template** | [Improvement methodology](docs/harness-lifecycle/improvement-methodology.md) — when to trust a proposal; [Lab sync workflow](docs/harness-lifecycle/lab-sync-workflow.md) — adopt & validate a release; [Harness lifecycle](docs/harness-lifecycle/README.md) — the rigorous form |

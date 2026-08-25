@@ -727,3 +727,95 @@ def test_an_unresolvable_prompt_path_is_passed_through_untouched(
 
     spec = json.loads((tmp_path / "terse-run-1" / "case_spec.json").read_text())
     assert spec["prompt"] == "Fix src/app.py"
+
+
+def test_case_spec_for_a_continuation_swaps_the_prompt_and_drops_step_prompts(
+    tmp_path, monkeypatch
+):
+    """A continuation replaces the instruction, not the case (ADR-0026).
+
+    The canned step prompts scripted the original attempt; replaying them would
+    talk past the state the inherited workspace is actually in.
+    """
+    import json
+    from types import SimpleNamespace
+
+    from harness_lab_app.models import Case, CaseType
+
+    engine = make_engine()
+    monkeypatch.setattr(
+        tasks,
+        "get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path, repo_root=tmp_path),
+    )
+    with Session(engine) as session:
+        session.add(
+            Case(
+                case_id="doom-like",
+                name="Doom-like Game",
+                type=CaseType.multi_step,
+                prompt_variants={"default": "Build a Doom-like game."},
+                step_prompts=["Set up the loop.", "Add raycasting."],
+                success_criteria={"runs": "The game starts."},
+                max_steps=3,
+            )
+        )
+        session.commit()
+        tasks._write_case_spec(
+            session,
+            "doom-run-1-C-001",
+            "doom-like",
+            "default",
+            continuation_prompt="Now add a pause menu.",
+            parent_run_id="doom-run-1",
+        )
+
+    spec = json.loads((tmp_path / "doom-run-1-C-001" / "case_spec.json").read_text())
+    assert spec["prompt"] == "Now add a pause menu."
+    assert spec["continues_run"] == "doom-run-1"
+    assert spec["step_prompts"] == []
+    # The task being measured is unchanged.
+    assert spec["success_criteria"] == {"runs": "The game starts."}
+
+
+def test_seed_continuation_workspace_prefers_the_archive(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    settings = SimpleNamespace(
+        data_runs_dir=tmp_path / "data" / "runs",
+        workspace_dir=tmp_path / "workspace",
+        repo_root=tmp_path,
+    )
+    monkeypatch.setattr(tasks, "get_settings", lambda: settings)
+    # continuation_source_dir lives in run_service and reads its own settings.
+    monkeypatch.setattr("harness_lab_app.run_service.get_settings", lambda: settings)
+
+    archive = tmp_path / "data" / "runs" / "parent-1" / "workspace"
+    archive.mkdir(parents=True)
+    (archive / "main.py").write_text("print('archived')\n")
+    live = tmp_path / "workspace" / "parent-1"
+    live.mkdir(parents=True)
+    (live / "main.py").write_text("print('stale live copy')\n")
+
+    tasks._seed_continuation_workspace("parent-1-C-001", "parent-1")
+
+    seeded = tmp_path / "workspace" / "parent-1-C-001" / "main.py"
+    assert seeded.read_text() == "print('archived')\n"
+
+
+def test_seed_continuation_workspace_fails_loudly_with_nothing_to_copy(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    settings = SimpleNamespace(
+        data_runs_dir=tmp_path / "data" / "runs",
+        workspace_dir=tmp_path / "workspace",
+        repo_root=tmp_path,
+    )
+    monkeypatch.setattr(tasks, "get_settings", lambda: settings)
+    monkeypatch.setattr("harness_lab_app.run_service.get_settings", lambda: settings)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        tasks._seed_continuation_workspace("gone-C-001", "gone")
+    assert "workspace is gone" in str(excinfo.value)

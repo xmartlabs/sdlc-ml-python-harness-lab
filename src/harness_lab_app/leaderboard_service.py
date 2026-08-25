@@ -9,12 +9,15 @@ run counts are small, and flat rows keep every filter combination possible.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlmodel import Session, select
 
 from harness_lab_app.config import get_settings
 from harness_lab_app.models import Case, Run, RunConfig, RunState, Validation
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 # Rows only make sense once a run has finished executing (failed runs count as
 # attempts — hiding them would inflate every % resolved).
@@ -42,6 +45,24 @@ def harness_version(meta: dict) -> str:
     if fingerprint:
         return str(fingerprint).removeprefix("sha256:")[:8]
     return str(meta.get("lab_git_commit") or "")[:8]
+
+
+def chain_depth(run_id: str, parents: Mapping[str, str | None]) -> int:
+    """How many times a human steered this branch (ADR-0026).
+
+    0 for an original run, 1 for its continuation, 2 for a continuation of that.
+    A run whose parent was force-deleted stops the walk where the chain becomes
+    unknowable rather than reporting a depth it cannot support. The visited set
+    guards against a cycle that a hand-edited database could introduce.
+    """
+    depth = 0
+    seen = {run_id}
+    current = parents.get(run_id)
+    while current and current not in seen:
+        depth += 1
+        seen.add(current)
+        current = parents.get(current)
+    return depth
 
 
 class LeaderboardService:
@@ -74,6 +95,12 @@ class LeaderboardService:
             for run in self.session.exec(select(Run))
             if run.state in _TERMINAL_STATES and not is_unmeasured(run.failure_reason)
         ]
+        # Built over *every* run, not just terminal ones: a chain can pass
+        # through a run that is filtered out of the rows below, and the depth
+        # must still count it.
+        parents = {
+            row.run_id: row.parent_run_id for row in self.session.exec(select(Run))
+        }
         configs = {config.id: config for config in self.session.exec(select(RunConfig))}
         cases = {case.case_id: case for case in self.session.exec(select(Case))}
         validations = {
@@ -110,6 +137,11 @@ class LeaderboardService:
                     "cost_usd": cost.get("cost_usd"),
                     "total_tokens": cost.get("total_tokens"),
                     "steps": effort.get("steps"),
+                    # Lineage: a continued run was steered by a human between
+                    # steps, so it does not compete with a one-shot attempt.
+                    # The dashboard hides chain_depth > 0 by default.
+                    "parent_run_id": run.parent_run_id,
+                    "chain_depth": chain_depth(run.run_id, parents),
                     "state": str(run.state),
                     "created_at": run.created_at.isoformat(),
                 }

@@ -97,6 +97,17 @@ def _apply_sqlite_compat_migrations() -> None:
             connection.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_run_batch_id ON run (batch_id)")
             )
+        if "parent_run_id" not in columns:
+            # Nullable for the same reason as batch_id: a run that predates
+            # continuations had no parent, and inventing one would fabricate
+            # lineage the leaderboard then reports as a human intervention.
+            connection.execute(text("ALTER TABLE run ADD COLUMN parent_run_id VARCHAR"))
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_run_parent_run_id "
+                    "ON run (parent_run_id)"
+                )
+            )
 
         audit_columns = {
             row[1]
@@ -122,6 +133,13 @@ def _apply_sqlite_compat_migrations() -> None:
                         f"ALTER TABLE runconfig ADD COLUMN {column} JSON NOT NULL DEFAULT '[]'"
                     )
                 )
+        if runconfig_columns and "continuation_prompt" not in runconfig_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE runconfig ADD COLUMN continuation_prompt "
+                    "VARCHAR NOT NULL DEFAULT ''"
+                )
+            )
 
         saved_proposal_columns = {
             row[1]

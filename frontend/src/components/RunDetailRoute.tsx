@@ -8,9 +8,16 @@ type RunDetailRouteProps = {
   onCancelRun: (runId: string) => Promise<RunRecord>;
   onRetryRun: (runId: string) => Promise<RunRecord>;
   onScoreRun: (runId: string, score: number, interventions: number, notes: string) => Promise<RunRecord>;
+  onContinueRun: (runId: string, prompt: string, maxSteps?: number) => Promise<RunRecord>;
 };
 
-export function RunDetailRoute({ runs, onCancelRun, onRetryRun, onScoreRun }: RunDetailRouteProps) {
+export function RunDetailRoute({
+  runs,
+  onCancelRun,
+  onRetryRun,
+  onScoreRun,
+  onContinueRun
+}: RunDetailRouteProps) {
   const { runId } = useParams();
   const run = runId ? runs.find((item) => item.run_id === runId) ?? null : null;
 
@@ -34,9 +41,11 @@ export function RunDetailRoute({ runs, onCancelRun, onRetryRun, onScoreRun }: Ru
   return (
     <RunDetail
       onCancelRun={onCancelRun}
+      onContinueRun={onContinueRun}
       onRetryRun={onRetryRun}
       onScoreRun={onScoreRun}
       run={run}
+      runs={runs}
     />
   );
 }

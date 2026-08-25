@@ -300,6 +300,12 @@ export const api = {
     request<RunRecord>(`/api/runs/${runId}/retry`, { method: "POST" }),
   cloneRun: (runId: string) =>
     request<RunRecord>(`/api/runs/${runId}/clone`, { method: "POST" }),
+  // Queues a child run seeded from this run's workspace (ADR-0026).
+  continueRun: (runId: string, prompt: string, maxSteps?: number) =>
+    request<RunRecord>(`/api/runs/${runId}/continue`, {
+      method: "POST",
+      body: JSON.stringify({ prompt, max_steps: maxSteps ?? null })
+    }),
   deleteRun: (runId: string, force = false) =>
     request<void>(`/api/runs/${runId}?force=${force ? "true" : "false"}`, { method: "DELETE" }),
   scoreRun: (runId: string, score: number, interventions: number, notes: string) =>

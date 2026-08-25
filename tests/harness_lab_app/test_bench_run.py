@@ -292,3 +292,39 @@ def test_case_step_prompt_carries_the_author_text_and_the_workspace(tmp_path):
     assert "Add collision detection." in text
     assert bench_run.agent_workspace_path("doom-like-K-001") in text
     assert "ALL MILESTONES COMPLETE" in text
+
+
+def test_continuation_prompt_body_tells_the_agent_the_workspace_is_its_own(tmp_path):
+    """Without the framing, the agent treats the inherited tree as a stranger's."""
+    body = bench_run.render_continuation_prompt_body(
+        "doom-like-K-001-C-001", "doom-like-K-001", "  Add a pause menu.  "
+    )
+
+    assert "Add a pause menu." in body
+    assert "doom-like-K-001" in body
+    # Absolute, for the same reason every other prompt's path is: a relative
+    # workspace/<run>/ gets normalized outside the bind mount and is lost.
+    assert bench_run.agent_workspace_path("doom-like-K-001-C-001") in body
+    assert "restart from scratch" in body.lower()
+
+
+def test_generic_continuation_prompt_never_borrows_the_tetris_framing(tmp_path):
+    """A DB case out of step_prompts has no main.py and no SDL smoke test."""
+    path = bench_run.generate_generic_continuation_prompt("terse-K-001", 3, tmp_path)
+    text = path.read_text()
+
+    assert path.name == "step-3-prompt.md"
+    assert "SDL_VIDEODRIVER" not in text
+    assert "Tetris" not in text
+    assert "main.py" not in text
+    assert bench_run.agent_workspace_path("terse-K-001") in text
+    assert "ALL MILESTONES COMPLETE" in text
+
+
+def test_tetris_continuation_prompt_still_carries_its_own_framing(tmp_path):
+    """The curated lane keeps the prompt written for it."""
+    path = bench_run.generate_continuation_prompt("tetris-v1-K-001", 2, tmp_path)
+    text = path.read_text()
+
+    assert "SDL_VIDEODRIVER=dummy" in text
+    assert "main.py" in text

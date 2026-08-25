@@ -46,7 +46,10 @@ const HARNESS_OPTIONS = ["opencode", "codex", "claude", "antigravity"] as const;
 // container — they need the host worker (subprocess backend).
 const HOST_HARNESSES = new Set(["codex", "claude"]);
 const FALLBACK_EXECUTOR_MODEL = "gateway/lmstudio-qwen3.6-35b-build";
+// Offered budgets. The selected case's own max_steps is merged in, so a case
+// authored with 1 or 4 steps is selectable rather than silently rounded up.
 const MAX_STEPS_OPTIONS = [3, 6, 10] as const;
+const DEFAULT_MAX_STEPS = 10;
 
 // Native model menus for the host-CLI harnesses. Values are passed straight to
 // the CLI's --model, so keep them to ids the CLI accepts. Edit these as new
@@ -86,7 +89,7 @@ export function Runs({
   // Remember the gateway default so switching back to opencode restores it.
   const [gatewayDefault, setGatewayDefault] = useState(FALLBACK_EXECUTOR_MODEL);
   const scoreMode = "manual";
-  const [maxSteps, setMaxSteps] = useState(10);
+  const [maxSteps, setMaxSteps] = useState(DEFAULT_MAX_STEPS);
   const [resume, setResume] = useState(false);
   const [dryRun, setDryRun] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -247,6 +250,18 @@ export function Runs({
   const selectedCase = useMemo(
     () => cases.find((item) => item.case_id === caseId) ?? cases[0] ?? null,
     [caseId, cases]
+  );
+
+  // The case says how many steps its task takes; the form used to ignore it and
+  // queue every run at 10, so a one-step case advertised a ten-step budget it
+  // was never going to use.
+  useEffect(() => {
+    setMaxSteps(selectedCase?.max_steps ?? DEFAULT_MAX_STEPS);
+  }, [selectedCase?.case_id, selectedCase?.max_steps]);
+
+  const maxStepsOptions = useMemo(
+    () => Array.from(new Set([...MAX_STEPS_OPTIONS, maxSteps])).sort((a, b) => a - b),
+    [maxSteps]
   );
 
   const promptVariantNames = Object.keys(selectedCase?.prompt_variants ?? { default: "" });
@@ -726,7 +741,7 @@ export function Runs({
           <label>
             <span>Max steps</span>
             <select value={maxSteps} onChange={(event) => setMaxSteps(Number(event.target.value))}>
-              {MAX_STEPS_OPTIONS.map((item) => (
+              {maxStepsOptions.map((item) => (
                 <option key={item} value={item}>
                   {item}
                 </option>

@@ -43,6 +43,15 @@ class ValidationService:
             self.session.add(validation)
         return validation
 
+    def _chain_depth(self, run_id: str) -> int:
+        """How many continuations led to this run (ADR-0026)."""
+        from harness_lab_app.leaderboard_service import chain_depth
+
+        parents = {
+            row.run_id: row.parent_run_id for row in self.session.exec(select(Run))
+        }
+        return chain_depth(run_id, parents)
+
     def _run_dir(self, run_id: str):
         return get_settings().data_runs_dir / run_id
 
@@ -90,7 +99,9 @@ class ValidationService:
         )
         objective = self._run_objective(spec, run_id)
         cost = collect_cost(self._run_dir(run_id))
-        effort = collect_effort(self._run_dir(run_id), run.interventions)
+        effort = collect_effort(
+            self._run_dir(run_id), run.interventions, self._chain_depth(run_id)
+        )
 
         validation = self._upsert(run_id)
         validation.objective = objective
@@ -136,7 +147,9 @@ class ValidationService:
         # Refresh effort with the confirmed intervention count.
         run = self.session.exec(select(Run).where(Run.run_id == run_id)).first()
         if run is not None:
-            validation.effort = collect_effort(self._run_dir(run_id), interventions)
+            validation.effort = collect_effort(
+                self._run_dir(run_id), interventions, self._chain_depth(run_id)
+            )
         validation.composite = compute_composite(
             validation.objective, validation.subjective
         )
