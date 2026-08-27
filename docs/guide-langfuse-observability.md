@@ -113,6 +113,11 @@ right side of that trade.
   stamps every line; claude does not, so its step boundaries are inferred from
   the step header and file mtimes, clamped so a step never appears to outlive
   the next one.
+- **The session row is filed under the `default` environment.** Langfuse stamps
+  `LANGFUSE_TRACING_ENVIRONMENT` on every trace and observation, but the session
+  record it derives from them keeps `default`. Filtering the *Sessions* list by
+  environment therefore hides the run; the *Traces* list filters correctly. Open
+  a session from one of its traces, or from the run detail page's link.
 - **A Langfuse outage is invisible to a run.** The exporter never raises; it
   writes a run event saying the export was skipped and the run finishes exactly
   as it would have.
