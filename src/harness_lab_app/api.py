@@ -47,6 +47,7 @@ from harness_lab_app.gateway_catalog_service import GatewayCatalogService
 from harness_lab_app.harness_lifecycle import drafting, sanitizer
 from harness_lab_app.improvement_service import ImprovementError, ImprovementService
 from harness_lab_app.leaderboard_service import LeaderboardService
+from harness_lab_app.observability_service import ObservabilityService
 from harness_lab_app.run_service import (
     RunAlreadyExistsError,
     RunBatchTooLargeError,
@@ -1123,6 +1124,26 @@ def create_app() -> FastAPI:
     def index_attribution(run_id: str, session: Session = Depends(get_session)):
         # Attribution is pure log parsing (no container), so it runs inline.
         return AttributionService(session).index_run(run_id)
+
+    @app.get("/api/runs/{run_id}/langfuse")
+    def get_langfuse(run_id: str, session: Session = Depends(get_session)):
+        """Tracing status for this run: where to look, or why there is nothing."""
+        return ObservabilityService(session).status(run_id)
+
+    @app.post("/api/runs/{run_id}/langfuse-export")
+    def export_langfuse(run_id: str, session: Session = Depends(get_session)):
+        # Re-exporting is safe: span ids are derived from the run id, so a
+        # second export updates the same session instead of duplicating it.
+        result = ObservabilityService(session).export(run_id)
+        return {
+            "run_id": result.run_id,
+            "session_id": result.session_id,
+            "session_url": result.session_url,
+            "ok": result.ok,
+            "spans": result.spans,
+            "traces": result.traces,
+            "reason": result.reason,
+        }
 
     @app.get("/api/runs/{run_id}/audit")
     def get_audit(run_id: str, session: Session = Depends(get_session)):

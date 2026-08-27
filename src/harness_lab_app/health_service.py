@@ -277,6 +277,27 @@ def _check_orphan_runs(session: Session) -> tuple[str, str, list[str]]:
     return OK, "No stuck runs.", []
 
 
+def _check_langfuse() -> tuple[str, str, list[str]]:
+    """Tracing reachability. Off is a choice, not a problem: it reports `ok`.
+
+    The only failure worth a warning is a lab that *asked* for tracing and is
+    not getting it — bad keys, or a host that does not answer.
+    """
+    from harness_lab_app.observability.client import check_connection
+    from harness_lab_app.observability.config import LangfuseConfig
+
+    config = LangfuseConfig.from_env()
+    if not config.enabled:
+        if config.requested:
+            return WARN, config.disabled_reason, []
+        return OK, "Tracing is off; run traces stay in data/runs/.", []
+    result = check_connection(config)
+    if result.ok:
+        mode = "auto-export on" if config.auto_export else "manual export only"
+        return OK, f"{result.reason} ({mode}).", []
+    return (ERROR if result.status in (401, 403) else WARN), result.reason, []
+
+
 # -- panel -------------------------------------------------------------------
 
 
@@ -310,6 +331,7 @@ def collect_health(session: Session) -> dict:
             lambda: _check_overlay(session),
             "refresh_models",
         ),
+        _timed("langfuse", "Langfuse tracing", _check_langfuse),
         _timed(
             "orphan_runs",
             "Run queue",

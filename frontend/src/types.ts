@@ -156,6 +156,26 @@ export type AuditRecord = {
   updated_at: string;
 };
 
+// Tracing status for one run. `enabled: false` is the normal state of a lab
+// that never turned Langfuse on; `reason` explains why there is nothing to see.
+export type LangfuseStatus = {
+  enabled: boolean;
+  reason: string;
+  session_id: string;
+  session_url: string;
+  auto_export: boolean;
+};
+
+export type LangfuseExport = {
+  run_id: string;
+  session_id: string;
+  session_url: string;
+  ok: boolean;
+  spans: number;
+  traces: number;
+  reason: string;
+};
+
 export type ArtifactRecord = {
   run_id: string;
   name: string;

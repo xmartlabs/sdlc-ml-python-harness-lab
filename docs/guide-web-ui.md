@@ -300,6 +300,17 @@ A continuation is a human intervention, so continued runs are hidden from
 the Dashboard by default — tick *include continuations* to see them. Full
 walkthrough: [Continuing a run](guide-run-continuation.md),
 [ADR-0026](adr/0026-run-continuation-as-child-runs.md).
+
+#### Send traces — read the run turn by turn
+
+When Langfuse is configured, the run header gains **Send traces** and **View in
+Langfuse**. The export is automatic at the end of a run; the button is for
+historical runs and for re-sending after a Langfuse outage. Re-exporting updates
+the same session instead of duplicating it, so it is always safe to press.
+
+Nothing appears here when tracing is off, which is the default. Full
+walkthrough: [Langfuse observability](guide-langfuse-observability.md),
+[ADR-0027](adr/0027-langfuse-traces-rebuilt-from-run-artifacts.md).
 The worker runs at concurrency 1, so a batch queues behind itself and a run can sit
 for hours before its container starts; a single created-to-ended duration cannot
 tell a slow model from a busy queue, which is exactly the question you are asking
@@ -433,6 +444,10 @@ refreshing every 30 seconds:
   `data/skills_staging/` disagrees with the database.
 - **Run queue** — runs active for over six hours, which usually means a worker died
   under them.
+- **Langfuse tracing** — whether run traces are reaching Langfuse. Tracing switched
+  off reads as `ok`: not using it is a choice, not a fault. It only warns when the
+  lab *asked* for tracing and is not getting it — missing keys, or a host that does
+  not answer. See [Langfuse observability](guide-langfuse-observability.md).
 
 A failing row carries its own **repair button**. There are exactly five repairs —
 re-sync skill views, rebuild the staging tree, refresh the model catalog, reconcile
@@ -486,6 +501,9 @@ The backoffice: everything you would otherwise change with a shell on the server
 - **Model defaults / Local runtimes / Harness credentials / Tracing** — the
   allowlisted slice of `.env` ([ADR-0014](adr/0014-web-editable-env-allowlist.md)).
   Every write is atomic and keeps a rolling backup in `data/app/env-backups/`.
+  *Tracing* is where Langfuse is switched on: `LANGFUSE_ENABLED` plus both keys,
+  and optionally `LANGFUSE_PROJECT_URL` so run pages can deep-link to a session
+  ([guide](guide-langfuse-observability.md)).
 - **Runtime facts** — `HARNESS_LAB_*` settings, read-only: they are cached at
   process start and changing them needs a restart. This includes
   `max_batch_runs` (default 50), the ceiling the run form reads to size a batch —

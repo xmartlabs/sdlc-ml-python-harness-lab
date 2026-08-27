@@ -50,6 +50,10 @@ def isolated(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(module, "read_env_file_value", lambda _key: "")
     monkeypatch.setattr(module, "_worker_facts", dict)
+    # Langfuse resolves its own config from the environment, so a developer
+    # with tracing exported in their shell must not change this panel.
+    for name in ("LANGFUSE_ENABLED", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+        monkeypatch.delenv(name, raising=False)
     return tmp_path
 
 
@@ -74,6 +78,7 @@ def test_every_check_reports_even_with_nothing_running(isolated):
         "git_tree",
         "staging",
         "model_overlay",
+        "langfuse",
         "orphan_runs",
     }
     assert all(check["latency_ms"] is not None for check in checks.values())
@@ -234,6 +239,68 @@ def test_gateway_without_credentials_warns_instead_of_erroring(isolated):
     status, detail, _ = module._check_gateway()
     assert status == module.WARN
     assert "GATEWAY_BASE_URL" in detail
+
+
+# -- langfuse ----------------------------------------------------------------
+
+
+def test_tracing_switched_off_is_ok_not_a_warning(isolated):
+    """Most labs never turn Langfuse on; that is a choice, not a fault."""
+    status, detail, _ = module._check_langfuse()
+    assert status == module.OK
+    assert "off" in detail
+
+
+def test_tracing_asked_for_without_keys_warns(isolated, monkeypatch):
+    monkeypatch.setenv("LANGFUSE_ENABLED", "true")
+    status, detail, _ = module._check_langfuse()
+    assert status == module.WARN
+    assert "LANGFUSE_PUBLIC_KEY" in detail
+
+
+def test_bad_credentials_are_an_error_not_a_warning(isolated, monkeypatch):
+    monkeypatch.setenv("LANGFUSE_ENABLED", "true")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+    import harness_lab_app.observability.client as client
+
+    monkeypatch.setattr(
+        client, "check_connection", lambda _config: client.SendResult(False, 401, "bad")
+    )
+    status, detail, _ = module._check_langfuse()
+    assert status == module.ERROR
+    assert detail == "bad"
+
+
+def test_an_unreachable_host_warns_rather_than_erroring(isolated, monkeypatch):
+    monkeypatch.setenv("LANGFUSE_ENABLED", "true")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+    import harness_lab_app.observability.client as client
+
+    monkeypatch.setattr(
+        client,
+        "check_connection",
+        lambda _config: client.SendResult(False, 0, "Could not reach host."),
+    )
+    status, detail, _ = module._check_langfuse()
+    assert status == module.WARN
+    assert detail == "Could not reach host."
+
+
+def test_a_reachable_langfuse_says_whether_export_is_automatic(isolated, monkeypatch):
+    monkeypatch.setenv("LANGFUSE_ENABLED", "true")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-test")
+    monkeypatch.setenv("LANGFUSE_AUTO_EXPORT", "false")
+    import harness_lab_app.observability.client as client
+
+    monkeypatch.setattr(
+        client, "check_connection", lambda _config: client.SendResult(True, 200, "up.")
+    )
+    status, detail, _ = module._check_langfuse()
+    assert status == module.OK
+    assert "manual export only" in detail
 
 
 # -- heal --------------------------------------------------------------------

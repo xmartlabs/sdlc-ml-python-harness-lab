@@ -602,6 +602,28 @@ swebench-pro-selftest:
 	@if [ ! -d .venv ]; then make install; fi
 	uv run python scripts/swebench_pro_common.py --selftest $(INSTANCE)
 
+# Langfuse observability (ADR/plan: docs/plans/2026-08-langfuse-observability.md).
+# All three are no-ops unless LANGFUSE_ENABLED=true with both keys in .env.
+
+# Verify host + credentials and print the resolved configuration.
+langfuse-check:
+	@if [ ! -d .venv ]; then make install; fi
+	@uv run python scripts/export_langfuse_traces.py --check
+
+# Export one run's session. Usage: make langfuse-export RUN=tetris-v1-K-061
+# Add DRY=1 to build and print the payload without sending anything.
+langfuse-export:
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-K-061"; exit 1; }
+	@if [ ! -d .venv ]; then make install; fi
+	@uv run python scripts/export_langfuse_traces.py --run $(RUN) $(if $(DRY),--dry-run,)
+
+# Export every run on disk. Span ids are derived from the run id, so re-running
+# updates existing sessions instead of duplicating them.
+# Usage: make langfuse-backfill [LIMIT=20] [DRY=1]
+langfuse-backfill:
+	@if [ ! -d .venv ]; then make install; fi
+	@uv run python scripts/export_langfuse_traces.py --all $(if $(LIMIT),--limit $(LIMIT),) $(if $(DRY),--dry-run,)
+
 # Reset the application SQLite database and reseed the Tetris pilot case.
 # Pass PURGE=1 to also remove on-disk run state (data/runs/*, workspace/*) so a
 # re-created run id cannot collide with a stale workspace. PURGE is destructive.
@@ -909,6 +931,9 @@ help:
 	@echo "  make sync-skills         Sync external skills to .github/skills-external and refresh native adapters"
 	@echo "  make check-sync          Fail if generated skill artifacts are stale (CI drift gate)"
 	@echo "  make purge-external-skills Purge all external skills and reset metadata"
+	@echo "  make langfuse-check      Verify the Langfuse host and credentials"
+	@echo "  make langfuse-export     Export one run's traces (RUN=... [DRY=1])"
+	@echo "  make langfuse-backfill   Export every run on disk ([LIMIT=N] [DRY=1])"
 	@echo "  make clean               Clean cache and generated files"
 	@echo ""
 
@@ -925,4 +950,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-up-prod app-down-prod backup app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models set-password case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean
+.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-up-prod app-down-prod backup app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models set-password case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill

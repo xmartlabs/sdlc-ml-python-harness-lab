@@ -334,6 +334,7 @@ file an issue → improve the template → re-measure.
 | Understand every screen of the web UI | [guide-web-ui.md](guide-web-ui.md) |
 | Push a stopped run further with a new prompt | [guide-run-continuation.md](guide-run-continuation.md) |
 | Run the audit → proposals → GitHub-issue loop | [improvement-cycle.md](improvement-cycle.md) |
+| Inspect a run turn by turn in Langfuse | [guide-langfuse-observability.md](guide-langfuse-observability.md) |
 | The methodology behind the loop (when to trust a proposal) | [harness-lifecycle/improvement-methodology.md](harness-lifecycle/improvement-methodology.md) |
 | Consolidate proposals from several runs into ONE issue | Improvements menu in the UI (saved-proposals worklist) — see [guide-web-ui.md](guide-web-ui.md) |
 | Adopt a new template release and validate it | [harness-lifecycle/lab-sync-workflow.md](harness-lifecycle/lab-sync-workflow.md) |

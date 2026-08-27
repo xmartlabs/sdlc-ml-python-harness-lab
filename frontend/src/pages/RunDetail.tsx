@@ -13,6 +13,7 @@ import type {
   AttributionRecord,
   AuditRecord,
   ImprovementsDoc,
+  LangfuseStatus,
   ProposalIssue,
   RunEventRecord,
   RunMetadata,
@@ -78,6 +79,9 @@ export function RunDetail({
   const [validation, setValidation] = useState<ValidationRecord | null>(null);
   const [attribution, setAttribution] = useState<AttributionRecord | null>(null);
   const [audit, setAudit] = useState<AuditRecord | null>(null);
+  const [langfuse, setLangfuse] = useState<LangfuseStatus | null>(null);
+  const [langfuseNotice, setLangfuseNotice] = useState<string | null>(null);
+  const [langfuseSending, setLangfuseSending] = useState(false);
   const [metadata, setMetadata] = useState<RunMetadata | null>(null);
   const [auditModel, setAuditModel] = useState("");
   const [improvements, setImprovements] = useState<ImprovementsDoc | null>(null);
@@ -164,6 +168,8 @@ export function RunDetail({
     setValidation(null);
     setAttribution(null);
     setAudit(null);
+    setLangfuse(null);
+    setLangfuseNotice(null);
     setMetadata(null);
     setImprovements(null);
     setImproveError(null);
@@ -219,6 +225,16 @@ export function RunDetail({
       })
       .catch(() => {
         // No audit yet (404) is expected until one is requested.
+      });
+    api
+      .getLangfuse(run.run_id)
+      .then((result) => {
+        if (active) {
+          setLangfuse(result);
+        }
+      })
+      .catch(() => {
+        // Tracing status is decoration; a failure just hides the link.
       });
     api
       .getImprovements(run.run_id)
@@ -520,6 +536,30 @@ export function RunDetail({
       });
   };
 
+  const handleLangfuseExport = () => {
+    if (run === null) return;
+    setLangfuseSending(true);
+    setLangfuseNotice(null);
+    api
+      .exportLangfuse(run.run_id)
+      .then((result) => {
+        setLangfuseNotice(
+          result.ok
+            ? `Sent ${result.spans} spans to session ${result.session_id}.`
+            : result.reason
+        );
+        if (result.session_url) {
+          setLangfuse((current) =>
+            current === null ? current : { ...current, session_url: result.session_url }
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        setLangfuseNotice(error instanceof ApiError ? error.message : "Export failed.");
+      })
+      .finally(() => setLangfuseSending(false));
+  };
+
   const countEntries = (counts: Record<string, number>) =>
     Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
@@ -563,7 +603,32 @@ export function RunDetail({
           <button disabled={!canRetry || actionPending} onClick={handleRetry} type="button">
             Retry
           </button>
+          {/* Only shown when tracing is on: a lab without Langfuse gets no dead buttons. */}
+          {langfuse?.enabled ? (
+            <>
+              <button disabled={langfuseSending} onClick={handleLangfuseExport} type="button">
+                {langfuseSending ? "Sending…" : "Send traces"}
+              </button>
+              {langfuse.session_url ? (
+                <a
+                  className="run-langfuse-link"
+                  href={langfuse.session_url}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  View in Langfuse ↗
+                </a>
+              ) : null}
+            </>
+          ) : null}
         </div>
+        {langfuse?.enabled ? (
+          <p className="muted run-langfuse-note">
+            Session <code>{langfuse.session_id}</code>
+            {langfuse.session_url ? null : " — set LANGFUSE_PROJECT_URL in Settings for a direct link."}
+            {langfuseNotice ? ` · ${langfuseNotice}` : null}
+          </p>
+        ) : null}
         {actionError !== null ? <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} /> : null}
       </div>
       <div className="run-tabs">
