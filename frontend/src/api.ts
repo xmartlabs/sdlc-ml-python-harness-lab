@@ -15,6 +15,8 @@ import type {
   HarnessSkill,
   HealResult,
   HealthReport,
+  LangfuseExport,
+  LangfuseStatus,
   LMStudioCatalog,
   ModelRefreshResult,
   OllamaCatalog,
@@ -326,6 +328,12 @@ export const api = {
       method: "POST"
     }),
   getAudit: (runId: string) => request<AuditRecord>(`/api/runs/${runId}/audit`),
+  getLangfuse: (runId: string) =>
+    request<LangfuseStatus>(`/api/runs/${runId}/langfuse`),
+  exportLangfuse: (runId: string) =>
+    request<LangfuseExport>(`/api/runs/${runId}/langfuse-export`, {
+      method: "POST"
+    }),
   getImprovements: (runId: string) =>
     request<ImprovementsDoc>(`/api/runs/${runId}/improvements`),
   getProposalIssue: (runId: string) =>

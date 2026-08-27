@@ -617,6 +617,9 @@ def _execute_run_body(
             # (including cancelled/failed), so index it regardless of outcome.
             _index_attribution(session, run_id)
             _index_artifacts(session, run_id)
+            # Last, and outside every branch: a failed run is exactly the one
+            # an operator wants to open in Langfuse.
+            _export_langfuse_traces(session, run_id)
         except Exception as exc:
             service.mark_finished(run_id, -1, f"Executor error: {exc!r}")
 
@@ -843,6 +846,28 @@ def _worker_gateway() -> Callable[[str, str, str], str]:
     return _call
 
 
+def _export_langfuse_traces(session: Session, run_id: str) -> None:
+    """Best-effort Langfuse export once a run reaches a terminal state.
+
+    A no-op unless LANGFUSE_ENABLED and LANGFUSE_AUTO_EXPORT are both on. The
+    exporter reads `data/runs/<id>/`, so re-running it later (or after a
+    re-validation) rebuilds the same traces under the same ids.
+    """
+    from harness_lab_app.observability_service import export_run_traces
+
+    try:
+        export_run_traces(session, run_id)
+    except Exception as exc:  # observability must never fail the run
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="error",
+                message=f"Langfuse export failed: {exc!r}",
+            )
+        )
+        session.commit()
+
+
 def _run_objective_validation(session: Session, run_id: str) -> None:
     """Best-effort objective validation after a successful run."""
     from harness_lab_app.validation_service import ValidationService
@@ -875,6 +900,9 @@ def validate_run(run_id: str) -> None:
         # Re-validate also completes SWE-bench runs that were parked awaiting a
         # manual score before auto-scoring existed (or whose validation ran late).
         _autoscore_objective_case(session, run_id)
+        # Re-export so the validation verdict and the new score reach the trace
+        # too; deterministic ids mean this updates rather than duplicates.
+        _export_langfuse_traces(session, run_id)
 
 
 @celery_app.task(name="harness_lab_app.tasks.audit_run", acks_late=True)

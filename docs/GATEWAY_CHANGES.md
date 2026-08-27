@@ -67,5 +67,7 @@ one source of truth.
 ## 5. Per-run summary command (confirm or add)
 
 Confirm there is a way to pull a usage summary by `run_id` / `session_id` (LiteLLM exports
-metadata/tags to Langfuse with the `langfuse.*` prefix). If absent, a thin export lives here as
-`scripts/export_langfuse_usage.py` rather than inside the gateway.
+metadata/tags to Langfuse with the `langfuse.*` prefix). The lab-side half of this exists:
+`scripts/export_langfuse_traces.py` posts one Langfuse session per run, carrying the run's own
+token and cost totals ([guide](guide-langfuse-observability.md)). What is still missing is the
+gateway forwarding *per-call* generations under the same `session_id`.
