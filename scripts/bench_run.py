@@ -605,6 +605,71 @@ def generate_case_step_prompt(
     return path
 
 
+def render_continuation_prompt_body(
+    run_id: str, parent_run_id: str, instruction: str
+) -> str:
+    """Frame a follow-up instruction for a run that inherits a workspace.
+
+    A continuation run starts with the parent's final workspace already in
+    place (ADR-0026), and the agent has no memory of having produced it. Without
+    this framing the first thing it does is decide the directory is somebody
+    else's and start over, which throws away the exact thing the continuation
+    exists to keep.
+
+    The workspace path is absolute for the same reason every other prompt's is:
+    a relative ``workspace/<run>/`` gets "normalized" to ``/workspace/<run>/``,
+    outside the bind mount, and the work is lost with the container.
+    """
+    workspace = agent_workspace_path(run_id)
+    return (
+        f"<!-- Continuation of RUN_ID={parent_run_id} -->\n\n"
+        f"You are continuing work that is already in progress. The workspace at "
+        f"`{workspace}` holds the current state, produced by an earlier session "
+        f"(run `{parent_run_id}`). It is yours to build on.\n\n"
+        f"Before you change anything, read what is there. Do NOT restart from "
+        f"scratch, do NOT recreate files that already exist, and do NOT rewrite "
+        f"code unrelated to the instruction below.\n\n"
+        f"## Your task\n\n"
+        f"{instruction.strip()}\n\n"
+        f"When you are done, state what you changed and what you left alone. If "
+        f"the task is fully complete, end with: ALL MILESTONES COMPLETE\n"
+    )
+
+
+def generate_generic_continuation_prompt(
+    run_id: str, step_n: int, steps_dir: Path
+) -> Path:
+    """Continuation prompt for step N of a case with no framing of its own.
+
+    ``generate_continuation_prompt`` is Tetris/pygame-framed: it names
+    ``main.py``, runs a ``SDL_VIDEODRIVER=dummy`` smoke test and talks about
+    game milestones. That is correct for the curated benchmark and actively
+    misleading for a case authored in the web UI, which reached this point only
+    because it ran out of ``step_prompts``.
+    """
+    workspace = agent_workspace_path(run_id)
+    text = (
+        f"<!-- Continuation step {step_n} for RUN_ID={run_id} -->\n\n"
+        f"This is continuation step {step_n} for RUN_ID={run_id}.\n\n"
+        f"Continue from the existing workspace at `{workspace}`. Do NOT restart "
+        f"from scratch and do NOT rewrite unrelated code.\n\n"
+        f"1. Review the current state of the workspace and the task's remaining "
+        f"gaps.\n"
+        f"2. Implement exactly ONE verifiable increment toward finishing the "
+        f"task.\n"
+        f"3. Verify it the way this task is meant to be verified (run the tests "
+        f"or the entry point you have been working with) and report the "
+        f"result.\n"
+        f"4. Stop after that one increment and state what the next one should "
+        f"be.\n"
+        f"5. If and ONLY if the whole task is complete, end with: "
+        f"ALL MILESTONES COMPLETE\n"
+    )
+    path = steps_dir / f"step-{step_n}-prompt.md"
+    path.write_text(text)
+    return path
+
+
 def generate_swe_continuation_prompt(
     run_id: str,
     step_n: int,
@@ -787,6 +852,10 @@ def write_metadata(
         "subagents": discover_subagents(),
         "base_commit": task.get("base_commit", ""),
         "workspace": f"workspace/{args.run}",
+        # Lineage for a continuation run (ADR-0026); "" for an original run.
+        # Carried in the archived artifact so a chain stays reconstructable
+        # from disk alone (ADR-0021).
+        "continues_run": run.get("continues_run", ""),
         # Friendly adopted-governance version at run time (leaderboard axis).
         "template_ref": read_template_ref(REPO_ROOT),
         "created_at": datetime.datetime.utcnow().isoformat() + "Z",
@@ -1867,6 +1936,21 @@ def main(argv: list[str] | None = None) -> int:
             "it from the web UI, not by hand."
         )
 
+    # A continuation replaces the task instruction in *every* lane, curated
+    # included: `resolve_prompt_file` would hand back the original benchmark
+    # prompt and re-issue the task the parent already spent its budget on
+    # (ADR-0026).
+    continues_run = str((case_spec or {}).get("continues_run") or "")
+    if continues_run:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        prompt_source = out_dir / "_prompt_source.md"
+        prompt_source.write_text(
+            render_continuation_prompt_body(
+                args.run, continues_run, (case_spec or {}).get("prompt", "")
+            )
+        )
+        run["continues_run"] = continues_run
+
     session_id = run.get("langfuse_session_id", f"bench-{args.run}")
 
     # Resolve models: CLI args override runs.yaml values
@@ -2153,7 +2237,10 @@ def main(argv: list[str] | None = None) -> int:
                         steps_dir,
                         case_step_prompts[step_n - 1],
                     )
-                else:
+                elif runs_path is not None:
+                    # Curated benchmark lane only: this prompt is Tetris/pygame
+                    # framed (main.py, an SDL smoke test, game milestones), so
+                    # it belongs to the benchmark that owns that framing.
                     step_prompt_path = generate_continuation_prompt(
                         args.run,
                         step_n,
@@ -2162,6 +2249,13 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     # Also copy step prompt to clipboard so user can paste if needed
                     copy_to_clipboard(step_prompt_path.read_text())
+                else:
+                    # A DB case that ran out of authored step_prompts. It has no
+                    # framing of its own, and inheriting Tetris's would tell the
+                    # agent to smoke-test a main.py that does not exist.
+                    step_prompt_path = generate_generic_continuation_prompt(
+                        args.run, step_n, steps_dir
+                    )
                 step_log = steps_dir / f"step-{step_n}.log"
                 print(f"\n  --- Step {step_n}/{max_steps} ---")
             else:

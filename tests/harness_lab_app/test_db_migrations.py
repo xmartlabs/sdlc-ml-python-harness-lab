@@ -123,3 +123,60 @@ def test_migration_widens_staged_skills_and_backfills_the_file(tmp_path, monkeyp
             text("SELECT count(*) FROM stagedskillfile")
         ).scalar()
     assert count == 1
+
+
+def _legacy_continuation_engine(tmp_path):
+    """A DB whose run/runconfig tables predate continuations (ADR-0026)."""
+    engine = create_engine(f"sqlite:///{tmp_path}/continuation.db")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE run (id INTEGER PRIMARY KEY, run_id VARCHAR, "
+                "state VARCHAR, notes VARCHAR, cancel_requested BOOLEAN, "
+                "batch_id VARCHAR)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE runconfig (id INTEGER PRIMARY KEY, case_id VARCHAR, "
+                "prompt_variant VARCHAR, skills_disabled JSON, skills_extra JSON)"
+            )
+        )
+        connection.execute(
+            text("INSERT INTO run (run_id, state) VALUES ('old-run-1', 'completed')")
+        )
+    return engine
+
+
+def test_migration_adds_continuation_columns_to_a_legacy_db(tmp_path, monkeypatch):
+    engine = _legacy_continuation_engine(tmp_path)
+    monkeypatch.setattr(db_module, "engine", engine)
+    monkeypatch.setattr(
+        db_module,
+        "get_settings",
+        lambda: SimpleNamespace(database_url=f"sqlite:///{tmp_path}/continuation.db"),
+    )
+
+    db_module._apply_sqlite_compat_migrations()
+
+    with engine.begin() as connection:
+        run_columns = {
+            row[1]
+            for row in connection.execute(text("PRAGMA table_info('run')")).fetchall()
+        }
+        config_columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('runconfig')")
+            ).fetchall()
+        }
+        # A run that predates continuations has no parent, and none is invented:
+        # a fabricated one would be reported as a human intervention.
+        parent = connection.execute(
+            text("SELECT parent_run_id FROM run WHERE run_id = 'old-run-1'")
+        ).scalar()
+    assert "parent_run_id" in run_columns
+    assert "continuation_prompt" in config_columns
+    assert parent is None
+
+    db_module._apply_sqlite_compat_migrations()

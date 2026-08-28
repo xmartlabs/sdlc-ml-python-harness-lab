@@ -228,6 +228,12 @@ export default function App() {
     return created;
   };
 
+  const continueRun = async (runId: string, prompt: string, maxSteps?: number) => {
+    const created = await api.continueRun(runId, prompt, maxSteps);
+    setRuns((current) => [created, ...current.filter((run) => run.run_id !== created.run_id)]);
+    return created;
+  };
+
   const deleteRun = async (runId: string, force = false) => {
     await api.deleteRun(runId, force);
     setRuns((current) => current.filter((run) => run.run_id !== runId));
@@ -278,6 +284,7 @@ export default function App() {
           element={
             <RunDetailRoute
               onCancelRun={cancelRun}
+              onContinueRun={continueRun}
               onRetryRun={retryRun}
               onScoreRun={scoreRun}
               runs={runs}

@@ -70,6 +70,20 @@ def _require_url(value: str) -> None:
         raise SettingsError(f"Expected an http(s) URL, got {value!r}.")
 
 
+def _require_bool(value: str) -> None:
+    if value and value.strip().lower() not in {
+        "1",
+        "0",
+        "true",
+        "false",
+        "yes",
+        "no",
+        "on",
+        "off",
+    }:
+        raise SettingsError(f"Expected true or false, got {value!r}.")
+
+
 def _require_gateway_url(value: str) -> None:
     _require_url(value)
     if value and not value.rstrip("/").endswith("/v1"):
@@ -168,6 +182,16 @@ _SPECS: tuple[EnvKeySpec, ...] = (
         is_secret=True,
     ),
     EnvKeySpec(
+        key="LANGFUSE_ENABLED",
+        label="Send run traces to Langfuse",
+        group=GROUP_TRACING,
+        help_text=(
+            "Master switch. false (the default) means zero calls to Langfuse. "
+            "Turning it on with an empty key leaves it off."
+        ),
+        validator=_require_bool,
+    ),
+    EnvKeySpec(
         key="LANGFUSE_HOST",
         label="Langfuse host",
         group=GROUP_TRACING,
@@ -181,6 +205,36 @@ _SPECS: tuple[EnvKeySpec, ...] = (
         label="Langfuse secret key",
         group=GROUP_TRACING,
         is_secret=True,
+    ),
+    EnvKeySpec(
+        key="LANGFUSE_PROJECT_URL",
+        label="Langfuse project URL",
+        group=GROUP_TRACING,
+        help_text=(
+            "Project root in the Langfuse UI, e.g. "
+            "https://cloud.langfuse.com/project/abc123. Only used to build the "
+            "'View in Langfuse' link on a run; the host cannot be derived into it."
+        ),
+        validator=_require_url,
+    ),
+    EnvKeySpec(
+        key="LANGFUSE_TRACING_ENVIRONMENT",
+        label="Langfuse environment tag",
+        group=GROUP_TRACING,
+        help_text=(
+            "Separates this box's traces from CI or a teammate's in the same "
+            "project. Defaults to lab-local."
+        ),
+    ),
+    EnvKeySpec(
+        key="LANGFUSE_AUTO_EXPORT",
+        label="Export traces automatically",
+        group=GROUP_TRACING,
+        help_text=(
+            "Export a run's traces as soon as it reaches a terminal state. "
+            "false keeps the integration manual (make langfuse-export RUN=<id>)."
+        ),
+        validator=_require_bool,
     ),
 )
 

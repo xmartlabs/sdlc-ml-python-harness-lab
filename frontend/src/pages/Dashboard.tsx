@@ -117,6 +117,9 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
   const [promptFilter, setPromptFilter] = useState(ALL);
   const [versionFilter, setVersionFilter] = useState(ALL);
   const [showOfficial, setShowOfficial] = useState(true);
+  // Off by default: a continued run was steered by a human between steps, so
+  // ranking it beside a one-shot attempt overstates the harness (ADR-0026).
+  const [showContinuations, setShowContinuations] = useState(false);
 
   useEffect(() => {
     api
@@ -137,9 +140,18 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
           (harnessFilter === ALL || r.harness === harnessFilter) &&
           (modelFilter === ALL || r.executor_model === modelFilter) &&
           (promptFilter === ALL || r.prompt_variant === promptFilter) &&
-          (versionFilter === ALL || r.harness_version === versionFilter)
+          (versionFilter === ALL || r.harness_version === versionFilter) &&
+          (showContinuations || (r.chain_depth ?? 0) === 0)
       ),
-    [rows, laneFilter, harnessFilter, modelFilter, promptFilter, versionFilter]
+    [
+      rows,
+      laneFilter,
+      harnessFilter,
+      modelFilter,
+      promptFilter,
+      versionFilter,
+      showContinuations
+    ]
   );
 
   const board = useMemo(() => {
@@ -267,6 +279,17 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
               type="checkbox"
             />
             <span>official reference</span>
+          </label>
+          <label
+            className="switch"
+            title="Runs continued from another run (ADR-0026). A human read the workspace and wrote a new prompt, so they are not comparable to one-shot attempts."
+          >
+            <input
+              checked={showContinuations}
+              onChange={(e) => setShowContinuations(e.target.checked)}
+              type="checkbox"
+            />
+            <span>include continuations</span>
           </label>
         </div>
         {board.length === 0 ? (

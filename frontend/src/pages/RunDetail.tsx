@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { ArtifactsPanel } from "../components/ArtifactsPanel";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -13,6 +13,7 @@ import type {
   AttributionRecord,
   AuditRecord,
   ImprovementsDoc,
+  LangfuseStatus,
   ProposalIssue,
   RunEventRecord,
   RunMetadata,
@@ -23,14 +24,27 @@ import type {
 
 type RunDetailProps = {
   run: RunRecord | null;
+  // Every loaded run, used only to list this one's continuations.
+  runs?: RunRecord[];
   onCancelRun: (runId: string) => Promise<RunRecord>;
   onRetryRun: (runId: string) => Promise<RunRecord>;
   onScoreRun: (runId: string, score: number, interventions: number, notes: string) => Promise<RunRecord>;
+  onContinueRun?: (runId: string, prompt: string, maxSteps?: number) => Promise<RunRecord>;
 };
 
 const POLL_INTERVAL_MS = 1500;
 export const CANCELLABLE_STATES: RunRecord["state"][] = ["pending", "running"];
 export const RETRYABLE_STATES: RunRecord["state"][] = ["failed", "cancelled"];
+// A run can be continued once it has stopped and its workspace is final
+// (ADR-0026). Mirrors CONTINUABLE_STATES in run_service.py.
+export const CONTINUABLE_STATES: RunRecord["state"][] = [
+  "completed",
+  "awaiting_manual_score",
+  "failed",
+  "cancelled"
+];
+// Offered alongside whatever budget the parent used, which is already in the list.
+const CONTINUE_STEP_OPTIONS = [1, 3, 6, 10];
 
 // Harnesses whose CLI emits final summaries, not per-tool logs — so file/tool/
 // governance attribution can't be parsed from them. claude runs now capture
@@ -44,17 +58,30 @@ function harnessFromCommand(command: string[] | undefined): string {
   return i >= 0 && i + 1 < command.length ? command[i + 1] : "opencode";
 }
 
-export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetailProps) {
+export function RunDetail({
+  run,
+  runs = [],
+  onCancelRun,
+  onRetryRun,
+  onScoreRun,
+  onContinueRun
+}: RunDetailProps) {
+  const navigate = useNavigate();
   const harness = harnessFromCommand(run?.command);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [continuePrompt, setContinuePrompt] = useState("");
+  const [continueSteps, setContinueSteps] = useState(3);
   const [scoreValue, setScoreValue] = useState(0);
   const [interventionsValue, setInterventionsValue] = useState(0);
   const [notesValue, setNotesValue] = useState("");
   const [validation, setValidation] = useState<ValidationRecord | null>(null);
   const [attribution, setAttribution] = useState<AttributionRecord | null>(null);
   const [audit, setAudit] = useState<AuditRecord | null>(null);
+  const [langfuse, setLangfuse] = useState<LangfuseStatus | null>(null);
+  const [langfuseNotice, setLangfuseNotice] = useState<string | null>(null);
+  const [langfuseSending, setLangfuseSending] = useState(false);
   const [metadata, setMetadata] = useState<RunMetadata | null>(null);
   const [auditModel, setAuditModel] = useState("");
   const [improvements, setImprovements] = useState<ImprovementsDoc | null>(null);
@@ -141,6 +168,8 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
     setValidation(null);
     setAttribution(null);
     setAudit(null);
+    setLangfuse(null);
+    setLangfuseNotice(null);
     setMetadata(null);
     setImprovements(null);
     setImproveError(null);
@@ -196,6 +225,16 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
       })
       .catch(() => {
         // No audit yet (404) is expected until one is requested.
+      });
+    api
+      .getLangfuse(run.run_id)
+      .then((result) => {
+        if (active) {
+          setLangfuse(result);
+        }
+      })
+      .catch(() => {
+        // Tracing status is decoration; a failure just hides the link.
       });
     api
       .getImprovements(run.run_id)
@@ -262,6 +301,25 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
     setActionPending(true);
     setActionError(null);
     onRetryRun(run.run_id)
+      .catch((error: Error) => setActionError(error.message))
+      .finally(() => setActionPending(false));
+  };
+
+  const canContinue = onContinueRun !== undefined && CONTINUABLE_STATES.includes(run.state);
+  const children = runs.filter((item) => item.parent_run_id === run.run_id);
+
+  const handleContinue = () => {
+    const prompt = continuePrompt.trim();
+    if (onContinueRun === undefined || prompt === "") {
+      return;
+    }
+    setActionPending(true);
+    setActionError(null);
+    onContinueRun(run.run_id, prompt, continueSteps)
+      .then((created) => {
+        setContinuePrompt("");
+        navigate(`/runs/${created.run_id}`);
+      })
       .catch((error: Error) => setActionError(error.message))
       .finally(() => setActionPending(false));
   };
@@ -478,6 +536,30 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
       });
   };
 
+  const handleLangfuseExport = () => {
+    if (run === null) return;
+    setLangfuseSending(true);
+    setLangfuseNotice(null);
+    api
+      .exportLangfuse(run.run_id)
+      .then((result) => {
+        setLangfuseNotice(
+          result.ok
+            ? `Sent ${result.spans} spans to session ${result.session_id}.`
+            : result.reason
+        );
+        if (result.session_url) {
+          setLangfuse((current) =>
+            current === null ? current : { ...current, session_url: result.session_url }
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        setLangfuseNotice(error instanceof ApiError ? error.message : "Export failed.");
+      })
+      .finally(() => setLangfuseSending(false));
+  };
+
   const countEntries = (counts: Record<string, number>) =>
     Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
@@ -493,6 +575,27 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
         <p className="eyebrow">Run detail</p>
         <h2>{run.run_id}</h2>
         <StateBadge state={run.state} />
+        {run.parent_run_id || children.length > 0 ? (
+          <p className="muted run-lineage">
+            {run.parent_run_id ? (
+              <>
+                Continues <Link to={`/runs/${run.parent_run_id}`}>{run.parent_run_id}</Link>
+              </>
+            ) : null}
+            {run.parent_run_id && children.length > 0 ? " · " : null}
+            {children.length > 0 ? (
+              <>
+                Continued by{" "}
+                {children.map((child, index) => (
+                  <span key={child.run_id}>
+                    {index > 0 ? ", " : ""}
+                    <Link to={`/runs/${child.run_id}`}>{child.run_id}</Link>
+                  </span>
+                ))}
+              </>
+            ) : null}
+          </p>
+        ) : null}
         <div className="run-actions">
           <button disabled={!canCancel || actionPending} onClick={handleCancel} type="button">
             Cancel
@@ -500,7 +603,32 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
           <button disabled={!canRetry || actionPending} onClick={handleRetry} type="button">
             Retry
           </button>
+          {/* Only shown when tracing is on: a lab without Langfuse gets no dead buttons. */}
+          {langfuse?.enabled ? (
+            <>
+              <button disabled={langfuseSending} onClick={handleLangfuseExport} type="button">
+                {langfuseSending ? "Sending…" : "Send traces"}
+              </button>
+              {langfuse.session_url ? (
+                <a
+                  className="run-langfuse-link"
+                  href={langfuse.session_url}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  View in Langfuse ↗
+                </a>
+              ) : null}
+            </>
+          ) : null}
         </div>
+        {langfuse?.enabled ? (
+          <p className="muted run-langfuse-note">
+            Session <code>{langfuse.session_id}</code>
+            {langfuse.session_url ? null : " — set LANGFUSE_PROJECT_URL in Settings for a direct link."}
+            {langfuseNotice ? ` · ${langfuseNotice}` : null}
+          </p>
+        ) : null}
         {actionError !== null ? <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} /> : null}
       </div>
       <div className="run-tabs">
@@ -600,6 +728,54 @@ export function RunDetail({ run, onCancelRun, onRetryRun, onScoreRun }: RunDetai
           <div className="panel-actions score-panel-actions">
             <button className="primary" disabled={actionPending} onClick={handleScore} type="button">
               {actionPending ? "Saving..." : "Submit score"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {canContinue ? (
+        <div className="panel subtle">
+          <div className="panel-head">
+            <h3>Continue</h3>
+            <span className="muted">
+              Starts a child run from this workspace — this run is not modified
+            </span>
+          </div>
+          <div className="form-grid score-form-grid">
+            <label className="full">
+              <span>Follow-up prompt</span>
+              <textarea
+                onChange={(event) => setContinuePrompt(event.target.value)}
+                placeholder="What should the agent do next, starting from what is already there?"
+                rows={4}
+                value={continuePrompt}
+              />
+            </label>
+            <label>
+              <span>Max steps</span>
+              <select
+                onChange={(event) => setContinueSteps(Number(event.target.value))}
+                value={continueSteps}
+              >
+                {CONTINUE_STEP_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="muted">
+            A continuation counts as a human intervention: the child is hidden from the
+            dashboard by default so it is not compared against one-shot runs.
+          </p>
+          <div className="panel-actions score-panel-actions">
+            <button
+              className="primary"
+              disabled={actionPending || continuePrompt.trim() === ""}
+              onClick={handleContinue}
+              type="button"
+            >
+              {actionPending ? "Queueing..." : "Continue run"}
             </button>
           </div>
         </div>

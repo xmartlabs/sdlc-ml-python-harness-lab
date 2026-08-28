@@ -66,7 +66,14 @@ def test_collect_cost_missing_usage_is_unavailable(tmp_path: Path):
 def test_collect_effort_uses_usage_steps_and_interventions(tmp_path: Path):
     (tmp_path / "usage.json").write_text(json.dumps({"steps": 8}))
     effort = collect_effort(tmp_path, interventions=2)
-    assert effort == {"steps": 8, "interventions": 2}
+    assert effort == {"steps": 8, "interventions": 2, "continuations": 0}
+
+
+def test_collect_effort_records_the_continuation_chain_depth(tmp_path: Path):
+    """A continued run was steered by a human between steps; effort says so."""
+    (tmp_path / "usage.json").write_text(json.dumps({"steps": 3}))
+    effort = collect_effort(tmp_path, interventions=0, continuations=2)
+    assert effort == {"steps": 3, "interventions": 0, "continuations": 2}
 
 
 def test_collect_effort_falls_back_to_step_logs(tmp_path: Path):

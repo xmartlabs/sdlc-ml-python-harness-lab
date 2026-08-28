@@ -33,7 +33,7 @@ from harness_lab_app.executors import (
     get_executor,
 )
 from harness_lab_app.models import Case, CaseType, Run, RunEvent, RunState
-from harness_lab_app.run_service import RunService
+from harness_lab_app.run_service import RunService, continuation_source_dir
 from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.sandbox_service import SandboxService
 from harness_lab_app.schemas import RunConfigCreate
@@ -66,6 +66,9 @@ def _config_payload(session: Session, run: Run) -> RunConfigCreate:
         max_steps=config.max_steps,
         resume=config.resume,
         dry_run=config.dry_run,
+        continuation_prompt=config.continuation_prompt,
+        skills_disabled=list(config.skills_disabled),
+        skills_extra=list(config.skills_extra),
     )
 
 
@@ -92,7 +95,13 @@ def _case_prompt_text(case: Case, prompt_variant: str) -> str:
 
 
 def _write_case_spec(
-    session: Session, run_id: str, case_id: str, prompt_variant: str
+    session: Session,
+    run_id: str,
+    case_id: str,
+    prompt_variant: str,
+    *,
+    continuation_prompt: str = "",
+    parent_run_id: str | None = None,
 ) -> None:
     """Stage the case, as the DB holds it, for the DB-blind runner container.
 
@@ -174,8 +183,50 @@ def _write_case_spec(
             "constraints": list(case.constraints),
             "success_criteria": dict(case.success_criteria),
         }
+    if continuation_prompt:
+        # A continuation replaces the instruction, not the case (ADR-0026): the
+        # SWE fields, constraints and success criteria still describe the task
+        # being measured. The canned step prompts are dropped — they scripted
+        # the original attempt, and replaying them would talk past the state the
+        # workspace is actually in.
+        spec["prompt"] = continuation_prompt
+        spec["continues_run"] = parent_run_id or ""
+        if "step_prompts" in spec:
+            spec["step_prompts"] = []
     run_dir.mkdir(parents=True, exist_ok=True)
     stale_spec.write_text(json.dumps(spec, indent=2))
+
+
+def _seed_continuation_workspace(run_id: str, parent_run_id: str) -> None:
+    """Copy the parent's final workspace into the child's, before it starts.
+
+    This is what makes a continuation continue anything: the runner is launched
+    with ``--resume``, so ``validate_workspace`` keeps whatever is already at
+    ``workspace/<run_id>`` instead of resetting it, and ``provision_workspace``
+    short-circuits on the existing ``.git`` rather than re-cloning over it.
+
+    ``symlinks=True`` matches what ``finalize_workspace`` archived with — a
+    workspace can hold a dangling venv symlink, and following it would either
+    explode or silently inline gigabytes of interpreter.
+
+    Raises:
+        RuntimeError: the parent has no workspace left, so there is nothing to
+            continue from. Better a failed run with that sentence than a child
+            that quietly starts from an empty directory.
+    """
+    source = continuation_source_dir(parent_run_id)
+    if source is None:
+        raise RuntimeError(
+            f"Cannot continue run {parent_run_id}: its workspace is gone "
+            "(deleted, or never created)."
+        )
+    dest = get_settings().workspace_dir / run_id
+    if dest.exists():
+        # A retry of a continuation re-enters here; the seed must be the
+        # parent's state, not whatever the previous attempt left behind.
+        shutil.rmtree(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, dest, symlinks=True, ignore_dangling_symlinks=True)
 
 
 def _provision_pro_workspace(session: Session, run_id: str, case_id: str) -> None:
@@ -499,14 +550,27 @@ def _execute_run_body(
             session.add(run)
             session.commit()
 
+            # A continuation starts from its parent's final state, so seed the
+            # workspace before anything else touches it (ADR-0026).
+            if run.parent_run_id:
+                _seed_continuation_workspace(run_id, run.parent_run_id)
+
             # Stage repo-task provisioning data for the container (no-op for
             # non-repo cases like Tetris).
             _write_case_spec(
-                session, run_id, config_payload.case_id, config_payload.prompt_variant
+                session,
+                run_id,
+                config_payload.case_id,
+                config_payload.prompt_variant,
+                continuation_prompt=config_payload.continuation_prompt,
+                parent_run_id=run.parent_run_id,
             )
             # Pro lane only: image-based provisioning needs docker, which the
-            # runner lacks — do it here before the container starts.
-            _provision_pro_workspace(session, run_id, config_payload.case_id)
+            # runner lacks — do it here before the container starts. Skipped for
+            # a continuation: the workspace it would build is the one we just
+            # seeded, and rebuilding it would discard the parent's work.
+            if not run.parent_run_id:
+                _provision_pro_workspace(session, run_id, config_payload.case_id)
 
             handle = executor.start(run_id, command)
             outcome = _stream_run(
@@ -553,6 +617,9 @@ def _execute_run_body(
             # (including cancelled/failed), so index it regardless of outcome.
             _index_attribution(session, run_id)
             _index_artifacts(session, run_id)
+            # Last, and outside every branch: a failed run is exactly the one
+            # an operator wants to open in Langfuse.
+            _export_langfuse_traces(session, run_id)
         except Exception as exc:
             service.mark_finished(run_id, -1, f"Executor error: {exc!r}")
 
@@ -779,6 +846,28 @@ def _worker_gateway() -> Callable[[str, str, str], str]:
     return _call
 
 
+def _export_langfuse_traces(session: Session, run_id: str) -> None:
+    """Best-effort Langfuse export once a run reaches a terminal state.
+
+    A no-op unless LANGFUSE_ENABLED and LANGFUSE_AUTO_EXPORT are both on. The
+    exporter reads `data/runs/<id>/`, so re-running it later (or after a
+    re-validation) rebuilds the same traces under the same ids.
+    """
+    from harness_lab_app.observability_service import export_run_traces
+
+    try:
+        export_run_traces(session, run_id)
+    except Exception as exc:  # observability must never fail the run
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="error",
+                message=f"Langfuse export failed: {exc!r}",
+            )
+        )
+        session.commit()
+
+
 def _run_objective_validation(session: Session, run_id: str) -> None:
     """Best-effort objective validation after a successful run."""
     from harness_lab_app.validation_service import ValidationService
@@ -811,6 +900,9 @@ def validate_run(run_id: str) -> None:
         # Re-validate also completes SWE-bench runs that were parked awaiting a
         # manual score before auto-scoring existed (or whose validation ran late).
         _autoscore_objective_case(session, run_id)
+        # Re-export so the validation verdict and the new score reach the trace
+        # too; deterministic ids mean this updates rather than duplicates.
+        _export_langfuse_traces(session, run_id)
 
 
 @celery_app.task(name="harness_lab_app.tasks.audit_run", acks_late=True)

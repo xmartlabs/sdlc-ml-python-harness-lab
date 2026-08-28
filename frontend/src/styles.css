@@ -816,6 +816,18 @@ label {
   cursor: not-allowed;
 }
 
+/* Sits in .run-actions next to the buttons, so it has to line up with them. */
+.run-langfuse-link {
+  align-self: center;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.run-langfuse-note {
+  margin-top: 6px;
+  font-size: 0.8rem;
+}
+
 .muted.error {
   color: #dc2626;
 }

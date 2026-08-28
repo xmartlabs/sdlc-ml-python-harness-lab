@@ -72,6 +72,8 @@ export type RunRecord = {
   // Set when the run came from POST /api/runs/batch; null for a run created
   // singly and for every run that predates batching.
   batch_id?: string | null;
+  // The run this one continues from (ADR-0026). Null for an original run.
+  parent_run_id?: string | null;
 };
 
 export type RunEventRecord = {
@@ -152,6 +154,26 @@ export type AuditRecord = {
   error: string | null;
   created_at: string;
   updated_at: string;
+};
+
+// Tracing status for one run. `enabled: false` is the normal state of a lab
+// that never turned Langfuse on; `reason` explains why there is nothing to see.
+export type LangfuseStatus = {
+  enabled: boolean;
+  reason: string;
+  session_id: string;
+  session_url: string;
+  auto_export: boolean;
+};
+
+export type LangfuseExport = {
+  run_id: string;
+  session_id: string;
+  session_url: string;
+  ok: boolean;
+  spans: number;
+  traces: number;
+  reason: string;
 };
 
 export type ArtifactRecord = {
@@ -541,6 +563,10 @@ export type LeaderboardRunRow = {
   cost_usd: number | null;
   total_tokens: number | null;
   steps: number | null;
+  // The run this one continues from, and how many continuations led to it
+  // (ADR-0026). chain_depth 0 = a one-shot attempt.
+  parent_run_id: string | null;
+  chain_depth: number;
   state: string;
   created_at: string;
 };

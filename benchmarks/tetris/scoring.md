@@ -48,7 +48,10 @@ Each level **subsumes the previous one**. Record the highest level reached.
 ## 3. Operational cost — pulled from Langfuse/LiteLLM by `session_id`
 
 Input tokens · output tokens · USD · wall time · turns · calls · model per call.
-Use `scripts/export_langfuse_usage.py --session <session_id>` once automated; manual until then.
+Use `make langfuse-export RUN=<run_id>` (or the run page's **Send traces**) to push a run's
+session; per-run tokens and cost ride on its `run:<run_id>` envelope trace. Per-*call* cost
+still has to come from the gateway and is not wired up yet — see
+[guide-langfuse-observability.md](../../docs/guide-langfuse-observability.md).
 
 ## Extra Langfuse scores
 
