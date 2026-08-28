@@ -328,3 +328,20 @@ def test_tetris_continuation_prompt_still_carries_its_own_framing(tmp_path):
 
     assert "SDL_VIDEODRIVER=dummy" in text
     assert "main.py" in text
+
+
+def test_stamp_event_line_keeps_json_valid():
+    import json
+
+    stamped = bench_run.stamp_event_line(
+        '{"type":"assistant","message":{}}\n', now_iso="2026-08-27T20:00:00Z"
+    )
+    event = json.loads(stamped)
+    assert event["_received_at"] == "2026-08-27T20:00:00Z"
+    assert event["type"] == "assistant"
+
+
+def test_stamp_event_line_leaves_non_json_untouched():
+    assert bench_run.stamp_event_line("plain text\n") == "plain text\n"
+    # `{}` cannot take a prepended key without corrupting the object.
+    assert bench_run.stamp_event_line("{}\n") == "{}\n"

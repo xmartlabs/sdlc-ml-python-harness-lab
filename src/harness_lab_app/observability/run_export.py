@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -33,6 +33,11 @@ from harness_lab_app.observability.events import (
     trace_id,
 )
 from harness_lab_app.observability.redaction import redact
+from harness_lab_app.observability.step_detail import (
+    StepDetail,
+    parse_claude_step_events,
+    parse_opencode_step_log,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -45,6 +50,11 @@ if TYPE_CHECKING:
 INPUT_LIMIT = 24_000
 OUTPUT_LIMIT = 24_000
 DIFF_LIMIT = 24_000
+# Child observations are numerous (a busy claude step runs to ~150), so their
+# payloads are capped much tighter than the one-per-step strings above.
+GENERATION_TEXT_LIMIT = 8_000
+TOOL_INPUT_LIMIT = 2_000
+TOOL_OUTPUT_LIMIT = 4_000
 
 _HEADER_RE = re.compile(r"^#\s+(\S+)\s+run started\s+(\S+?)Z?\s*$", re.MULTILINE)
 # opencode writes `timestamp=<iso>Z` on every line; the last one is the closest
@@ -217,6 +227,30 @@ def _collect_steps(run_dir: Path, metadata: Mapping[str, Any]) -> list[StepFacts
     return steps
 
 
+def run_identity(run_id: str, metadata: Mapping[str, Any]) -> str:
+    """The seed OTEL ids are derived from.
+
+    ``run_id`` alone is not unique enough: the same id can name two different
+    runs (a container-volume copy and the local ``data/`` copy, or an operator
+    reusing an id), and because ids are deterministic those two runs would
+    silently overwrite each other in Langfuse. Salting with ``condition_hash``
+    (or ``created_at`` for pre-hash runs) keeps re-exports of the *same* run
+    idempotent while distinct runs stay distinct.
+    """
+    salt = str(metadata.get("condition_hash") or metadata.get("created_at") or "")
+    return f"{run_id}@{salt}" if salt else run_id
+
+
+def _step_detail(step: StepFacts) -> StepDetail:
+    """Per-call detail for one step, from whichever artifact the lane wrote."""
+    events_path = step.log_path.with_suffix(".events.jsonl")
+    if events_path.is_file():
+        detail = parse_claude_step_events(_read_text(events_path).splitlines())
+        if not detail.empty:
+            return detail
+    return parse_opencode_step_log(step.log)
+
+
 def run_tags(metadata: Mapping[str, Any]) -> list[str]:
     """The tag vocabulary `harnesses/metadata-standard.md` defines."""
     pairs = (
@@ -291,6 +325,153 @@ def _run_level(extra: Mapping[str, Any]) -> tuple[str | None, str | None]:
     return "ERROR", message
 
 
+def _interpolator(detail: StepDetail, start: datetime, end: datetime) -> Any:
+    """Map an event index to a moment inside the step window.
+
+    Used when an artifact carries order but no clock (claude events without
+    `_received_at`): events are spread evenly across the step, which preserves
+    sequence and rough proportion without inventing precision.
+    """
+    total = max(detail.event_count, 1)
+    window = (end - start).total_seconds()
+
+    def at(index: int) -> datetime:
+        fraction = min(max(index, 0), total) / total
+        return start + timedelta(seconds=window * fraction)
+
+    return at
+
+
+def _step_child_spans(
+    detail: StepDetail,
+    step: StepFacts,
+    *,
+    ident: str,
+    trace: str,
+    parent: str,
+    environment: str,
+) -> list[dict[str, Any]]:
+    """Generations and tool calls inside one step, as child observations."""
+    at = _interpolator(detail, step.start, step.end)
+    spans: list[dict[str, Any]] = []
+
+    for gen in detail.generations:
+        start = gen.start or at(gen.first_event)
+        end = gen.end or at(gen.last_event + 1)
+        label = gen.metadata.get("agent")
+        spans.append(
+            build_span(
+                trace=trace,
+                span=span_id(ident, f"step:{step.number}:gen:{gen.index}"),
+                parent=parent,
+                observation_type="generation",
+                name=f"llm-{gen.index}" + (f" ({label})" if label else ""),
+                start_ns=_to_ns(start),
+                end_ns=_to_ns(end),
+                environment=environment,
+                output_value=redact(_clip_head(gen.text, GENERATION_TEXT_LIMIT))
+                if gen.text
+                else None,
+                model=gen.model or None,
+                usage_details={key: value for key, value in gen.usage.items() if value}
+                or None,
+                metadata={
+                    **gen.metadata,
+                    "step": step.number,
+                    "timing_source": detail.timing,
+                },
+            )
+        )
+
+    for tool in detail.tool_calls:
+        start = tool.start or at(tool.first_event)
+        end = tool.end or at(tool.last_event)
+        spans.append(
+            build_span(
+                trace=trace,
+                span=span_id(ident, f"step:{step.number}:tool:{tool.index}"),
+                parent=parent,
+                observation_type="tool",
+                name=tool.name or f"tool-{tool.index}",
+                start_ns=_to_ns(start),
+                end_ns=_to_ns(end),
+                environment=environment,
+                input_value=redact(_clip_head(tool.input_text, TOOL_INPUT_LIMIT))
+                if tool.input_text
+                else None,
+                output_value=redact(_clip_tail(tool.output_text, TOOL_OUTPUT_LIMIT))
+                if tool.output_text
+                else None,
+                level="ERROR" if tool.is_error else None,
+                metadata={
+                    **tool.metadata,
+                    "step": step.number,
+                    "timing_source": detail.timing,
+                },
+            )
+        )
+
+    # The full log tail moves to its own observation so the step's output can
+    # be the outcome instead of a wall of text.
+    spans.append(
+        build_span(
+            trace=trace,
+            span=span_id(ident, f"step:{step.number}:log"),
+            parent=parent,
+            observation_type="event",
+            name="log",
+            start_ns=_to_ns(step.end),
+            end_ns=_to_ns(step.end),
+            environment=environment,
+            output_value=redact(_clip_tail(step.log, OUTPUT_LIMIT)),
+            metadata={"step": step.number, "log_bytes": len(step.log)},
+        )
+    )
+    return spans
+
+
+def _step_result_facts(detail: StepDetail) -> dict[str, Any]:
+    """Metadata worth surfacing on the step span from the terminal result."""
+    result = detail.result
+    out: dict[str, Any] = {}
+    for key in (
+        "stop_reason",
+        "num_turns",
+        "duration_ms",
+        "duration_api_ms",
+        "ttft_ms",
+        "permission_denials",
+    ):
+        if result.get(key) not in (None, "", 0):
+            out[key] = result[key]
+    return out
+
+
+def _step_usage_details(detail: StepDetail) -> dict[str, int] | None:
+    usage = detail.result.get("usage") or {}
+    mapped = {
+        target: usage[source]
+        for source, target in (
+            ("input_tokens", "input"),
+            ("output_tokens", "output"),
+            ("cache_read_input_tokens", "cache_read_input_tokens"),
+            ("cache_creation_input_tokens", "cache_creation_input_tokens"),
+        )
+        if isinstance(usage.get(source), int) and usage[source] > 0
+    }
+    return mapped or None
+
+
+def _step_output(detail: StepDetail, step: StepFacts) -> str:
+    """The step's outcome: final assistant text when known, log tail otherwise."""
+    final = str(detail.result.get("result_text") or "")
+    if final:
+        return final
+    if detail.generations and detail.generations[-1].text:
+        return _clip_tail(detail.generations[-1].text, GENERATION_TEXT_LIMIT)
+    return _clip_tail(step.log, OUTPUT_LIMIT)
+
+
 def build_run_spans(
     run_dir: Path,
     *,
@@ -307,6 +488,7 @@ def build_run_spans(
     metadata = _load_json(run_dir / "metadata.json")
     usage = _load_json(run_dir / "usage.json")
     run_id = str(metadata.get("run_id") or extra.get("run_id") or run_dir.name)
+    ident = run_identity(run_id, metadata)
     session = config.session_id(run_id)
     tags = run_tags(metadata)
     env = config.environment
@@ -315,11 +497,23 @@ def build_run_spans(
     spans: list[dict[str, Any]] = []
 
     for step in steps:
-        step_trace = trace_id(run_id, f"step:{step.number}")
+        detail = _step_detail(step)
+        step_trace = trace_id(ident, f"step:{step.number}")
+        step_span = span_id(ident, f"step:{step.number}")
+        model = (
+            (
+                (detail.result.get("models") or [None])[0]
+                if len(detail.result.get("models") or []) == 1
+                else None
+            )
+            or str(metadata.get("executor_model") or "")
+            or None
+        )
+        step_failed = bool(detail.result.get("is_error"))
         spans.append(
             build_span(
                 trace=step_trace,
-                span=span_id(run_id, f"step:{step.number}"),
+                span=step_span,
                 name=f"step-{step.number}",
                 trace_name=f"{run_id} · step {step.number}",
                 start_ns=_to_ns(step.start),
@@ -328,19 +522,51 @@ def build_run_spans(
                 tags=tags,
                 environment=env,
                 input_value=redact(_clip_head(step.prompt, INPUT_LIMIT)),
-                output_value=redact(_clip_tail(step.log, OUTPUT_LIMIT)),
+                output_value=redact(_step_output(detail, step))
+                if not detail.empty
+                else redact(_clip_tail(step.log, OUTPUT_LIMIT)),
                 metadata={
                     **step.metadata,
                     "harness": step.harness,
                     "run_id": run_id,
                     "executor_model": metadata.get("executor_model"),
+                    **(
+                        {
+                            "detail_source": detail.source,
+                            "timing_source": detail.timing,
+                            "generations": len(detail.generations),
+                            "tool_calls": len(detail.tool_calls),
+                        }
+                        if not detail.empty
+                        else {}
+                    ),
+                    **_step_result_facts(detail),
                 },
-                model=str(metadata.get("executor_model") or "") or None,
+                model=model,
+                level="ERROR" if step_failed else None,
+                status_message="step reported an error" if step_failed else None,
+                usage_details=_step_usage_details(detail),
+                cost_details=(
+                    {"total": detail.result["total_cost_usd"]}
+                    if isinstance(detail.result.get("total_cost_usd"), (int, float))
+                    else None
+                ),
             )
         )
+        if not detail.empty:
+            spans.extend(
+                _step_child_spans(
+                    detail,
+                    step,
+                    ident=ident,
+                    trace=step_trace,
+                    parent=step_span,
+                    environment=env,
+                )
+            )
 
-    run_trace = trace_id(run_id, "run")
-    run_span = span_id(run_id, "run")
+    run_trace = trace_id(ident, "run")
+    run_span = span_id(ident, "run")
     run_start = (
         steps[0].start
         if steps
@@ -375,7 +601,7 @@ def build_run_spans(
     spans.extend(
         _run_child_spans(
             run_dir,
-            run_id=run_id,
+            ident=ident,
             trace=run_trace,
             parent=run_span,
             environment=env,
@@ -389,7 +615,7 @@ def build_run_spans(
 def _run_child_spans(
     run_dir: Path,
     *,
-    run_id: str,
+    ident: str,
     trace: str,
     parent: str,
     environment: str,
@@ -409,7 +635,7 @@ def _run_child_spans(
         spans.append(
             build_span(
                 trace=trace,
-                span=span_id(run_id, "diff"),
+                span=span_id(ident, "diff"),
                 name="diff",
                 parent=parent,
                 observation_type="event",
@@ -429,7 +655,7 @@ def _run_child_spans(
         spans.append(
             build_span(
                 trace=trace,
-                span=span_id(run_id, "audit"),
+                span=span_id(ident, "audit"),
                 name="audit",
                 parent=parent,
                 observation_type="event",
@@ -445,7 +671,7 @@ def _run_child_spans(
         spans.append(
             build_span(
                 trace=trace,
-                span=span_id(run_id, "validation"),
+                span=span_id(ident, "validation"),
                 name="validation",
                 parent=parent,
                 observation_type="event",

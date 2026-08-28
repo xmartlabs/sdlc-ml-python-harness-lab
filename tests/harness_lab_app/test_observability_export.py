@@ -221,7 +221,24 @@ def test_ids_are_deterministic_so_re_export_updates_in_place(run_dir, config):
     assert [(s["traceId"], s["spanId"]) for s in first] == [
         (s["traceId"], s["spanId"]) for s in second
     ]
-    assert first[0]["traceId"] == trace_id(RUN_ID, "step:1")
+    # Ids are salted with the condition hash so two *different* runs that
+    # happen to share a run_id cannot overwrite each other in Langfuse.
+    assert first[0]["traceId"] == trace_id(f"{RUN_ID}@sha256:abc", "step:1")
+
+
+def test_two_runs_sharing_a_run_id_get_distinct_ids(run_dir, config, tmp_path):
+    import shutil
+
+    other = tmp_path / "elsewhere" / RUN_ID
+    shutil.copytree(run_dir, other)
+    metadata = json.loads((other / "metadata.json").read_text())
+    metadata["condition_hash"] = "sha256:different"
+    (other / "metadata.json").write_text(json.dumps(metadata))
+
+    ids_a = {s["traceId"] for s in build_run_spans(run_dir, config=config)}
+    ids_b = {s["traceId"] for s in build_run_spans(other, config=config)}
+    assert ids_a.isdisjoint(ids_b)
+    # Same session either way: they still group under the run in the UI.
 
 
 def test_ids_have_the_otel_widths(run_dir, config):

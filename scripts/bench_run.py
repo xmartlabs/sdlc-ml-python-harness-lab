@@ -1315,6 +1315,22 @@ def render_claude_event(raw_line: str) -> str | None:
     return None  # user/tool_result events: noise for the readable log
 
 
+def stamp_event_line(line: str, now_iso: str | None = None) -> str:
+    """Prepend `_received_at` to a stream-json event line.
+
+    claude stream-json events carry no clock of their own; the arrival stamp is
+    what lets the Langfuse exporter place generations and tool calls on a real
+    timeline instead of interpolating. Only lines that are clearly JSON objects
+    are touched, and readers that do not know the key ignore it.
+    """
+    if not line.startswith('{"'):
+        return line
+    import datetime as _dt
+
+    received = now_iso or _dt.datetime.utcnow().isoformat() + "Z"
+    return f'{{"_received_at":"{received}",' + line[1:]
+
+
 def run_opencode(
     cmd: list[str],
     log_path: Path,
@@ -1359,7 +1375,7 @@ def run_opencode(
         assert proc.stdout is not None
         for line in proc.stdout:
             if events_fh is not None:
-                events_fh.write(line)
+                events_fh.write(stamp_event_line(line))
                 events_fh.flush()
                 rendered = render_claude_event(line)
                 if rendered is None:

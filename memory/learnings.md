@@ -201,6 +201,20 @@ place a future field will be dropped: `_config_payload`, `_resume_config`,
 grows. See [ADR-0026](../docs/adr/0026-run-continuation-as-child-runs.md) and
 [guide-run-continuation.md](../docs/guide-run-continuation.md).
 
+## claude stream-json per-turn usage undercounts output (2026-08-27)
+
+In `steps/step-N.events.jsonl`, each assistant message's `usage.output_tokens`
+is a streaming snapshot taken before the message finished: summing them across
+a run gives ~5% of the real total (`1348` vs `26987` on `tetris-v1-K-004`).
+`input_tokens` and the cache counters per turn are usable; output totals must
+come from the terminal `result` event or `usage.json`. The events also carry
+no timestamps of their own — `bench_run.stamp_event_line` now injects
+`_received_at` at capture time, and the Langfuse exporter labels anything
+older `timing_source: interpolated`. Also: `run_id` is not globally unique
+across copies of a run directory, which is why OTEL ids are salted with
+`condition_hash`. See
+[ADR-0028](../docs/adr/0028-step-traces-carry-per-call-detail.md).
+
 <!-- Add new learnings above this line -->
 
 
@@ -782,5 +796,19 @@ place a future field will be dropped: `_config_payload`, `_resume_config`,
 `clone_run` and `continue_run` must all be updated together when the schema
 grows. See [ADR-0026](../docs/adr/0026-run-continuation-as-child-runs.md) and
 [guide-run-continuation.md](../docs/guide-run-continuation.md).
+
+## claude stream-json per-turn usage undercounts output (2026-08-27)
+
+In `steps/step-N.events.jsonl`, each assistant message's `usage.output_tokens`
+is a streaming snapshot taken before the message finished: summing them across
+a run gives ~5% of the real total (`1348` vs `26987` on `tetris-v1-K-004`).
+`input_tokens` and the cache counters per turn are usable; output totals must
+come from the terminal `result` event or `usage.json`. The events also carry
+no timestamps of their own — `bench_run.stamp_event_line` now injects
+`_received_at` at capture time, and the Langfuse exporter labels anything
+older `timing_source: interpolated`. Also: `run_id` is not globally unique
+across copies of a run directory, which is why OTEL ids are salted with
+`condition_hash`. See
+[ADR-0028](../docs/adr/0028-step-traces-carry-per-call-detail.md).
 
 <!-- Add new learnings above this line -->
