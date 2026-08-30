@@ -3,6 +3,103 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## An evaluation lab's real product is the refusals — 2026-08-30
+
+Building v2 (experiments, scores, findings) the pattern that kept recurring is that
+the valuable code is what the system *declines* to say:
+
+- an experiment that varies harness **and** repository is rejected at creation, not
+  rendered as an average later (`validate_design`);
+- a mean from one observation reports **no** spread — `stdev=0.0` would claim perfect
+  consistency from a single run;
+- a delta with no spread to compare against reports `exceeds_spread=None`, not `True`;
+- a missing cost emits **nothing**, never `0` — zero is a claim, and a flattering one;
+- a confidence interval under N=3 returns `None`;
+- a maturity level above 2 without evidence is refused outright;
+- the DeepEval adapter emits nothing when unwired, because "not measured" and "scored
+  badly" must never merge in an aggregate.
+
+Each of these is one branch. Together they are the difference between a lab and a job
+runner that renders averages — and none of them would ever be missed by a test that
+only checked the happy path, because the failure is a plausible-looking number.
+
+Second recurring rule, now applied five times: **a new field enters `condition_hash`
+only when it differs from the historical default** (`skills_disabled` non-empty,
+`target` present, `harness_source != lab_root`). Break it once and the whole
+historical corpus re-bins against hashes it never had.
+
+Third: an axis added to `RunConfig` must be carried by every path that claims to
+reproduce a run — clone, retry, continuation, and each repetition of a batch. That is
+four call sites per axis, and missing one splits an arm invisibly.
+
+## cwd *is* the harness condition, and the fingerprint has to follow it — 2026-08-30
+
+Claude Code and opencode auto-load their adapter file and native skills from the
+process cwd. `bench_run` already knew this — it set `agent_cwd = workspace` for one
+hardcoded case so a "bare" SWE arm would not silently inherit the lab harness. So the
+`native` / `injected` comparison (ADR-0031) is not new machinery, it is that side
+effect promoted to a declared condition.
+
+The trap is in the fingerprint, and it fails **silently**. `build_harness_fingerprint`
+reads `skills-lock.json`, which a cloned repository never has. Point both arms at it
+and they produce the same `harness_hash` → the same `condition_hash` → one arm where
+there should be two, and every downstream comparison quietly stops comparing. No test
+fails, no error appears; the numbers just become meaningless. Hence
+`build_workspace_harness_fingerprint`, which hashes what is actually readable from the
+agent's cwd (native skill dirs, projected agents, adapter files, governance docs).
+
+Three smaller things the implementation forced:
+
+- **Project before the baseline commit.** Provisioning commits the workspace so
+  `git diff HEAD` is only the agent's work. A harness copied in afterwards lands in
+  that diff as though the agent wrote it.
+- **Copy, never symlink.** `link_tool`'s symlink strategy encodes a path relative to
+  the root it writes into; a lab skill is unreachable that way from a clone, and the
+  archived workspace has to stand alone anyway.
+- **Gate the fingerprint move on the declared condition, not on `agent_cwd`.** The SWE
+  lane has set `agent_cwd = workspace` since long before this existed; keying off it
+  would re-bin every historical SWE arm against a hash it never had.
+
+**And do not compare `lab_root` against `native`** — they differ in the harness *and*
+in whether the agent works inside the repo at all. Two changes, one number. See
+[ADR-0031](../docs/adr/0031-harness-source-is-a-run-condition.md).
+
+## A pinned commit must survive every path that "repeats" a run — 2026-08-30
+
+Target repositories (ADR-0029) resolve a ref to a SHA at run creation. The obvious
+implementation resolves it once, in `create_run`, and is wrong in four places:
+`clone_run`, `continue_run`, `_resume_config` (retry) and `create_batch` all produce
+runs that claim to be the *same arm* as an earlier one. Any of them re-reading
+`main` silently splits one arm in two the moment someone pushes — and the split is
+invisible, because both runs are labelled `main`.
+
+So resolution takes a `pinned_commit` short-circuit, and every one of those paths
+passes the stored commit instead of the ref. `create_batch` resolves once per
+`(repo, ref)` and hands the same SHA to all N repetitions, for the same reason
+`_preflight_key` deduplicates preflight: the expensive call is not the problem, the
+*inconsistent* call is.
+
+Two smaller traps in the same change:
+
+- **`condition_hash` must hash the commit, never the ref.** Hashing `main` makes two
+  different experiments share an arm. And it enters the identity *only when
+  non-empty*, following the existing ablation rule — otherwise every historical arm
+  re-bins.
+- **`git ls-remote <url>` with a url starting with `-`** is argument injection
+  (`--upload-pack=…` is remote command execution). `validate_repository_url` is a
+  security boundary, not input tidying; and `GIT_TERMINAL_PROMPT=0` +
+  `ssh -oBatchMode=yes` turn a missing credential into an error instead of a hung
+  API worker.
+
+**Also discovered, and it changes what is feasible next:** `skills_sync` is already
+fully root-parameterized (`discover_skills(root)`, `link_tool(root, …)`,
+`render_tool(root, …)`, `project_agents(root, …)`). Only
+[bench_run.py](../scripts/bench_run.py) hardcodes `REPO_ROOT`. Injecting the harness
+into a *foreign* workspace is therefore a `source_root`/`target_root` split, not a
+rewrite — which is what makes the `native` vs `injected` comparison in
+[the v2 roadmap](../docs/roadmap-lab-v2.md#phase-2--harness-conditions-on-an-external-target)
+tractable.
+
 ## Langfuse v4 takes traces only over OTLP, and its SDK cannot backdate them — 2026-08-27
 
 Wiring run traces to Langfuse looked like a two-line SDK call. It was not:

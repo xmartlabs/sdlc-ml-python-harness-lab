@@ -4,6 +4,7 @@ import { api, ApiError } from "../api";
 import { ArtifactsPanel } from "../components/ArtifactsPanel";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HarnessCatalog } from "../components/HarnessCatalog";
+import { ScoresPanel } from "../components/ScoresPanel";
 import { LogViewer } from "../components/LogViewer";
 import { Markdown } from "../components/Markdown";
 import { SandboxPanel } from "../components/SandboxPanel";
@@ -1232,6 +1233,7 @@ export function RunDetail({
           <h3>Artifacts</h3>
           <span className="muted">data/runs/{run.run_id}</span>
         </div>
+        <ScoresPanel runId={run.run_id} />
         <ArtifactsPanel runId={run.run_id} />
       </div>
       </div>

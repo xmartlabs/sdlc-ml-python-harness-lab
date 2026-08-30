@@ -56,6 +56,14 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0025 — The DB is the source of truth for every case](0025-db-is-the-source-of-truth-for-every-case.md)
 - [0026 — A continuation is a child run, not a reopened one](0026-run-continuation-as-child-runs.md)
 - [0027 — Langfuse traces are rebuilt from run artifacts, not emitted live](0027-langfuse-traces-rebuilt-from-run-artifacts.md)
+- [0028 — Make the evaluation mode an explicit property of a comparison](0028-evaluation-modes.md)
+- [0029 — Make the target repository first-class and pin every run to a resolved SHA](0029-target-repositories-pinned-per-run.md)
+- [0030 — Provision every workspace through one source interface](0030-one-workspace-source-interface.md)
+- [0031 — Make the harness a condition of the run, not a property of the machine](0031-harness-source-is-a-run-condition.md)
+- [0032 — Derive organizational cases from a target's own history, deterministically](0032-cases-are-derived-from-a-targets-own-history.md)
+- [0033 — Put `Experiment` above `Run`, and refuse a design its mode cannot answer](0033-experiment-above-run.md)
+- [0034 — Record every metric against a declared, versioned definition](0034-score-registry.md)
+- [0035 — Make a finding a testable claim, and keep the maturity assessment human](0035-findings-and-manual-maturity-assessment.md)
 
 ## Why ADRs exist
 

@@ -275,6 +275,245 @@ export type StagedSkillPromoteResult = {
   next_steps: string;
 };
 
+/**
+ * A repository a case can be run against, independent of the case (ADR-0029).
+ *
+ * `default_ref` is what a run pins when it names no ref of its own. The commit
+ * itself is never stored here — a repository moves, and the immutable commit
+ * belongs to the run that used it.
+ */
+/**
+ * Which harness the agent can see (ADR-0031).
+ *
+ * `lab_root` is the historical default: the agent works from the lab repo and
+ * edits the target from outside. `native` and `injected` both put it *inside*
+ * the target — with the repo's own conventions, or with ours projected on top.
+ * That pair is the comparison; `lab_root` vs `native` would mix two changes.
+ */
+export type HarnessSource = "lab_root" | "native" | "injected";
+
+/** What the lab knows about itself. Every figure carries its denominator. */
+export type OverviewRate = { rate: number | null; n: number; note: string };
+
+/** One registry metric aggregated across the corpus, direction attached. */
+export type ScoreAggregate = {
+  name: string;
+  version: string;
+  category: string;
+  provenance: string;
+  direction: string;
+  description: string;
+  runs: number;
+  mean: number | null;
+  median: number | null;
+  stdev: number | null;
+  minimum: number | null;
+  maximum: number | null;
+  true_rate: number | null;
+};
+
+export type OverviewReport = {
+  window_days: number;
+  harness_version: string | null;
+  experiments: { total: number; recent: number };
+  success: OverviewRate;
+  success_all_time: OverviewRate;
+  regressions: {
+    count: number;
+    eligible_cases: number;
+    rate: number | null;
+    cases: string[];
+  };
+  cost: {
+    median_usd: number | null;
+    n: number;
+    total_usd: number | null;
+    cost_per_success: number | null;
+    successes: number;
+  };
+  regression_suite: { cases: number; of_active: number };
+  findings: { open: number; validated: number; total: number };
+  scoring: { scored: number; terminal: number };
+  trend: { week_ending: string; n: number; rate: number | null }[];
+  runs: { total: number; recent: number };
+  scores: {
+    runs: number;
+    adherence: ScoreAggregate | null;
+    useful: ScoreAggregate | null;
+    redundant: ScoreAggregate | null;
+    diff_size: ScoreAggregate | null;
+    forbidden: ScoreAggregate | null;
+    metrics: ScoreAggregate[];
+  };
+};
+
+export type ExperimentMode = "harness_evaluation" | "cross_repo" | "discovery";
+export type ConditionRole = "control" | "treatment";
+
+export type ExperimentRecord = {
+  experiment_id: string;
+  name: string;
+  question: string;
+  mode: ExperimentMode;
+  status: "draft" | "running" | "complete" | "abandoned";
+  case_ids: string[];
+  prompt_variants: string[];
+  repetitions: number;
+  notes: string;
+  condition_count?: number;
+  run_count?: number;
+  warnings?: string[];
+};
+
+export type ConditionRecord = {
+  label: string;
+  role: ConditionRole;
+  description: string;
+  overrides: Record<string, unknown>;
+};
+
+/** One metric aggregated over a condition's repetitions. */
+export type AggregateRecord = {
+  name: string;
+  n: number;
+  mean: number | null;
+  median: number | null;
+  stdev: number | null;
+  minimum: number | null;
+  maximum: number | null;
+  missing: number;
+};
+
+export type ConditionSummary = {
+  label: string;
+  role: ConditionRole;
+  runs: number;
+  scored_runs: number;
+  success_rate: number | null;
+  warnings: string[];
+  metrics: Record<string, AggregateRecord>;
+};
+
+export type DeltaRecord = {
+  name: string;
+  control: number | null;
+  treatment: number | null;
+  absolute: number | null;
+  relative: number | null;
+  direction: string;
+  exceeds_spread: boolean | null;
+};
+
+export type CaseMatrixRow = {
+  case_id: string;
+  control: boolean | null;
+  treatment: boolean | null;
+  movement: "fixed" | "broken" | "unchanged" | "incomplete";
+};
+
+export type ExperimentSummary = {
+  experiment_id: string;
+  question: string;
+  mode: ExperimentMode;
+  repetitions: number;
+  conditions: ConditionSummary[];
+  comparisons: {
+    control: string;
+    treatment: string;
+    deltas: DeltaRecord[];
+    success: { control: number | null; treatment: number | null; points: number | null };
+    case_matrix: CaseMatrixRow[];
+  }[];
+};
+
+export type FindingRecord = {
+  finding_id: string;
+  title: string;
+  body: string;
+  severity: "low" | "medium" | "high";
+  status:
+    | "open"
+    | "proposed"
+    | "experiment_running"
+    | "validated"
+    | "refuted"
+    | "dismissed";
+  target_repo_id: string;
+  evidence_run_ids: string[];
+  affected_case_ids: string[];
+  recommendation: string;
+  intervention: string;
+  experiment_id: string | null;
+  outcome: string;
+  warnings?: string[];
+};
+
+/** One recorded metric. `provenance` is the field that must reach the eye. */
+export type ScoreRecord = {
+  run_id: string;
+  name: string;
+  version: string;
+  category: string;
+  provenance: "fact" | "observation" | "judgement" | string;
+  source: string;
+  value_num: number | null;
+  value_bool: boolean | null;
+  value_text: string | null;
+  reason: string;
+};
+
+export type TargetRecord = {
+  target_id: string;
+  name: string;
+  description: string;
+  repository_url: string;
+  default_ref: string;
+  status: "active" | "archived";
+  setup_commands: string[];
+  validation_commands: string[];
+  language: string;
+  team: string;
+  tags: string[];
+};
+
+/** A case mined from a target's history — a proposal, nothing persisted. */
+export type CaseCandidate = {
+  commit: string;
+  subject: string;
+  authored_at: string;
+  source_files: string[];
+  test_files: string[];
+  suggested_case_id: string;
+  suggested_prompt: string;
+};
+
+export type CaseCandidates = {
+  target_id: string;
+  ref: string;
+  scanned: number;
+  candidates: CaseCandidate[];
+};
+
+export type TargetCreatePayload = {
+  target_id: string;
+  name: string;
+  repository_url: string;
+  description?: string;
+  default_ref?: string;
+  setup_commands?: string[];
+  validation_commands?: string[];
+  language?: string;
+  team?: string;
+  tags?: string[];
+};
+
+/** What `main` resolves to right now — shown before a run is created. */
+export type TargetResolveResult = {
+  target_id: string;
+  ref: string;
+  commit: string;
+};
+
 export type RunConfigPayload = {
   case_id: string;
   prompt_variant: string;
@@ -287,6 +526,9 @@ export type RunConfigPayload = {
   dry_run: boolean;
   skills_disabled?: string[];
   skills_extra?: string[];
+  target_repo_id?: string;
+  target_ref?: string;
+  harness_source?: HarnessSource;
 };
 
 export type RunCreatePayload = {
@@ -308,6 +550,10 @@ export type RunBatchPayload = {
   harnesses: string[];
   executor_models: (string | null)[];
   planner_models: (string | null)[];
+  /** The Mode B axis: one case family, N repositories. `[""]` = no target. */
+  target_repo_ids?: string[];
+  target_ref?: string;
+  harness_sources?: HarnessSource[];
   repetitions: number;
   score_mode: string;
   max_steps: number;

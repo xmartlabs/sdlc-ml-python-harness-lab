@@ -41,10 +41,17 @@ def render_region(
     registry: Registry,
     tool: ToolSpec,
     skills: list[Skill] | None = None,
+    template_root: Path | None = None,
 ) -> str:
-    """Render the managed region content (no surrounding markers)."""
+    """Render the managed region content (no surrounding markers).
+
+    ``template_root`` separates *where the templates live* from *where the
+    output goes*. They are the same root for an in-place sync; they differ when
+    a governed harness is projected into a foreign repository, which owns
+    neither ``adapters/templates`` nor ``.github/skills``.
+    """
     skills = skills if skills is not None else discover_skills(root)
-    env = _environment(root)
+    env = _environment(template_root or root)
     template_name = tool.adapter_template or DEFAULT_TEMPLATE
     template = env.get_template(template_name)
     context = {
@@ -87,11 +94,13 @@ def render_tool(
     registry: Registry,
     tool: ToolSpec,
     skills: list[Skill] | None = None,
+    template_root: Path | None = None,
 ) -> bool:
     """Write the managed region into the adapter file. Returns True if changed.
 
     ``skills`` overrides discovery — used by the benchmark runner to project an
     ablated (or extended) skill set into the adapter file for one run.
+    ``template_root`` is where the Jinja templates live when it is not ``root``.
     """
     if not tool.adapter_file:
         return False
@@ -99,7 +108,10 @@ def render_tool(
     if not path.is_file():
         return False
     current = path.read_text(encoding="utf-8")
-    updated = splice(current, render_region(root, registry, tool, skills=skills))
+    updated = splice(
+        current,
+        render_region(root, registry, tool, skills=skills, template_root=template_root),
+    )
     if updated == current:
         return False
     path.write_text(updated, encoding="utf-8")

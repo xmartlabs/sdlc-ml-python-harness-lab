@@ -358,6 +358,54 @@ def apply_skill_views(skills: list) -> None:
         render_tool(REPO_ROOT, registry, tool, skills=skills)
 
 
+def inject_harness(workspace: Path, skills: list, tool_id: str) -> dict:
+    """Project the lab harness into a target workspace (ADR-0031).
+
+    This is the `injected` arm. The agent runs inside the cloned repository, so
+    the harness has to be *there* — a governance surface in the lab is invisible
+    from a cwd the agent never visits.
+
+    ``skills`` is the run's **effective** set, so an ablated arm stays ablated
+    inside the target. Passing the full governed set here would silently undo
+    the ablation for exactly the runs meant to measure it.
+    """
+    from ml_python_base.skills_sync.config import DEFAULT_REGISTRY_PATH, load_registry
+    from ml_python_base.skills_sync.projection import project_harness
+
+    registry = load_registry(REPO_ROOT / DEFAULT_REGISTRY_PATH)
+    governance = (
+        *registry.governance.files,
+        registry.governance.automation,
+        registry.governance.orchestration,
+    )
+    result = project_harness(
+        REPO_ROOT,
+        workspace,
+        registry,
+        skills=skills,
+        tool_ids=(tool_id,),
+        governance_files=tuple(doc for doc in governance if doc),
+    )
+    print(
+        f"  ✓ Harness projected into the target: {len(result.skills)} skill(s), "
+        f"{result.agents} agent(s), tool={tool_id}"
+    )
+    if result.collisions:
+        # Replacing a repository's own governance changes the thing being
+        # measured, so it is announced and recorded, never silent.
+        print(
+            "  ⚠️  Replaced the target's own governance: "
+            f"{', '.join(result.collisions)} (kept as *.native.bak)"
+        )
+    return {
+        "tools": result.tools,
+        "skills": sorted(result.skills),
+        "agents": result.agents,
+        "files_written": sorted(result.files_written),
+        "collisions": sorted(result.collisions),
+    }
+
+
 def restore_full_skill_views() -> None:
     """Re-sync every native view from the governed source (idempotent)."""
     from ml_python_base.skills_sync.discovery import (
@@ -828,6 +876,10 @@ def write_metadata(
     prompt_short: str,
     prompt_source: Path | None = None,
     task_path: Path | None = None,
+    target: dict | None = None,
+    harness_source: str = "",
+    harness_root: Path | None = None,
+    harness_projection: dict | None = None,
 ) -> Path:
     meta = {
         "project": "ai-sdlc-lab",
@@ -852,6 +904,11 @@ def write_metadata(
         "subagents": discover_subagents(),
         "base_commit": task.get("base_commit", ""),
         "workspace": f"workspace/{args.run}",
+        # Which external repository this run worked in, if any (ADR-0029).
+        "target_repo_id": (target or {}).get("target_id", ""),
+        "target_commit": (target or {}).get("commit", ""),
+        # Which harness the agent could see, and from where (ADR-0031).
+        "harness_source": harness_source or "lab_root",
         # Lineage for a continuation run (ADR-0026); "" for an original run.
         # Carried in the archived artifact so a chain stays reconstructable
         # from disk alone (ADR-0021).
@@ -873,6 +930,10 @@ def write_metadata(
         task_path=task_path,
         runner_image=os.environ.get("HARNESS_LAB_RUNNER_IMAGE"),
         skills_disabled=tuple(meta["skills_disabled"]),
+        target=target,
+        harness_source=harness_source,
+        harness_root=harness_root,
+        harness_projection=harness_projection,
         skills_extra_hashes=staged_skill_hashes(
             list(getattr(args, "extra_skill", []) or [])
         ),
@@ -1048,16 +1109,110 @@ def _load_case_spec(out_dir: Path) -> dict | None:
 
 
 def spec_provisions_repo(spec: dict | None) -> bool:
-    """Whether this case needs a subject repo cloned before the agent runs.
+    """Whether this run needs a repository cloned before the agent runs.
 
-    Only a cloneable ``owner/repo`` counts: a case may carry a bare
-    ``subject_repo`` for provenance (Tetris says ``ml-python-base``), and a
-    DB-native case leaves the field empty.
+    Two independent reasons to provision. An external **target repository**
+    (ADR-0029) says so explicitly through ``source``; that is the discriminator
+    ADR-0030 introduced, and it is checked first because a target is orthogonal
+    to the case type — the same case may run locally or against a clone.
+
+    Otherwise a cloneable ``owner/repo`` counts, and only that: a case may carry
+    a bare ``subject_repo`` for provenance (Tetris says ``ml-python-base``), and
+    a DB-native case leaves the field empty.
     """
+    if (spec or {}).get("source") == "git_target":
+        return True
     return "/" in (spec or {}).get("repo", "")
 
 
-def provision_workspace(workspace: Path, spec: dict) -> None:
+def _provision_git_target(
+    workspace: Path, spec: dict, on_provisioned: object = None
+) -> None:
+    """Materialize an external target repository at its pinned commit (ADR-0029).
+
+    The commit — never the ref — is what gets checked out. It was resolved once,
+    at run creation, and shipped in the spec; resolving a ref here would let the
+    run execute against a commit its own provenance does not name.
+
+    Setup commands run before the agent and their output is committed along with
+    the checkout, so the agent's later ``git diff HEAD`` contains only the
+    agent's work. Build artifacts a repo already ignores (``.venv``,
+    ``node_modules``) stay ignored — ``git add -A`` honors ``.gitignore``, and an
+    ignored file never appears in the diff anyway.
+    """
+    import swebench_common as swe
+
+    target = spec.get("target") or {}
+    repo_url = str(target.get("repo_url") or "")
+    commit = str(target.get("commit") or "")
+    target_id = str(target.get("target_id") or "?")
+    if not repo_url or not commit:
+        sys.exit(
+            f"❌ Target '{target_id}' is missing a repo_url or a resolved commit. "
+            "The worker stages both into case_spec.json — the run should never "
+            "have started without them."
+        )
+
+    if workspace.exists():
+        workspace.rmdir()  # let git clone create it
+    print(f"  Provisioning target {target_id} @ {commit[:10]} …")
+    swe.clone_checkout(workspace, repo_url, commit)
+
+    for command in [str(item) for item in target.get("setup", []) if str(item).strip()]:
+        rendered = command.format(workspace=str(workspace))
+        print(f"  setup: {rendered}")
+        # Shell is intentional and is the contract: setup entries are
+        # operator-authored shell lines (`uv sync && make build`), exactly like
+        # a case's validation_commands. They come from the lab's own database,
+        # not from the agent or the target repository, and they already run
+        # inside the per-run container.
+        result = subprocess.run(  # nosec B602 - operator-authored setup command
+            rendered,
+            shell=True,
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            print(result.stdout[-1500:])
+            print(result.stderr[-1500:])
+            sys.exit(
+                f"❌ Target setup failed (rc={result.returncode}): {rendered}\n"
+                "The agent would have started against a half-built repository, so "
+                "the run is stopped instead."
+            )
+
+    # The harness lands BEFORE the baseline commit on purpose: projected into a
+    # committed tree it would show up in the agent's `git diff HEAD` as though
+    # the agent had written it, and every diff-based measurement would be wrong.
+    if callable(on_provisioned):
+        on_provisioned(workspace)
+
+    _run_git(["git", "-C", str(workspace), "add", "-A"], cwd=REPO_ROOT)
+    _run_git(
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "-c",
+            "user.email=lab@harness.local",
+            "-c",
+            "user.name=harness-lab",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            f"target: provisioned {target_id} @ {commit[:10]}",
+        ],
+        cwd=REPO_ROOT,
+    )
+    print(f"  ✓ Target {target_id} provisioned at {commit[:10]}.")
+
+
+def provision_workspace(
+    workspace: Path, spec: dict, on_provisioned: object = None
+) -> None:
     """Clone + set up a subject repo in the workspace before the agent runs.
 
     Repo-task / SWE-bench flow (ADR-0009): clone @ base_commit, apply the
@@ -1073,6 +1228,10 @@ def provision_workspace(workspace: Path, spec: dict) -> None:
         return
     if workspace.exists() and any(workspace.iterdir()):
         sys.exit(f"❌ workspace/{workspace.name}/ is not empty; cannot provision repo.")
+
+    if spec.get("source") == "git_target":
+        _provision_git_target(workspace, spec, on_provisioned)
+        return
 
     if spec.get("case_type") == "swe_pro":
         # Pro lane: copy the repo out of the instance's prebuilt image (needs
@@ -2048,8 +2207,11 @@ def main(argv: list[str] | None = None) -> int:
         if skills_ablation:
             sys.exit(f"❌ Could not sync skill views before ablation: {exc!r}")
         print(f"  ⚠️  Skill view sync skipped: {exc!r}")
+    # Always resolved, ablated or not: the `injected` harness condition projects
+    # this exact set into the target, so a run with no ablation still needs to
+    # know what "the harness" currently is.
+    effective_skills = build_effective_skills(args.disable_skill, args.extra_skill)
     if skills_ablation:
-        effective_skills = build_effective_skills(args.disable_skill, args.extra_skill)
         apply_skill_views(effective_skills)
         import atexit
 
@@ -2085,16 +2247,39 @@ def main(argv: list[str] | None = None) -> int:
         validate_workspace(workspace, args.run, args.resume, fresh=args.fresh)
     workspace.mkdir(parents=True, exist_ok=True)
 
-    if provisions_repo and case_spec is not None:
-        provision_workspace(workspace, case_spec)
+    # The harness condition (ADR-0031) is decided before provisioning, because
+    # `injected` is a step *of* provisioning.
+    harness_source = str((case_spec or {}).get("harness_source") or "lab_root")
+    harness_projection: dict | None = None
 
-    # Control-arm hygiene (harness A/B): Claude Code auto-loads CLAUDE.md and
-    # .claude/skills/ from its cwd, so a "bare" default-variant run launched
-    # from the repo root silently inherits the whole lab harness. The default
-    # arm therefore runs from inside the subject repo (truly bare context);
-    # the harness variant keeps the repo-root cwd so the surface is available.
+    def _inject(ws: Path) -> None:
+        nonlocal harness_projection
+        harness_projection = inject_harness(ws, effective_skills, args.harness)
+
+    if provisions_repo and case_spec is not None:
+        provision_workspace(
+            workspace,
+            case_spec,
+            _inject if harness_source == "injected" else None,
+        )
+
+    # Where the agent runs decides which harness it can see. Claude Code and
+    # opencode auto-load their adapter file and native skills from the cwd, so
+    # cwd IS the harness condition:
+    #
+    #   lab_root  — the lab repository: the agent sees the lab's harness and
+    #               edits the workspace from outside. The historical default.
+    #   native    — inside the target: whatever governance that repo ships, and
+    #               nothing else.
+    #   injected  — inside the target, with the lab harness projected into it.
+    #
+    # Running `native` from the repo root would silently hand the agent the lab
+    # harness and quietly turn the control arm into a second treatment arm.
     agent_cwd: Path | None = None
-    if args.harness == "claude" and provisions_repo and prompt_short == "swe_default":
+    if harness_source in ("native", "injected"):
+        agent_cwd = workspace
+    elif args.harness == "claude" and provisions_repo and prompt_short == "swe_default":
+        # Pre-existing control-arm hygiene for the SWE lane, unchanged.
         agent_cwd = workspace
 
     repo_note: str | None = None
@@ -2133,6 +2318,18 @@ def main(argv: list[str] | None = None) -> int:
             if runs_path is not None
             else out_dir / "case_spec.json"
         ),
+        target=(case_spec or {}).get("target"),
+        harness_source=harness_source,
+        # An in-target harness is fingerprinted from the workspace, never from
+        # the lab — otherwise `native` and `injected` hash identically and the
+        # two arms silently merge into one.
+        #
+        # Gated on the declared condition, NOT on `agent_cwd`: the SWE lane has
+        # set `agent_cwd = workspace` for its bare claude arm since long before
+        # harness conditions existed, and moving that arm's fingerprint now
+        # would re-bin every historical SWE run against a hash it never had.
+        harness_root=(workspace if harness_source in ("native", "injected") else None),
+        harness_projection=harness_projection,
     )
     print(f"  Metadata:    {(out_dir / 'metadata.json').relative_to(REPO_ROOT)}")
 

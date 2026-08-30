@@ -13,11 +13,14 @@ const COLLAPSED_STORAGE_KEY = "ahl.sidebar.collapsed";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: "🏠", end: true },
+  { to: "/experiments", label: "Experiments", icon: "🧪", end: false },
   { to: "/runs", label: "Runs", icon: "▶", end: false },
   { to: "/cases", label: "Cases", icon: "🗂", end: false },
+  { to: "/repositories", label: "Repositories", icon: "📦", end: false },
   { to: "/skills", label: "Skills", icon: "🧩", end: false },
   { to: "/improvements", label: "Improvements", icon: "💡", end: false },
   { to: "/compare", label: "Compare", icon: "⇄", end: false },
+  { to: "/findings", label: "Findings", icon: "🔎", end: false },
   { to: "/health", label: "Health", icon: "🩺", end: false },
   { to: "/guide", label: "Guide", icon: "📖", end: false },
   { to: "/settings", label: "Settings", icon: "⚙", end: false }

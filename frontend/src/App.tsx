@@ -6,6 +6,9 @@ import { Layout } from "./components/Layout";
 import { RunDetailRoute } from "./components/RunDetailRoute";
 import { Cases } from "./pages/Cases";
 import { Compare } from "./pages/Compare";
+import { Experiments } from "./pages/Experiments";
+import { Findings } from "./pages/Findings";
+import { Repositories } from "./pages/Repositories";
 import { Dashboard } from "./pages/Dashboard";
 import { Guide } from "./pages/Guide";
 import { Health } from "./pages/Health";
@@ -319,6 +322,9 @@ export default function App() {
         />
         <Route element={<Skills />} path="/skills" />
         <Route element={<Improvements />} path="/improvements" />
+        <Route element={<Experiments />} path="/experiments" />
+        <Route element={<Findings />} path="/findings" />
+        <Route element={<Repositories />} path="/repositories" />
         <Route element={<Compare runs={runs} />} path="/compare" />
         <Route element={<Guide />} path="/guide" />
         <Route element={<Health />} path="/health" />

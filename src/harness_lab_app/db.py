@@ -89,6 +89,17 @@ def _apply_sqlite_compat_migrations() -> None:
             connection.execute(
                 text("ALTER TABLE run ADD COLUMN notes VARCHAR NOT NULL DEFAULT ''")
             )
+        for column in ("experiment_id", "condition_label"):
+            # Nullable for the same reason as batch_id below: a run created
+            # outside an experiment belongs to none, and inventing membership
+            # would put runs into a design they were never part of.
+            if column not in columns:
+                connection.execute(text(f"ALTER TABLE run ADD COLUMN {column} VARCHAR"))
+                connection.execute(
+                    text(
+                        f"CREATE INDEX IF NOT EXISTS ix_run_{column} ON run ({column})"
+                    )
+                )
         if "batch_id" not in columns:
             # Nullable on purpose: pre-existing runs were not part of a batch,
             # and backfilling them with a synthetic id would invent grouping
@@ -140,6 +151,50 @@ def _apply_sqlite_compat_migrations() -> None:
                     "VARCHAR NOT NULL DEFAULT ''"
                 )
             )
+        # Target repository pairing (ADR-0029). Empty string, not NULL: absence
+        # of a target is a real state ("runs in the lab's own workspace"), and
+        # the readers treat "" as that state rather than branching on None.
+        for column in ("target_repo_id", "target_ref", "target_commit"):
+            if runconfig_columns and column not in runconfig_columns:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE runconfig ADD COLUMN {column} "
+                        "VARCHAR NOT NULL DEFAULT ''"
+                    )
+                )
+        # Harness condition (ADR-0031). The default backfills historical rows
+        # with `lab_root`, which is not a placeholder — it is what those runs
+        # actually did, so the column is accurate the moment it is added.
+        if runconfig_columns and "harness_source" not in runconfig_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE runconfig ADD COLUMN harness_source "
+                    "VARCHAR NOT NULL DEFAULT 'lab_root'"
+                )
+            )
+
+        # Case provenance and expected/forbidden surfaces (ADR-0032). Existing
+        # cases default to `synthetic`: they were handcrafted or seeded, and
+        # calling them `organization` would claim a lineage they do not have.
+        case_columns = {
+            row[1]
+            for row in connection.execute(text("PRAGMA table_info('case')")).fetchall()
+        }
+        if case_columns and "provenance" not in case_columns:
+            connection.execute(
+                text(
+                    'ALTER TABLE "case" ADD COLUMN provenance '
+                    "VARCHAR NOT NULL DEFAULT 'synthetic'"
+                )
+            )
+        for column in ("files_expected", "files_forbidden"):
+            if case_columns and column not in case_columns:
+                connection.execute(
+                    text(
+                        f'ALTER TABLE "case" ADD COLUMN {column} '
+                        "JSON NOT NULL DEFAULT '[]'"
+                    )
+                )
 
         saved_proposal_columns = {
             row[1]

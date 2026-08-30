@@ -180,3 +180,79 @@ def test_migration_adds_continuation_columns_to_a_legacy_db(tmp_path, monkeypatc
     assert parent is None
 
     db_module._apply_sqlite_compat_migrations()
+
+
+def _legacy_runconfig_engine(tmp_path):
+    """A DB whose runconfig predates target repositories (ADR-0029)."""
+    engine = create_engine(f"sqlite:///{tmp_path}/targets.db")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE runconfig ("
+                "id INTEGER PRIMARY KEY, case_id VARCHAR, prompt_variant VARCHAR, "
+                "harness VARCHAR, score_mode VARCHAR, max_steps INTEGER, "
+                "skills_disabled JSON, skills_extra JSON, "
+                "continuation_prompt VARCHAR, created_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE run (id INTEGER PRIMARY KEY, run_id VARCHAR, "
+                "state VARCHAR, notes VARCHAR, cancel_requested BOOLEAN, "
+                "batch_id VARCHAR, parent_run_id VARCHAR)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO runconfig (case_id, prompt_variant, harness) "
+                "VALUES ('tetris-v1', 'sdlc', 'opencode')"
+            )
+        )
+    return engine
+
+
+def test_migration_adds_target_columns_without_touching_historical_runs(
+    tmp_path, monkeypatch
+):
+    engine = _legacy_runconfig_engine(tmp_path)
+    SQLModel.metadata.create_all(engine)  # adds targetrepository
+    monkeypatch.setattr(db_module, "engine", engine)
+    monkeypatch.setattr(
+        db_module,
+        "get_settings",
+        lambda: SimpleNamespace(database_url=f"sqlite:///{tmp_path}/targets.db"),
+    )
+
+    db_module._apply_sqlite_compat_migrations()
+
+    with engine.begin() as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('runconfig')")
+            ).fetchall()
+        }
+        tables = {
+            row[0]
+            for row in connection.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+        }
+        legacy = connection.execute(
+            text(
+                "SELECT case_id, target_repo_id, target_ref, target_commit, "
+                "harness_source FROM runconfig"
+            )
+        ).fetchone()
+
+    assert {"target_repo_id", "target_ref", "target_commit"} <= columns
+    assert "harness_source" in columns
+    assert "targetrepository" in tables
+    # A run that predates targets reads as "no external target" — empty string,
+    # never NULL, so every reader can treat absence as a real state.
+    # `lab_root` is not a placeholder for the historical row — it is what that
+    # run actually did, so the backfilled column is accurate, not merely present.
+    assert legacy == ("tetris-v1", "", "", "", "lab_root")
+
+    # Idempotent: running again must not fail on the existing columns.
+    db_module._apply_sqlite_compat_migrations()

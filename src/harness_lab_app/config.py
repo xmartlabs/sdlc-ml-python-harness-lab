@@ -96,6 +96,13 @@ class Settings(BaseSettings):
         return self.repo_root / "data" / "runs"
 
     @property
+    def target_mirrors_dir(self) -> Path:
+        # Blobless bare mirrors of registered target repositories, kept so case
+        # derivation can read history without re-cloning per request. Disposable
+        # by construction: deleting it costs one slower derivation.
+        return self.repo_root / "data" / "target-mirrors"
+
+    @property
     def workspace_dir(self) -> Path:
         # Live working directory the runner writes into, per run
         # (workspace/<run_id>/). Mirrors WORKSPACE_ROOT in scripts/bench_start.py

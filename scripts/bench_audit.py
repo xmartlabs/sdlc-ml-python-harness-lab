@@ -26,6 +26,7 @@ Requires env vars (can live in .env at repo root):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import json
 import os
@@ -365,7 +366,41 @@ def build_inputs(run: dict, out_dir: Path) -> dict:
             f"harness '{harness or 'unknown'}' has no mapped rules file; "
             "defaulting to OPENCODE.md — treat rule-adherence findings with care"
         )
-    rules = read_text_if_exists(REPO_ROOT / rules_name)
+    # WHERE the rules live depends on the run's harness condition (ADR-0031).
+    # A `native` or `injected` run put the agent inside the target repository,
+    # so the governance under evaluation is the one archived with that run — for
+    # `native` it is *the team's own*, and judging it against the lab's
+    # documents would score them for following rules they were never given.
+    # `metadata` is the raw file text (it is fed to the prompt verbatim), so the
+    # one field needed as data is parsed out here rather than plumbed through.
+    harness_source = "lab_root"
+    if metadata:
+        with contextlib.suppress(Exception):
+            harness_source = (
+                str(json.loads(metadata).get("harness_source") or "") or "lab_root"
+            )
+    rules_root = REPO_ROOT
+    if harness_source in ("native", "injected"):
+        archived = out_dir / "workspace"
+        if archived.is_dir():
+            rules_root = archived
+        else:
+            rules_warning = (
+                f"{rules_warning + '; ' if rules_warning else ''}"
+                f"run used harness_source='{harness_source}' but its workspace is "
+                "gone; falling back to the lab's rules — rule-adherence findings "
+                "describe the wrong rulebook"
+            )
+    rules = read_text_if_exists(rules_root / rules_name)
+    if rules is None and rules_root is not REPO_ROOT:
+        # A `native` target that ships no governance at all is a real and
+        # interesting condition, not a missing file: say so instead of silently
+        # substituting the lab's.
+        rules = (
+            f"(The target repository ships no {rules_name}. This run had no "
+            "governance surface beyond the prompt — judge rule adherence "
+            "accordingly.)"
+        )
 
     return {
         "metadata": metadata,
@@ -374,6 +409,8 @@ def build_inputs(run: dict, out_dir: Path) -> dict:
         "prompt": prompt,
         "rules": rules,
         "rules_source": rules_name,
+        "rules_root": str(rules_root),
+        "harness_source": harness_source,
         "rules_warning": rules_warning,
         "harness": harness,
         "log_text": log_text,

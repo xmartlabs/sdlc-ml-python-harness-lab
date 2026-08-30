@@ -4,9 +4,14 @@ import type {
   AuditRecord,
   ImprovementsDoc,
   CaseCreatePayload,
+  CaseCandidates,
+  ConditionRecord,
   CaseRecord,
   ContextProbeResult,
   DocContent,
+  ExperimentRecord,
+  ExperimentSummary,
+  FindingRecord,
   DocEntry,
   EnvSettings,
   EnvUpdateResult,
@@ -23,10 +28,12 @@ import type {
   RuntimeFacts,
   LeaderboardRunRow,
   ModelCatalog,
+  OverviewReport,
   OfficialReferenceRow,
   GroupIssueResult,
   ProposalIssue,
   RunConfigPayload,
+  ScoreRecord,
   RunBatchPayload,
   RunBatchResult,
   RunCreatePayload,
@@ -43,6 +50,9 @@ import type {
   StagedSkillPromoteResult,
   StagedSkillRecord,
   SwebenchProInstance,
+  TargetCreatePayload,
+  TargetRecord,
+  TargetResolveResult,
   ValidationRecord
 } from "./types";
 
@@ -231,6 +241,79 @@ export const api = {
     request<void>(`/api/staged-skills/${name}/files/${encodeFilePath(path)}`, {
       method: "DELETE"
     }),
+  getOverview: () => request<OverviewReport>("/api/overview"),
+  listExperiments: () => request<ExperimentRecord[]>("/api/experiments"),
+  getExperiment: (id: string) =>
+    request<ExperimentRecord & { conditions: ConditionRecord[]; runs: unknown[] }>(
+      `/api/experiments/${id}`
+    ),
+  createExperiment: (payload: unknown) =>
+    request<ExperimentRecord>("/api/experiments", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  summarizeExperiment: (id: string) =>
+    request<ExperimentSummary>(`/api/experiments/${id}/summary`),
+  launchExperiment: (id: string, config: RunConfigPayload) =>
+    request<{ count: number; run_ids: string[] }>(
+      `/api/experiments/${id}/launch`,
+      { method: "POST", body: JSON.stringify({ config }) }
+    ),
+  listFindings: () => request<FindingRecord[]>("/api/findings"),
+  createFinding: (payload: unknown) =>
+    request<FindingRecord>("/api/findings", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  updateFinding: (id: string, payload: unknown) =>
+    request<FindingRecord>(`/api/findings/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  draftExperimentFromFinding: (id: string) =>
+    request<Record<string, unknown>>(`/api/findings/${id}/experiment-draft`, {
+      method: "POST"
+    }),
+  getScoreDefinitions: () =>
+    request<{
+      count: number;
+      categories: Record<
+        string,
+        { name: string; direction: string; provenance: string; category: string }[]
+      >;
+    }>("/api/scores/definitions"),
+  listRunScores: (runId: string) =>
+    request<ScoreRecord[]>(`/api/runs/${runId}/scores`),
+  evaluateRunScores: (runId: string) =>
+    request<ScoreRecord[]>(`/api/runs/${runId}/scores`, { method: "POST" }),
+  listTargets: (includeArchived = false) =>
+    request<TargetRecord[]>(
+      `/api/targets?include_archived=${includeArchived ? "true" : "false"}`
+    ),
+  createTarget: (payload: TargetCreatePayload) =>
+    request<TargetRecord>("/api/targets", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  updateTarget: (targetId: string, payload: Partial<TargetCreatePayload>) =>
+    request<TargetRecord>(`/api/targets/${targetId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  archiveTarget: (targetId: string) =>
+    request<void>(`/api/targets/${targetId}`, { method: "DELETE" }),
+  // Resolve a ref without creating anything: the operator sees the exact
+  // commit a run would be pinned to before spending a container on it.
+  resolveTargetRef: (targetId: string, ref: string) =>
+    request<TargetResolveResult>(`/api/targets/${targetId}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ ref })
+    }),
+  deriveCases: (targetId: string, limit = 20) =>
+    request<CaseCandidates>(
+      `/api/targets/${targetId}/derive-cases?limit=${limit}`,
+      { method: "POST" }
+    ),
   listCases: () => request<CaseRecord[]>("/api/cases"),
   createCase: (payload: CaseCreatePayload) =>
     request<CaseRecord>("/api/cases", {

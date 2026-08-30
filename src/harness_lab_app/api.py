@@ -30,6 +30,7 @@ from harness_lab_app.auth import (
     throttle_retry_after,
     verify_password,
 )
+from harness_lab_app.case_derivation import derive_candidates
 from harness_lab_app.case_service import CaseService
 from harness_lab_app.celery_app import (
     enqueue_audit,
@@ -43,11 +44,23 @@ from harness_lab_app.celery_app import (
 from harness_lab_app.config import get_settings, read_env_file_value
 from harness_lab_app.constants import EXAMPLE_LMSTUDIO_URL, EXAMPLE_OLLAMA_URL
 from harness_lab_app.db import get_engine, get_session, init_db
+from harness_lab_app.experiment_service import (
+    ExperimentDesignError,
+    ExperimentError,
+    ExperimentNotFoundError,
+    ExperimentService,
+)
+from harness_lab_app.finding_service import (
+    FindingError,
+    FindingNotFoundError,
+    FindingService,
+)
 from harness_lab_app.gateway_catalog_service import GatewayCatalogService
 from harness_lab_app.harness_lifecycle import drafting, sanitizer
 from harness_lab_app.improvement_service import ImprovementError, ImprovementService
 from harness_lab_app.leaderboard_service import LeaderboardService
 from harness_lab_app.observability_service import ObservabilityService
+from harness_lab_app.overview_service import OverviewService
 from harness_lab_app.run_service import (
     RunAlreadyExistsError,
     RunBatchTooLargeError,
@@ -58,8 +71,13 @@ from harness_lab_app.run_service import (
 )
 from harness_lab_app.sandbox_service import VALID_KINDS, SandboxService
 from harness_lab_app.schemas import (
+    AssessmentCreate,
     CaseCreate,
     EnvUpdateRequest,
+    ExperimentCreate,
+    ExperimentLaunch,
+    FindingCreate,
+    FindingUpdate,
     GatewayModelUpdate,
     GatewayTestRequest,
     GroupIssueRequest,
@@ -74,7 +92,12 @@ from harness_lab_app.schemas import (
     StagedSkillImportRequest,
     StagedSkillUpdate,
     SwebenchImportRequest,
+    TargetRepositoryCreate,
+    TargetRepositoryUpdate,
+    TargetResolveRequest,
 )
+from harness_lab_app.score_service import ScoreService
+from harness_lab_app.scores import REGISTRY, definitions_by_category
 from harness_lab_app.session_middleware import (
     SessionMiddleware,
     admin_password_hash,
@@ -89,6 +112,12 @@ from harness_lab_app.swebench_pro_client import (
     SwebenchProFetchError,
     list_instances as pro_list_instances,
     normalize_instance as pro_normalize_instance,
+)
+from harness_lab_app.target_service import (
+    TargetError,
+    TargetNotFoundError,
+    TargetService,
+    resolve_ref,
 )
 from harness_lab_app.validation_service import ValidationService
 
@@ -883,6 +912,303 @@ def create_app() -> FastAPI:
         except StagedSkillError as exc:
             status = 404 if "not found" in str(exc).lower() else 422
             raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+    @app.get("/api/overview")
+    def get_overview(window_days: int = 30, session: Session = Depends(get_session)):
+        """What the lab knows about itself: quality, regressions, cost, backlog.
+
+        Computed server-side so the Dashboard cannot drift from what the same
+        numbers mean anywhere else, and so the definitions ("what counts as a
+        regression") are testable rather than implied by a chart.
+        """
+        return OverviewService(session).build(window_days=max(1, min(window_days, 365)))
+
+    @app.get("/api/findings")
+    def list_findings(session: Session = Depends(get_session)):
+        return FindingService(session).list_findings()
+
+    @app.get("/api/findings/{finding_id}")
+    def get_finding(finding_id: str, session: Session = Depends(get_session)):
+        try:
+            return FindingService(session).get_finding(finding_id)
+        except FindingNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/findings", status_code=201)
+    def create_finding(data: FindingCreate, session: Session = Depends(get_session)):
+        try:
+            finding, warnings = FindingService(session).create_finding(data)
+        except FindingError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {**finding.model_dump(), "warnings": warnings}
+
+    @app.patch("/api/findings/{finding_id}")
+    def update_finding(
+        finding_id: str, data: FindingUpdate, session: Session = Depends(get_session)
+    ):
+        try:
+            return FindingService(session).update_finding(finding_id, data)
+        except FindingNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/findings/{finding_id}/experiment-draft")
+    def draft_experiment_from_finding(
+        finding_id: str, session: Session = Depends(get_session)
+    ):
+        """The experiment that would settle this finding — as a draft.
+
+        Not created outright: the design needs cases and a harness axis the
+        operator chooses, and an experiment auto-generated from a sentence is
+        exactly the unanswerable design ADR-0033 refuses.
+        """
+        try:
+            return FindingService(session).experiment_draft(finding_id)
+        except FindingNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except FindingError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/assessments/rubric")
+    def get_assessment_rubric():
+        """The maturity rubric. Scored by a human, never computed."""
+        return {"dimensions": FindingService.rubric()}
+
+    @app.get("/api/assessments")
+    def list_assessments(session: Session = Depends(get_session)):
+        return FindingService(session).list_assessments()
+
+    @app.post("/api/assessments", status_code=201)
+    def create_assessment(
+        data: AssessmentCreate, session: Session = Depends(get_session)
+    ):
+        try:
+            assessment, warnings = FindingService(session).create_assessment(data)
+        except FindingError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {**assessment.model_dump(), "warnings": warnings}
+
+    @app.get("/api/scores/definitions")
+    def list_score_definitions():
+        """The registry itself, so a client can render a score it has never seen.
+
+        Every value the lab stores is filed under one of these. The `provenance`
+        field is the one that must reach the UI: a fact, an observation and a
+        judgement are three different kinds of claim and must not be drawn the
+        same way.
+        """
+        return {
+            "count": len(REGISTRY),
+            "categories": {
+                category: [definition.__dict__ for definition in definitions]
+                for category, definitions in definitions_by_category().items()
+            },
+        }
+
+    @app.post("/api/runs/{run_id}/scores/export")
+    def export_run_scores(run_id: str, session: Session = Depends(get_session)):
+        """Push this run's exportable scores onto its Langfuse session.
+
+        One-way on purpose: the lab database stays the source of truth for the
+        experiment domain, and Langfuse is where traces and telemetry live.
+        """
+        from harness_lab_app.observability.score_export import export_scores
+
+        scores = ScoreService(session).list_scores(run_id)
+        result = export_scores(run_id, scores)
+        return result.__dict__
+
+    @app.get("/api/scores/aggregate")
+    def aggregate_scores(session: Session = Depends(get_session)):
+        """The score corpus, one entry per definition, with direction attached."""
+        return ScoreService(session).aggregate()
+
+    @app.get("/api/runs/{run_id}/scores")
+    def get_run_scores(run_id: str, session: Session = Depends(get_session)):
+        return ScoreService(session).list_scores(run_id)
+
+    @app.post("/api/runs/{run_id}/scores")
+    def evaluate_run_scores(
+        run_id: str, profile: str = "default", session: Session = Depends(get_session)
+    ):
+        try:
+            return ScoreService(session).evaluate_run(run_id, profile)
+        except KeyError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/experiments")
+    def list_experiments(session: Session = Depends(get_session)):
+        service = ExperimentService(session)
+        experiments = service.list_experiments()
+        return [
+            {
+                **experiment.model_dump(),
+                "condition_count": len(service.conditions(experiment.experiment_id)),
+                "run_count": len(service.runs(experiment.experiment_id)),
+            }
+            for experiment in experiments
+        ]
+
+    @app.get("/api/experiments/{experiment_id}")
+    def get_experiment(experiment_id: str, session: Session = Depends(get_session)):
+        service = ExperimentService(session)
+        try:
+            experiment = service.get_experiment(experiment_id)
+        except ExperimentNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            **experiment.model_dump(),
+            "conditions": service.conditions(experiment_id),
+            "runs": service.runs(experiment_id),
+        }
+
+    @app.get("/api/experiments/{experiment_id}/summary")
+    def summarize_experiment(
+        experiment_id: str, session: Session = Depends(get_session)
+    ):
+        try:
+            return ExperimentService(session).summarize(experiment_id)
+        except ExperimentNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/experiments", status_code=201)
+    def create_experiment(
+        data: ExperimentCreate, session: Session = Depends(get_session)
+    ):
+        try:
+            experiment, warnings = ExperimentService(session).create_experiment(data)
+        except ExperimentDesignError as exc:
+            # A design that contradicts its mode is a 422, not a 500: the request
+            # was well-formed, the *experiment* is not answerable.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ExperimentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {**experiment.model_dump(), "warnings": warnings}
+
+    @app.post("/api/experiments/{experiment_id}/launch", status_code=201)
+    def launch_experiment(
+        experiment_id: str,
+        data: ExperimentLaunch,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            runs = ExperimentService(session).launch(experiment_id, data.config)
+        except ExperimentNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ExperimentError, RunPreflightError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {
+            "experiment_id": experiment_id,
+            "count": len(runs),
+            "run_ids": [run.run_id for run in runs],
+        }
+
+    @app.get("/api/targets")
+    def list_targets(
+        include_archived: bool = False, session: Session = Depends(get_session)
+    ):
+        return TargetService(session).list_targets(include_archived=include_archived)
+
+    @app.get("/api/targets/{target_id}")
+    def get_target(target_id: str, session: Session = Depends(get_session)):
+        try:
+            return TargetService(session).get_target(target_id)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/targets", status_code=201)
+    def create_target(
+        data: TargetRepositoryCreate, session: Session = Depends(get_session)
+    ):
+        try:
+            return TargetService(session).create_target(data)
+        except TargetError as exc:
+            # A duplicate id or a URL git would read as an option is a bad
+            # request, not a server fault — the form can show it inline.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.patch("/api/targets/{target_id}")
+    def update_target(
+        target_id: str,
+        data: TargetRepositoryUpdate,
+        session: Session = Depends(get_session),
+    ):
+        try:
+            return TargetService(session).update_target(target_id, data)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TargetError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete("/api/targets/{target_id}", status_code=204)
+    def delete_target(target_id: str, session: Session = Depends(get_session)):
+        try:
+            TargetService(session).delete_target(target_id)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(status_code=204)
+
+    @app.post("/api/targets/{target_id}/resolve")
+    def resolve_target_ref(
+        target_id: str,
+        data: TargetResolveRequest,
+        session: Session = Depends(get_session),
+    ):
+        """Resolve a ref to a commit without creating anything.
+
+        Powers the run form's "check" affordance: the operator sees the exact
+        commit the run would be pinned to *before* spending a container on it,
+        and an unreachable repository or a typo'd branch is reported here
+        instead of surfacing as a failed run.
+        """
+        try:
+            target = TargetService(session).get_target(target_id)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        ref = (data.ref or target.default_ref or "").strip()
+        try:
+            commit = resolve_ref(target.repository_url, ref)
+        except TargetError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"target_id": target.target_id, "ref": ref, "commit": commit}
+
+    @app.post("/api/targets/{target_id}/derive-cases")
+    def derive_target_cases(
+        target_id: str,
+        limit: int = 20,
+        scan: int = 300,
+        ref: str = "",
+        session: Session = Depends(get_session),
+    ):
+        """Mine candidate cases from the repository's own commit history.
+
+        Nothing is persisted: candidates are proposals for a human to read,
+        edit and accept. A derived case is only worth running if the team
+        recognises it as their work, and that judgement is not the lab's to
+        make.
+        """
+        try:
+            target = TargetService(session).get_target(target_id)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            candidates = derive_candidates(
+                target.repository_url,
+                ref or target.default_ref,
+                get_settings().target_mirrors_dir,
+                target.target_id,
+                scan=max(1, min(scan, 2000)),
+                limit=max(1, min(limit, 100)),
+            )
+        except TargetError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {
+            "target_id": target.target_id,
+            "ref": ref or target.default_ref,
+            "scanned": scan,
+            "candidates": [candidate.as_dict() for candidate in candidates],
+        }
 
     @app.get("/api/cases")
     def list_cases(session: Session = Depends(get_session)):

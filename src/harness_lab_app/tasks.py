@@ -37,6 +37,7 @@ from harness_lab_app.run_service import RunService, continuation_source_dir
 from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.sandbox_service import SandboxService
 from harness_lab_app.schemas import RunConfigCreate
+from harness_lab_app.target_service import TargetError, TargetService
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,45 @@ def _config_payload(session: Session, run: Run) -> RunConfigCreate:
         continuation_prompt=config.continuation_prompt,
         skills_disabled=list(config.skills_disabled),
         skills_extra=list(config.skills_extra),
+        target_repo_id=config.target_repo_id,
+        target_ref=config.target_ref,
+        harness_source=config.harness_source,
     )
+
+
+def _target_spec(session: Session, run: Run) -> dict[str, Any] | None:
+    """The target block for ``case_spec.json``, or None for a local run.
+
+    The runner container has no database, so everything it needs to clone and
+    set up the repository is staged here by the worker (the same channel
+    ``case_spec.json`` already uses for cases, ADR-0009).
+
+    The **commit** is what is shipped, never the ref: the ref was already
+    resolved at run creation (ADR-0029), and re-resolving it in the runner would
+    let a run execute against a commit its own provenance does not name.
+    """
+    config = RunService(session).get_run_config(run.run_config_id)
+    if not config.target_repo_id:
+        return None
+    try:
+        target = TargetService(session).get_target(config.target_repo_id)
+    except TargetError:
+        # An archived-then-deleted target must not silently downgrade the run to
+        # a local one: the case would run in a bare workspace and look fine.
+        raise RuntimeError(
+            f"Run {run.run_id} targets unknown repository '{config.target_repo_id}'."
+        ) from None
+    return {
+        "target_id": target.target_id,
+        "repo_url": target.repository_url,
+        "ref": config.target_ref or target.default_ref,
+        "commit": config.target_commit,
+        "setup": list(target.setup_commands),
+        # Which harness the agent will see inside the clone (ADR-0031). The
+        # runner acts on this: `injected` projects the lab harness into the
+        # workspace, `native` deliberately leaves the repo as it is.
+        "harness_source": str(config.harness_source),
+    }
 
 
 def _case_prompt_text(case: Case, prompt_variant: str) -> str:
@@ -102,6 +141,7 @@ def _write_case_spec(
     *,
     continuation_prompt: str = "",
     parent_run_id: str | None = None,
+    target: dict[str, Any] | None = None,
 ) -> None:
     """Stage the case, as the DB holds it, for the DB-blind runner container.
 
@@ -183,6 +223,15 @@ def _write_case_spec(
             "constraints": list(case.constraints),
             "success_criteria": dict(case.success_criteria),
         }
+    if target:
+        # An external target repository (ADR-0029). Carried alongside the case
+        # rather than inside it: the case describes the task, the target
+        # describes where it runs, and the same case must be pairable with any
+        # number of repositories. `source` is the explicit provisioning
+        # discriminator (ADR-0030) — the runner selects a strategy from it
+        # instead of inferring one from the shape of the data.
+        spec["source"] = "git_target"
+        spec["target"] = target
     if continuation_prompt:
         # A continuation replaces the instruction, not the case (ADR-0026): the
         # SWE fields, constraints and success criteria still describe the task
@@ -564,6 +613,7 @@ def _execute_run_body(
                 config_payload.prompt_variant,
                 continuation_prompt=config_payload.continuation_prompt,
                 parent_run_id=run.parent_run_id,
+                target=_target_spec(session, run),
             )
             # Pro lane only: image-based provisioning needs docker, which the
             # runner lacks — do it here before the container starts. Skipped for
@@ -617,6 +667,10 @@ def _execute_run_body(
             # (including cancelled/failed), so index it regardless of outcome.
             _index_attribution(session, run_id)
             _index_artifacts(session, run_id)
+            # Scored for every terminal run, not only successful ones: a run
+            # that failed still spent tokens and produced a diff, and excluding
+            # it would make cost aggregates describe only the runs that worked.
+            _record_scores(session, run_id)
             # Last, and outside every branch: a failed run is exactly the one
             # an operator wants to open in Langfuse.
             _export_langfuse_traces(session, run_id)
@@ -868,6 +922,40 @@ def _export_langfuse_traces(session: Session, run_id: str) -> None:
         session.commit()
 
 
+def _record_scores(session: Session, run_id: str) -> None:
+    """Score the run against the registry, right after validation.
+
+    Scoring used to be on demand, which made the registry effectively
+    write-only: nothing aggregates a metric no run has recorded, so every
+    dashboard and comparison silently fell back to the older `Validation`
+    fields. Running it here is what makes the score corpus exist at all.
+
+    Best-effort, like validation and the trace export around it: a missing
+    score is a gap in a chart, never a reason to fail a run that worked.
+    """
+    from harness_lab_app.score_service import ScoreService
+
+    try:
+        scores = ScoreService(session).evaluate_run(run_id)
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="info",
+                message=f"Recorded {len(scores)} score(s) against the registry.",
+            )
+        )
+        session.commit()
+    except Exception as exc:  # scoring must never fail the run
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="error",
+                message=f"Scoring could not run: {exc!r}",
+            )
+        )
+        session.commit()
+
+
 def _run_objective_validation(session: Session, run_id: str) -> None:
     """Best-effort objective validation after a successful run."""
     from harness_lab_app.validation_service import ValidationService
@@ -900,6 +988,10 @@ def validate_run(run_id: str) -> None:
         # Re-validate also completes SWE-bench runs that were parked awaiting a
         # manual score before auto-scoring existed (or whose validation ran late).
         _autoscore_objective_case(session, run_id)
+        # Scores come after validation because they read its verdict, cost and
+        # effort; re-scoring overwrites in place, so a re-validate refreshes
+        # them rather than accumulating contradictions.
+        _record_scores(session, run_id)
         # Re-export so the validation verdict and the new score reach the trace
         # too; deterministic ids mean this updates rather than duplicates.
         _export_langfuse_traces(session, run_id)

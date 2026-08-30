@@ -71,6 +71,16 @@ class LangfuseConfig:
     def traces_url(self) -> str:
         return f"{self.host.rstrip('/')}{OTLP_TRACES_PATH}"
 
+    @property
+    def ingestion_url(self) -> str:
+        """The legacy ingestion endpoint, which on v4 still accepts scores.
+
+        Spans have to go over OTLP (ADR-0027), but ``score-create`` is one of the
+        two event types this route still takes — so scores need no second
+        protocol and no SDK.
+        """
+        return f"{self.host.rstrip('/')}/api/public/ingestion"
+
     def session_id(self, run_id: str) -> str:
         """Deterministic session id for a run — one Langfuse session per run.
 

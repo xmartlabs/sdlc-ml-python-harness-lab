@@ -1965,3 +1965,75 @@ button.ghost {
   padding: 0.75rem;
   margin-bottom: 0.75rem;
 }
+
+
+/* --- Experiments, findings, derived cases (v2 surfaces) ------------------ */
+
+/* A delta's colour follows the metric's declared direction, never its sign:
+   a drop in cost is a win, a drop in pass rate is not. */
+.delta-better {
+  color: var(--ok, #1a7f37);
+  font-weight: 600;
+}
+
+.delta-worse {
+  color: var(--error, #b42318);
+  font-weight: 600;
+}
+
+.warning-list {
+  margin: 0;
+  padding: 0.75rem 1rem 0.75rem 2rem;
+  border-left: 3px solid var(--warn, #b54708);
+  background: var(--surface-2, rgba(181, 71, 8, 0.06));
+  border-radius: 4px;
+}
+
+.warning-list li {
+  margin: 0.25rem 0;
+  font-size: 0.9em;
+}
+
+.candidate-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.candidate-list > li {
+  border-top: 1px solid var(--border, rgba(128, 128, 128, 0.2));
+  padding: 0.5rem 0;
+}
+
+/* Provenance is the field that must reach the eye: a judgement rendered like a
+   test result borrows authority it has not earned. */
+.provenance-fact {
+  color: var(--ok, #1a7f37);
+}
+
+.provenance-observation {
+  color: var(--text-muted, #667085);
+}
+
+.provenance-judgement {
+  color: var(--warn, #b54708);
+  font-style: italic;
+}
+
+
+/* Overview: side-by-side panels that stack on a narrow viewport. */
+.row.wrap {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.row.wrap > .panel {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.metric small {
+  display: block;
+  font-size: 0.75em;
+  font-weight: 400;
+}

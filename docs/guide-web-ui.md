@@ -20,9 +20,167 @@ Everything the web app runs also has a CLI equivalent (`make bench-run …`); th
 form shows the equivalent command as a reference. The web lane and the CLI are
 two front-ends over the same runner (`scripts/bench_run.py`).
 
+That loop is one run at a time. A *comparison* needs more than one, and a comparison
+you intend to act on needs a design — which is what the next section is about.
+
+```
+state a question → declare the arms → launch N repetitions
+   → read the deltas and the case matrix
+   → record a finding → test it with another experiment
+```
+
+## Three ways to use the lab
+
+The screens below document *what each one does*. This section is the other half:
+**which job you are doing**, and which screens that job touches.
+
+The lab distinguishes three modes ([ADR-0028](adr/0028-evaluation-modes.md)), and
+they are not labels — each one fixes a different set of factors and therefore
+licenses a different kind of conclusion. An experiment declares its mode, and the
+lab **refuses a design the mode cannot answer**.
+
+| | **Mode A** — Harness evaluation | **Mode B** — Cross-repo | **Mode C** — Discovery |
+|---|---|---|---|
+| **Question** | Does this change to the harness cause a better outcome? | Does the harness work outside the repo it was designed in? | How does this team work with agents? |
+| **Held fixed** | repo, case, model | harness, model, task family | — |
+| **Varied** | the harness | the repository | — |
+| **Licenses** | a causal claim, with repetitions | where it holds and where it degrades | nothing — **exploratory evidence, not experimental evidence** |
+| **Never** | pool across repos | pool across repos | present as a measurement |
+
+### Mode A — did our change help?
+
+The everyday question: a new skill, a rule, a prompt, a harness version.
+
+1. **Experiments** → create one with mode `harness_evaluation`, your cases, and two
+   conditions: a `control` (today's setup) and a `treatment` (the change).
+2. Launch it with N ≥ 5 repetitions. Agents are stochastic; one trial per arm cannot
+   tell a real difference from run-to-run variance, and the screen labels anything
+   below 5 as exploratory.
+3. Read the **experiment detail**: the condition table, the deltas, and — most
+   usefully — the **case matrix**, which shows *where* the treatment helped.
+
+The lab will reject the design if it varies the model or the repository as well:
+whatever difference you measured could not be attributed to the harness.
+
+### Mode B — does it travel?
+
+1. **Repositories** → register the repos you want to cover.
+2. **Experiments** → mode `cross_repo`, one condition per repository, everything else
+   identical.
+3. Read the result **per repository**. A mean across three codebases is not a
+   measurement of anything — they are not equivalent conditions. What you legitimately
+   learn is which repos the harness holds up in and which properties break it.
+
+### Mode C — what can we learn from this repo?
+
+No control, no causal claim. You are looking, not proving. Outputs are **findings**,
+and everything they produce is labelled exploratory until an experiment tests it.
+
+## Auditing someone else's repository — worked example
+
+This is the flow that spans everything above: take a repository you did not write,
+find out how an agent behaves in it, and turn what you see into something testable.
+
+**1. Register the repository.** Repositories → *Add a repository*: clone URL, default
+ref, setup commands (`uv sync`), and the repo's own validation commands (`make test`).
+Press **Check** to see the exact commit the ref points at right now. A private repo
+with no credentials or a typo'd branch fails here, not after a container is up.
+
+**2. Get a case that means something in that repo.** Press **Derive cases**. The lab
+mines the repository's history for commits that changed source **and** its tests
+together — tasks that team actually performs and already knows how to verify. Read the
+candidates, keep the ones the team would recognise as their work, and create them in
+**Cases** with provenance `organization`.
+
+> Running `build a Tetris clone` against a payments API measures nothing. This step is
+> what makes everything after it interpretable.
+
+**Freeze the case and its rubric before running anything.** A case edited after seeing
+results is not a measurement. Each candidate carries the commit it came from, which is
+what lets you show later that the case predates the results.
+
+**3. See how an agent does in it, as it is.** Runs → New run → pick the case, pick the
+repository, and set **Harness** to `native`: the agent works *inside* their repo with
+only what that repo ships — their `CLAUDE.md`, their conventions, or nothing at all.
+This is their baseline, and it is the first honest answer to "how does an agent resolve
+this case here today?"
+
+**4. Read the run.** The **Scores** panel separates facts (a command exited) from
+observations (parsed from artifacts) from judgements (a model's opinion). The audit
+now reads **their** governance for a `native` run, not the lab's — so its
+rule-adherence findings are about the rules the agent was actually given.
+
+**5. Compare against your harness.** Experiments → mode `harness_evaluation`, control
+`native`, treatment `injected`, same repository, same case, same model, N ≥ 5. That
+answers the question a client actually asks:
+
+> What does your harness add over how we already work?
+
+Injection copies the lab's skills, agents, adapter file and governance documents into
+the clone before the baseline commit — so they never appear in the agent's own diff —
+and it carries any skill ablation the run declares. If their repo already ships a
+`CLAUDE.md`, it is displaced to `CLAUDE.md.native.bak` and the collision is recorded
+in the run's manifest: replacing a team's governance changes the thing being measured,
+so it is never silent.
+
+**6. Turn what you saw into claims.** Findings → record what the runs showed, with the
+run ids as evidence, a recommendation, and the intervention that would implement it.
+**Draft experiment** turns a finding into a design to review. A finding citing no runs
+is labelled an observation; a finding an experiment **refuted** keeps its record.
+
+```
+Audit → Finding → Hypothesis → Experiment → Evidence → Recommendation
+```
+
+**What this does not do.** The lab observes how an agent behaves in a repository; it
+is not a static code-quality audit. What you can say afterwards is how *agent-ready*
+the repo is and where an agent trips over it — missing tests, no lint gate, absent
+conventions — each claim linked to runs. That is a stronger deliverable than a
+scorecard, and a narrower one than it might be mistaken for.
+
 ## Screens
 
-### Dashboard — the leaderboard
+### Dashboard — the overview
+Leads with what the lab knows about itself, computed server-side
+(`GET /api/overview`) so the numbers cannot drift from what the same definitions
+mean elsewhere:
+
+| Figure | What it counts |
+|---|---|
+| **Harness version** | the version the most recent run carried |
+| **Success rate** | objectively-validated runs that passed, in the window. A manual-score run is *unknown* and is excluded, never counted as a failure |
+| **Regressions** | cases whose latest verdict is a failure **after an earlier pass**. A case that has only ever failed is an open problem, not a regression |
+| **Median cost** | the median, not the mean — one runaway run distorts a mean badly. Beside it, cost per success, which is the figure a decision turns on |
+| **Regression suite** | active cases carrying their own objective validation, i.e. the ones that can gate a change without a human |
+| **Experiments** | created in the window |
+
+Every figure shows its **denominator**. A rate over four runs and one over four
+hundred are different claims, and the screen refuses to render them the same.
+
+**Quality over time** plots the weekly success rate. A week with no validated run is
+left blank rather than drawn as zero — a gap on the baseline would show a collapse
+that never happened.
+
+**Harness signal** is the second panel, and it answers a different question from
+everything above it. The figures in the header come from `Validation` — *did the runs
+pass, what did they cost*. These come from the score registry — **is the harness
+earning its keep**:
+
+- **Skill adherence** — the share of the available harness an auditor judged genuinely
+  used. A harness of 24 skills an agent reaches two of is not a good harness, and no
+  other figure on the page would say so. It is a *judgement*, and labelled one.
+- **Items useful / redundant per run** — the per-item verdicts, averaged.
+- **Diff size** (median) and **boundary violations** (forbidden paths touched).
+
+When adherence falls below 40% the panel says what to do about it: that is a finding
+about the *harness*, not the model — read the per-item verdicts in a run's **Harness
+catalog**, ablate the items that never earn their keep, and measure the difference.
+
+**Worth attention** surfaces what is actually actionable: regressed cases by name,
+finished runs with no scores yet (scoring is on demand, so those are missing from
+every experiment summary), and open findings with nothing testing them.
+
+Below the overview, the leaderboard is unchanged.
 The landing page is the lab's **leaderboard**, swebench.com-style: every terminal
 run counts as one attempt, grouped by **condition** (harness + executor model +
 prompt variant + harness version) and ranked by **% resolved** with a
@@ -130,6 +288,10 @@ batch starts as "what I was about to run" and you widen it from there:
 
 - **Cases**, **Prompt variants**, **Harnesses**, **Executor models** — each list is
   an axis. Every combination is queued.
+- **Target repositories** — the axis that answers "does this hold outside the repo
+  it was designed in?" ([guide](guide-target-repositories.md)). Read those results
+  per repository: a mean across different codebases is not a measurement, because
+  the repositories are not equivalent conditions.
 - **Repetitions** — trials per combination.
 - **Prompt variants** offers the *union* across the selected cases, not the
   intersection: cases legitimately define different variant sets, and an
@@ -301,6 +463,25 @@ the Dashboard by default — tick *include continuations* to see them. Full
 walkthrough: [Continuing a run](guide-run-continuation.md),
 [ADR-0026](adr/0026-run-continuation-as-child-runs.md).
 
+#### Scores — the three kinds of claim, drawn apart
+
+Recorded automatically when a run reaches a terminal state, and refreshed by a
+re-validate. **Score this run** backfills a run that predates automatic scoring.
+
+
+**Score this run** records its metrics against the versioned registry
+([ADR-0034](adr/0034-score-registry.md)). Each row shows `name@version` and its
+**provenance**:
+
+- **fact** — a command exited. Reproducible without judgement.
+- **observation** — parsed from the run's artifacts. True of the record, not
+  necessarily of the world.
+- **judgement** — a model's opinion. Defensible, not checkable.
+
+They are drawn differently on purpose. `test_pass_rate = 1.0` and
+`skill_adherence = 0.81` look identical once both are numbers in a table, and the
+second borrows the authority of the first.
+
 #### Send traces — read the run turn by turn
 
 When Langfuse is configured, the run header gains **Send traces** and **View in
@@ -365,6 +546,51 @@ not something to fix before running.
 can be committed to the repo and driven from the CLI lane. After a sync, later
 edits show as `modified_since_sync` until you export again.
 
+### Experiments
+A question, declared arms, and the runs that answer it
+([ADR-0033](adr/0033-experiment-above-run.md)). The difference from a batch is that
+an experiment makes a claim, so the lab checks the design against the declared mode
+and **refuses one that cannot answer it** — a comparison varying both the harness and
+the repository produces a number attributable to neither.
+
+The detail view keeps outcome, efficiency and behaviour in separate rows, shows every
+mean with its spread, colours a delta by the metric's **declared direction** (a drop
+in cost is a win; a drop in pass rate is not), and flags a delta that sits inside
+run-to-run variance. Below it, the **case matrix** shows where a treatment helped and
+where it did not — an average of "+8 points" can be "fixed four cases, broke two".
+
+Low repetition counts are labelled wherever they appear. One trial is an exploratory
+result, and the screen says so rather than letting it look like a finding.
+
+### Findings
+What the runs showed, what to do about it, and whether that was tested
+([ADR-0035](adr/0035-findings-and-manual-maturity-assessment.md)). A finding carries
+its evidence, a recommendation, the intervention that would implement it, and the
+experiment that settled it. A finding citing no runs is labelled an observation; a
+finding an experiment **refuted** keeps its record.
+
+**Draft experiment** turns a finding into a design to review — not into a created
+experiment, because the harness axis the intervention changes is a choice a sentence
+does not determine.
+
+### Repositories
+The repositories a case can be run against. By default a run works in the lab's own
+workspace; registering a target lets the same case run inside another repo — your
+team's service, a client's codebase — cloned fresh per run.
+
+The property that makes it a measurement rather than a demo: the ref you pick is
+resolved to a **commit SHA before the run starts**, and that commit is what the run
+records and what its `condition_hash` covers. A run pinned to `main` stays on the
+commit it used, so cloning it later reproduces the experiment instead of picking up
+whatever was pushed since ([ADR-0029](adr/0029-target-repositories-pinned-per-run.md)).
+
+**Check** resolves the default ref on demand, so an unreachable repository or a
+typo'd branch is reported here rather than as a failed run.
+
+A target's **validation commands** replace the case's when a run has one — the repo
+knows how it is tested better than a portable case does. Full walkthrough:
+[Target repositories](guide-target-repositories.md).
+
 ### Skills
 Two tiers: the **governed catalog** (read-only, shipped with the harness) and
 **staged skills** — experimental skills you trial per-run via the ablation panel
@@ -416,6 +642,11 @@ the surface that actually influenced the runs. Details in
 [improvement-cycle.md](improvement-cycle.md).
 
 ### Compare
+Side-by-side runs. Below the built-in rows, every **registry score** either run
+recorded appears with its provenance, and the winning cell follows each metric's
+*declared direction* rather than the sign — a lower cost wins, a lower pass rate does
+not.
+
 Line up runs of the same case across models or harness conditions:
 
 - Pick 2–4 runs; the **metrics table** shows case, models, prompt, objective

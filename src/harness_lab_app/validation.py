@@ -97,12 +97,21 @@ def collect_effort(
     }
 
 
-def build_validation_spec(case: Case, run_id: str) -> dict[str, Any]:
+def build_validation_spec(
+    case: Case, run_id: str, target_commands: list[str] | None = None
+) -> dict[str, Any]:
     """Executable objective-validation spec for a case, or a manual marker.
 
     Case ``validation_commands`` are shell strings with ``{workspace}`` /
     ``{run_id}`` placeholders. Prose-only entries (no placeholder and not a
     runnable command) are treated as manual notes and skipped.
+
+    ``target_commands`` are the target repository's own gates (ADR-0029) and
+    **replace** the case's when present. A repository knows how it is tested
+    better than a portable case does: a case that runs across several
+    repositories cannot name each one's test command, and merging the two would
+    run the case's guess *as well as* the repo's truth, failing runs for the
+    wrong reason.
     """
     # Managed (--fresh) runs archive + remove the live workspace, so prefer the
     # archived copy under data/runs/<id>/workspace when it exists (also the home
@@ -112,7 +121,7 @@ def build_validation_spec(case: Case, run_id: str) -> dict[str, Any]:
         f"data/runs/{run_id}/workspace" if archived.exists() else f"workspace/{run_id}"
     )
     commands: list[list[str]] = []
-    for raw in case.validation_commands or []:
+    for raw in target_commands or case.validation_commands or []:
         if not _looks_executable(raw):
             continue
         rendered = _portable_timeout(raw.format(workspace=workspace, run_id=run_id))

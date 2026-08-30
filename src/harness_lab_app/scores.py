@@ -1,0 +1,322 @@
+"""The score registry: every metric the lab records, declared and versioned.
+
+Three problems this exists to prevent, all of which are silent.
+
+**A metric changing meaning under a stable name.** When a judge, a rubric or a
+formula changes, `step_efficiency` from before and after are different
+quantities. Pooling them produces a trend line that is an artefact of the change.
+Every definition therefore carries a ``version``, and a score is stored under
+``name@version``.
+
+**Facts read as opinions, and opinions read as facts.** `test_pass_rate = 1.0`
+is a command's exit status. `skill_usefulness = 0.81` is a model's opinion.
+`skill_file_read = true` is something parsed out of a log. They are all numbers
+on a screen, and only the declared ``provenance`` keeps them distinguishable.
+
+**A number whose direction nobody remembers.** ``direction`` says whether more is
+better, so a comparison surface can never render an improvement as a regression.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+# Score categories. They are kept separate all the way to the UI: collapsing
+# them into one number is exactly what the roadmap forbids.
+OUTCOME = "outcome"
+EFFICIENCY = "efficiency"
+TRAJECTORY = "trajectory"
+BEHAVIORAL = "behavioral"
+COMPOSITE = "composite"
+
+# Where a value came from, which is what licenses how much weight it can carry.
+FACT = "fact"  # a command exited, a file exists — reproducible without judgement
+OBSERVATION = "observation"  # parsed from artifacts; true of the record, not the world
+JUDGEMENT = "judgement"  # a model's opinion, defensible but not checkable
+
+HIGHER_IS_BETTER = "higher_is_better"
+LOWER_IS_BETTER = "lower_is_better"
+NEUTRAL = "neutral"
+
+NUMERIC = "numeric"
+BOOLEAN = "boolean"
+CATEGORICAL = "categorical"
+
+
+@dataclass(frozen=True)
+class ScoreDefinition:
+    name: str
+    category: str
+    kind: str
+    provenance: str
+    direction: str
+    version: str
+    description: str
+    source: str = ""
+    minimum: float | None = None
+    maximum: float | None = None
+
+    @property
+    def key(self) -> str:
+        """The identity a stored score is filed under."""
+        return f"{self.name}@{self.version}"
+
+
+def _d(**kwargs) -> ScoreDefinition:
+    return ScoreDefinition(**kwargs)
+
+
+# --- Level 1: deterministic outcome ---------------------------------------
+_OUTCOME = [
+    _d(
+        name="task_validation_pass",
+        category=OUTCOME,
+        kind=BOOLEAN,
+        provenance=FACT,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="deterministic",
+        description="Every objective validation command exited 0.",
+    ),
+    _d(
+        name="test_pass_rate",
+        category=OUTCOME,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="deterministic",
+        minimum=0.0,
+        maximum=1.0,
+        description="Fraction of validation checks that passed.",
+    ),
+    _d(
+        name="expected_files_modified",
+        category=OUTCOME,
+        kind=NUMERIC,
+        provenance=OBSERVATION,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="deterministic",
+        minimum=0.0,
+        maximum=1.0,
+        description=(
+            "Fraction of the case's expected files the diff actually touched. "
+            "Observation, not fact: it is true of the recorded diff, and a "
+            "correct solution may legitimately land elsewhere."
+        ),
+    ),
+    _d(
+        name="forbidden_files_modified",
+        category=OUTCOME,
+        kind=NUMERIC,
+        provenance=OBSERVATION,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="deterministic",
+        minimum=0.0,
+        description=(
+            "Count of forbidden paths the diff touched. A solution that edits "
+            "one is wrong even when the tests pass."
+        ),
+    ),
+]
+
+# --- Level 2: efficiency ---------------------------------------------------
+_EFFICIENCY = [
+    _d(
+        name="total_tokens",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="efficiency",
+        minimum=0.0,
+        description="Input plus output tokens across the run.",
+    ),
+    _d(
+        name="cost_usd",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="efficiency",
+        minimum=0.0,
+        description="Reported spend for the run.",
+    ),
+    _d(
+        name="agent_steps",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="efficiency",
+        minimum=0.0,
+        description="Agent steps executed.",
+    ),
+    _d(
+        name="wall_time_minutes",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="efficiency",
+        minimum=0.0,
+        description="Wall-clock duration of the run.",
+    ),
+    _d(
+        name="diff_lines_changed",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=OBSERVATION,
+        direction=NEUTRAL,
+        version="v1",
+        source="efficiency",
+        minimum=0.0,
+        description=(
+            "Lines added plus removed. Neutral on purpose — neither a large nor "
+            "a small diff is good in itself."
+        ),
+    ),
+    _d(
+        name="files_changed",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=OBSERVATION,
+        direction=NEUTRAL,
+        version="v1",
+        source="efficiency",
+        minimum=0.0,
+        description="Files the diff touched.",
+    ),
+]
+
+# --- Level 4: harness behaviour (the LLM audit, made structural) ----------
+_BEHAVIORAL = [
+    _d(
+        name="skill_adherence",
+        category=BEHAVIORAL,
+        kind=NUMERIC,
+        provenance=JUDGEMENT,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="harness_audit",
+        minimum=0.0,
+        maximum=1.0,
+        description=(
+            "Share of available harness items the auditor judged genuinely used. "
+            "A judgement: the auditor reads logs, it does not observe invocation."
+        ),
+    ),
+    _d(
+        name="harness_items_useful",
+        category=BEHAVIORAL,
+        kind=NUMERIC,
+        provenance=JUDGEMENT,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="harness_audit",
+        minimum=0.0,
+        description="Harness items the auditor judged useful in this run.",
+    ),
+    _d(
+        name="harness_items_redundant",
+        category=BEHAVIORAL,
+        kind=NUMERIC,
+        provenance=JUDGEMENT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="harness_audit",
+        minimum=0.0,
+        description="Harness items the auditor judged redundant or unused.",
+    ),
+    _d(
+        name="governance_read_coverage",
+        category=BEHAVIORAL,
+        kind=NUMERIC,
+        provenance=OBSERVATION,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="attribution",
+        minimum=0.0,
+        maximum=1.0,
+        description=(
+            "Share of governance documents the agent actually opened, parsed "
+            "from step logs. A lower bound: context-injected content leaves no "
+            "read event."
+        ),
+    ),
+]
+
+# --- Level 3: trajectory (an optional adapter, never the platform) --------
+# Declared here even though the adapter may not be installed: a definition is a
+# contract about what the name means, and it must not appear or vanish depending
+# on which extras a deployment happens to have.
+_TRAJECTORY = [
+    _d(
+        name="task_completion",
+        category=TRAJECTORY,
+        kind=NUMERIC,
+        provenance=JUDGEMENT,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="deepeval",
+        minimum=0.0,
+        maximum=1.0,
+        description="Whether the agent's trajectory accomplished the stated task.",
+    ),
+    _d(
+        name="step_efficiency",
+        category=TRAJECTORY,
+        kind=NUMERIC,
+        provenance=JUDGEMENT,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="deepeval",
+        minimum=0.0,
+        maximum=1.0,
+        description="Whether the steps taken were necessary to reach the outcome.",
+    ),
+    _d(
+        name="tool_correctness",
+        category=TRAJECTORY,
+        kind=NUMERIC,
+        provenance=JUDGEMENT,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="deepeval",
+        minimum=0.0,
+        maximum=1.0,
+        description="Whether the tools called were the right ones for each step.",
+    ),
+]
+
+REGISTRY: dict[str, ScoreDefinition] = {
+    definition.name: definition
+    for definition in (*_OUTCOME, *_EFFICIENCY, *_TRAJECTORY, *_BEHAVIORAL)
+}
+
+
+def get_definition(name: str) -> ScoreDefinition:
+    try:
+        return REGISTRY[name]
+    except KeyError:
+        raise KeyError(
+            f"Unknown score '{name}'. Every score must be declared in the "
+            "registry before it can be recorded — an undeclared metric has no "
+            "direction, no provenance and no version, so nothing downstream can "
+            "read it correctly."
+        ) from None
+
+
+def definitions_by_category() -> dict[str, list[ScoreDefinition]]:
+    grouped: dict[str, list[ScoreDefinition]] = {}
+    for definition in REGISTRY.values():
+        grouped.setdefault(definition.category, []).append(definition)
+    for items in grouped.values():
+        items.sort(key=lambda item: item.name)
+    return grouped

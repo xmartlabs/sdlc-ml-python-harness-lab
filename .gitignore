@@ -85,6 +85,8 @@ src/logger/data/*
 data/app/
 # SWE-bench Pro eval staging (containerized run_script/parser scratch)
 data/tmp/
+# Blobless mirrors of registered target repositories (rebuildable cache).
+data/target-mirrors/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/

@@ -2,7 +2,19 @@ import re
 
 from pydantic import BaseModel, Field, field_validator
 
-from harness_lab_app.models import CaseStatus, CaseSyncState, CaseType, RunState
+from harness_lab_app.models import (
+    CaseProvenance,
+    CaseStatus,
+    CaseSyncState,
+    CaseType,
+    ConditionRole,
+    ExperimentMode,
+    FindingSeverity,
+    FindingStatus,
+    HarnessSource,
+    RunState,
+    TargetStatus,
+)
 
 # SWE-bench instance ids look like `pallets__flask-4992` (owner__repo-issue).
 # SWE-bench Pro ids look like `instance_owner__repo-<sha>[-v<sha|nan>]`.
@@ -39,12 +51,77 @@ class CaseCreate(BaseModel):
     scoring_rubric: str = ""
     constraints: list[str] = Field(default_factory=list)
     validation_commands: list[str] = Field(default_factory=list)
+    provenance: CaseProvenance = CaseProvenance.synthetic
+    files_expected: list[str] = Field(default_factory=list)
+    files_forbidden: list[str] = Field(default_factory=list)
+    metadata_json: dict[str, str] = Field(default_factory=dict)
     max_steps: int = 1
 
 
 class CaseRead(CaseCreate):
     status: CaseStatus
     sync_state: CaseSyncState
+
+
+class TargetRepositoryCreate(BaseModel):
+    target_id: str
+    name: str
+    repository_url: str
+    description: str = ""
+    default_ref: str = "main"
+    setup_commands: list[str] = Field(default_factory=list)
+    validation_commands: list[str] = Field(default_factory=list)
+    language: str = ""
+    team: str = ""
+    tags: list[str] = Field(default_factory=list)
+    metadata_json: dict[str, str] = Field(default_factory=dict)
+
+
+class TargetRepositoryUpdate(BaseModel):
+    """Partial update. Every field optional; unset fields are left alone."""
+
+    name: str | None = None
+    repository_url: str | None = None
+    description: str | None = None
+    default_ref: str | None = None
+    status: TargetStatus | None = None
+    setup_commands: list[str] | None = None
+    validation_commands: list[str] | None = None
+    language: str | None = None
+    team: str | None = None
+    tags: list[str] | None = None
+    metadata_json: dict[str, str] | None = None
+
+
+class TargetRepositoryRead(TargetRepositoryCreate):
+    status: TargetStatus
+
+
+class TargetResolveRequest(BaseModel):
+    """Resolve a ref without creating a run — the form's 'check' button."""
+
+    ref: str = ""
+
+
+class ExperimentConditionCreate(BaseModel):
+    """One declared arm. ``overrides`` fixes the axis values this arm holds."""
+
+    label: str
+    role: ConditionRole = ConditionRole.treatment
+    description: str = ""
+    overrides: dict = Field(default_factory=dict)
+
+
+class ExperimentCreate(BaseModel):
+    experiment_id: str
+    name: str = ""
+    question: str
+    mode: ExperimentMode
+    case_ids: list[str] = Field(default_factory=list)
+    prompt_variants: list[str] = Field(default_factory=list)
+    conditions: list[ExperimentConditionCreate] = Field(default_factory=list)
+    repetitions: int = 1
+    notes: str = ""
 
 
 class RunConfigCreate(BaseModel):
@@ -67,6 +144,16 @@ class RunConfigCreate(BaseModel):
     # run only. Unchecked by default in the UI.
     skills_extra: list[str] = Field(default_factory=list)
 
+    # External target repository (ADR-0029). `target_repo_id` is what the run
+    # form sends; `target_ref` defaults to the repository's own default_ref.
+    # `target_commit` is NOT accepted from the client — RunService resolves it,
+    # so a caller cannot record a commit the run will not actually use.
+    target_repo_id: str = ""
+    target_ref: str = ""
+    # Which harness the agent sees (ADR-0031). `native`/`injected` both run the
+    # agent inside the target repository and therefore require one.
+    harness_source: HarnessSource = HarnessSource.lab_root
+
     @field_validator("score_mode")
     @classmethod
     def validate_score_mode(cls, value: str) -> str:
@@ -80,6 +167,46 @@ class RunConfigCreate(BaseModel):
         if normalized != "manual":
             raise ValueError("score_mode must be: manual")
         return normalized
+
+
+class ExperimentLaunch(BaseModel):
+    """Settings every arm of the launch shares; conditions override on top."""
+
+    config: RunConfigCreate
+
+
+class FindingCreate(BaseModel):
+    finding_id: str
+    title: str
+    body: str = ""
+    severity: FindingSeverity = FindingSeverity.medium
+    target_repo_id: str = ""
+    evidence_run_ids: list[str] = Field(default_factory=list)
+    affected_case_ids: list[str] = Field(default_factory=list)
+    recommendation: str = ""
+    intervention: str = ""
+
+
+class FindingUpdate(BaseModel):
+    title: str | None = None
+    body: str | None = None
+    severity: FindingSeverity | None = None
+    status: FindingStatus | None = None
+    recommendation: str | None = None
+    intervention: str | None = None
+    experiment_id: str | None = None
+    outcome: str | None = None
+    evidence_run_ids: list[str] | None = None
+    affected_case_ids: list[str] | None = None
+
+
+class AssessmentCreate(BaseModel):
+    assessment_id: str
+    organization: str
+    summary: str = ""
+    assessed_by: str = ""
+    # {dimension_key: {"level": 1-5, "rationale": str, "evidence": [ids]}}
+    dimensions: dict = Field(default_factory=dict)
 
 
 class StagedSkillCreate(BaseModel):
@@ -204,6 +331,20 @@ class RunBatchCreate(BaseModel):
     # the axis passes a single-element list.
     executor_models: list[str | None] = Field(default_factory=_unset_axis)
     planner_models: list[str | None] = Field(default_factory=_unset_axis)
+    # Target repositories to run against (ADR-0029) — the Mode B axis: one case
+    # family, N repositories, harness held fixed. The default single empty
+    # string means "no external target", which is what every batch created
+    # before targets existed asked for.
+    target_repo_ids: list[str] = Field(default_factory=lambda: [""])
+    # The Mode A axis for an external target: run the same case with the repo's
+    # own conventions and with the lab harness projected on top.
+    harness_sources: list[HarnessSource] = Field(
+        default_factory=lambda: [HarnessSource.lab_root]
+    )
+    # Shared across the axis: one ref name resolved per repository. Empty means
+    # each repository's own `default_ref` — the only sensible default when the
+    # repositories do not share a branch naming convention.
+    target_ref: str = ""
     repetitions: int = 1
 
     # Shared across every generated run.

@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { Link } from "react-router-dom";
+
 import type {
   CaseRecord,
   LeaderboardRunRow,
   OfficialReferenceRow,
-  RunRecord
+  OverviewReport,
+  RunRecord,
+  ScoreAggregate
 } from "../types";
 
 type DashboardProps = {
@@ -14,6 +18,251 @@ type DashboardProps = {
 };
 
 const ALL = "all";
+
+function pct(value: number | null | undefined): string {
+  return value === null || value === undefined ? "—" : `${(value * 100).toFixed(0)}%`;
+}
+
+function usd(value: number | null | undefined): string {
+  return value === null || value === undefined ? "—" : `$${value.toFixed(2)}`;
+}
+
+/**
+ * A sparkline of weekly success rate.
+ *
+ * A week with no validated run is a **gap**, not a zero: drawing it on the
+ * baseline would show a collapse that never happened.
+ */
+function Trend({ points }: { points: OverviewReport["trend"] }) {
+  const measured = points.filter((point) => point.rate !== null);
+  if (measured.length < 2) {
+    return (
+      <p className="muted small">
+        Not enough weeks with a validated run to draw a trend yet.
+      </p>
+    );
+  }
+  const width = 240;
+  const height = 44;
+  const step = width / Math.max(points.length - 1, 1);
+  return (
+    <svg
+      aria-label="Weekly success rate"
+      height={height}
+      role="img"
+      viewBox={`0 0 ${width} ${height}`}
+      width={width}
+    >
+      {points.map((point, index) =>
+        point.rate === null ? null : (
+          <circle
+            cx={index * step}
+            cy={height - point.rate * height}
+            fill="currentColor"
+            key={point.week_ending}
+            r={2.5}
+          >
+            <title>
+              {point.week_ending}: {pct(point.rate)} over {point.n} run(s)
+            </title>
+          </circle>
+        )
+      )}
+      <polyline
+        fill="none"
+        points={points
+          .map((point, index) =>
+            point.rate === null
+              ? null
+              : `${index * step},${height - point.rate * height}`
+          )
+          .filter(Boolean)
+          .join(" ")}
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
+/**
+ * The score corpus, aggregated.
+ *
+ * The figures above come from `Validation`. These come from the registry, and
+ * they answer a different question: not "did the runs pass?" but "is the
+ * harness earning its keep?" — which is the question this lab exists for and
+ * which nothing else on this page would ever surface.
+ */
+function HarnessSignal({ scores }: { scores: OverviewReport["scores"] }) {
+  if (scores.runs === 0) {
+    return (
+      <section className="panel">
+        <h2>Harness signal</h2>
+        <p className="muted">
+          No scores recorded yet. Runs are scored against the registry when they
+          finish; older runs can be scored from their detail page.
+        </p>
+      </section>
+    );
+  }
+
+  const adherence = scores.adherence;
+  const useful = scores.useful?.mean ?? null;
+  const redundant = scores.redundant?.mean ?? null;
+  const forbidden = scores.forbidden;
+
+  return (
+    <section className="panel">
+      <div className="row space-between">
+        <h2>Harness signal</h2>
+        <span className="muted small">over {scores.runs} scored run(s)</span>
+      </div>
+
+      <div className="metrics">
+        <div className="metric">
+          <span>Skill adherence</span>
+          <strong>{adherence?.mean === null || adherence === null
+            ? "—"
+            : pct(adherence.mean)}</strong>
+          <small className="muted">
+            share of the harness judged used · judgement
+          </small>
+        </div>
+        <div className="metric">
+          <span>Items useful / run</span>
+          <strong>{useful === null ? "—" : useful.toFixed(1)}</strong>
+          <small className="muted">
+            {redundant === null ? "" : `${redundant.toFixed(1)} judged redundant`}
+          </small>
+        </div>
+        <div className="metric">
+          <span>Diff size</span>
+          <strong>
+            {scores.diff_size?.median === null || !scores.diff_size
+              ? "—"
+              : `${scores.diff_size.median} lines`}
+          </strong>
+          <small className="muted">median · observation</small>
+        </div>
+        <div className="metric">
+          <span>Boundary violations</span>
+          <strong>{forbidden?.mean ? forbidden.maximum : 0}</strong>
+          <small className="muted">forbidden paths touched, worst run</small>
+        </div>
+      </div>
+
+      {adherence !== null && adherence.mean !== null && adherence.mean < 0.4 && (
+        <p className="muted small">
+          Agents are judged to use under half of the harness available to them.
+          That is a finding about the <em>harness</em>, not the model: an item
+          nothing ever reaches is cost without effect. Read the per-item verdicts
+          in a run&apos;s <strong>Harness catalog</strong>, then ablate the ones
+          that never earn their keep and measure the difference.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function Overview({ report }: { report: OverviewReport }) {
+  const unscored = report.scoring.terminal - report.scoring.scored;
+  return (
+    <>
+      <div className="metrics">
+        <div className="metric">
+          <span>Harness version</span>
+          <strong>{report.harness_version ?? "—"}</strong>
+        </div>
+        <div className="metric">
+          <span>Success rate ({report.window_days}d)</span>
+          <strong>{pct(report.success.rate)}</strong>
+          <small className="muted">over {report.success.n} validated run(s)</small>
+        </div>
+        <div className="metric">
+          <span>Regressions</span>
+          <strong>{report.regressions.count}</strong>
+          <small className="muted">
+            of {report.regressions.eligible_cases} case(s) with a history
+          </small>
+        </div>
+        <div className="metric">
+          <span>Median cost</span>
+          <strong>{usd(report.cost.median_usd)}</strong>
+          <small className="muted">
+            {usd(report.cost.cost_per_success)} per success
+          </small>
+        </div>
+        <div className="metric">
+          <span>Regression suite</span>
+          <strong>{report.regression_suite.cases}</strong>
+          <small className="muted">
+            of {report.regression_suite.of_active} active case(s)
+          </small>
+        </div>
+        <div className="metric">
+          <span>Experiments</span>
+          <strong>{report.experiments.recent}</strong>
+          <small className="muted">
+            this window · {report.experiments.total} total
+          </small>
+        </div>
+      </div>
+
+      <div className="row gap wrap">
+        <section className="panel">
+          <h2>Quality over time</h2>
+          <Trend points={report.trend} />
+          <p className="muted small">
+            Weekly share of objectively-validated runs that passed. A week with no
+            validated run is left blank rather than drawn as zero.
+          </p>
+        </section>
+
+        <HarnessSignal scores={report.scores} />
+      </div>
+
+      <div className="row gap wrap">
+        <section className="panel">
+          <h2>Worth attention</h2>
+          <ul className="warning-list">
+            {report.success.note && <li>⚠ {report.success.note}</li>}
+            {report.regressions.count > 0 && (
+              <li>
+                ⚠ Regressed since a previous pass:{" "}
+                <span className="mono small">
+                  {report.regressions.cases.join(", ")}
+                </span>
+              </li>
+            )}
+            {unscored > 0 && (
+              <li>
+                {unscored} finished run(s) have no scores yet — scoring is on demand,
+                so they are absent from every experiment summary.
+              </li>
+            )}
+            {report.findings.open > 0 && (
+              <li>
+                {report.findings.open} open <Link to="/findings">finding(s)</Link>{" "}
+                with nothing testing them yet.
+              </li>
+            )}
+            {report.regression_suite.cases === 0 && (
+              <li>
+                No case carries its own objective validation, so nothing here can
+                gate a change to the harness.
+              </li>
+            )}
+            {report.success.note === "" &&
+              report.regressions.count === 0 &&
+              unscored === 0 &&
+              report.findings.open === 0 &&
+              report.regression_suite.cases > 0 && <li>Nothing outstanding.</li>}
+          </ul>
+        </section>
+      </div>
+    </>
+  );
+}
 
 function countByState(runs: RunRecord[], state: RunRecord["state"]): number {
   return runs.filter((run) => run.state === state).length;
@@ -110,6 +359,7 @@ function fmtNum(value: number | null, digits = 1): string {
 
 export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
   const [rows, setRows] = useState<LeaderboardRunRow[]>([]);
+  const [overview, setOverview] = useState<OverviewReport | null>(null);
   const [reference, setReference] = useState<OfficialReferenceRow[]>([]);
   const [laneFilter, setLaneFilter] = useState(ALL);
   const [harnessFilter, setHarnessFilter] = useState(ALL);
@@ -122,6 +372,11 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
   const [showContinuations, setShowContinuations] = useState(false);
 
   useEffect(() => {
+    api
+    api
+      .getOverview()
+      .then(setOverview)
+      .catch(() => setOverview(null));
     api
       .getLeaderboard()
       .then(setRows)
@@ -173,39 +428,43 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
     <section className="page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Dashboard</p>
-          <h1>Leaderboard</h1>
+          <p className="eyebrow">Overview</p>
+          <h1>Harness quality</h1>
           <p className="lede">
-            % of cases resolved per condition (harness + model + prompt + harness
-            version), swebench.com-style. Every terminal run counts as one attempt;
-            manual-score cases show average score only.
+            Is the harness getting better, is anything regressing, and what does a
+            success cost. Every figure carries its denominator — a rate over four
+            runs and one over four hundred are different claims.
           </p>
         </div>
         <div className="status-chip">{apiStatus}</div>
       </header>
 
-      <div className="metrics">
-        <div className="metric">
-          <span>Cases</span>
-          <strong>{cases.length}</strong>
+      {overview !== null ? (
+        <Overview report={overview} />
+      ) : (
+        <div className="metrics">
+          <div className="metric">
+            <span>Cases</span>
+            <strong>{cases.length}</strong>
+          </div>
+          <div className="metric">
+            <span>Runs</span>
+            <strong>{runs.length}</strong>
+          </div>
+          <div className="metric">
+            <span>Running</span>
+            <strong>{countByState(runs, "running")}</strong>
+          </div>
+          <div className="metric">
+            <span>Completed</span>
+            <strong>{countByState(runs, "completed")}</strong>
+          </div>
         </div>
-        <div className="metric">
-          <span>Runs</span>
-          <strong>{runs.length}</strong>
-        </div>
-        <div className="metric">
-          <span>Running</span>
-          <strong>{countByState(runs, "running")}</strong>
-        </div>
-        <div className="metric">
-          <span>Completed</span>
-          <strong>{countByState(runs, "completed")}</strong>
-        </div>
-      </div>
+      )}
 
       <section className="panel">
         <div className="panel-head">
-          <h2>Ranking by condition</h2>
+          <h2>Leaderboard — ranking by condition</h2>
           <span className="muted">
             {board.filter((r) => !r.official).length} condition(s) ·{" "}
             {filtered.length} run(s)
