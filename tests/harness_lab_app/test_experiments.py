@@ -658,3 +658,45 @@ def test_launch_config_reports_what_real_runs_carry(session):
     assert config["executor_model"] == "stub-executor"
     assert config["prompt_variant"] == "sdlc"
     assert config["max_steps"] == 5
+
+
+def test_an_experiment_without_cases_warns_at_creation(session):
+    """'Has no cases' must be said at creation, not three screens later at launch."""
+    service = ExperimentService(session)
+    _, warnings = service.create_experiment(
+        ExperimentCreate(
+            experiment_id="empty-audit",
+            name="Empty audit",
+            question="How does this repo behave under an agent?",
+            mode=ExperimentMode.discovery,
+            case_ids=[],
+            repetitions=2,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="as-is",
+                    role=ConditionRole.treatment,
+                    overrides={"target_repo_id": "some-repo"},
+                )
+            ],
+        )
+    )
+    assert any("no cases" in warning for warning in warnings)
+
+
+def test_launch_enqueues_every_run_it_persists(session):
+    """A launched run must reach the queue, not just the database.
+
+    RunService._publish() silently no-ops when no enqueue callback was
+    injected, and the launch path used to build its RunService without one —
+    so an entire experiment sat `pending` forever with a healthy worker and no
+    error anywhere. The API layer injects the publisher; this pins that the
+    launch path actually hands it through.
+    """
+    published: list[str] = []
+    service = ExperimentService(session, enqueue=published.append)
+    _skills_design(service, "queued")
+
+    runs = service.launch("queued", _base_config(dry_run=True))
+
+    assert len(runs) == 2
+    assert sorted(published) == sorted(run.run_id for run in runs)

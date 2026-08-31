@@ -1211,7 +1211,9 @@ def create_app() -> FastAPI:
         session: Session = Depends(get_session),
     ):
         try:
-            runs = ExperimentService(session).launch(experiment_id, data.config)
+            runs = ExperimentService(session, enqueue=enqueue_run).launch(
+                experiment_id, data.config
+            )
         except ExperimentNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (ExperimentError, RunPreflightError) as exc:

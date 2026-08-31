@@ -60,6 +60,9 @@ export function Audit() {
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
   const [candidates, setCandidates] = useState<CaseCandidates | null>(null);
   const [accepted, setAccepted] = useState<string[]>([]);
+  // The ids of the cases actually created — what the discovery experiment
+  // runs. Kept apart from `accepted` (commit hashes for the checklist UI).
+  const [acceptedCaseIds, setAcceptedCaseIds] = useState<string[]>([]);
   const [suggestions, setSuggestions] = useState<SuggestionRecord[]>([]);
   const [author, setAuthor] = useState("");
   const [busy, setBusy] = useState("");
@@ -107,18 +110,43 @@ export function Audit() {
       if (!target) {
         return;
       }
-      await api.createCase(candidateToCase(candidate, target));
+      const created = await api.createCase(candidateToCase(candidate, target));
       setAccepted((current) => [...current, candidate.commit]);
+      setAcceptedCaseIds((current) => [...current, created.case_id]);
     });
 
   const startDiscovery = () =>
     run("discovery", async () => {
+      // This session's accepted cases, plus every case previously derived from
+      // this repository (tagged at creation) — so re-entering the audit after
+      // a reload still finds the cases a past session created.
+      const caseIds = new Set(acceptedCaseIds);
+      try {
+        for (const item of await api.listCases()) {
+          if ((item.tags ?? []).includes(targetId)) {
+            caseIds.add(item.case_id);
+          }
+        }
+      } catch {
+        // Cases unlistable — proceed with what this session accepted.
+      }
+      if (caseIds.size === 0) {
+        setError(
+          "No cases yet for this repository. Accept at least one derived case " +
+            "in the previous step — a discovery run with no cases measures nothing."
+        );
+        setStep("cases");
+        return;
+      }
+      // A previous audit may already have created `audit-<target>`; each
+      // discovery round is its own experiment, so suffix rather than collide.
+      const suffix = Date.now().toString(36).slice(-4);
       const experiment = await api.createExperiment({
-        experiment_id: `audit-${targetId}`.slice(0, 64),
+        experiment_id: `audit-${targetId}-${suffix}`.slice(0, 64),
         name: `Audit: ${target?.name ?? targetId}`,
         question: `How does ${target?.name ?? targetId} currently behave under an agent?`,
         mode: "discovery",
-        case_ids: accepted.length > 0 ? [] : [],
+        case_ids: [...caseIds].sort(),
         repetitions: 2,
         conditions: [
           {
@@ -335,8 +363,9 @@ export function Audit() {
           </p>
           <p className="muted">
             This creates a discovery experiment against{" "}
-            <strong>{target?.name ?? targetId}</strong>. Add the cases you accepted on
-            its page, then launch it.
+            <strong>{target?.name ?? targetId}</strong> carrying every case derived
+            from it — the ones you accepted here and any from earlier audits. You
+            launch it from its page, where the model and budget are chosen.
           </p>
           <div className="toolbar">
             <button

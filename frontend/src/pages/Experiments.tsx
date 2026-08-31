@@ -532,6 +532,22 @@ function LaunchPanel({
     );
   }
 
+  if (caseIds.length === 0) {
+    return (
+      <div className="card">
+        <h3>Run this experiment</h3>
+        <p className="callout callout--warning">
+          This experiment has no cases, so there is nothing to launch. It was
+          created before any case was attached — re-run the flow that created it
+          (for a repository audit: accept at least one derived case, then create
+          the discovery experiment again) or create a new experiment from{" "}
+          <Link to="/evaluate/new">New evaluation</Link>. Experiments are
+          immutable once declared, so this draft simply stays inert.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="card">
       <h3>Run this experiment</h3>

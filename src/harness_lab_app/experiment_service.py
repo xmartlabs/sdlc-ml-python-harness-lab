@@ -201,8 +201,14 @@ def repetition_warning(repetitions: int) -> str | None:
 
 
 class ExperimentService:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, enqueue=None):
         self.session = session
+        # Queue publisher, injected by the API layer exactly as RunService gets
+        # it. Without this, `launch` persisted its runs and then silently never
+        # enqueued them — RunService._publish() no-ops when the callback is
+        # absent — leaving a whole experiment `pending` forever with no error
+        # anywhere. Only `launch` needs it; every read path passes nothing.
+        self.enqueue = enqueue
 
     def list_experiments(self) -> list[Experiment]:
         rows = list(self.session.exec(select(Experiment)).all())
@@ -399,6 +405,14 @@ class ExperimentService:
         )
         if note:
             warnings.append(note)
+        if not data.case_ids:
+            # Creating is allowed — a draft can exist before its cases do — but
+            # this is the single most confusing failure to hit later ("has no
+            # cases", at launch, three screens away), so it is named now.
+            warnings.append(
+                "This experiment has no cases, so it cannot launch. Set case_ids "
+                "before launching — an experiment measures nothing without them."
+            )
 
         experiment = Experiment(
             experiment_id=experiment_id,
@@ -520,7 +534,7 @@ class ExperimentService:
         if not experiment.case_ids:
             raise ExperimentError(f"Experiment '{experiment_id}' has no cases.")
 
-        runs_service = RunService(self.session)
+        runs_service = RunService(self.session, enqueue=self.enqueue)
         configs: list[tuple[str, RunConfigCreate]] = []
         for case_id in experiment.case_ids:
             for variant in experiment.prompt_variants or [base.prompt_variant]:
