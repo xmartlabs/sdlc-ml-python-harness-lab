@@ -10,7 +10,7 @@ import {
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
 import { ModelPicker } from "../components/ModelPicker";
-import { IconArrowRight } from "../components/icons";
+import { IconAlert, IconArrowRight } from "../components/icons";
 import type {
   CaseRecord,
   ExperimentMode,
@@ -317,6 +317,33 @@ export function NewEvaluation() {
           )
     );
   }, [factorKey, variantOptions]);
+
+  // Written FOR the operator, adopted BY the operator: the backend refuses a
+  // question-less experiment on purpose (a batch with authority it has not
+  // earned), so the wizard offers a starting sentence rather than silently
+  // inventing one.
+  const suggestedQuestion = useMemo(() => {
+    if (mode === "cross_repo") {
+      return "Does this harness hold up across repositories, or does it degrade outside the one it was built in?";
+    }
+    if (factorKey === "full_harness") {
+      return "Does the full harness improve outcomes over the bare model on these cases?";
+    }
+    if (factorKey === "skills_extra") {
+      return skillNames.length > 0
+        ? `Does adding ${skillNames.join(", ")} improve outcomes?`
+        : "Does adding this staged skill improve outcomes?";
+    }
+    if (factorKey === "skills_disabled") {
+      return skillNames.length > 0
+        ? `Does removing ${skillNames.join(", ")} change outcomes at all?`
+        : "Does removing this skill change outcomes at all?";
+    }
+    if (factorKey === "harness") {
+      return `Does ${treatmentHarness} beat ${controlHarness} on the same cases and model?`;
+    }
+    return "Does the injected lab harness improve over the repository's own setup?";
+  }, [controlHarness, factorKey, mode, skillNames, treatmentHarness]);
 
   const setMode = (next: ExperimentMode) => {
     setParams({ mode: next });
@@ -666,7 +693,14 @@ export function NewEvaluation() {
 
       <div className="panel">
         <label className="field">
-          <span>What are you trying to find out?</span>
+          <span>
+            What are you trying to find out?{" "}
+            {question.trim() ? null : (
+              <em className="error-text small">
+                required — the experiment is built around this question
+              </em>
+            )}
+          </span>
           <input
             onChange={(event) => setQuestion(event.target.value)}
             placeholder={
@@ -677,6 +711,15 @@ export function NewEvaluation() {
             value={question}
           />
         </label>
+        {question.trim() ? null : (
+          <button
+            className="secondary"
+            onClick={() => setQuestion(suggestedQuestion)}
+            type="button"
+          >
+            Use a suggested question: &ldquo;{suggestedQuestion}&rdquo;
+          </button>
+        )}
       </div>
 
       {mode === "harness_evaluation" ? (
@@ -1166,11 +1209,19 @@ export function NewEvaluation() {
           ))}
         </ul>
         {blocking.length > 0 ? (
-          <ul className="blocking-list">
-            {blocking.map((problem) => (
-              <li key={problem}>{problem}</li>
-            ))}
-          </ul>
+          <div className="callout callout--warning">
+            <IconAlert size={16} />
+            <div>
+              <strong>
+                Not ready yet — the buttons below unlock when this is resolved:
+              </strong>
+              <ul className="blocking-list">
+                {blocking.map((problem) => (
+                  <li key={problem}>{problem}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
         ) : null}
         {warnings.length > 0 ? (
           <ul className="blocking-list blocking-list--warning">
@@ -1204,6 +1255,7 @@ export function NewEvaluation() {
             className="primary"
             disabled={blocking.length > 0 || isSaving}
             onClick={() => void submit(true)}
+            title={blocking.length > 0 ? blocking.join(" ") : undefined}
             type="button"
           >
             {isSaving ? "Working…" : "Create & launch runs"}
@@ -1213,6 +1265,7 @@ export function NewEvaluation() {
             className="secondary"
             disabled={blocking.length > 0 || isSaving}
             onClick={() => void submit(false)}
+            title={blocking.length > 0 ? blocking.join(" ") : undefined}
             type="button"
           >
             Create without launching
