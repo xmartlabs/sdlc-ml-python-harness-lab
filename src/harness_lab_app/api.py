@@ -31,7 +31,7 @@ from harness_lab_app.auth import (
     verify_password,
 )
 from harness_lab_app.case_derivation import derive_candidates
-from harness_lab_app.case_service import CaseService
+from harness_lab_app.case_service import CaseExistsError, CaseService
 from harness_lab_app.celery_app import (
     enqueue_audit,
     enqueue_container_cleanup,
@@ -1359,7 +1359,11 @@ def create_app() -> FastAPI:
 
     @app.post("/api/cases")
     def create_case(data: CaseCreate, session: Session = Depends(get_session)):
-        return CaseService(session).create_case(data)
+        try:
+            return CaseService(session).create_case(data)
+        except CaseExistsError as exc:
+            # 409, so a client can treat "already there" as the non-event it is.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.patch("/api/cases/{case_id}")
     def update_case(

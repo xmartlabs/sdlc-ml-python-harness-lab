@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { ReadinessReportView } from "../components/ReadinessReportView";
@@ -101,7 +101,27 @@ export function Audit() {
 
   const derive = () =>
     run("derive", async () => {
-      setCandidates(await api.deriveCases(targetId, 15));
+      const derived = await api.deriveCases(targetId, 15);
+      setCandidates(derived);
+      // Candidates a past audit already turned into cases start ticked, so
+      // the button that would only ever answer "already exists" is never
+      // offered in the first place.
+      try {
+        const known = new Set((await api.listCases()).map((item) => item.case_id));
+        const existing = derived.candidates.filter((candidate) =>
+          known.has(candidate.suggested_case_id)
+        );
+        if (existing.length > 0) {
+          setAccepted((current) => [
+            ...new Set([...current, ...existing.map((c) => c.commit)])
+          ]);
+          setAcceptedCaseIds((current) => [
+            ...new Set([...current, ...existing.map((c) => c.suggested_case_id)])
+          ]);
+        }
+      } catch {
+        // Catalog unlistable — the accept button handles duplicates anyway.
+      }
       setStep("cases");
     });
 
@@ -110,9 +130,29 @@ export function Audit() {
       if (!target) {
         return;
       }
-      const created = await api.createCase(candidateToCase(candidate, target));
+      const payload = candidateToCase(candidate, target);
+      try {
+        const created = await api.createCase(payload);
+        setAcceptedCaseIds((current) => [...current, created.case_id]);
+      } catch (createError) {
+        // A past audit already accepted this candidate. That is the outcome
+        // the button was after, so it reads as success — the case simply
+        // joins the discovery set like any other.
+        const alreadyThere =
+          (createError instanceof ApiError && createError.status === 409) ||
+          (createError instanceof Error &&
+            createError.message.includes("already exists"));
+        if (!alreadyThere) {
+          throw createError;
+        }
+        setAcceptedCaseIds((current) =>
+          current.includes(payload.case_id) ? current : [...current, payload.case_id]
+        );
+        setNotice(
+          `'${payload.case_id}' already existed from an earlier audit — reusing it.`
+        );
+      }
       setAccepted((current) => [...current, candidate.commit]);
-      setAcceptedCaseIds((current) => [...current, created.case_id]);
     });
 
   const startDiscovery = () =>
@@ -327,7 +367,7 @@ export function Audit() {
                   <pre className="candidate-prompt">{candidate.suggested_prompt}</pre>
                 </div>
                 {accepted.includes(candidate.commit) ? (
-                  <span className="badge ok">Case created</span>
+                  <span className="badge ok">Case in the catalog</span>
                 ) : (
                   <button
                     className="secondary"
