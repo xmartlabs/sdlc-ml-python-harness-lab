@@ -6,6 +6,11 @@ import { caseOptionLabel } from "../caseLabels";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
 import { ModelPicker } from "../components/ModelPicker";
+import {
+  HARNESS_NATIVE_MODELS,
+  HARNESS_OPTIONS,
+  HOST_HARNESSES
+} from "../harnesses";
 import { RunTable } from "../components/RunTable";
 import type {
   CaseRecord,
@@ -44,28 +49,12 @@ function toggleInSet<T extends string>(current: Set<T>, value: T): Set<T> {
   return next;
 }
 
-const HARNESS_OPTIONS = ["opencode", "codex", "claude", "antigravity"] as const;
-// Harnesses that run via the host CLI (native auth) instead of the runner
-// container — they need the host worker (subprocess backend).
-const HOST_HARNESSES = new Set(["codex", "claude"]);
+
 const FALLBACK_EXECUTOR_MODEL = "gateway/lmstudio-qwen3.6-35b-build";
 // Offered budgets. The selected case's own max_steps is merged in, so a case
 // authored with 1 or 4 steps is selectable rather than silently rounded up.
 const MAX_STEPS_OPTIONS = [3, 6, 10] as const;
 const DEFAULT_MAX_STEPS = 10;
-
-// Native model menus for the host-CLI harnesses. Values are passed straight to
-// the CLI's --model, so keep them to ids the CLI accepts. Edit these as new
-// versions ship — this is the systematic-lab knob for host harnesses.
-const HARNESS_NATIVE_MODELS: Record<string, ModelOption[]> = {
-  claude: [
-    { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
-    { id: "claude-opus-4-8", label: "Claude Opus 4.8" },
-    { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" }
-  ],
-  // Only the confirmed CLI default is listed — add your codex model ids here.
-  codex: [{ id: "codex-mini-latest", label: "Codex Mini (latest)" }]
-};
 
 export function Runs({
   cases,
@@ -530,7 +519,7 @@ export function Runs({
         label: label.trim() || undefined,
         config: buildConfig()
       });
-      navigate(`/runs/${created.run_id}`);
+      navigate(`/advanced/runs/${created.run_id}`);
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : "Unable to create run");
     } finally {
@@ -830,7 +819,7 @@ export function Runs({
           >
             <small className="muted">
               {HARNESS_NATIVE_MODELS[harness]
-                ? `Native ${harness} CLI models (passed to --model). Edit the list in Runs.tsx as versions ship.`
+                ? `Native ${harness} CLI models (passed to --model). Edit the list in harnesses.ts as versions ship.`
                 : modelSource === "opencode.json"
                   ? "Gateway unreachable — showing opencode.json models."
                   : modelSource === "gateway"

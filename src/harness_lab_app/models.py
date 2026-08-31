@@ -273,9 +273,24 @@ class Experiment(SQLModel, table=True):
     case_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     prompt_variants: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     repetitions: int = 1
+    # Per-case override of ``repetitions``. Empty for an ordinary experiment,
+    # where every case is repeated the same number of times. A curated suite
+    # deliberately repeats a cheap deterministic canary more often than an
+    # expensive SWE-bench instance, and flattening that to one number would
+    # either inflate the expensive case or under-sample the canary.
+    case_repetitions: dict[str, int] = Field(
+        default_factory=dict, sa_column=Column(JSON)
+    )
+    # The regression suite this experiment was generated from, when it was
+    # (ADR-0037). Empty for a hand-designed experiment.
+    suite_id: str = ""
     notes: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+    def repetitions_for(self, case_id: str) -> int:
+        """How many times this case runs in each arm."""
+        return max(1, self.case_repetitions.get(case_id, self.repetitions))
 
 
 class ExperimentCondition(SQLModel, table=True):
@@ -364,6 +379,11 @@ class Score(SQLModel, table=True):
     # judgement, usually empty for a fact.
     reason: str = ""
     confidence: float | None = None
+    # Which instrument produced the value: evaluator, adapter version, judge
+    # model, rubric. Empty for a deterministic score, where the code is the
+    # provenance; populated for anything a model decided, so a rubric change is
+    # visible on the value and not only in a changelog.
+    provenance_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
 
     __table_args__ = (UniqueConstraint("run_id", "name", "version"),)
@@ -408,6 +428,13 @@ class Audit(SQLModel, table=True):
     # second auditor pass: {"items": [{name, kind, used_evidence, verdict,
     # note}], "parse_error"?}. Optional — old audits have an empty dict.
     findings_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    # The governance surface this audit judged the run against: which files the
+    # run could actually read, where they came from (`target_workspace` vs
+    # `lab_root`), and a content fingerprint of the set. An audit whose
+    # denominator is unrecorded cannot be re-read a month later, and a `native`
+    # verdict scored against the lab's own rules has to be identifiable rather
+    # than trusted (see `harness_lab_app.governance`).
+    governance_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
     error: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -420,8 +447,15 @@ class FindingSeverity(StrEnum):
 
 
 class FindingStatus(StrEnum):
-    """A finding's life: observed → hypothesis → tested → settled."""
+    """A finding's life: suggested → observed → hypothesis → tested → settled.
 
+    ``suggested`` is the machine's half of the loop and deliberately not the
+    same thing as ``open``: the lab may notice a pattern, but nothing it notices
+    becomes a finding of record until a person accepts it and puts their name on
+    it (ADR-0035, §14).
+    """
+
+    suggested = "suggested"
     open = "open"
     proposed = "proposed"
     experiment_running = "experiment_running"
@@ -458,6 +492,16 @@ class Finding(SQLModel, table=True):
     recommendation: str = ""
     # The change proposed to test the recommendation (a skill, a rule, a gate).
     intervention: str = ""
+    # Where the finding came from. Empty for one a person wrote unprompted; for
+    # an accepted or rejected suggestion this is the suggestion's stable key
+    # (e.g. "regression:cli-textstats-v1"), which is what stops the same
+    # pattern being suggested again after somebody has already ruled on it.
+    origin: str = ""
+    # The person accountable for the finding. A suggestion has none until it is
+    # accepted, and accepting without one is refused: an unowned finding is an
+    # assertion nobody has to defend.
+    author: str = ""
+    accepted_at: datetime | None = None
     # The experiment that tested it, once one exists.
     experiment_id: str | None = Field(default=None, index=True)
     outcome: str = ""

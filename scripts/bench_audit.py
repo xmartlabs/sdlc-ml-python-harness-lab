@@ -52,6 +52,10 @@ from harness_lab_app.gateway_models import (
     list_gateway_models,
     normalize_model_name,
 )
+from harness_lab_app.governance import (
+    HARNESS_RULES_FILE,
+    resolve_surface,
+)
 
 # Per-artifact clip budgets (characters). Logs can be large in multi-step runs;
 # we keep head+tail so both the setup and the final state are visible.
@@ -154,16 +158,11 @@ _HARNESS_PROFILE: dict[str, str] = {
 }
 
 
-# The adapter file whose rules the audited agent actually saw, per harness.
-# Paths are relative to REPO_ROOT (the bench working tree mirrors the template's
-# adapter layout). An unmapped harness falls back to OPENCODE.md with an
-# explicit warning in the audit inputs.
-_HARNESS_RULES_FILE: dict[str, str] = {
-    "opencode": "OPENCODE.md",
-    "claude": "CLAUDE.md",
-    "codex": "AGENTS.md",
-    "antigravity": ".agents/rules/GEMINI.md",
-}
+# The adapter file whose rules the audited agent actually saw, per harness, and
+# *where* that file lives for the run's condition, both owned by
+# `harness_lab_app.governance` so the auditor, the attribution parser and the
+# API cannot drift into disagreeing about what a run was judged against.
+_HARNESS_RULES_FILE = HARNESS_RULES_FILE
 
 
 def harness_from_metadata(metadata_text: str | None) -> str:
@@ -356,43 +355,32 @@ def build_inputs(run: dict, out_dir: Path) -> dict:
     log_text, log_sources = gather_logs(out_dir)
 
     # The rules corpus must match the harness that drove the run — auditing a
-    # claude/codex run against OPENCODE.md judges it by the wrong rulebook.
-    harness = detect_harness(metadata, log_text)
-    rules_name = _HARNESS_RULES_FILE.get(harness)
-    rules_warning = ""
-    if rules_name is None:
-        rules_name = "OPENCODE.md"
-        rules_warning = (
-            f"harness '{harness or 'unknown'}' has no mapped rules file; "
-            "defaulting to OPENCODE.md — treat rule-adherence findings with care"
-        )
-    # WHERE the rules live depends on the run's harness condition (ADR-0031).
-    # A `native` or `injected` run put the agent inside the target repository,
-    # so the governance under evaluation is the one archived with that run — for
-    # `native` it is *the team's own*, and judging it against the lab's
-    # documents would score them for following rules they were never given.
+    # claude/codex run against OPENCODE.md judges it by the wrong rulebook — and
+    # it must come from WHERE that run's condition put the agent (ADR-0031).
+    # Under `native` the rules under evaluation are the target team's own;
+    # judging them against the lab's documents would score them for following
+    # rules they were never given. `resolve_surface` owns both decisions.
+    #
     # `metadata` is the raw file text (it is fed to the prompt verbatim), so the
     # one field needed as data is parsed out here rather than plumbed through.
+    harness = detect_harness(metadata, log_text)
     harness_source = "lab_root"
     if metadata:
         with contextlib.suppress(Exception):
             harness_source = (
                 str(json.loads(metadata).get("harness_source") or "") or "lab_root"
             )
-    rules_root = REPO_ROOT
-    if harness_source in ("native", "injected"):
-        archived = out_dir / "workspace"
-        if archived.is_dir():
-            rules_root = archived
-        else:
-            rules_warning = (
-                f"{rules_warning + '; ' if rules_warning else ''}"
-                f"run used harness_source='{harness_source}' but its workspace is "
-                "gone; falling back to the lab's rules — rule-adherence findings "
-                "describe the wrong rulebook"
-            )
+    surface = resolve_surface(
+        lab_root=REPO_ROOT,
+        run_dir=out_dir,
+        harness=harness,
+        harness_source=harness_source,
+    )
+    rules_name = surface.rules_file
+    rules_warning = surface.warning
+    rules_root = Path(surface.root)
     rules = read_text_if_exists(rules_root / rules_name)
-    if rules is None and rules_root is not REPO_ROOT:
+    if rules is None and surface.source != "lab_root":
         # A `native` target that ships no governance at all is a real and
         # interesting condition, not a missing file: say so instead of silently
         # substituting the lab's.
@@ -403,6 +391,7 @@ def build_inputs(run: dict, out_dir: Path) -> dict:
         )
 
     return {
+        "governance": surface.as_dict(),
         "metadata": metadata,
         "usage": usage,
         "diff": diff,
@@ -439,7 +428,25 @@ def build_user_message(run_id: str, inp: dict) -> str:
     if inp["usage"]:
         sections.append("\n## usage.json\n```json\n" + inp["usage"].strip() + "\n```")
     if inp["rules"]:
-        rules_header = f"\n## Corpus de reglas disponible ({inp['rules_source']})\n"
+        governance = inp.get("governance") or {}
+        origin = (
+            "el repositorio target archivado con esta corrida"
+            if governance.get("source") == "target_workspace"
+            else "el repositorio del lab"
+        )
+        rules_header = (
+            f"\n## Corpus de reglas disponible ({inp['rules_source']})\n"
+            f"> Fuente de governance: **{governance.get('source', 'lab_root')}** "
+            f"({origin}) · harness_source=`{governance.get('harness_source', '')}` · "
+            f"{governance.get('file_count', 0)} archivo(s) · "
+            f"fingerprint `{str(governance.get('fingerprint', ''))[:12]}`\n"
+            "> Evaluá la adherencia SOLO contra los archivos listados abajo. "
+            "Si un archivo no está en esta superficie, la corrida nunca lo "
+            "recibió y no puede ser penalizada por no seguirlo.\n"
+        )
+        if governance.get("files"):
+            listed = ", ".join(governance["files"][:60])
+            rules_header += f"> Superficie: {listed}\n"
         if inp.get("rules_warning"):
             rules_header += f"> ⚠️ {inp['rules_warning']}\n"
         sections.append(rules_header + clip(inp["rules"].strip(), RULES_CLIP_CHARS))
@@ -649,6 +656,20 @@ def main(argv: list[str] | None = None) -> int:
             findings = {"items": [], "parse_error": f"gateway error: {exc}"}
     else:
         findings = {"items": [], "parse_error": "no harness catalog in metadata.json"}
+    # The surface the verdicts above were formed against, recorded beside them.
+    # A judgement whose denominator is unknown cannot be re-read later, and a
+    # `native` verdict that turns out to have been scored against the lab's
+    # rules has to be identifiable as such rather than trusted.
+    findings["governance"] = inp["governance"]
+    governance_path = out_dir / "audit_governance.json"
+    governance_path.write_text(
+        json.dumps(inp["governance"], ensure_ascii=False, indent=2)
+    )
+    print(
+        f"✅ Wrote {governance_path.relative_to(REPO_ROOT)} "
+        f"(source={inp['governance']['source']}, "
+        f"{inp['governance']['file_count']} file(s))"
+    )
     findings_path = out_dir / "audit_findings.json"
     findings_path.write_text(json.dumps(findings, ensure_ascii=False, indent=2))
     print(

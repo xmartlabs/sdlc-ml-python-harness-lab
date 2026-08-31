@@ -326,3 +326,335 @@ def test_every_run_of_an_arm_carries_the_declared_overrides(lab):
     assert by_label["native"].target_commit == by_label["injected"].target_commit
     # And the shared settings came from the launch payload, not the condition.
     assert by_label["native"].executor_model == "stub-model"
+
+
+# --------------------------------------------------------------------------
+# Reading the result — the mode governs what may be claimed (§10, §25)
+# --------------------------------------------------------------------------
+
+
+def test_discovery_summary_carries_no_comparison_and_no_causal_verdict(lab):
+    """Mode C describes a repository. It concludes nothing about a change."""
+    lab.create_experiment(
+        _payload(
+            experiment_id="client-discovery",
+            mode=ExperimentMode.discovery,
+            repetitions=1,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="as-is",
+                    # A discovery arm may carry the control role and still must
+                    # not be rendered as one half of a comparison.
+                    role=ConditionRole.control,
+                    overrides={"target_repo_id": "payments"},
+                ),
+                ExperimentConditionCreate(
+                    label="also-as-is",
+                    overrides={"target_repo_id": "payments"},
+                ),
+            ],
+        )
+    )
+
+    summary = lab.summarize("client-discovery")
+
+    assert summary["comparisons"] == []
+    assert summary["verdict"]["causal"] is False
+    assert summary["verdict"]["headline"] == "Exploratory — no comparison"
+
+
+def test_cross_repo_summary_keeps_repositories_apart(lab):
+    """Mode B reports per repository; it never pools the arms into one score."""
+    TargetService(lab.session).create_target(
+        TargetRepositoryCreate(
+            target_id="billing",
+            name="Billing",
+            repository_url="https://github.com/acme/billing.git",
+        )
+    )
+    lab.create_experiment(
+        _payload(
+            experiment_id="does-it-travel",
+            mode=ExperimentMode.cross_repo,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="payments",
+                    role=ConditionRole.control,
+                    overrides={"target_repo_id": "payments"},
+                ),
+                ExperimentConditionCreate(
+                    label="billing",
+                    overrides={"target_repo_id": "billing"},
+                ),
+            ],
+        )
+    )
+
+    summary = lab.summarize("does-it-travel")
+
+    # Every repository keeps its own row; there is no pooled aggregate anywhere
+    # in the payload for a reader to mistake for a result.
+    assert [c["label"] for c in summary["conditions"]] == ["payments", "billing"]
+    assert summary["verdict"]["causal"] is False
+    assert any("not pooled" in c for c in summary["verdict"]["caveats"])
+
+
+def test_a_harness_summary_reports_its_evidence_honestly(lab):
+    lab.create_experiment(_payload(repetitions=2))
+
+    summary = lab.summarize("migration-safety")
+
+    assert summary["verdict"]["evidence"] == "1 case \u00d7 2 repetitions"
+    assert summary["verdict"]["strength"] == "exploratory comparison"
+    # Nothing has run, so there is nothing to conclude.
+    assert summary["verdict"]["headline"] == "Not enough evidence yet"
+
+
+def test_the_summary_reports_per_case_repetitions_from_a_suite(lab):
+    lab.create_experiment(
+        _payload(repetitions=5, case_repetitions={"add-endpoint": 1}, suite_id="s1")
+    )
+
+    summary = lab.summarize("migration-safety")
+
+    assert summary["suite_id"] == "s1"
+    assert summary["case_repetitions"] == {"add-endpoint": 1}
+    # The weakest case governs the wording, not the headline number.
+    assert summary["verdict"]["strength"] == "exploratory"
+
+
+def test_launch_preflights_every_arm_not_just_the_baseline(session):
+    """A treatment differing only in skills must still be preflighted.
+
+    The launch dedupe key once omitted the skill axes — the very fields a
+    Mode A experiment varies — so the treatment config collapsed onto its
+    baseline and skipped preflight. An unknown staged skill then failed at run
+    time, inside one arm only, which is indistinguishable from the treatment
+    being bad. The refusal has to come at launch, for the whole experiment.
+    """
+    from harness_lab_app.models import Case, CaseType
+    from harness_lab_app.run_service import RunPreflightError
+    from harness_lab_app.schemas import RunConfigCreate
+
+    session.add(Case(case_id="tetris-v1", name="Tetris", type=CaseType.single_prompt))
+    session.commit()
+    service = ExperimentService(session)
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="ghost-skill",
+            name="Ghost skill",
+            question="Does a skill nobody staged help?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["tetris-v1"],
+            repetitions=2,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="baseline",
+                    role=ConditionRole.control,
+                    overrides={"skills_extra": []},
+                ),
+                ExperimentConditionCreate(
+                    label="with-skill",
+                    role=ConditionRole.treatment,
+                    overrides={"skills_extra": ["ghost-skill-nobody-staged"]},
+                ),
+            ],
+        )
+    )
+
+    with pytest.raises(RunPreflightError, match="ghost-skill-nobody-staged"):
+        service.launch(
+            "ghost-skill",
+            RunConfigCreate(
+                case_id="tetris-v1",
+                prompt_variant="sdlc",
+                executor_model="stub-executor",
+                score_mode="manual",
+                max_steps=5,
+            ),
+        )
+
+    # Refused as one intent: no half-launched experiment left behind.
+    assert service.runs("ghost-skill") == []
+
+
+def test_full_harness_design_expands_per_arm_prompt_and_skills(session):
+    """Bare model versus the whole harness — the lab's founding comparison.
+
+    One treatment, two levers moved together on purpose: the governance-loaded
+    prompt variant and the full skill catalog. The claim is about the harness
+    as a unit, so this must be one accepted design — and each arm's runs must
+    carry that arm's own prompt and ablation, or the two arms silently run the
+    same condition.
+    """
+    from harness_lab_app.models import Case, CaseType
+    from harness_lab_app.run_service import RunService
+    from harness_lab_app.schemas import RunConfigCreate
+
+    session.add(Case(case_id="tetris-v1", name="Tetris", type=CaseType.single_prompt))
+    session.commit()
+    service = ExperimentService(session)
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="full-harness",
+            name="Full harness",
+            question="Does the harness as a whole earn its keep?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["tetris-v1"],
+            repetitions=2,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="bare",
+                    role=ConditionRole.control,
+                    overrides={
+                        "prompt_variant": "naive",
+                        "skills_disabled": ["brainstorm_quick", "bootstrap_project"],
+                    },
+                ),
+                ExperimentConditionCreate(
+                    label="full-harness",
+                    role=ConditionRole.treatment,
+                    overrides={"prompt_variant": "sdlc", "skills_disabled": []},
+                ),
+            ],
+        )
+    )
+
+    runs = service.launch(
+        "full-harness",
+        RunConfigCreate(
+            case_id="tetris-v1",
+            prompt_variant="sdlc",
+            executor_model="stub-executor",
+            score_mode="manual",
+            max_steps=5,
+            dry_run=True,
+        ),
+    )
+
+    run_service = RunService(session)
+    by_arm = {}
+    for run in runs:
+        config = run_service.get_run_config(run.run_config_id)
+        by_arm.setdefault(
+            run.condition_label, (config.prompt_variant, sorted(config.skills_disabled))
+        )
+    assert by_arm["bare"] == ("naive", ["bootstrap_project", "brainstorm_quick"])
+    assert by_arm["full-harness"] == ("sdlc", [])
+
+
+def test_prompt_variant_alone_is_a_valid_harness_axis():
+    """naive-vs-sdlc with nothing else varying is the classic A/B, not a refusal."""
+    warnings = validate_design(
+        ExperimentMode.harness_evaluation,
+        [
+            {
+                "label": "bare",
+                "role": ConditionRole.control,
+                "overrides": {"prompt_variant": "naive"},
+            },
+            {
+                "label": "governed",
+                "role": ConditionRole.treatment,
+                "overrides": {"prompt_variant": "sdlc"},
+            },
+        ],
+    )
+    assert warnings == []
+
+
+def _skills_design(service, experiment_id="lockcheck"):
+    from sqlmodel import select
+
+    from harness_lab_app.models import Case, CaseType
+
+    session = service.session
+    if not session.exec(select(Case).where(Case.case_id == "tetris-v1")).first():
+        session.add(
+            Case(case_id="tetris-v1", name="Tetris", type=CaseType.single_prompt)
+        )
+        session.commit()
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id=experiment_id,
+            name="Lock check",
+            question="Does ablating brainstorm_quick change anything?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["tetris-v1"],
+            repetitions=1,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="baseline", role=ConditionRole.control, overrides={}
+                ),
+                ExperimentConditionCreate(
+                    label="ablated",
+                    role=ConditionRole.treatment,
+                    overrides={"skills_disabled": ["brainstorm_quick"]},
+                ),
+            ],
+        )
+    )
+
+
+def _base_config(**over):
+    from harness_lab_app.schemas import RunConfigCreate
+
+    payload = {
+        "case_id": "tetris-v1",
+        "prompt_variant": "sdlc",
+        "executor_model": "stub-executor",
+        "score_mode": "manual",
+        "max_steps": 5,
+    }
+    payload.update(over)
+    return RunConfigCreate(**payload)
+
+
+def test_relaunching_with_a_different_model_is_refused(session):
+    """One experiment, one measurement configuration.
+
+    A relaunch under another model would file two measurements under the same
+    experiment_id, and every aggregate would average them as though they were
+    one condition. Same-config relaunches stay allowed: that is how
+    repetitions are added.
+    """
+    service = ExperimentService(session)
+    _skills_design(service)
+    service.launch("lockcheck", _base_config())
+
+    with pytest.raises(ExperimentError, match="executor_model"):
+        service.launch("lockcheck", _base_config(executor_model="other-model"))
+
+    # The same configuration adds repetitions instead.
+    again = service.launch("lockcheck", _base_config())
+    assert len(again) == 2
+    assert len(service.runs("lockcheck")) == 4
+
+
+def test_a_dry_run_rehearsal_neither_locks_nor_is_blocked(session):
+    """Dry runs build commands; they measure nothing, so they lock nothing."""
+    service = ExperimentService(session)
+    _skills_design(service, "rehearsal")
+    service.launch("rehearsal", _base_config(dry_run=True))
+
+    # A real launch under a different model is fine after a dry rehearsal…
+    service.launch("rehearsal", _base_config(executor_model="the-real-model"))
+    # …and a later dry run under yet another model is never blocked.
+    service.launch("rehearsal", _base_config(executor_model="whatever", dry_run=True))
+
+
+def test_launch_config_reports_what_real_runs_carry(session):
+    """The detail payload's launch_config: None for drafts, locked afterwards."""
+    service = ExperimentService(session)
+    _skills_design(service, "cfg")
+    assert service.launch_config("cfg") is None
+
+    service.launch("cfg", _base_config(dry_run=True))
+    assert service.launch_config("cfg") is None, "a rehearsal is not a measurement"
+
+    service.launch("cfg", _base_config())
+    config = service.launch_config("cfg")
+    assert config is not None
+    assert config["executor_model"] == "stub-executor"
+    assert config["prompt_variant"] == "sdlc"
+    assert config["max_steps"] == 5

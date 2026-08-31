@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Any
 from sqlmodel import Session, select
 
 from harness_lab_app.findings import RUBRIC, TESTABLE_STATUSES, validate_assessment
-from harness_lab_app.models import Assessment, ConditionRole, Finding
+from harness_lab_app.models import (
+    Assessment,
+    ConditionRole,
+    Finding,
+    FindingSeverity,
+    FindingStatus,
+)
 
 if TYPE_CHECKING:
     from harness_lab_app.schemas import (
@@ -83,6 +89,9 @@ class FindingService:
             title=data.title,
             body=data.body,
             severity=data.severity,
+            status=data.status,
+            origin=data.origin,
+            author=data.author,
             target_repo_id=data.target_repo_id,
             evidence_run_ids=list(data.evidence_run_ids),
             affected_case_ids=list(data.affected_case_ids),
@@ -161,6 +170,99 @@ class FindingService:
             ),
         }
 
+    # --- suggestions ------------------------------------------------------
+
+    def suggestions(self) -> list[dict[str, Any]]:
+        """Patterns the corpus supports, minus the ones already ruled on.
+
+        Computed on demand and never written. A suggestion only reaches the
+        database as the *consequence* of a person accepting or rejecting it,
+        which is what keeps "the lab noticed something" and "the lab claims
+        something" distinct (§14).
+        """
+        from harness_lab_app import suggestions
+        from harness_lab_app.leaderboard_service import LeaderboardService
+        from harness_lab_app.overview_service import OverviewService
+
+        ruled_on = {
+            finding.origin
+            for finding in self.session.exec(select(Finding)).all()
+            if finding.origin
+        }
+        return suggestions.build(
+            LeaderboardService(self.session).list_rows(),
+            score_signal=OverviewService(self.session)._score_signal(),
+            ruled_on=ruled_on,
+        )
+
+    def _suggestion(self, key: str) -> dict[str, Any]:
+        for candidate in self.suggestions():
+            if candidate["key"] == key:
+                return candidate
+        raise FindingNotFoundError(
+            f"No open suggestion with key '{key}'. It may already have been "
+            "accepted or rejected."
+        )
+
+    def accept_suggestion(
+        self,
+        key: str,
+        *,
+        author: str,
+        finding_id: str = "",
+        overrides: dict[str, Any] | None = None,
+    ) -> tuple[Finding, list[str]]:
+        """Turn a suggestion into a finding of record, with a name on it.
+
+        ``author`` is required, and that is the whole point of the method
+        existing. Everything else is editable before acceptance — the operator
+        may rewrite the title, the body and the recommendation — because a
+        finding a person signs must be a finding that person wrote.
+        """
+        from harness_lab_app.schemas import FindingCreate
+
+        author = (author or "").strip()
+        if not author:
+            raise FindingError(
+                "Accepting a suggestion requires an author. A finding nobody "
+                "owns is an assertion nobody has to defend."
+            )
+        suggestion = {**self._suggestion(key), **(overrides or {})}
+        finding, warnings = self.create_finding(
+            FindingCreate(
+                finding_id=finding_id.strip() or _finding_id_for(key),
+                title=str(suggestion["title"]),
+                body=str(suggestion.get("body", "")),
+                severity=FindingSeverity(str(suggestion.get("severity", "medium"))),
+                status=FindingStatus.open,
+                origin=key,
+                author=author,
+                target_repo_id=str(suggestion.get("target_repo_id", "")),
+                evidence_run_ids=list(suggestion.get("evidence_run_ids", [])),
+                affected_case_ids=list(suggestion.get("affected_case_ids", [])),
+                recommendation=str(suggestion.get("recommendation", "")),
+                intervention=str(suggestion.get("intervention", "")),
+            )
+        )
+        finding.accepted_at = datetime.now(UTC)
+        self.session.add(finding)
+        self.session.commit()
+        self.session.refresh(finding)
+        return finding, warnings
+
+    def reject_suggestion(self, key: str, *, author: str, reason: str = "") -> Finding:
+        """Record that a person looked at a suggestion and declined it.
+
+        Written down rather than discarded: the rejection is what stops the
+        pattern being re-suggested every week, and a reviewer six months later
+        deserves to see that somebody already considered it.
+        """
+        suggestion = self._suggestion(key)
+        finding, _ = self.create_finding(
+            _rejection_payload(key, suggestion, author=author, reason=reason)
+        )
+        return finding
+
     # --- assessments ------------------------------------------------------
 
     def list_assessments(self) -> list[Assessment]:
@@ -204,3 +306,28 @@ class FindingService:
     @staticmethod
     def rubric() -> list[dict[str, Any]]:
         return [dimension.__dict__ for dimension in RUBRIC]
+
+
+def _finding_id_for(key: str) -> str:
+    """A slug from a suggestion key: ``regression:cli-v1`` → ``regression-cli-v1``."""
+    slug = re.sub(r"[^a-z0-9-]+", "-", key.lower()).strip("-")
+    return slug[:64] or "suggested-finding"
+
+
+def _rejection_payload(
+    key: str, suggestion: dict[str, Any], *, author: str, reason: str
+) -> FindingCreate:
+    from harness_lab_app.schemas import FindingCreate
+
+    return FindingCreate(
+        finding_id=f"{_finding_id_for(key)}-rejected"[:64],
+        title=str(suggestion["title"]),
+        body=reason or "Reviewed and not taken forward.",
+        severity=FindingSeverity(str(suggestion.get("severity", "medium"))),
+        status=FindingStatus.dismissed,
+        origin=key,
+        author=author,
+        target_repo_id=str(suggestion.get("target_repo_id", "")),
+        evidence_run_ids=list(suggestion.get("evidence_run_ids", [])),
+        affected_case_ids=list(suggestion.get("affected_case_ids", [])),
+    )

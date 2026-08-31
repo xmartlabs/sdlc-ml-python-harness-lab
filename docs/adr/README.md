@@ -64,6 +64,8 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0033 — Put `Experiment` above `Run`, and refuse a design its mode cannot answer](0033-experiment-above-run.md)
 - [0034 — Record every metric against a declared, versioned definition](0034-score-registry.md)
 - [0035 — Make a finding a testable claim, and keep the maturity assessment human](0035-findings-and-manual-maturity-assessment.md)
+- [0036 — Judge every run against the governance surface it actually had](0036-audit-judges-a-run-against-its-own-governance.md)
+- [0037 — Make the regression suite produce experiments, not run them](0037-regression-suite-produces-experiments.md)
 
 ## Why ADRs exist
 

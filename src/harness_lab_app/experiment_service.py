@@ -26,6 +26,7 @@ from harness_lab_app.models import (
     ExperimentMode,
     ExperimentStatus,
     Run,
+    RunConfig,
 )
 from harness_lab_app.run_service import RunService
 from harness_lab_app.schemas import RunConfigCreate
@@ -34,7 +35,13 @@ if TYPE_CHECKING:
     from harness_lab_app.schemas import ExperimentCreate
 
 # Axis fields a condition may fix. Anything else is either shared by the whole
-# experiment (cases, prompt variants, repetitions) or not an axis at all.
+# experiment (cases, repetitions) or not an axis at all.
+#
+# ``prompt_variant`` is an axis on purpose: the governance-loaded variant of a
+# prompt (``sdlc``, ``swe_harness``) IS part of the harness, and the lab's
+# original A/B — bare prompt versus harness-wrapped — is expressed as exactly
+# this axis. An experiment-level ``prompt_variants`` list still exists for the
+# other use: running every arm across several variants as strata.
 CONDITION_FIELDS = frozenset(
     {
         "harness",
@@ -45,6 +52,7 @@ CONDITION_FIELDS = frozenset(
         "harness_source",
         "skills_disabled",
         "skills_extra",
+        "prompt_variant",
         "max_steps",
     }
 )
@@ -137,6 +145,10 @@ def validate_design(
             "skills_disabled",
             "skills_extra",
             "harness",
+            # The governance-loaded prompt is a harness lever like any skill:
+            # naive-vs-sdlc and swe_default-vs-swe_harness are the lab's
+            # founding comparisons.
+            "prompt_variant",
         }
         if len(conditions) > 1 and not harness_axes:
             raise ExperimentDesignError(
@@ -238,6 +250,7 @@ class ExperimentService:
             paired_by_case,
             success_delta,
             summarize_condition,
+            verdict,
         )
 
         experiment = self.get_experiment(experiment_id)
@@ -278,7 +291,13 @@ class ExperimentService:
         }
 
         control = next((c for c in conditions if c.role == ConditionRole.control), None)
-        comparisons = []
+        comparisons: list[dict[str, Any]] = []
+        # Discovery has no control arm by construction (ADR-0028) and must not
+        # acquire one here: a mode that cannot support a causal claim never
+        # renders a control-versus-treatment delta, whatever roles the rows
+        # happen to carry.
+        if experiment.mode == ExperimentMode.discovery:
+            control = None
         if control is not None:
             for condition in conditions:
                 if condition.label == control.label:
@@ -304,11 +323,27 @@ class ExperimentService:
                     }
                 )
 
+        first: dict[str, Any] | None = comparisons[0] if comparisons else None
+        answer = verdict(
+            mode=str(experiment.mode.value),
+            cases=len(experiment.case_ids),
+            repetitions=min(
+                [experiment.repetitions, *experiment.case_repetitions.values()]
+            ),
+            control=summaries[first["control"]] if first else None,
+            treatment=summaries[first["treatment"]] if first else None,
+            success=first["success"] if first else None,
+            case_matrix=first["case_matrix"] if first else None,
+        )
+
         return {
             "experiment_id": experiment_id,
             "question": experiment.question,
             "mode": experiment.mode,
             "repetitions": experiment.repetitions,
+            "case_repetitions": dict(experiment.case_repetitions),
+            "suite_id": experiment.suite_id,
+            "verdict": answer,
             "conditions": [
                 {
                     "label": summary.label,
@@ -356,7 +391,12 @@ class ExperimentService:
                     f"{', '.join(unknown)}. Valid: {', '.join(sorted(CONDITION_FIELDS))}."
                 )
         warnings = validate_design(data.mode, conditions)
-        note = repetition_warning(data.repetitions)
+        # The weakest case governs the caveat: an experiment whose SWE-bench
+        # instance runs once is exploratory *for that case* however many times
+        # the canaries repeat.
+        note = repetition_warning(
+            min([data.repetitions, *data.case_repetitions.values()])
+        )
         if note:
             warnings.append(note)
 
@@ -368,6 +408,12 @@ class ExperimentService:
             case_ids=list(data.case_ids),
             prompt_variants=list(data.prompt_variants),
             repetitions=data.repetitions,
+            case_repetitions={
+                case_id: count
+                for case_id, count in data.case_repetitions.items()
+                if case_id in data.case_ids
+            },
+            suite_id=data.suite_id,
             notes=data.notes,
         )
         self.session.add(experiment)
@@ -384,6 +430,81 @@ class ExperimentService:
         self.session.commit()
         self.session.refresh(experiment)
         return experiment, warnings
+
+    #: What a launch locks for the life of the experiment. Everything here is
+    #: part of what was measured; skills are included because an arm's ablation
+    #: is its identity, not a setting.
+    _LOCKED_FIELDS = (
+        "harness",
+        "executor_model",
+        "planner_model",
+        "prompt_variant",
+        "max_steps",
+        "skills_disabled",
+        "skills_extra",
+    )
+
+    @staticmethod
+    def _locked_value(value: Any) -> Any:
+        return sorted(value) if isinstance(value, list) else value
+
+    def _check_launch_consistency(
+        self, experiment_id: str, configs: list[tuple[str, RunConfigCreate]]
+    ) -> None:
+        """Refuse a relaunch that would mix two configurations in one name."""
+        runs_service = RunService(self.session)
+        reference: dict[tuple[str, str], RunConfig] = {}
+        for run in self.runs(experiment_id):
+            recorded = runs_service.get_run_config(run.run_config_id)
+            if recorded.dry_run:
+                continue
+            reference.setdefault(
+                (recorded.case_id, run.condition_label or ""), recorded
+            )
+        if not reference:
+            return
+        for label, config in configs:
+            prior = reference.get((config.case_id, label))
+            if prior is None:
+                continue
+            diffs = [
+                f"{field}: {self._locked_value(getattr(prior, field))!r} → "
+                f"{self._locked_value(getattr(config, field))!r}"
+                for field in self._LOCKED_FIELDS
+                if self._locked_value(getattr(prior, field))
+                != self._locked_value(getattr(config, field))
+            ]
+            if diffs:
+                raise ExperimentError(
+                    f"Experiment '{experiment_id}' was already launched with a "
+                    f"different configuration for arm '{label}' — "
+                    + "; ".join(diffs)
+                    + ". Mixing configurations inside one experiment files two "
+                    "measurements under one name. Relaunch with the same "
+                    "configuration to add repetitions, or create a new experiment."
+                )
+
+    def launch_config(self, experiment_id: str) -> dict[str, Any] | None:
+        """The shared configuration this experiment's real runs carry.
+
+        Read from the first non-dry run rather than stored separately, so it
+        cannot drift from what actually executed. ``None`` while nothing real
+        has run — a draft is still free to choose.
+        """
+        runs_service = RunService(self.session)
+        for run in self.runs(experiment_id):
+            config = runs_service.get_run_config(run.run_config_id)
+            if config.dry_run:
+                continue
+            return {
+                "harness": config.harness,
+                "executor_model": config.executor_model,
+                "planner_model": config.planner_model,
+                "prompt_variant": config.prompt_variant,
+                "max_steps": config.max_steps,
+                "score_mode": config.score_mode,
+            }
+        return None
 
     def launch(self, experiment_id: str, base: RunConfigCreate) -> list[Run]:
         """Expand the declared design into runs, tagged with their arm.
@@ -410,8 +531,17 @@ class ExperimentService:
                     )
                     payload.update(condition.overrides)
                     config = RunConfigCreate(**payload)
-                    for _ in range(max(1, experiment.repetitions)):
+                    for _ in range(experiment.repetitions_for(case_id)):
                         configs.append((condition.label, config))
+
+        # One experiment, one measurement configuration. A second launch with a
+        # different shared setup (another model, another budget) would file two
+        # different measurements under the same experiment_id, and the summary
+        # would average them as though they were one. Same-config launches stay
+        # allowed — that is how repetitions are added. Dry runs are rehearsals:
+        # they neither lock the configuration nor are blocked by it.
+        if not base.dry_run:
+            self._check_launch_consistency(experiment_id, configs)
 
         # Validate everything before persisting anything — an experiment is one
         # intent, exactly as a batch is (ADR-0023).
@@ -424,6 +554,13 @@ class ExperimentService:
                 config.score_mode,
                 config.target_repo_id,
                 config.harness_source,
+                # The skill axes MUST be part of this key. They are exactly what
+                # a Mode A experiment varies, so without them the treatment arm
+                # dedupes onto its own baseline and its config is never
+                # preflighted — an unknown staged skill then fails at *run*
+                # time, inside one arm, which reads as a treatment effect.
+                tuple(sorted(config.skills_disabled)),
+                tuple(sorted(config.skills_extra)),
             )
             if key in seen:
                 continue

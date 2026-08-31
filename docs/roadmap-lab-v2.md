@@ -376,15 +376,22 @@ Experiment model, mode, declared conditions, repetitions, run grouping, experime
 API. Batch becomes the *execution strategy* of an experiment rather than a parallel
 path; `benchmarks/harness-regression-v1/suite.yaml` becomes a producer of
 experiments, closing the gap noted in
-[known-limitations.md](known-limitations.md#suiteyaml-is-not-wired-to-the-batch-endpoint).
+[known-limitations.md](known-limitations.md#suiteyaml-produces-experiments-not-batches).
 
 *Exit:* a Mode A experiment (control vs treatment, N reps) created, executed and
 grouped end to end, with conditions declared before execution rather than parsed
 back out of a command string. **Met (2026-08-30)** —
 [ADR-0033](adr/0033-experiment-above-run.md): `Experiment` + `ExperimentCondition`,
 `Run.experiment_id` / `condition_label`, and design validation that *refuses* a
-comparison the declared mode cannot answer. `suite.yaml` is still not wired to it —
-the one part of this phase left short.
+comparison the declared mode cannot answer.
+
+`suite.yaml` was the one part left short, and it closed the same day:
+[ADR-0037](adr/0037-regression-suite-produces-experiments.md) makes a suite a
+*producer* of experiments via `POST /api/experiments/from-suite`. The suite supplies
+the cases and their per-case repetitions, the caller supplies the two arms, and the
+suite's `controlled_fields` are enforced against that choice. There is no second
+runner, so validating a harness release is read through the same case matrix as
+every other comparison: **fixed / broken / unchanged**.
 
 ### Phase 5 — Evaluation schema
 
@@ -401,7 +408,11 @@ resolved from the workspace.
 
 *Exit:* every completed run produces named, versioned scores with declared
 provenance (fact / observation / judgement), and an audit of an external target
-quotes that target's governance. **Met (2026-08-30)** —
+quotes that target's governance. **Met (2026-08-30)**, and completed the same day by
+[ADR-0036](adr/0036-audit-judges-a-run-against-its-own-governance.md), which resolves
+the governance surface per run from the workspace that run actually had and persists
+its source, file list and fingerprint with the audit — so a `native` control is never
+scored against rules it did not receive. Original delivery —
 [ADR-0034](adr/0034-score-registry.md): a code-owned registry of 17 definitions,
 three evaluators behind named profiles, `Score` rows keyed `name@version`, and
 `bench_audit` now resolving its rules from the run's workspace for a `native` or
@@ -430,12 +441,16 @@ Optional dependency. Task Completion, Step Efficiency, Tool Correctness. Evaluat
 Plan Quality and Plan Adherence only after the first three prove stable.
 
 *Exit:* trajectory scores appear for an experiment with DeepEval enabled, and the
-lab behaves identically with it disabled. **Partially met (2026-08-30)** — the three
-trajectory definitions are declared, the adapter and the `with_trajectory` profile
-exist, and a deployment without DeepEval is missing three scores rather than behaving
-differently. The adapter reports honestly that it is not wired: mapping a recorded
-trajectory onto DeepEval's test-case shape is the remaining work, and emitting a zero
-instead would confuse "not measured" with "scored badly".
+lab behaves identically with it disabled. **Met (2026-08-30)** — the three trajectory
+metrics are wired end to end: a run's recorded trajectory is mapped onto DeepEval's
+test-case shape, and each score is persisted with its evaluator, adapter version and
+the rubric or judge model behind it. Two of the three are `GEval` rubrics rather than
+DeepEval's own metrics (its task-completion metric reads a *live* trace; the lab
+evaluates archived runs, and step efficiency has no DeepEval metric at all) — both
+are declared `judgement` in the registry, which is what they are. A metric that
+cannot be computed — no DeepEval, no judge model, no trajectory, no declared
+expectation — returns **no score**, never a zero. Plan Quality and Plan Adherence
+stay out, as planned.
 
 ### Phase 8 — Statistical aggregation
 
@@ -463,7 +478,14 @@ Skills, Evaluations, Insights, Settings.
   it shows *where* a treatment helps and where it does nothing.
 
 *Exit:* an experiment can be read and interpreted without opening a single run.
-**Met (2026-08-30)** — an Experiments screen (condition table, per-metric deltas
+**Met (2026-08-30), and reworked on the same date** around *what the user came to
+learn* rather than around the lab's own entities: a Home page whose first question is
+"what do you want to learn?" and whose three answers are the three modes, an
+attention list of only actionable signals, a wizard that cannot express a design the
+lab would refuse, a six-step guided audit for Mode C, an experiment verdict that
+answers the question in ten seconds without ever claiming statistical significance,
+and navigation regrouped as Evaluate / Evidence / Advanced / System with every old
+path redirecting. Original delivery: an Experiments screen (condition table, per-metric deltas
 coloured by *declared direction*, the case matrix), a Findings screen, a Scores panel
 that draws fact, observation and judgement differently, and an Overview that leads
 with harness version, success rate, regressions, median cost and cost-per-success,
@@ -495,8 +517,14 @@ addressed to the target repository rather than to the lab's harness.
 **Met (2026-08-30)** — [ADR-0035](adr/0035-findings-and-manual-maturity-assessment.md):
 `Finding` with evidence, recommendation, intervention and the experiment that settled
 it; `refuted` kept as a first-class outcome. The draft endpoint returns a design to
-review rather than creating one. Findings are authored by a human, not mined from
-audits.
+review rather than creating one.
+
+Extended the same day with **suggested findings**: the corpus is mined for patterns —
+regressions, cases that have never passed, harness items the auditor keeps judging
+unused — and they reach a review queue labelled `suggested`. Accepting one requires a
+name and produces a finding of record; rejecting one is written down so the pattern
+is not re-raised. Nothing auto-promotes, which keeps "the lab noticed something" and
+"the lab claims something" distinct.
 
 ### Phase 11 — Organizational assessment
 

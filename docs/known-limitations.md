@@ -34,12 +34,14 @@ multiplications and a `422`. But `repetitions` itself accepts any positive integ
 so the rejection message can quote an implausible number. Harmless; noted so the
 absence of a field-level bound is not read as an oversight.
 
-### `suite.yaml` is not wired to the batch endpoint
+### `suite.yaml` produces experiments, not batches
 
-`benchmarks/harness-regression-v1/suite.yaml` already models cases × repetitions
-with declarative gates, and is reachable only from the lifecycle CLI. It should
-become a *producer* of batches rather than a second execution path. Deferred, not
-rejected — see ADR-0023.
+`benchmarks/harness-regression-v1/suite.yaml` models cases × repetitions with
+declarative gates. It is now a *producer* of experiments rather than a second
+execution path ([ADR-0037](adr/0037-regression-suite-produces-experiments.md)) — it
+was never wired to the batch endpoint, and no longer needs to be: an experiment is
+the unit above a batch ([ADR-0033](adr/0033-experiment-above-run.md)). The lifecycle
+CLI's own suite path still exists alongside the API route.
 
 ## Run failure reporting
 
@@ -107,13 +109,22 @@ the prerequisite for closing this gap.
 The [v2 roadmap](roadmap-lab-v2.md) is implemented. These are the parts that landed
 deliberately short, so the gap is discovered here rather than in use.
 
-### The DeepEval adapter is declared, not wired
+### DeepEval covers three metrics, and only three
 
-The three trajectory definitions exist in the registry, the `with_trajectory` profile
-exists, and `DeepEvalEvaluator` reports honestly that it is not connected. Mapping a
-recorded trajectory onto DeepEval's test-case shape is the remaining work. It emits
-nothing rather than a zero: "not measured" and "scored badly" are different claims,
-and an aggregate must never confuse them.
+`task_completion`, `step_efficiency` and `tool_correctness` are wired: a run's
+recorded trajectory is mapped onto DeepEval's test-case shape and the results are
+persisted with their evaluator, its adapter version, and the rubric or judge model
+used. Two of the three are `GEval` rubrics rather than DeepEval's own metrics —
+DeepEval's task-completion metric reads a *live* trace and the lab evaluates archived
+runs, and step efficiency has no DeepEval metric at all. Both are declared
+`judgement` in the registry, which is what they are. Plan quality and plan adherence
+are **not** wired, deliberately — the lab owns the
+evaluation model and DeepEval is an adapter to it, so each metric is added only when
+the lab can say what it means.
+
+A run whose trajectory carries too little signal returns **no score**, never a zero:
+"not measured" and "scored badly" are different claims, and an aggregate must never
+confuse them.
 
 ### Runs from before scoring existed have no scores
 
@@ -122,17 +133,29 @@ finished before that landed carry none until someone opens them and presses **Sc
 this run**; they are absent from the corpus aggregate and from any experiment summary
 until then. The Dashboard's "worth attention" panel counts them.
 
-### `suite.yaml` still is not a producer of experiments
+### The regression suite runs through experiments, with one caveat
 
-Noted under Batch runs above, and unchanged by v2: it should generate experiments now
-that they exist, rather than remaining a second execution path reachable only from the
-lifecycle CLI.
+`POST /api/experiments/from-suite` turns a suite into an ordinary
+`harness_evaluation` experiment — the suite supplies the cases and their per-case
+repetitions, the caller supplies the two arms, and everything after that is the
+existing design validation and case matrix
+([ADR-0037](adr/0037-regression-suite-produces-experiments.md)). There is no second
+runner.
 
-### Findings are authored by hand
+What remains: the lifecycle CLI's own suite path still exists alongside it, and a
+suite invocation that varies a field the suite controls is now *refused* rather than
+silently accepted.
 
-The audit already produces per-item verdicts, and mining findings from a run corpus is
-the obvious next step. It was left out on purpose: generated claims with nobody
-accountable for them are the opposite of what a finding is for.
+### Findings are authored by hand, on purpose
+
+The corpus is mined for **suggestions** — regressions, cases that have never passed,
+harness items the auditor keeps judging unused — and they appear in a review queue
+labelled `suggested`. None of them becomes a finding without a person accepting it
+and their name being recorded against it. A rejection is written down too, so the
+same pattern is not re-raised next week.
+
+Nothing here auto-promotes: a generated claim with nobody accountable for it is the
+opposite of what a finding is for.
 
 ### A harness from a third repository is still unsupported
 
@@ -168,9 +191,15 @@ Partly lifted for runs against an external target
 ([ADR-0031](adr/0031-harness-source-is-a-run-condition.md)): `harness_source` picks
 between the lab's harness projected into the target (`injected`) and the target's own
 conventions (`native`), which is enough for a harness A/B on someone else's
-repository. What remains true is the general statement — a harness sourced from a
-*third* repository is still not supported, and the LLM audit still reads the lab's
-governance documents regardless of which condition ran.
+repository. What remains true is the general statement: a harness sourced from a
+*third* repository is still not supported.
+
+The audit half of that gap is closed. Each run is now judged against the governance
+surface it actually had — the target's own for a `native` arm, the injected harness
+for an `injected` one — and the surface's source, file list and fingerprint are
+persisted with the audit
+([ADR-0036](adr/0036-audit-judges-a-run-against-its-own-governance.md)). Audits
+recorded before that carry no surface and say so rather than being backfilled.
 
 This is the deliberate narrowing described in
 [the readiness plan](plans/2026-08-open-source-readiness-and-batch-runs.md), and it

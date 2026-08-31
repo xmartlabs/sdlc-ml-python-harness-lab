@@ -91,6 +91,9 @@ from harness_lab_app.schemas import (
     StagedSkillFileWrite,
     StagedSkillImportRequest,
     StagedSkillUpdate,
+    SuggestionAccept,
+    SuggestionReject,
+    SuiteExperimentCreate,
     SwebenchImportRequest,
     TargetRepositoryCreate,
     TargetRepositoryUpdate,
@@ -923,9 +926,67 @@ def create_app() -> FastAPI:
         """
         return OverviewService(session).build(window_days=max(1, min(window_days, 365)))
 
+    @app.get("/api/attention")
+    def get_attention(session: Session = Depends(get_session)):
+        """What needs attention, in human language, each with a way in (§4)."""
+        from harness_lab_app.attention_service import AttentionService
+
+        return AttentionService(session).build()
+
+    @app.get("/api/evidence-summary")
+    def get_evidence_summary(session: Session = Depends(get_session)):
+        """The handful of figures the home page may carry below the workflows."""
+        from harness_lab_app.attention_service import evidence_summary
+
+        return evidence_summary(session)
+
     @app.get("/api/findings")
     def list_findings(session: Session = Depends(get_session)):
         return FindingService(session).list_findings()
+
+    @app.get("/api/findings/suggestions")
+    def list_finding_suggestions(session: Session = Depends(get_session)):
+        """Patterns the corpus supports — proposals, not findings (§14).
+
+        Computed on demand and never written. Nothing here is a finding of
+        record until a person accepts it and their name goes on it.
+        """
+        return {"suggestions": FindingService(session).suggestions()}
+
+    @app.post("/api/findings/suggestions/{key:path}/accept", status_code=201)
+    def accept_finding_suggestion(
+        key: str, data: SuggestionAccept, session: Session = Depends(get_session)
+    ):
+        try:
+            finding, warnings = FindingService(session).accept_suggestion(
+                key,
+                author=data.author,
+                finding_id=data.finding_id,
+                overrides=data.overrides,
+            )
+        except FindingNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except FindingError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {**finding.model_dump(), "warnings": warnings}
+
+    @app.post("/api/findings/suggestions/{key:path}/reject", status_code=201)
+    def reject_finding_suggestion(
+        key: str, data: SuggestionReject, session: Session = Depends(get_session)
+    ):
+        """Record the rejection rather than discarding it.
+
+        A pattern somebody has already considered and declined should not come
+        back next week as though it were new.
+        """
+        try:
+            return FindingService(session).reject_suggestion(
+                key, author=data.author, reason=data.reason
+            )
+        except FindingNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except FindingError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/findings/{finding_id}")
     def get_finding(finding_id: str, session: Session = Depends(get_session)):
@@ -1061,6 +1122,10 @@ def create_app() -> FastAPI:
             **experiment.model_dump(),
             "conditions": service.conditions(experiment_id),
             "runs": service.runs(experiment_id),
+            # The configuration the experiment's real runs already carry, so a
+            # relaunch reuses it instead of asking again — the second ask is
+            # how two measurements end up filed under one name.
+            "launch_config": service.launch_config(experiment_id),
         }
 
     @app.get("/api/experiments/{experiment_id}/summary")
@@ -1081,6 +1146,59 @@ def create_app() -> FastAPI:
         except ExperimentDesignError as exc:
             # A design that contradicts its mode is a 422, not a 500: the request
             # was well-formed, the *experiment* is not answerable.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ExperimentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {**experiment.model_dump(), "warnings": warnings}
+
+    @app.post("/api/experiments/from-suite", status_code=201)
+    def create_experiment_from_suite(
+        data: SuiteExperimentCreate, session: Session = Depends(get_session)
+    ):
+        """Turn a regression suite into an experiment (§13).
+
+        Deliberately routed through the ordinary creation path: a suite run is a
+        `harness_evaluation` experiment, validated by the same design rules and
+        read through the same case matrix. The suite contributes only the
+        design — which cases, repeated how often.
+        """
+        from harness_lab_app.harness_lifecycle.suite import (
+            load_default_suite,
+        )
+        from harness_lab_app.harness_lifecycle.suite_experiment import (
+            SuiteArm,
+            SuiteExperimentError,
+            experiment_from_suite,
+        )
+
+        try:
+            suite = load_default_suite(get_settings().repo_root, data.suite_id)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(
+                status_code=404, detail=f"Unknown suite '{data.suite_id}': {exc}"
+            ) from exc
+
+        try:
+            payload = experiment_from_suite(
+                suite,
+                experiment_id=data.experiment_id,
+                control=SuiteArm(
+                    label=data.control.label,
+                    overrides=data.control.overrides,
+                    description=data.control.description,
+                ),
+                treatment=SuiteArm(
+                    label=data.treatment.label,
+                    overrides=data.treatment.overrides,
+                    description=data.treatment.description,
+                ),
+                prompt_variant=data.prompt_variant,
+                question=data.question,
+                name=data.name,
+                notes=data.notes,
+            )
+            experiment, warnings = ExperimentService(session).create_experiment(payload)
+        except SuiteExperimentError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except ExperimentError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1148,6 +1266,22 @@ def create_app() -> FastAPI:
         except TargetNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(status_code=204)
+
+    @app.get("/api/targets/{target_id}/readiness")
+    def target_readiness(target_id: str, session: Session = Depends(get_session)):
+        """Step 2 of the guided audit: what this repository already has.
+
+        Reads the repository rather than the lab's expectations of it. Anything
+        it cannot observe is reported as "Not detected", never inferred — an
+        audit whose opening page overstates what a client has is worse than no
+        audit at all.
+        """
+        from harness_lab_app.readiness_service import ReadinessService
+
+        try:
+            return ReadinessService(session).build(target_id)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/targets/{target_id}/resolve")
     def resolve_target_ref(
@@ -1431,6 +1565,74 @@ def create_app() -> FastAPI:
         return RunService(session).score_run(
             run_id, data.score, data.interventions, data.notes
         )
+
+    @app.get("/api/runs/{run_id}/context")
+    def get_run_context(run_id: str, session: Session = Depends(get_session)):
+        """What condition this run *was* — the questions asked before the logs.
+
+        A run page that opens with stdout answers "what happened inside the
+        container?". Before that is worth reading, a person needs to know which
+        experiment this arm belongs to, which repository at which commit it
+        worked on, and whose governance the agent could see. Those live across
+        three tables; composing them here keeps the frontend from having to
+        know that.
+        """
+        from harness_lab_app.models import Case, Experiment, TargetRepository
+
+        service = RunService(session)
+        try:
+            run = service.get_run(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        config = service.get_run_config(run.run_config_id)
+
+        experiment = None
+        if run.experiment_id:
+            experiment = session.exec(
+                select(Experiment).where(Experiment.experiment_id == run.experiment_id)
+            ).first()
+
+        case = session.exec(select(Case).where(Case.case_id == config.case_id)).first()
+        target = None
+        if config.target_repo_id:
+            target = session.exec(
+                select(TargetRepository).where(
+                    TargetRepository.target_id == config.target_repo_id
+                )
+            ).first()
+
+        return {
+            "run_id": run.run_id,
+            "experiment_id": run.experiment_id or "",
+            "experiment_question": experiment.question if experiment else "",
+            "experiment_mode": experiment.mode.value if experiment else "",
+            "condition_label": run.condition_label or "",
+            "case_id": config.case_id,
+            "case_name": case.name if case else "",
+            "prompt_variant": config.prompt_variant,
+            "harness": config.harness,
+            # The condition ADR-0031 makes a first-class axis: whether the agent
+            # saw the target repository's own setup or the one the lab injected.
+            "harness_source": config.harness_source.value,
+            "executor_model": config.executor_model or "",
+            "planner_model": config.planner_model or "",
+            "target_repo_id": config.target_repo_id,
+            "target_name": target.name if target else "",
+            "target_url": target.repository_url if target else "",
+            "target_ref": config.target_ref,
+            # The immutable fact. The ref can move; this is what makes the run
+            # reproducible (ADR-0029).
+            "target_commit": config.target_commit,
+            "validation_commands": (
+                list(target.validation_commands)
+                if target and target.validation_commands
+                else list(case.validation_commands)
+                if case
+                else []
+            ),
+            "max_steps": config.max_steps,
+            "parent_run_id": run.parent_run_id or "",
+        }
 
     @app.get("/api/runs/{run_id}/validation")
     def get_validation(run_id: str, session: Session = Depends(get_session)):

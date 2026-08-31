@@ -240,14 +240,19 @@ _BEHAVIORAL = [
         kind=NUMERIC,
         provenance=OBSERVATION,
         direction=HIGHER_IS_BETTER,
-        version="v1",
+        # v2 changed the denominator: it is now the governance surface the run
+        # actually had (ADR-0031), not a fixed list of the lab's own documents.
+        # A `native` run is no longer marked down for not reading files that
+        # were never in its workspace, so v1 and v2 values are not comparable.
+        version="v2",
         source="attribution",
         minimum=0.0,
         maximum=1.0,
         description=(
-            "Share of governance documents the agent actually opened, parsed "
-            "from step logs. A lower bound: context-injected content leaves no "
-            "read event."
+            "Share of the run's own governance documents the agent actually "
+            "opened, parsed from step logs. The denominator is that run's "
+            "resolved governance surface. A lower bound: context-injected "
+            "content leaves no read event."
         ),
     ),
 ]

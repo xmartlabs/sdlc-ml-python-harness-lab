@@ -31,6 +31,13 @@ dependencies = [
     "jinja2>=3.1",
 ]
 
+# Optional: three trajectory scores (task completion, step efficiency, tool
+# correctness). A lab without it is missing those three scores and behaves
+# identically otherwise — the adapter returns no score rather than a zero, so
+# nothing downstream reads "not installed" as "did badly".
+[project.optional-dependencies]
+deepeval = ["deepeval>=3.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

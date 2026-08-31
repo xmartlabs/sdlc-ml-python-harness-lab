@@ -76,6 +76,36 @@ export type RunRecord = {
   parent_run_id?: string | null;
 };
 
+/**
+ * The condition a run *was*, composed from run, config, experiment and target.
+ *
+ * §16: a run page leads with this and keeps the logs available further down.
+ * Which arm of which experiment, against which commit, with whose governance,
+ * is what makes a log worth reading in the first place.
+ */
+export type RunContext = {
+  run_id: string;
+  experiment_id: string;
+  experiment_question: string;
+  experiment_mode: string;
+  condition_label: string;
+  case_id: string;
+  case_name: string;
+  prompt_variant: string;
+  harness: string;
+  harness_source: string;
+  executor_model: string;
+  planner_model: string;
+  target_repo_id: string;
+  target_name: string;
+  target_url: string;
+  target_ref: string;
+  target_commit: string;
+  validation_commands: string[];
+  max_steps: number;
+  parent_run_id: string;
+};
+
 export type RunEventRecord = {
   id: number;
   run_id: string;
@@ -127,6 +157,17 @@ export type AttributionRecord = {
     skills_available?: string[];
     skills_consulted?: string[];
     skills_note?: string;
+    /**
+     * Which repository the coverage denominator came from (ADR-0036).
+     * `target_workspace` = the run's own archived workspace, `lab_root` = the
+     * repository the lab itself runs from. 2/9 against a client's documents
+     * and 2/9 against the lab's are different measurements, and without this
+     * they render identically.
+     */
+    governance_source?: string;
+    governance_fingerprint?: string;
+    harness_source?: string;
+    governance_warning?: string;
   };
   summary: string;
   steps_parsed: number;
@@ -145,12 +186,27 @@ export type AuditFindings = {
   parse_error?: string;
 };
 
+/** The governance surface an audit judged one run against (ADR-0036). */
+export type GovernanceSurface = {
+  source: string;
+  root: string;
+  harness_source: string;
+  rules_file: string;
+  files: string[];
+  file_count: number;
+  fingerprint: string;
+  truncated: boolean;
+  warning: string;
+};
+
 export type AuditRecord = {
   run_id: string;
   auditor_model: string;
   status: "running" | "done" | "failed";
   markdown: string;
   findings_json?: AuditFindings;
+  /** Empty for audits recorded before the surface was pinned per run. */
+  governance_json?: GovernanceSurface | Record<string, never>;
   error: string | null;
   created_at: string;
   updated_at: string;
@@ -365,6 +421,21 @@ export type ExperimentRecord = {
   warnings?: string[];
 };
 
+/**
+ * The shared configuration an experiment's real runs were launched with.
+ * Null while the experiment is a draft (dry-run rehearsals do not count).
+ * Once set, the backend refuses a relaunch that differs — so the UI shows
+ * this instead of asking for the configuration a second time.
+ */
+export type LaunchConfigSummary = {
+  harness: string;
+  executor_model: string | null;
+  planner_model: string | null;
+  prompt_variant: string;
+  max_steps: number;
+  score_mode: string;
+};
+
 export type ConditionRecord = {
   label: string;
   role: ConditionRole;
@@ -411,11 +482,43 @@ export type CaseMatrixRow = {
   movement: "fixed" | "broken" | "unchanged" | "incomplete";
 };
 
+/** One number worth putting at the top of the page, with both arms' values. */
+export type VerdictHighlight = {
+  label: string;
+  metric: string;
+  control: number | null;
+  treatment: number | null;
+};
+
+/**
+ * The ten-second answer, computed on the backend.
+ *
+ * Deliberately not assembled in the browser: what an experiment is allowed to
+ * claim follows from its mode and its repetition count, and that rule belongs
+ * next to the design validation that enforces it — not in a template.
+ */
+export type VerdictBlock = {
+  /** False for any mode that cannot support a causal claim. */
+  causal: boolean;
+  headline: string;
+  claim: string;
+  /** "exploratory" … "stronger evidence". Never "significant". */
+  strength: string;
+  /** e.g. "12 cases x 5 repetitions". */
+  evidence: string;
+  highlights: VerdictHighlight[];
+  movements: { fixed: number; broken: number; unchanged: number; incomplete: number };
+  caveats: string[];
+};
+
 export type ExperimentSummary = {
   experiment_id: string;
   question: string;
   mode: ExperimentMode;
   repetitions: number;
+  case_repetitions?: Record<string, number>;
+  suite_id?: string | null;
+  verdict?: VerdictBlock;
   conditions: ConditionSummary[];
   comparisons: {
     control: string;
@@ -432,6 +535,7 @@ export type FindingRecord = {
   body: string;
   severity: "low" | "medium" | "high";
   status:
+    | "suggested"
     | "open"
     | "proposed"
     | "experiment_running"
@@ -445,7 +549,99 @@ export type FindingRecord = {
   intervention: string;
   experiment_id: string | null;
   outcome: string;
+  /** The suggestion key this finding came from, empty when a person wrote it. */
+  origin?: string;
+  /** Who put their name on it. Required to accept a suggestion. */
+  author?: string;
+  accepted_at?: string | null;
   warnings?: string[];
+};
+
+/**
+ * A pattern the lab noticed. Not a finding, and the distinction is the point:
+ * nothing here is a claim until a person accepts it and their name goes on it.
+ */
+export type SuggestionRecord = {
+  key: string;
+  title: string;
+  body: string;
+  severity: "low" | "medium" | "high";
+  recommendation: string;
+  intervention: string;
+  target_repo_id: string;
+  evidence_run_ids: string[];
+  affected_case_ids: string[];
+  source: string;
+  status: "suggested";
+};
+
+/** One thing worth doing, with the way into it attached. */
+export type AttentionItem = {
+  kind: string;
+  severity: "critical" | "warning" | "info";
+  count: number;
+  headline: string;
+  detail: string;
+  action: string;
+  route: string;
+};
+
+export type AttentionFeed = {
+  items: AttentionItem[];
+  clear: boolean;
+};
+
+/** The five or six numbers the home page is allowed to show. */
+export type EvidenceSummary = {
+  experiments_active: number;
+  repositories: number;
+  cases: number;
+  success: { rate: number | null; n: number; note: string };
+  // Field names mirror `overview_service` exactly. They carry their unit in the
+  // name, and a type that renamed them would compile happily while reading
+  // `undefined` off every payload.
+  cost: {
+    median_usd: number | null;
+    total_usd: number | null;
+    cost_per_success: number | null;
+    successes: number;
+    n: number;
+  };
+  findings_open: number;
+  harness_version: string | null;
+  window_days: number;
+};
+
+/** One readiness line. `unknown` means "we could not look", never "absent". */
+export type ReadinessCheck = {
+  label: string;
+  status: "ok" | "missing" | "unknown";
+  detail: string;
+  items: string[];
+};
+
+export type ReadinessReport = {
+  target_id: string;
+  name: string;
+  repository_url: string;
+  ref: string;
+  commit: string | null;
+  detected: {
+    rules_files: string[];
+    skills: string[];
+    agents: string[];
+    commands: string[];
+    governance_docs: string[];
+    memory: string[];
+    adrs: string[];
+    ci_workflows: string[];
+    test_markers: string[];
+  } | null;
+  read_error: string;
+  checks: ReadinessCheck[];
+  /** Narrowly: a run would execute and be scored. Not a governance verdict. */
+  ready: boolean;
+  blocking: string[];
 };
 
 /** One recorded metric. `provenance` is the field that must reach the eye. */

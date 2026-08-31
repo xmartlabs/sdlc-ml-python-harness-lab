@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../api";
+import { ProvenanceBadge, ProvenanceLegend } from "./ProvenanceBadge";
 import type { ScoreRecord } from "../types";
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -8,19 +9,6 @@ const CATEGORY_LABEL: Record<string, string> = {
   efficiency: "Efficiency",
   trajectory: "Trajectory",
   behavioral: "Behaviour"
-};
-
-/**
- * The three kinds of claim, drawn differently on purpose.
- *
- * `test_pass_rate = 1.0` is a command's exit status. `skill_adherence = 0.81`
- * is a model's opinion. Once both are numbers in a table they look identical,
- * and the opinion borrows the authority of the fact.
- */
-const PROVENANCE_HINT: Record<string, string> = {
-  fact: "a command exited — reproducible without judgement",
-  observation: "parsed from the run's artifacts — true of the record",
-  judgement: "a model's opinion — defensible, not checkable"
 };
 
 function displayValue(score: ScoreRecord): string {
@@ -79,7 +67,9 @@ export function ScoresPanel({ runId }: { runId: string }) {
           records them against the versioned registry.
         </p>
       ) : (
-        Object.entries(byCategory).map(([category, rows]) => (
+        <>
+        <ProvenanceLegend />
+        {Object.entries(byCategory).map(([category, rows]) => (
           <div key={category}>
             <h4>{CATEGORY_LABEL[category] ?? category}</h4>
             <table className="data-table">
@@ -91,11 +81,8 @@ export function ScoresPanel({ runId }: { runId: string }) {
                       <span className="muted"> @{score.version}</span>
                     </td>
                     <td className="mono">{displayValue(score)}</td>
-                    <td className={`small provenance-${score.provenance}`}>
-                      {score.provenance}
-                      <div className="muted small">
-                        {PROVENANCE_HINT[score.provenance]}
-                      </div>
+                    <td className="small">
+                      <ProvenanceBadge provenance={score.provenance} />
                     </td>
                     <td className="muted small">{score.reason}</td>
                   </tr>
@@ -103,7 +90,8 @@ export function ScoresPanel({ runId }: { runId: string }) {
               </tbody>
             </table>
           </div>
-        ))
+        ))}
+        </>
       )}
     </section>
   );

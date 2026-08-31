@@ -14,10 +14,12 @@ from harness_lab_app.statistics import (
     aggregate_values,
     compare,
     confidence_interval,
+    evidence_strength,
     paired_by_case,
     repetition_warnings,
     success_delta,
     summarize_condition,
+    verdict,
 )
 
 
@@ -184,3 +186,152 @@ def test_no_confidence_interval_below_three_observations(values):
 def test_an_interval_brackets_the_mean():
     low, high = confidence_interval([1.0, 2.0, 3.0, 4.0])
     assert low < 2.5 < high
+
+
+# --------------------------------------------------------------------------
+# The ten-second answer (§10)
+# --------------------------------------------------------------------------
+
+
+def _pair(control_passes, treatment_passes, *, reps=5):
+    control = _arm("native", [2.0] * reps, control_passes)
+    treatment = _arm("injected", [1.5] * reps, treatment_passes)
+    return control, treatment
+
+
+def test_discovery_never_produces_a_causal_verdict():
+    """Mode C describes a repository; it concludes nothing about a change."""
+    answer = verdict(mode="discovery", cases=6, repetitions=1)
+
+    assert answer["causal"] is False
+    assert answer["headline"] == "Exploratory — no comparison"
+    assert "no causal claim" in answer["claim"]
+    assert answer["highlights"] == []
+
+
+def test_cross_repo_reports_per_repository_and_says_so():
+    """Mode B varies the repository, so the arms are not pooled into a result."""
+    answer = verdict(mode="cross_repo", cases=4, repetitions=5)
+
+    assert answer["causal"] is False
+    assert answer["headline"] == "Per-repository result"
+    assert any("not pooled" in caveat for caveat in answer["caveats"])
+
+
+def test_a_clear_move_over_enough_repetitions_is_a_likely_improvement():
+    control, treatment = _pair(
+        [False, False, True, True, False], [True, True, True, True, True]
+    )
+    answer = verdict(
+        mode="harness_evaluation",
+        cases=1,
+        repetitions=5,
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+    )
+
+    assert answer["causal"] is True
+    assert answer["headline"] == "Likely improvement"
+    assert answer["strength"] == "useful comparison"
+    assert answer["evidence"] == "1 case \u00d7 5 repetitions"
+    # Never the vocabulary of proof.
+    assert "significant" not in answer["claim"].lower()
+
+
+def test_the_same_move_over_two_repetitions_is_only_observed():
+    control, treatment = _pair([False, False], [True, True], reps=2)
+    answer = verdict(
+        mode="harness_evaluation",
+        cases=1,
+        repetitions=2,
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+    )
+
+    assert answer["headline"] == "Improvement observed"
+    assert answer["strength"] == "exploratory comparison"
+    assert "within observed variance" in answer["caveats"][0].lower()
+
+
+def test_a_drop_is_named_a_regression():
+    control, treatment = _pair(
+        [True, True, True, True, True], [False, False, True, True, True]
+    )
+    answer = verdict(
+        mode="harness_evaluation",
+        cases=1,
+        repetitions=8,
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+    )
+
+    assert answer["headline"] == "Likely regression"
+
+
+def test_an_aggregate_gain_still_reports_the_cases_it_broke():
+    """ "+8 points" must never be shown without "and broke two cases"."""
+    control, treatment = _pair(
+        [False, False, False, True, True], [True, True, True, True, True]
+    )
+    matrix = paired_by_case(
+        {"a": False, "b": True, "c": True, "d": None},
+        {"a": True, "b": False, "c": True, "d": None},
+    )
+    answer = verdict(
+        mode="harness_evaluation",
+        cases=4,
+        repetitions=5,
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+        case_matrix=matrix,
+    )
+
+    assert answer["movements"] == {
+        "fixed": 1,
+        "broken": 1,
+        "unchanged": 1,
+        "incomplete": 1,
+    }
+    assert any("fail under injected" in caveat for caveat in answer["caveats"])
+    assert any("no paired outcome" in caveat for caveat in answer["caveats"])
+
+
+def test_an_unscored_experiment_says_so_instead_of_guessing():
+    answer = verdict(mode="harness_evaluation", cases=3, repetitions=5)
+
+    assert answer["headline"] == "Not enough evidence yet"
+    assert answer["causal"] is False
+
+
+def test_headline_metrics_lead_with_success_then_cost():
+    control, treatment = _pair([True] * 5, [True] * 5)
+    answer = verdict(
+        mode="harness_evaluation",
+        cases=1,
+        repetitions=5,
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+    )
+
+    labels = [item["label"] for item in answer["highlights"]]
+    assert labels[0] == "Success"
+    assert "Cost usd" in labels
+    assert answer["headline"] == "No difference observed"
+
+
+@pytest.mark.parametrize(
+    ("reps", "word"),
+    [
+        (1, "exploratory"),
+        (3, "exploratory comparison"),
+        (6, "useful comparison"),
+        (12, "stronger evidence"),
+    ],
+)
+def test_evidence_strength_uses_prudent_words_only(reps, word):
+    assert evidence_strength(reps) == word

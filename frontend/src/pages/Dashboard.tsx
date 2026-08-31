@@ -242,7 +242,7 @@ function Overview({ report }: { report: OverviewReport }) {
             )}
             {report.findings.open > 0 && (
               <li>
-                {report.findings.open} open <Link to="/findings">finding(s)</Link>{" "}
+                {report.findings.open} open <Link to="/evidence/findings">finding(s)</Link>{" "}
                 with nothing testing them yet.
               </li>
             )}

@@ -1,5 +1,6 @@
 import type {
   ArtifactRecord,
+  AttentionFeed,
   AttributionRecord,
   AuditRecord,
   ImprovementsDoc,
@@ -11,10 +12,12 @@ import type {
   DocContent,
   ExperimentRecord,
   ExperimentSummary,
+  LaunchConfigSummary,
   FindingRecord,
   DocEntry,
   EnvSettings,
   EnvUpdateResult,
+  EvidenceSummary,
   GatewayModelRecord,
   GatewayTestResult,
   HarnessSkill,
@@ -30,6 +33,7 @@ import type {
   ModelCatalog,
   OverviewReport,
   OfficialReferenceRow,
+  ReadinessReport,
   GroupIssueResult,
   ProposalIssue,
   RunConfigPayload,
@@ -41,6 +45,7 @@ import type {
   SaveImprovementsResult,
   SavedProposalRecord,
   SessionState,
+  RunContext,
   RunEventRecord,
   RunRecord,
   SandboxRecord,
@@ -49,6 +54,7 @@ import type {
   StagedSkillImportPreview,
   StagedSkillPromoteResult,
   StagedSkillRecord,
+  SuggestionRecord,
   SwebenchProInstance,
   TargetCreatePayload,
   TargetRecord,
@@ -242,13 +248,44 @@ export const api = {
       method: "DELETE"
     }),
   getOverview: () => request<OverviewReport>("/api/overview"),
+  // The home page's two calls. Kept separate because they answer different
+  // questions: what should I do next, and what does the lab currently hold.
+  getRunContext: (runId: string) => request<RunContext>(`/api/runs/${runId}/context`),
+  getAttention: () => request<AttentionFeed>("/api/attention"),
+  getEvidenceSummary: () => request<EvidenceSummary>("/api/evidence-summary"),
   listExperiments: () => request<ExperimentRecord[]>("/api/experiments"),
   getExperiment: (id: string) =>
-    request<ExperimentRecord & { conditions: ConditionRecord[]; runs: unknown[] }>(
-      `/api/experiments/${id}`
-    ),
+    request<
+      ExperimentRecord & {
+        conditions: ConditionRecord[];
+        runs: unknown[];
+        launch_config: LaunchConfigSummary | null;
+      }
+    >(`/api/experiments/${id}`),
   createExperiment: (payload: unknown) =>
     request<ExperimentRecord>("/api/experiments", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  /**
+   * A regression suite, as an experiment (§13).
+   *
+   * The suite contributes the design — which cases, repeated how often — and
+   * the caller contributes the harness change. There is no second runner: what
+   * comes back is an ordinary `harness_evaluation` experiment, read through the
+   * same case matrix as everything else.
+   */
+  createExperimentFromSuite: (payload: {
+    experiment_id: string;
+    suite_id?: string;
+    control: { label: string; description?: string; overrides: Record<string, unknown> };
+    treatment: { label: string; description?: string; overrides: Record<string, unknown> };
+    prompt_variant?: string;
+    question?: string;
+    name?: string;
+    notes?: string;
+  }) =>
+    request<ExperimentRecord & { warnings?: string[] }>("/api/experiments/from-suite", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
@@ -274,6 +311,23 @@ export const api = {
     request<Record<string, unknown>>(`/api/findings/${id}/experiment-draft`, {
       method: "POST"
     }),
+  listSuggestions: () =>
+    request<{ suggestions: SuggestionRecord[] }>("/api/findings/suggestions"),
+  // Accepting writes a finding with the accepter's name on it; rejecting
+  // writes the refusal down so the pattern is not offered again.
+  acceptSuggestion: (
+    key: string,
+    payload: { author: string; finding_id?: string; overrides?: Record<string, unknown> }
+  ) =>
+    request<{ finding: FindingRecord; warnings: string[] }>(
+      `/api/findings/suggestions/${encodeFilePath(key)}/accept`,
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
+  rejectSuggestion: (key: string, payload: { author: string; reason?: string }) =>
+    request<FindingRecord>(
+      `/api/findings/suggestions/${encodeFilePath(key)}/reject`,
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
   getScoreDefinitions: () =>
     request<{
       count: number;
@@ -309,6 +363,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ref })
     }),
+  // Step 2 of the guided audit: what this repository already has, read from
+  // the repository rather than assumed.
+  getTargetReadiness: (targetId: string) =>
+    request<ReadinessReport>(`/api/targets/${targetId}/readiness`),
   deriveCases: (targetId: string, limit = 20) =>
     request<CaseCandidates>(
       `/api/targets/${targetId}/derive-cases?limit=${limit}`,

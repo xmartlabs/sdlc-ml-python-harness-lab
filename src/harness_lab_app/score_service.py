@@ -6,6 +6,9 @@ from typing import Any
 
 from sqlmodel import Session, select
 
+from harness_lab_app import trajectory as trajectory_module
+from harness_lab_app.attribution import read_step_events, read_step_logs
+from harness_lab_app.attribution_service import AttributionService
 from harness_lab_app.case_service import CaseService
 from harness_lab_app.config import get_settings
 from harness_lab_app.evaluation import EvaluationContext, run_profile
@@ -105,14 +108,29 @@ class ScoreService:
 
         expected: tuple[str, ...] = ()
         forbidden: tuple[str, ...] = ()
+        task = ""
+        expected_tools: tuple[str, ...] = ()
         try:
             case = CaseService(self.session).get_case(config.case_id)
             expected = tuple(case.files_expected)
             forbidden = tuple(case.files_forbidden)
+            task = case.prompt_variants.get(config.prompt_variant) or case.description
+            expected_tools = trajectory_module.expected_tools_for(
+                files_expected=expected,
+                validation_commands=tuple(case.validation_commands),
+            )
         except ValueError:
             # A run whose case was deleted still has facts worth scoring; only
             # the surface checks drop out.
             pass
+
+        # The harness-behaviour evaluator reads read-coverage off attribution,
+        # and that coverage is only meaningful against the run's own governance
+        # surface — which is what AttributionService resolves (ADR-0031).
+        attribution = AttributionService(self.session).get_attribution(run_id)
+
+        event_lines, _ = read_step_events(run_dir)
+        log_text, _ = read_step_logs(run_dir)
 
         return EvaluationContext(
             run_id=run_id,
@@ -126,7 +144,13 @@ class ScoreService:
                 else None
             ),
             audit_findings=audit.findings_json if audit else None,
-            attribution=None,
+            attribution=dict(attribution.harness_usage) if attribution else None,
+            trajectory=trajectory_module.build(
+                event_lines=event_lines,
+                log_text=log_text,
+                task=task,
+                expected_tools=expected_tools,
+            ),
             diff_text=diff_text,
             files_expected=expected,
             files_forbidden=forbidden,

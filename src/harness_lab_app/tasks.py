@@ -1041,7 +1041,10 @@ def audit_run(run_id: str, auditor_model: str | None = None) -> None:
             markdown = service.read_audit_markdown(run_id)
             if markdown:
                 service.store_result(
-                    run_id, markdown, findings=service.read_audit_findings(run_id)
+                    run_id,
+                    markdown,
+                    findings=service.read_audit_findings(run_id),
+                    governance=service.read_audit_governance(run_id),
                 )
             else:
                 service.store_error(run_id, "Audit finished but wrote no audit.md")

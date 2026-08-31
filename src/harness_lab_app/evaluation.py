@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 from harness_lab_app.scores import get_definition
@@ -29,6 +29,11 @@ class ScoreValue:
     value: float | bool | str | None
     reason: str = ""
     confidence: float | None = None
+    # Who computed it and with what. `provenance` on the definition says what
+    # *kind* of claim this is; this says which instrument made it, so a rubric
+    # or judge-model change is visible on the value rather than only in a
+    # changelog.
+    provenance_detail: dict[str, Any] = field(default_factory=dict)
 
     def as_row(self) -> dict[str, Any]:
         """Materialize against the registry, so nothing undeclared is stored."""
@@ -41,6 +46,7 @@ class ScoreValue:
             "source": definition.source,
             "reason": self.reason,
             "confidence": self.confidence,
+            "provenance_json": dict(self.provenance_detail),
             "value_num": None,
             "value_bool": None,
             "value_text": None,
@@ -239,7 +245,11 @@ class HarnessBehaviorEvaluator:
                     len(read) / len(available)
                     if isinstance(read, list)
                     else float(read) / float(len(available)),
-                    reason="parsed from step logs (a lower bound)",
+                    reason=(
+                        f"parsed from step logs (a lower bound); denominator is "
+                        f"the run's {attribution.get('governance_source') or 'own'}"
+                        f" governance surface"
+                    ),
                 )
             )
         return scores
@@ -261,51 +271,44 @@ class DeepEvalEvaluator:
     this repository declares, and a deployment without it is missing three
     scores rather than behaving differently.
 
-    A missing dependency is reported, never silently treated as a zero score —
-    "we did not measure this" and "this scored badly" are different claims and
-    an aggregate must never confuse them.
+    A missing dependency, a missing judge model, a run with no recorded
+    trajectory and a case with no declared expectation are all reported as
+    *skips*, never as zero scores — "we did not measure this" and "this scored
+    badly" are different claims and an aggregate must never confuse them. The
+    reasons are readable on :attr:`skipped`, one per metric.
     """
 
     id = "deepeval"
 
-    #: Set by :meth:`evaluate` so callers can explain an empty result.
-    unavailable_reason = ""
-
-    def _metrics(self):
-        try:
-            from deepeval.metrics import (
-                TaskCompletionMetric,
-                ToolCorrectnessMetric,
-            )
-        except ImportError:
-            return None
-        return {
-            "task_completion": TaskCompletionMetric,
-            "tool_correctness": ToolCorrectnessMetric,
-        }
+    def __init__(self) -> None:
+        #: Set by :meth:`evaluate` so callers can explain an empty result.
+        self.unavailable_reason: str = ""
+        #: ``{metric name: why it produced no value}`` for the last evaluation.
+        self.skipped: dict[str, str] = {}
 
     def evaluate(self, context: EvaluationContext) -> list[ScoreValue]:
-        metrics = self._metrics()
-        if metrics is None:
-            self.unavailable_reason = (
-                "DeepEval is not installed; trajectory scores were not computed. "
-                "Install the `deepeval` extra to enable them."
-            )
-            return []
-        trajectory = (context.trajectory or {}).get("steps") or []
-        if not trajectory:
-            self.unavailable_reason = (
-                "No agent trajectory was recorded for this run, so trajectory "
-                "metrics have nothing to read."
-            )
-            return []
-        # Wiring the recorded trajectory into DeepEval's test-case shape is the
-        # remaining work; the seam, the declarations and the honest empty result
-        # are what this phase commits to.
+        from harness_lab_app.deepeval_adapter import measure
+
+        outcomes = measure(context.trajectory)
+        self.skipped = {
+            outcome.name: outcome.skipped_reason
+            for outcome in outcomes
+            if not outcome.measured
+        }
+        # One line for a caller that only wants to say why the section is empty.
         self.unavailable_reason = (
-            "DeepEval is installed but the trajectory adapter is not wired yet."
+            "; ".join(sorted(set(self.skipped.values()))) if self.skipped else ""
         )
-        return []
+        return [
+            ScoreValue(
+                outcome.name,
+                outcome.value,
+                reason=outcome.reason,
+                provenance_detail=outcome.provenance,
+            )
+            for outcome in outcomes
+            if outcome.measured
+        ]
 
 
 # Named sets of evaluators. A profile is what an experiment declares, so two

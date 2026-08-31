@@ -4,10 +4,12 @@ import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
+import { ReadinessReportView } from "../components/ReadinessReportView";
 import { Spinner } from "../components/Spinner";
 import type {
   CaseCandidate,
   CaseCandidates,
+  ReadinessReport,
   TargetRecord,
   TargetResolveResult
 } from "../types";
@@ -73,6 +75,11 @@ export function Repositories() {
   const [derived, setDerived] = useState<CaseCandidates | null>(null);
   const [deriving, setDeriving] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Read on demand rather than on load: it clones and reads the repository,
+  // which is far too expensive to do for every row of a table nobody asked
+  // a question of yet.
+  const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
+  const [reading, setReading] = useState<string | null>(null);
 
   const load = async (archived = showArchived) => {
     setIsLoading(true);
@@ -152,6 +159,20 @@ export function Repositories() {
       }));
     } finally {
       setChecking(null);
+    }
+  };
+
+  const handleReadiness = async (targetId: string) => {
+    setReading(targetId);
+    setError(null);
+    try {
+      setReadiness(await api.getTargetReadiness(targetId));
+    } catch (readError) {
+      setError(
+        readError instanceof Error ? readError.message : "Unable to read the repository"
+      );
+    } finally {
+      setReading(null);
     }
   };
 
@@ -381,6 +402,13 @@ export function Repositories() {
                         Edit
                       </button>
                       <button
+                        disabled={reading !== null}
+                        onClick={() => void handleReadiness(target.target_id)}
+                        type="button"
+                      >
+                        {reading === target.target_id ? "Reading…" : "Readiness"}
+                      </button>
+                      <button
                         disabled={deriving !== null}
                         onClick={() => void handleDerive(target)}
                         type="button"
@@ -403,6 +431,26 @@ export function Repositories() {
           </table>
         )}
       </div>
+
+      {readiness !== null && (
+        <div className="card">
+          <div className="row space-between">
+            <h2>Readiness — {readiness.target_id}</h2>
+            <span className={`badge ${readiness.ready ? "ok" : "warn"}`}>
+              {readiness.ready ? "Ready to run" : "Not runnable yet"}
+            </span>
+          </div>
+          <p className="muted small">
+            "Ready" is a narrow claim: a run against this repository would execute
+            and be scored. It says nothing about how good the repository's own AI
+            governance is.
+          </p>
+          <ReadinessReportView report={readiness} />
+          <button onClick={() => setReadiness(null)} type="button">
+            Close
+          </button>
+        </div>
+      )}
 
       {derived !== null && (
         <div className="card">

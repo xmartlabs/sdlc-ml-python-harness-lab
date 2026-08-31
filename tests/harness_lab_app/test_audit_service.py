@@ -100,3 +100,52 @@ def test_mark_running_is_idempotent_upsert():
         assert first.id == again.id
         assert again.status == "running"
         assert again.auditor_model == "claude"
+
+
+def test_store_result_persists_the_governance_surface():
+    """What the audit judged against travels with the verdict.
+
+    A stored `skill_adherence` of 0.4 is unreadable without knowing whose rules
+    the auditor held the run to.
+    """
+    governance = {
+        "source": "target_workspace",
+        "harness_source": "native",
+        "rules_file": "AGENTS.md",
+        "files": ["AGENTS.md"],
+        "file_count": 1,
+        "fingerprint": "abc123",
+        "truncated": False,
+        "warning": "",
+    }
+    with _session() as session:
+        service = AuditService(session)
+        service.mark_running("run-g")
+        audit = service.store_result("run-g", "body", governance=governance)
+        assert audit.governance_json["harness_source"] == "native"
+        assert audit.governance_json["fingerprint"] == "abc123"
+        # An audit stored without one keeps the empty default rather than
+        # inheriting a neighbouring run's surface.
+        service.mark_running("run-h")
+        assert service.store_result("run-h", "body").governance_json == {}
+
+
+def test_read_audit_governance_absent_is_none(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from harness_lab_app import audit_service as module
+
+    monkeypatch.setattr(
+        module, "get_settings", lambda: SimpleNamespace(data_runs_dir=tmp_path)
+    )
+    with _session() as session:
+        service = AuditService(session)
+        # An audit from before the surface was recorded genuinely does not know
+        # what it judged; None says that, {} would not.
+        assert service.read_audit_governance("run-y") is None
+        run_dir = tmp_path / "run-y"
+        run_dir.mkdir()
+        (run_dir / "audit_governance.json").write_text("not json {")
+        assert service.read_audit_governance("run-y") is None
+        (run_dir / "audit_governance.json").write_text('{"source": "lab_root"}')
+        assert service.read_audit_governance("run-y") == {"source": "lab_root"}

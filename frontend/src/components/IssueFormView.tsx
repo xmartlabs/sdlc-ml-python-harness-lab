@@ -56,15 +56,15 @@ export function IssueFormView({ repository, markdown, form }: IssueFormViewProps
             textDecoration: "none"
           }}
         >
-          Abrir issue pre-cargado en GitHub ↗
+          Open prefilled issue on GitHub ↗
         </a>
       </div>
       <p className="muted" style={{ fontSize: "0.85rem" }}>
-        El link abre el form <code>{form.template}</code> de {repository} con todos los
-        campos ya cargados. Confirmá los dos campos marcados{" "}
-        <strong>recomendado</strong> (canal y SemVer) y tildá las casillas de
-        sanitización antes de crear. Cada campo también se puede copiar suelto por si
-        preferís pegar a mano.
+        The link opens the <code>{form.template}</code> form on {repository} with every
+        field already filled in. Confirm the two fields marked{" "}
+        <strong>recommended</strong> (channel and SemVer) and tick the sanitisation
+        boxes before creating it. Each field can also be copied on its own if you
+        would rather paste by hand.
       </p>
       <div className="proposal-fields" style={{ display: "grid", gap: "0.75rem" }}>
         {form.fields.map((field) => (
@@ -72,10 +72,10 @@ export function IssueFormView({ repository, markdown, form }: IssueFormViewProps
             <div className="panel-head">
               <h4 style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
                 {field.label}
-                {field.recommended ? <span className="badge ok">recomendado</span> : null}
+                {field.recommended ? <span className="badge ok">recommended</span> : null}
               </h4>
               <button onClick={() => handleCopyField(field.id, field.value)} type="button">
-                {copiedField === field.id ? "Copiado ✓" : "Copiar"}
+                {copiedField === field.id ? "Copied" : "Copy"}
               </button>
             </div>
             {field.reason ? (
@@ -96,11 +96,11 @@ export function IssueFormView({ repository, markdown, form }: IssueFormViewProps
         ))}
       </div>
       <details style={{ marginTop: "1rem" }}>
-        <summary>Ver como markdown único (copia y pega manual)</summary>
+        <summary>View as a single markdown block (manual copy and paste)</summary>
         <div className="panel-head" style={{ marginTop: "0.5rem" }}>
-          <span className="muted">Issue para {repository}</span>
+          <span className="muted">Issue for {repository}</span>
           <button onClick={handleCopyMarkdown} type="button">
-            {markdownCopied ? "Copiado ✓" : "Copiar todo"}
+            {markdownCopied ? "Copied" : "Copy all"}
           </button>
         </div>
         <pre

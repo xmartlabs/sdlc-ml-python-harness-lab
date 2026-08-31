@@ -138,9 +138,115 @@ the repo is and where an agent trips over it — missing tests, no lint gate, ab
 conventions — each claim linked to runs. That is a stronger deliverable than a
 scorecard, and a narrower one than it might be mistaken for.
 
+## Where things live
+
+The navigation is grouped by what you came to do, not by which table backs it.
+Nothing was removed in the regrouping — the old paths still resolve, they just
+redirect.
+
+| Group | Screens | For |
+|---|---|---|
+| — | **Home** | choosing what to learn, and what needs attention |
+| **Evaluate** | New evaluation, Experiments | stating a question and reading its answer |
+| **Evidence** | Findings, Cases, Repositories, Skills | what the lab knows and what it measures against |
+| **Advanced** | Runs, Compare, Benchmarks, Improvements | the operational machinery underneath |
+| **System** | Health, Guide, Settings | the lab itself |
+
 ## Screens
 
-### Dashboard — the overview
+### Home — what do you want to learn?
+
+The landing page asks one question and offers three answers, one per mode
+([ADR-0028](adr/0028-evaluation-modes.md)). Each card states the question it can
+answer, what it holds fixed, what it varies, and what it is **not** allowed to
+claim — so the choice of mode happens before any data is collected rather than
+after.
+
+- **Evaluate a harness change** → the wizard at **Evaluate → New evaluation**.
+- **Test across repositories** → the same wizard in cross-repo mode.
+- **Audit a repository** → the six-step guided audit.
+
+Below the cards, **What needs attention?** lists only what someone can act on —
+regressed cases, suggested findings waiting for review, findings with nothing
+testing them, finished runs with no scores, failed experiment arms, experiments
+below five repetitions, repositories with no validation gate. Every item carries
+its own way in. When there is nothing to do it says so instead of filling the
+space.
+
+Under that, an **evidence summary** of six figures, each with its denominator. The
+full leaderboard, the model and prompt filters and the official SWE reference rows
+moved to **Advanced → Benchmarks**: a home page should answer *what should I do
+next*, not *what data exists in the system*.
+
+### New evaluation — the wizard for Modes A and B
+
+**Where the cases run** is the first choice, and it decides which loop you are in:
+
+- **This lab** (the default) — the harness under test is the lab's own governance,
+  the synced `ml-python-base` release. This is the continuous-improvement loop the
+  lab was built around: change a skill, measure it, cut a release, re-measure. No
+  target repository is involved, and none is asked for.
+- **An external repository** — the agent works inside someone else's codebase,
+  cloned fresh per run. Only here does *Governance source* (`native` vs `injected`)
+  mean anything, because only here are there two governance surfaces to compare;
+  inside the lab that factor is disabled and says why.
+
+The rest of the form is built so it cannot express a design the lab would refuse.
+One factor varies at a time — one or **several** skills (several are tested as a
+bundle: a win belongs to the bundle, not to any single member) — everything else
+is pinned across the arms, and in cross-repo mode each repository becomes its own
+arm and the results stay separated.
+
+**Full harness** is the founding comparison, as a factor: a bare arm (plain
+prompt variant, every governed skill hidden) against the whole harness (the
+governance-loaded variant with the full skill catalog). Two levers move
+together on purpose — the claim is about the harness as a unit; ablate factors
+afterwards to see which parts do the work. The prompt pair is drawn from the
+selected cases' own variants (`naive`→`sdlc`, `swe_default`→`swe_harness`), and
+`prompt_variant` is a first-class condition axis for exactly this reason. "Add skills" offers the *staged* catalog and
+"Remove skills" the *governed* one, because that is what `skills_extra` and
+`skills_disabled` each accept.
+
+**How it runs** carries the classic run form's own controls — the three-tier
+model picker, the harness, the prompt variant (union of the selected cases'
+variants), the step budget, dry run — so the wizard is the whole journey.
+**Create & launch runs** queues arms × cases × repetitions in one step;
+*Create without launching* leaves a draft the experiment page can launch later. The panel at
+the bottom shows the exact arms about to be created, and lists what is blocking
+creation until nothing is.
+
+Repetitions are chosen from three named levels — **2 (exploratory only)**,
+**5 (useful comparison)**, **10 (stronger evidence)**. Below five, the lab will
+describe the result as exploratory however large the difference looks.
+
+Ticking **Use the regression suite** replaces the case picker with a suite's own
+declared design — its canonical cases and its per-case repetition counts
+([ADR-0037](adr/0037-regression-suite-produces-experiments.md)). What comes back is
+an ordinary harness-evaluation experiment, read through the same case matrix. This
+is how a harness release is validated: previous version vs new, over the suite,
+producing **fixed / broken / unchanged**.
+
+### Repository audit — Mode C, in six steps
+
+1. **Select repository** — register it, or pick one already known.
+2. **Repository readiness** — what the lab could actually read at the pinned
+   commit: reachability, validation gates, setup, and any AI governance already
+   there (rules files, skills, agents, commands, ADRs, CI). Anything it could not
+   observe says **Not detected** rather than being guessed at. "Ready" is a narrow
+   claim — a run would execute and be scored — and says nothing about how good
+   that governance is.
+3. **Derive cases** — proposed from the repository's own history
+   ([ADR-0032](adr/0032-cases-are-derived-from-a-targets-own-history.md)), reviewed
+   and accepted one at a time. An accepted candidate becomes a real case, validated
+   by the repository's own commands.
+4. **Run discovery** — an explicit `discovery` experiment with one `as-is` arm
+   against the repository's native governance.
+5. **Review findings** — strengths, gaps and unused resources arrive labelled
+   **suggested**. Nothing becomes a finding of record without a name on it.
+6. **Turn a finding into an experiment** — prefilled with the repository, the
+   cases and the hypothesis, and editable before it is created.
+
+### Benchmarks (Advanced) — the leaderboard and the overview
 Leads with what the lab knows about itself, computed server-side
 (`GET /api/overview`) so the numbers cannot drift from what the same definitions
 mean elsewhere:
@@ -180,8 +286,7 @@ catalog**, ablate the items that never earn their keep, and measure the differen
 finished runs with no scores yet (scoring is on demand, so those are missing from
 every experiment summary), and open findings with nothing testing them.
 
-Below the overview, the leaderboard is unchanged.
-The landing page is the lab's **leaderboard**, swebench.com-style: every terminal
+Below the overview is the lab's **leaderboard**, swebench.com-style: every terminal
 run counts as one attempt, grouped by **condition** (harness + executor model +
 prompt variant + harness version) and ranked by **% resolved** with a
 proportional bar.
@@ -379,9 +484,25 @@ cycle — derived from `data/runs/<id>/improvements.json`:
 - **no** — synthesis ran and proposed nothing (clean run / outcome gate closed);
 - **pending** — synthesis hasn't run yet (open the run and generate it).
 
-Create the run and you land on its **detail page**: live logs, artifacts, the
-validation & score panel, attribution, LLM audit, and in-platform sandboxes
-(web terminal / desktop) to poke at the produced workspace.
+Create the run and you land on its **detail page**, which opens with the
+**Condition** — the experiment and arm this run belongs to, the case, the
+repository and the resolved commit, the harness, the governance source, the model
+and the step budget, and the validation gate it will be judged by. A log is only
+interpretable as a member of a design, so that comes first and the logs, artifacts,
+validation & score panel, attribution, LLM audit and in-platform sandboxes (web
+terminal / desktop) follow underneath.
+
+A run created outside an experiment says so — **ad-hoc run, not part of an
+experiment** — rather than being drawn as though it were an arm of something.
+
+The **attribution** panel's governance coverage now names its own denominator: which
+repository's governance surface the fraction is over, under which `harness_source`,
+with its fingerprint. The **LLM audit** carries the same surface as a collapsible
+file list. A `native` run is judged against the target repository's own governance
+and an `injected` one against the harness the lab actually put there — never against
+rules the run did not receive
+([ADR-0036](adr/0036-audit-judges-a-run-against-its-own-governance.md)). Audits
+recorded before that say so instead of showing a surface they never had.
 
 Inside either sandbox, a run whose output is a web page opens with `open-html`:
 
@@ -553,11 +674,23 @@ an experiment makes a claim, so the lab checks the design against the declared m
 and **refuses one that cannot answer it** — a comparison varying both the harness and
 the repository produces a number attributable to neither.
 
-The detail view keeps outcome, efficiency and behaviour in separate rows, shows every
+The detail view opens with a **verdict**: whether the treatment improved things, on
+which metrics, at what cost, and how much evidence stands behind it — "12 cases × 5
+repetitions" — plus the case movements as `fixed / broken / unchanged`. The wording
+is deliberately cautious. The lab runs no hypothesis test, so it never says
+*significant*; it says exploratory, useful comparison, stronger evidence, within
+observed variance, or improvement observed.
+
+Under that it keeps outcome, efficiency and behaviour in separate rows, shows every
 mean with its spread, colours a delta by the metric's **declared direction** (a drop
 in cost is a win; a drop in pass rate is not), and flags a delta that sits inside
 run-to-run variance. Below it, the **case matrix** shows where a treatment helped and
 where it did not — an average of "+8 points" can be "fixed four cases, broke two".
+
+**Run this experiment** launches the declared design: you supply only what every arm
+shares (model, harness, step budget), and anything the design varies is overridden
+per arm afterwards — so a value typed there cannot leak into the comparison as a
+confound.
 
 Low repetition counts are labelled wherever they appear. One trial is an exploratory
 result, and the screen says so rather than letting it look like a finding.
@@ -572,6 +705,13 @@ finding an experiment **refuted** keeps its record.
 **Draft experiment** turns a finding into a design to review — not into a created
 experiment, because the harness axis the intervention changes is a choice a sentence
 does not determine.
+
+The **Suggested** tab is the review queue for patterns the lab noticed in the run
+corpus: a case that regressed, a case that has never passed, harness items the
+auditor keeps judging unused. Each carries its evidence and an editable
+recommendation, and each needs a name before **Accept** or **Reject** enables — a
+finding nobody owns is an assertion nobody has to defend. A rejection is recorded
+too, so the same pattern is not raised again next week.
 
 ### Repositories
 The repositories a case can be run against. By default a run works in the lab's own
@@ -623,7 +763,7 @@ row per proposal, with run date and template version for comparing iterations).
 Each row shows the **harness** that produced the run (claude, opencode, …), and
 the toolbar can **filter by harness** — useful to work claude-only or
 opencode-only batches, since the harness decides which files a fix should touch.
-Select any subset — across runs and cases — and **Generar issue combinado**
+Select any subset — across runs and cases — and **Generate combined issue**
 consolidates them, via one LLM pass plus the sanitizer pipeline, into a single
 prefilled ml-python-base issue.
 
@@ -641,8 +781,12 @@ The same directive steers the LLM's `affected_artifacts`, so the issue lands in
 the surface that actually influenced the runs. Details in
 [improvement-cycle.md](improvement-cycle.md).
 
-### Compare
-Side-by-side runs. Below the built-in rows, every **registry score** either run
+### Advanced Compare
+Side-by-side runs, and an ad-hoc one: **no causal claim is implied unless the
+conditions satisfy an experiment design**. The runs lined up here were not
+necessarily matched on repository, model or repetition count, so a difference can
+come from anything that differed between them. The screen says so at the top. To
+make a claim, run an experiment. Below the built-in rows, every **registry score** either run
 recorded appears with its provenance, and the winning cell follows each metric's
 *declared direction* rather than the sign — a lower cost wins, a lower pass rate does
 not.
@@ -653,7 +797,7 @@ Line up runs of the same case across models or harness conditions:
   result, final/composite score, tokens, cost, time, steps, and interventions —
   with the best cell per row highlighted.
 - The aggregated ranking by condition (% resolved, harness version, official
-  reference) lives on the **Dashboard** leaderboard.
+  reference) lives on the **Advanced → Benchmarks** leaderboard.
 
 Typical use: run the same case with a new model and a previous one, then open
 Compare to see the objective and cost deltas.

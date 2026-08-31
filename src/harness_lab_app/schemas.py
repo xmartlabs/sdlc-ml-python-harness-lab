@@ -1,4 +1,5 @@
 import re
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -121,6 +122,34 @@ class ExperimentCreate(BaseModel):
     prompt_variants: list[str] = Field(default_factory=list)
     conditions: list[ExperimentConditionCreate] = Field(default_factory=list)
     repetitions: int = 1
+    # Per-case override of ``repetitions``; empty means uniform.
+    case_repetitions: dict[str, int] = Field(default_factory=dict)
+    suite_id: str = ""
+    notes: str = ""
+
+
+class SuiteArmCreate(BaseModel):
+    """One side of a regression-suite comparison."""
+
+    label: str
+    description: str = ""
+    overrides: dict = Field(default_factory=dict)
+
+
+class SuiteExperimentCreate(BaseModel):
+    """Generate an experiment from a regression suite (§13).
+
+    The suite supplies the cases and repetitions; the caller supplies the
+    harness change being measured.
+    """
+
+    experiment_id: str
+    suite_id: str = "harness-regression-v1"
+    control: SuiteArmCreate
+    treatment: SuiteArmCreate
+    prompt_variant: str = "baseline"
+    question: str = ""
+    name: str = ""
     notes: str = ""
 
 
@@ -180,11 +209,31 @@ class FindingCreate(BaseModel):
     title: str
     body: str = ""
     severity: FindingSeverity = FindingSeverity.medium
+    # A finding written by a person starts open. `suggested` is reserved for the
+    # lab's own proposals, which are not findings of record until accepted.
+    status: FindingStatus = FindingStatus.open
+    # The suggestion key this came from, when it came from one (§14).
+    origin: str = ""
+    author: str = ""
     target_repo_id: str = ""
     evidence_run_ids: list[str] = Field(default_factory=list)
     affected_case_ids: list[str] = Field(default_factory=list)
     recommendation: str = ""
     intervention: str = ""
+
+
+class SuggestionAccept(BaseModel):
+    """Accept a suggested finding, with the edits and the name that make it one."""
+
+    author: str
+    finding_id: str = ""
+    # Any field of the suggestion the operator rewrote before signing it.
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+class SuggestionReject(BaseModel):
+    author: str
+    reason: str = ""
 
 
 class FindingUpdate(BaseModel):

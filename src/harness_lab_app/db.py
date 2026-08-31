@@ -130,6 +130,76 @@ def _apply_sqlite_compat_migrations() -> None:
                     "ALTER TABLE audit ADD COLUMN findings_json JSON NOT NULL DEFAULT '{}'"
                 )
             )
+        # Governance provenance per audit. Backfills empty rather than guessing:
+        # an audit written before the surface was recorded genuinely does not
+        # know what it judged, and an invented `lab_root` would assert otherwise.
+        if audit_columns and "governance_json" not in audit_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE audit ADD COLUMN governance_json JSON "
+                    "NOT NULL DEFAULT '{}'"
+                )
+            )
+
+        # Which instrument produced a score. Empty for everything recorded
+        # before the adapter existed — those values are real, they simply do not
+        # know which rubric made them, and saying so beats inventing one.
+        score_columns = {
+            row[1]
+            for row in connection.execute(text("PRAGMA table_info('score')")).fetchall()
+        }
+        if score_columns and "provenance_json" not in score_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE score ADD COLUMN provenance_json JSON "
+                    "NOT NULL DEFAULT '{}'"
+                )
+            )
+
+        # A generated experiment carries its per-case repetition plan and the
+        # suite it came from. Every experiment created by hand predates both and
+        # keeps the uniform repetitions it was designed with.
+        experiment_columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('experiment')")
+            ).fetchall()
+        }
+        if experiment_columns and "case_repetitions" not in experiment_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE experiment ADD COLUMN case_repetitions JSON "
+                    "NOT NULL DEFAULT '{}'"
+                )
+            )
+        if experiment_columns and "suite_id" not in experiment_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE experiment ADD COLUMN suite_id VARCHAR "
+                    "NOT NULL DEFAULT ''"
+                )
+            )
+
+        finding_columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('finding')")
+            ).fetchall()
+        }
+        if finding_columns:
+            for column, ddl in (
+                (
+                    "origin",
+                    "ALTER TABLE finding ADD COLUMN origin VARCHAR NOT NULL DEFAULT ''",
+                ),
+                (
+                    "author",
+                    "ALTER TABLE finding ADD COLUMN author VARCHAR NOT NULL DEFAULT ''",
+                ),
+                ("accepted_at", "ALTER TABLE finding ADD COLUMN accepted_at DATETIME"),
+            ):
+                if column not in finding_columns:
+                    connection.execute(text(ddl))
 
         runconfig_columns = {
             row[1]

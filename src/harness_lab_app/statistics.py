@@ -271,3 +271,214 @@ def confidence_interval(
     mean = statistics.fmean(values)
     margin = z * (statistics.stdev(values) / math.sqrt(len(values)))
     return (mean - margin, mean + margin)
+
+
+# --------------------------------------------------------------------------
+# The ten-second answer
+# --------------------------------------------------------------------------
+
+# What a reader wants first, in order: did it work, what did it cost, how much
+# work was it. Everything else belongs in the full metric table.
+HEADLINE_METRICS = ("cost_usd", "agent_steps", "wall_time_minutes", "total_tokens")
+
+# A success-rate move smaller than this is not worth a directional word at the
+# top of the page whatever the design. Product judgement, not statistics — and
+# it is a floor on the *wording*, never a claim of significance.
+_MATERIAL_POINTS = 5.0
+
+
+def evidence_strength(repetitions: int) -> str:
+    """Prudent words for what a repetition count supports. Never "significant"."""
+    if repetitions < EXPLORATORY_ONLY:
+        return "exploratory"
+    if repetitions < USEFUL_COMPARISON:
+        return "exploratory comparison"
+    if repetitions < STRONGER_EVIDENCE:
+        return "useful comparison"
+    return "stronger evidence"
+
+
+def _highlight(
+    label: str, name: str, control: ConditionSummary, treatment: ConditionSummary
+) -> dict[str, Any] | None:
+    left = control.metrics.get(name)
+    right = treatment.metrics.get(name)
+    if not left or not right or left.mean is None or right.mean is None:
+        return None
+    return {
+        "label": label,
+        "metric": name,
+        "control": left.mean,
+        "treatment": right.mean,
+    }
+
+
+def _movements(case_matrix: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"fixed": 0, "broken": 0, "unchanged": 0, "incomplete": 0}
+    for row in case_matrix:
+        movement = str(row.get("movement", ""))
+        if movement in counts:
+            counts[movement] += 1
+    return counts
+
+
+def verdict(
+    *,
+    mode: str,
+    cases: int,
+    repetitions: int,
+    control: ConditionSummary | None = None,
+    treatment: ConditionSummary | None = None,
+    success: dict[str, Any] | None = None,
+    case_matrix: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The answer an experiment page leads with, in words the design supports.
+
+    Three rules hold this together, and they are the reason this is a function
+    rather than a template in the frontend:
+
+    - **A mode that cannot make a causal claim never gets one.** Discovery
+      describes; cross-repo reports per repository. Only ``harness_evaluation``
+      is allowed a directional verdict, and ``causal`` says so on every payload.
+    - **No invented significance.** The vocabulary is exploratory / useful
+      comparison / stronger evidence / within observed variance / improvement
+      observed — the wording moves with the repetition count, and no p-value is
+      ever implied.
+    - **The aggregate never hides the matrix.** An experiment that gained eight
+      points and broke two cases says both, in the headline block.
+    """
+    strength = evidence_strength(repetitions)
+    # The "\u00d7" is deliberate: this string is rendered verbatim as the
+    # evidence line of the experiment page.
+    evidence = (
+        f"{cases} case{'s' if cases != 1 else ''} \u00d7 "
+        f"{repetitions} repetition{'s' if repetitions != 1 else ''}"
+    )
+    base: dict[str, Any] = {
+        "causal": False,
+        "strength": strength,
+        "evidence": evidence,
+        "highlights": [],
+        "movements": _movements(case_matrix or []),
+        "caveats": [],
+    }
+
+    if mode == "discovery":
+        return {
+            **base,
+            "headline": "Exploratory — no comparison",
+            "claim": (
+                "Discovery describes how this repository behaves today. It has "
+                "no control arm, compares nothing, and supports no causal claim."
+            ),
+            "caveats": [
+                "Use these runs to derive cases and findings, not to conclude "
+                "that anything improved."
+            ],
+        }
+
+    if mode == "cross_repo":
+        return {
+            **base,
+            "headline": "Per-repository result",
+            "claim": (
+                "This experiment holds the harness fixed and varies the "
+                "repository, so it shows where the harness holds and where it "
+                "degrades — not that one repository is better than another."
+            ),
+            "caveats": [
+                "Scores from different repositories are not pooled. Read this "
+                "experiment one repository at a time."
+            ],
+        }
+
+    if control is None or treatment is None or not success:
+        return {
+            **base,
+            "headline": "Not enough evidence yet",
+            "claim": "No completed comparison has been scored for this experiment.",
+        }
+
+    highlights = [
+        {
+            "label": "Success",
+            "metric": "success_rate",
+            "control": success.get("control"),
+            "treatment": success.get("treatment"),
+        }
+    ]
+    for name in HEADLINE_METRICS:
+        found = _highlight(
+            name.replace("_", " ").capitalize(), name, control, treatment
+        )
+        if found:
+            highlights.append(found)
+
+    movements = base["movements"]
+    caveats: list[str] = []
+    if repetitions < USEFUL_COMPARISON:
+        caveats.append(
+            f"{repetitions} repetition{'s' if repetitions != 1 else ''} per arm — "
+            f"{strength}. Agents are stochastic; this cannot separate a real "
+            "difference from run-to-run variance."
+        )
+    if movements["broken"]:
+        caveats.append(
+            f"{movements['broken']} case(s) that passed under {control.label} "
+            f"fail under {treatment.label}. Read the case matrix before acting "
+            "on the aggregate."
+        )
+    if movements["incomplete"]:
+        caveats.append(
+            f"{movements['incomplete']} case(s) have no paired outcome yet, so "
+            "they are absent from the comparison."
+        )
+
+    points = success.get("points")
+    if points is None:
+        return {
+            **base,
+            "causal": True,
+            "headline": "Not enough evidence yet",
+            "claim": (
+                "One of the arms has no scored run, so there is no success rate "
+                "to compare."
+            ),
+            "highlights": highlights,
+            "caveats": caveats,
+        }
+
+    if abs(points) < 1e-9:
+        headline = "No difference observed"
+        claim = (
+            f"{treatment.label} matched {control.label} on success rate over "
+            f"{evidence}."
+        )
+    else:
+        word = "improvement" if points > 0 else "regression"
+        material = abs(points) >= _MATERIAL_POINTS
+        if repetitions >= USEFUL_COMPARISON and material:
+            headline = f"Likely {word}"
+            claim = (
+                f"{treatment.label} moved success by {points:+.0f} points against "
+                f"{control.label} over {evidence} — a {strength}."
+            )
+        else:
+            headline = f"{word.capitalize()} observed"
+            claim = (
+                f"{treatment.label} moved success by {points:+.0f} points against "
+                f"{control.label}, but over {evidence} that sits within the "
+                "variance this design can distinguish."
+            )
+            caveats.insert(
+                0, "Within observed variance — treat as a signal, not a result."
+            )
+
+    return {
+        **base,
+        "causal": True,
+        "headline": headline,
+        "claim": claim,
+        "highlights": highlights,
+        "caveats": caveats,
+    }

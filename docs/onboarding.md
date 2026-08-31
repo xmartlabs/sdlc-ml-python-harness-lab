@@ -4,7 +4,7 @@ Step-by-step setup for a developer cloning the lab on a **new machine**. At the 
 you will have the web app running, one benchmark run executed, and the improvement
 loop within reach.
 
-Already set up? Jump to [Operating the lab](#7-what-next--operating-the-lab).
+Already set up? Jump to [Operating the lab](#8-what-next--operating-the-lab).
 
 ---
 
@@ -312,7 +312,23 @@ If all of that worked, your machine is fully onboarded.
 | Every step logs `stream error` (gateway model) | The self-hosted server behind that model (LM Studio / Ollama / NIM host) is off or unreachable from the gateway — start it and re-run. Run creation preflights this and rejects with a clear error when the backend is provably down (skip with `HARNESS_LAB_DISABLE_GATEWAY_PROBE=1`) |
 | No run attribution in Langfuse | `LITELLM_MASTER_KEY` matches your gateway's master key |
 
-## 6. Optional — develop the lab itself
+## 6. Optional — trajectory scores (DeepEval)
+
+Three scores — `task_completion`, `step_efficiency` and `tool_correctness` — are
+computed by [DeepEval](https://github.com/confident-ai/deepeval), which is an
+optional dependency:
+
+```bash
+uv sync --extra deepeval
+```
+
+They need a judge model as well as the package: two of the three are `GEval`
+rubrics, so set `OPENAI_API_KEY` (or DeepEval's own model configuration) for the
+judge. Without either, those three metrics return **no score** — never a zero, so
+an aggregate can never read "not installed" as "did badly". Everything else in the
+lab behaves identically with DeepEval absent.
+
+## 7. Optional — develop the lab itself
 
 ```bash
 make install       # pin Python, create .venv, sync deps (uv)
@@ -324,7 +340,7 @@ cd frontend && npm install && npx tsc --noEmit   # frontend typecheck
 A Dev Container config is included (VS Code → "Reopen in Container") for a
 zero-setup Linux environment.
 
-## 7. What next — operating the lab
+## 8. What next — operating the lab
 
 Once set up, your day-to-day is the **improvement cycle**: run → audit → propose →
 file an issue → improve the template → re-measure.

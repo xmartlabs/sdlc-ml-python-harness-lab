@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { MouseEvent } from "react";
-import { NavLink, useNavigate, useParams } from "react-router-dom";
+import { NavLink, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import {
   caseDisplayName,
@@ -199,6 +199,11 @@ function compareRows(a: RunRow, b: RunRow, key: SortKey): number {
 
 export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: RunTableProps) {
   const { runId: activeRunId } = useParams();
+  // The home page's attention items promise a filtered list — "4 experiment
+  // runs failed" leading to every run ever would be the kind of CTA that
+  // teaches people to stop clicking them.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const attentionFilter = searchParams.get("filter") ?? "";
   const navigate = useNavigate();
   const [rowActionError, setRowActionError] = useState<string | null>(null);
   const [pendingRowId, setPendingRowId] = useState<string | null>(null);
@@ -233,6 +238,17 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
       if (stateFilter !== "all" && row.run.state !== stateFilter) {
         return false;
       }
+      if (attentionFilter === "failed" && row.run.state !== "failed") {
+        return false;
+      }
+      // "Unscored" means finished with no manual/objective score recorded —
+      // exactly the runs missing from every aggregate on the home page.
+      if (
+        attentionFilter === "unscored" &&
+        !(row.run.state === "completed" && row.run.score === null)
+      ) {
+        return false;
+      }
       if (!needle) {
         return true;
       }
@@ -251,7 +267,7 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
         .toLowerCase()
         .includes(needle);
     });
-  }, [harnessFilter, query, rows, stateFilter]);
+  }, [attentionFilter, harnessFilter, query, rows, stateFilter]);
 
   const sorted = useMemo(() => {
     const factor = sortDirection === "asc" ? 1 : -1;
@@ -298,7 +314,7 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
     setRowActionError(null);
     setPendingRowId(targetRunId);
     onCloneRun(targetRunId)
-      .then((created) => navigate(`/runs/${created.run_id}`))
+      .then((created) => navigate(`/advanced/runs/${created.run_id}`))
       .catch((error: Error) => setRowActionError(error.message))
       .finally(() => setPendingRowId(null));
   };
@@ -313,14 +329,18 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
     onDeleteRun(targetRunId)
       .then(() => {
         if (activeRunId === targetRunId) {
-          navigate("/runs");
+          navigate("/advanced/runs");
         }
       })
       .catch((error: Error) => setRowActionError(error.message))
       .finally(() => setPendingRowId(null));
   };
 
-  const isFiltered = query.trim() !== "" || harnessFilter !== "all" || stateFilter !== "all";
+  const isFiltered =
+    query.trim() !== "" ||
+    harnessFilter !== "all" ||
+    stateFilter !== "all" ||
+    attentionFilter !== "";
 
   return (
     <section className="panel">
@@ -330,6 +350,27 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
           {isFiltered ? `${sorted.length} of ${runs.length} runs` : `${runs.length} total`}
         </span>
       </div>
+
+      {/* An arrived-from-home filter is visible and removable — a list quietly
+          hiding rows is worse than one that shows too many. */}
+      {attentionFilter ? (
+        <p className="callout">
+          Showing only{" "}
+          <strong>
+            {attentionFilter === "unscored"
+              ? "finished runs with no score"
+              : "failed runs"}
+          </strong>
+          .{" "}
+          <button
+            className="button-link"
+            onClick={() => setSearchParams({})}
+            type="button"
+          >
+            Show all runs
+          </button>
+        </p>
+      ) : null}
 
       {runs.length > 0 ? (
         <div className="table-toolbar">

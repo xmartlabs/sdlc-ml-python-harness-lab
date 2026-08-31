@@ -5,6 +5,7 @@ import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { HelpPanel } from "../components/HelpPanel";
 import { StateBadge } from "../components/StateBadge";
+import { IconAlert } from "../components/icons";
 import type { RunRecord, ScoreRecord, ValidationRecord } from "../types";
 
 type CompareProps = {
@@ -295,14 +296,25 @@ export function Compare({ runs }: CompareProps) {
     <section className="page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Compare</p>
-          <h1>Run comparison</h1>
+          <p className="eyebrow">Advanced</p>
+          <h1>Advanced Compare</h1>
           <p className="lede">
             Line up runs of the same case across models or harness conditions —
             objective score, cost, and effort side by side.
           </p>
         </div>
       </header>
+
+      <div className="callout callout--warning">
+        <IconAlert size={16} />
+        <p>
+          <strong>Ad-hoc comparison.</strong> No causal claim is implied unless the
+          conditions satisfy an experiment design. These runs were not necessarily
+          matched on repository, model or repetition count, so a difference here can
+          come from anything that differed between them. To make a claim, run an{" "}
+          <Link to="/evaluate/new">experiment</Link>.
+        </p>
+      </div>
 
       <HelpPanel title="How to read this comparison" docHref="docs/guide-web-ui.md">
         <ol className="skills-howto">
@@ -402,7 +414,7 @@ export function Compare({ runs }: CompareProps) {
 
           <p className="muted">
             Looking for the aggregated ranking by condition (% resolved, harness,
-            version)? It moved to the <Link to="/">Dashboard</Link>.
+            version)? It moved to the <Link to="/advanced/benchmarks">Benchmarks</Link>.
           </p>
         </>
       )}
