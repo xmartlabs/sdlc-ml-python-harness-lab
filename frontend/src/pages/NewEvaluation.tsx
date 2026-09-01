@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
-import { api } from "../api";
+import { ApiError, api } from "../api";
 import {
   HARNESS_NATIVE_MODELS,
   HARNESS_OPTIONS,
@@ -83,6 +83,9 @@ const FACTORS = [
 
 type FactorKey = (typeof FACTORS)[number]["key"];
 
+/** Backend ceiling on an experiment slug; suffixes have to fit inside it. */
+const MAX_SLUG = 64;
+
 const REPETITION_CHOICES = [
   { value: 2, label: "2 — exploratory only" },
   { value: 5, label: "5 — useful comparison" },
@@ -95,7 +98,50 @@ function slugify(value: string): string {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, 64) || "experiment"
+      .slice(0, MAX_SLUG) || "experiment"
+  );
+}
+
+/**
+ * The same question asked of a different harness is a different experiment.
+ *
+ * Ids are derived from the question, so re-running one comparison against
+ * another runtime used to collide and be refused with nothing to do about it
+ * short of rewording the question. The counter keeps the id readable, keeps
+ * the question intact, and leaves the earlier experiment untouched.
+ */
+function uniqueExperimentId(base: string, taken: Set<string>): string {
+  if (!taken.has(base)) {
+    return base;
+  }
+  for (let counter = 2; counter <= 99; counter += 1) {
+    const suffix = `-${counter}`;
+    const candidate = base.slice(0, MAX_SLUG - suffix.length) + suffix;
+    if (!taken.has(candidate)) {
+      return candidate;
+    }
+  }
+  const stamp = `-${Date.now().toString(36)}`;
+  return base.slice(0, MAX_SLUG - stamp.length) + stamp;
+}
+
+/** Ids the backend already holds, so the form can pick a free one up front. */
+async function takenExperimentIds(): Promise<Set<string>> {
+  try {
+    const existing = await api.listExperiments();
+    return new Set(existing.map((item) => item.experiment_id));
+  } catch {
+    // Unlistable catalog — the create call still refuses duplicates and the
+    // retry below recovers from it.
+    return new Set<string>();
+  }
+}
+
+/** A create refused only because the derived id was taken. */
+function isDuplicateId(error: unknown): boolean {
+  return (
+    (error instanceof ApiError && error.status === 409) ||
+    (error instanceof Error && error.message.includes("already exists"))
   );
 }
 
@@ -117,6 +163,7 @@ export function NewEvaluation() {
   const [skills, setSkills] = useState<HarnessSkill[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
   const [question, setQuestion] = useState("");
@@ -348,6 +395,7 @@ export function NewEvaluation() {
   const setMode = (next: ExperimentMode) => {
     setParams({ mode: next });
     setWarnings([]);
+    setNotice(null);
     setError(null);
   };
 
@@ -581,10 +629,48 @@ export function NewEvaluation() {
     dry_run: dryRun
   });
 
+  /**
+   * Create under the first free id derived from the question.
+   *
+   * The listing can be stale — another tab, another operator — so a refusal on
+   * the id we picked is not an error to report but a collision to step past.
+   */
+  const createUnderFreeId = async <T extends { experiment_id: string }>(
+    create: (experimentId: string) => Promise<T>
+  ): Promise<T> => {
+    const base = slugify(question);
+    const taken = await takenExperimentIds();
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const experimentId = uniqueExperimentId(base, taken);
+      try {
+        const created = await create(experimentId);
+        if (created.experiment_id !== base) {
+          setNotice(
+            `An experiment already asks this question, so this one was filed as ` +
+              `'${created.experiment_id}'. The earlier one is untouched.`
+          );
+        }
+        return created;
+      } catch (createError) {
+        if (!isDuplicateId(createError)) {
+          throw createError;
+        }
+        // Lost the race for that id; take the next counter and try again.
+        taken.add(experimentId);
+        lastError = createError;
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Unable to find a free experiment id.");
+  };
+
   /** Create the experiment; with `launch`, queue every run of the design too. */
   const submit = async (launch: boolean) => {
     setIsSaving(true);
     setError(null);
+    setNotice(null);
     setCreatedId(null);
     try {
       if (useSuite) {
@@ -593,35 +679,39 @@ export function NewEvaluation() {
         if (!control || !treatment) {
           throw new Error("A suite comparison needs one control arm and one treatment.");
         }
-        const fromSuite = await api.createExperimentFromSuite({
-          experiment_id: slugify(question),
-          suite_id: suiteId,
-          question,
-          name: question.slice(0, 80),
-          control: {
-            label: control.label,
-            description: control.description,
-            overrides: control.overrides
-          },
-          treatment: {
-            label: treatment.label,
-            description: treatment.description,
-            overrides: treatment.overrides
-          }
-        });
+        const fromSuite = await createUnderFreeId((experimentId) =>
+          api.createExperimentFromSuite({
+            experiment_id: experimentId,
+            suite_id: suiteId,
+            question,
+            name: question.slice(0, 80),
+            control: {
+              label: control.label,
+              description: control.description,
+              overrides: control.overrides
+            },
+            treatment: {
+              label: treatment.label,
+              description: treatment.description,
+              overrides: treatment.overrides
+            }
+          })
+        );
         setWarnings(fromSuite.warnings ?? []);
         await finish(fromSuite.experiment_id, launch);
         return;
       }
-      const created = await api.createExperiment({
-        experiment_id: slugify(question),
-        name: question.slice(0, 80),
-        question,
-        mode,
-        case_ids: caseIds,
-        repetitions,
-        conditions
-      });
+      const created = await createUnderFreeId((experimentId) =>
+        api.createExperiment({
+          experiment_id: experimentId,
+          name: question.slice(0, 80),
+          question,
+          mode,
+          case_ids: caseIds,
+          repetitions,
+          conditions
+        })
+      );
       setWarnings(created.warnings ?? []);
       await finish(created.experiment_id, launch);
     } catch (saveError) {
@@ -1223,6 +1313,7 @@ export function NewEvaluation() {
             </div>
           </div>
         ) : null}
+        {notice ? <p className="callout callout--ok">{notice}</p> : null}
         {warnings.length > 0 ? (
           <ul className="blocking-list blocking-list--warning">
             {warnings.map((warning) => (

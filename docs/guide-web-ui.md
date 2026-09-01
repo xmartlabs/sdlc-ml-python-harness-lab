@@ -219,6 +219,12 @@ Repetitions are chosen from three named levels — **2 (exploratory only)**,
 **5 (useful comparison)**, **10 (stronger evidence)**. Below five, the lab will
 describe the result as exploratory however large the difference looks.
 
+The experiment's id is derived from the question. Asking the same question
+again — the usual case being *the same comparison, run on a different harness* —
+does not collide: the wizard files the new experiment under the next free id
+(`does-x-improve-outcomes-2`) and says so, leaving the earlier experiment and its
+runs untouched.
+
 Ticking **Use the regression suite** replaces the case picker with a suite's own
 declared design — its canonical cases and its per-case repetition counts
 ([ADR-0037](adr/0037-regression-suite-produces-experiments.md)). What comes back is
