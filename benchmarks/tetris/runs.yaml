@@ -649,7 +649,7 @@ runs:
   langfuse_session_id: bench-tetris-v1-M-001
   virtual_key: null
   branch: bench/tetris-v1-M-001
-  status: pending
+  status: running
   result_level: null
   human_interventions: null
   notes: Kimi-K2.6 via litellm
@@ -666,7 +666,7 @@ runs:
   langfuse_session_id: bench-tetris-v1-M-002
   virtual_key: null
   branch: bench/tetris-v1-M-002
-  status: pending
+  status: running
   result_level: null
   human_interventions: null
   notes: ''
@@ -683,7 +683,7 @@ runs:
   langfuse_session_id: bench-tetris-v1-M-003
   virtual_key: null
   branch: bench/tetris-v1-M-003
-  status: pending
+  status: running
   result_level: null
   human_interventions: null
   notes: ''

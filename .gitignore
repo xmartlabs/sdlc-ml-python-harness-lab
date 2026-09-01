@@ -123,3 +123,9 @@ bench_report_*.txt
 # stray default can never flood git status again.
 .pnpm-store/
 data/pnpm-store/
+
+# `make backup` snapshots the state the lab cannot regenerate (the SQLite DB,
+# run artifacts, .env) into BACKUP_DIR, which defaults to backups/. Those
+# archives are hundreds of MB and routinely exceed GitHub's 100 MB blob limit —
+# they are disaster-recovery copies, not history.
+backups/
