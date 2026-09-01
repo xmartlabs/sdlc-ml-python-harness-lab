@@ -53,7 +53,7 @@ install:
 	echo "📌 Pinning Python version $(PYTHON_VERSION)..."; \
 	"$$UV_BIN" python pin $(PYTHON_VERSION); \
 	echo "📦 Syncing dependencies (creating .venv if it doesn't exist)..."; \
-	"$$UV_BIN" sync; \
+	"$$UV_BIN" sync --group dev; \
 	echo "🔌 Registering Jupyter kernel..."; \
 	"$$UV_BIN" run python -m ipykernel install --user --name=$(KERNEL_NAME) --display-name="Python (uv)"; \
 	echo "✅ Environment ready! Use 'source .venv/bin/activate' to activate."

@@ -104,6 +104,20 @@ class TargetResolveRequest(BaseModel):
     ref: str = ""
 
 
+class TargetInspectRequest(BaseModel):
+    """Inspect a repository before it is saved — the form's 'inspect' button.
+
+    Returns the same readiness report a saved target would, so a user learns the
+    runtime is unsupported (or its commands mismatch it) before creating it.
+    """
+
+    repository_url: str
+    default_ref: str = ""
+
+    setup_commands: list[str] = Field(default_factory=list)
+    validation_commands: list[str] = Field(default_factory=list)
+
+
 class ExperimentConditionCreate(BaseModel):
     """One declared arm. ``overrides`` fixes the axis values this arm holds."""
 

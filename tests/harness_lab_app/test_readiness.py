@@ -297,6 +297,126 @@ def test_a_polyglot_repo_suggests_one_gate_per_ecosystem():
     assert "go test ./..." in out["validation"]
 
 
+# ---------------------------------------------------------------------------
+# Runtime compatibility: would the runner image even be able to build this?
+# ---------------------------------------------------------------------------
+
+
+def test_a_python_repo_is_compatible_with_the_runner():
+    from harness_lab_app.readiness_service import runtime_compatibility
+
+    check = runtime_compatibility(["pyproject.toml", "src/app.py"], [], [])
+    assert check.status == "ok"
+    assert "Python" in check.detail
+
+
+def test_a_node_repo_is_compatible_with_the_runner():
+    from harness_lab_app.readiness_service import runtime_compatibility
+
+    check = runtime_compatibility(["package.json", "index.js"], [], [])
+    assert check.status == "ok"
+    assert "Node" in check.detail
+
+
+def test_a_go_repo_warns_that_the_runner_has_no_go_toolchain():
+    from harness_lab_app.readiness_service import runtime_compatibility
+
+    check = runtime_compatibility(["go.mod", "main.go"], [], [])
+    assert check.status == "missing"
+    assert "Go" in check.detail
+
+
+def test_a_repo_with_no_project_marker_is_unknown_not_missing():
+    from harness_lab_app.readiness_service import runtime_compatibility
+
+    check = runtime_compatibility(["README.md", "src/app.py"], [], [])
+    assert check.status == "unknown"
+
+
+def test_python_install_on_a_repo_with_no_python_marker_is_flagged():
+    """The exact deepseek failure: `pip install -e .` on a Node repo."""
+    from harness_lab_app.readiness_service import runtime_compatibility
+
+    check = runtime_compatibility(
+        ["package.json", "pnpm-lock.yaml"],
+        ["pnpm install --frozen-lockfile", "pip install -e ."],
+        ["pnpm test", "pytest -x -q"],
+    )
+    assert check.status == "missing"
+    assert any("pip install -e ." in item for item in check.items)
+
+
+def test_node_install_on_a_repo_with_no_package_json_is_flagged():
+    from harness_lab_app.readiness_service import runtime_compatibility
+
+    check = runtime_compatibility(
+        ["pyproject.toml"],
+        ["pnpm install --frozen-lockfile"],
+        [],
+    )
+    assert check.status == "missing"
+    assert any("pnpm install" in item for item in check.items)
+
+
+def test_consistent_python_commands_do_not_trip_the_mismatch():
+    from harness_lab_app.readiness_service import runtime_compatibility
+
+    check = runtime_compatibility(
+        ["pyproject.toml"],
+        ["pip install -e .", "pip install pytest"],
+        ["pytest -q"],
+    )
+    assert check.status == "ok"
+
+
+def test_runtime_compatibility_rides_on_the_readiness_report_without_blocking():
+    """It is a warning, not a gate — a run can still be launched."""
+    report = readiness_service.build(
+        _target(validation_commands=["pytest -q"], setup_commands=["pip install -e ."]),
+        commit="a" * 40,
+        paths=["package.json"],
+    )
+    runtime = _check(report, "Runtime compatibility")
+    assert runtime["status"] == "missing"
+    # Soft warning: it never appears in the blocking list.
+    assert "Runtime compatibility" not in report["blocking"]
+
+
+def test_runtime_compatibility_is_unknown_when_the_repo_could_not_be_read():
+    report = readiness_service.build(_target(), commit=None, paths=None)
+    assert _check(report, "Runtime compatibility")["status"] == "unknown"
+
+
+def test_inspect_reports_a_repository_before_it_is_saved(session, monkeypatch):
+    """The form's Inspect: a mismatch is caught pre-creation, nothing persisted."""
+    from harness_lab_app.readiness_service import ReadinessService
+
+    monkeypatch.setattr(
+        "harness_lab_app.target_service.resolve_ref", lambda _u, _r: "c" * 40
+    )
+    monkeypatch.setattr(
+        "harness_lab_app.case_derivation.sync_mirror",
+        lambda *_a, **_k: session,  # any non-None object; list_paths is stubbed
+    )
+    monkeypatch.setattr(
+        "harness_lab_app.readiness_service.list_paths",
+        lambda *_a, **_k: ["package.json", "pnpm-lock.yaml"],
+    )
+    report = ReadinessService(session).inspect(
+        "https://github.com/acme/web.git",
+        "main",
+        setup_commands=["pnpm install --frozen-lockfile", "pip install -e ."],
+        validation_commands=["pnpm test"],
+    )
+    runtime = _check(report, "Runtime compatibility")
+    assert runtime["status"] == "missing"
+    assert any("pip install -e ." in item for item in runtime["items"])
+    # A transient inspection is never written to the targets table.
+    from harness_lab_app.target_service import TargetService
+
+    assert TargetService(session).list_targets() == []
+
+
 def test_suggestions_ride_on_the_readiness_report(session):
     """The payload carries the inference so the UI can offer one-click adoption."""
     from harness_lab_app.models import TargetRepository

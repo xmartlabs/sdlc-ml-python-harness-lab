@@ -172,6 +172,128 @@ def _governance_checks(detected: dict[str, Any] | None) -> list[Check]:
     return checks
 
 
+# Ecosystems the lab can tell apart, keyed by the marker file at the repo root,
+# and whether the `Dockerfile.runner` image ships that toolchain. The runner has
+# Python (pip/uv) and Node (npm/pnpm/yarn) + git; everything else needs a custom
+# runner image, so a run against it will very likely fail at setup.
+_ECOSYSTEMS: tuple[tuple[str, str, bool], ...] = (
+    ("pyproject.toml", "Python", True),
+    ("setup.py", "Python", True),
+    ("setup.cfg", "Python", True),
+    ("package.json", "Node.js", True),
+    ("go.mod", "Go", False),
+    ("Cargo.toml", "Rust", False),
+    ("pom.xml", "Java (Maven)", False),
+    ("build.gradle", "Java/Kotlin (Gradle)", False),
+    ("Gemfile", "Ruby", False),
+    ("composer.json", "PHP", False),
+)
+
+_PYTHON_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
+
+# Commands that install *this repository* as a package of a given ecosystem, so
+# they cannot succeed unless that ecosystem's marker is present. This is the
+# exact class of failure that aborts provisioning before the agent runs (a
+# `pip install -e .` on a repo with no pyproject.toml, say).
+_MISMATCH_PATTERNS: tuple[tuple[re.Pattern[str], str, tuple[str, ...]], ...] = (
+    (re.compile(r"\bpip3?\s+install\b.*(?:-e\s+)?\.\s*$"), "Python", _PYTHON_MARKERS),
+    (
+        re.compile(r"\buv\s+pip\s+install\b.*(?:-e\s+)?\.\s*$"),
+        "Python",
+        _PYTHON_MARKERS,
+    ),
+    (re.compile(r"\buv\s+sync\b"), "Python", _PYTHON_MARKERS),
+    (re.compile(r"\bpoetry\s+install\b"), "Python", _PYTHON_MARKERS),
+    (
+        re.compile(r"\b(?:npm|pnpm|yarn)\s+(?:install|ci|i|add)\b"),
+        "Node.js",
+        ("package.json",),
+    ),
+)
+
+
+def runtime_compatibility(
+    paths: list[str] | None,
+    setup_commands: list[str],
+    validation_commands: list[str],
+) -> Check:
+    """Would the runner image be able to build and test this repository?
+
+    A soft warning, never a gate (the lab fails open — see the audit philosophy):
+    it catches the failure mode where provisioning aborts *before* the agent runs
+    because a configured command's toolchain is not present. Two things are wrong
+    in that world and both are reported here: (1) the repository's ecosystem is
+    one the runner image does not ship, or (2) a setup/validation command installs
+    the repo as a package of an ecosystem the repo does not actually declare.
+    """
+    label = "Runtime compatibility"
+    if paths is None:
+        return Check(
+            label,
+            "unknown",
+            "The repository could not be read, so its runtime cannot be confirmed.",
+        )
+    path_set = set(paths)
+    present = {
+        label_: supported
+        for marker, label_, supported in _ECOSYSTEMS
+        if marker in path_set
+    }
+    supported = sorted(name for name, ok in present.items() if ok)
+    unsupported = sorted(name for name, ok in present.items() if not ok)
+
+    commands = [*(setup_commands or []), *(validation_commands or [])]
+    mismatches: list[str] = []
+    for cmd in commands:
+        low = cmd.strip().lower()
+        for pattern, ecosystem, markers in _MISMATCH_PATTERNS:
+            if pattern.search(low) and not any(m in path_set for m in markers):
+                need = (
+                    markers[0] if ecosystem != "Python" else "pyproject.toml/setup.py"
+                )
+                mismatches.append(
+                    f"`{cmd.strip()}` needs a {ecosystem} project ({need}), "
+                    "which this repository does not have"
+                )
+                break
+
+    if mismatches:
+        return Check(
+            label,
+            "missing",
+            "A configured command assumes a toolchain this repository does not "
+            "declare, so provisioning would abort before the agent runs — exactly "
+            "the failure this check exists to catch.",
+            mismatches,
+        )
+    if supported:
+        detail = (
+            f"{'/'.join(supported)} project — the runner image ships this toolchain "
+            "(Python via pip/uv, Node via npm/pnpm/yarn)."
+        )
+        if unsupported:
+            detail += (
+                f" It also carries {'/'.join(unsupported)}, whose toolchain the "
+                "runner does not include; commands needing it would fail."
+            )
+        return Check(label, "ok", detail, supported)
+    if unsupported:
+        return Check(
+            label,
+            "missing",
+            f"Detected {'/'.join(unsupported)}. The runner image ships only Python "
+            "and Node toolchains, so a run here will very likely fail at setup "
+            "unless the runner image is extended first.",
+            unsupported,
+        )
+    return Check(
+        label,
+        "unknown",
+        "No project marker (pyproject.toml, setup.py, package.json, …) was found, "
+        "so the runtime cannot be confirmed and a run may fail at setup.",
+    )
+
+
 def build(
     target: TargetRepository,
     *,
@@ -223,7 +345,20 @@ def build(
         list(target.setup_commands),
     )
 
-    checks = [reachable, ref_check, gates, setup, *_governance_checks(detected)]
+    runtime = runtime_compatibility(
+        paths,
+        list(target.setup_commands),
+        list(target.validation_commands),
+    )
+
+    checks = [
+        reachable,
+        ref_check,
+        gates,
+        setup,
+        runtime,
+        *_governance_checks(detected),
+    ]
     return {
         "target_id": target.target_id,
         "name": target.name,
@@ -373,11 +508,53 @@ class ReadinessService:
         self.session = session
 
     def build(self, target_id: str) -> dict[str, Any]:
-        from harness_lab_app.case_derivation import sync_mirror
-        from harness_lab_app.config import get_settings
-        from harness_lab_app.target_service import TargetService, resolve_ref
+        from harness_lab_app.target_service import TargetService
 
         target = TargetService(self.session).get_target(target_id)
+        return self._report_for(target)
+
+    def inspect(
+        self,
+        repository_url: str,
+        default_ref: str = "",
+        setup_commands: list[str] | None = None,
+        validation_commands: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Readiness for a repository that is not yet a saved target.
+
+        The Add-a-repository form calls this before creation so a user learns the
+        repository's runtime is unsupported (or its commands mismatch it) *before*
+        launching a run that would abort in provisioning. The form's own draft
+        commands are passed through so the mismatch check reflects what would be
+        saved. The transient target is never persisted; ``validate_repository_url``
+        still guards the URL.
+        """
+        import hashlib
+
+        from harness_lab_app.models import TargetRepository
+        from harness_lab_app.target_service import validate_repository_url
+
+        url = validate_repository_url(repository_url)
+        # A stable per-URL mirror slug so two inspections of different repos do
+        # not clobber each other's mirror directory.
+        slug = (
+            "inspect-"
+            + hashlib.sha1(url.encode(), usedforsecurity=False).hexdigest()[:12]
+        )
+        target = TargetRepository(
+            target_id=slug,
+            name="(inspect)",
+            repository_url=url,
+            default_ref=default_ref.strip() or "main",
+            setup_commands=setup_commands or [],
+            validation_commands=validation_commands or [],
+        )
+        return self._report_for(target)
+
+    def _report_for(self, target: TargetRepository) -> dict[str, Any]:
+        from harness_lab_app.case_derivation import sync_mirror
+        from harness_lab_app.config import get_settings
+        from harness_lab_app.target_service import resolve_ref
 
         commit: str | None = None
         ref_error = ""

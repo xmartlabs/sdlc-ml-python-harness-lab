@@ -380,6 +380,19 @@ export const api = {
     ),
   getTargetReadiness: (targetId: string) =>
     request<ReadinessReport>(`/api/targets/${targetId}/readiness`),
+  // Inspect a repository before it is saved: the same readiness report a target
+  // would produce, so a mismatch (unsupported runtime, or a command whose
+  // toolchain the repo lacks) is caught before creation rather than at a run.
+  inspectTarget: (payload: {
+    repository_url: string;
+    default_ref?: string;
+    setup_commands?: string[];
+    validation_commands?: string[];
+  }) =>
+    request<ReadinessReport>("/api/targets/inspect", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
   deriveCases: (targetId: string, limit = 20) =>
     request<CaseCandidates>(
       `/api/targets/${targetId}/derive-cases?limit=${limit}`,

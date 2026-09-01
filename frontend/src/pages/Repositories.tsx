@@ -80,6 +80,10 @@ export function Repositories() {
   // a question of yet.
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
   const [reading, setReading] = useState<string | null>(null);
+  // Pre-creation inspection of the repository the form is describing. Read-only
+  // (nothing is saved) and non-blocking: it warns, it does not stop the Add.
+  const [inspection, setInspection] = useState<ReadinessReport | null>(null);
+  const [inspecting, setInspecting] = useState(false);
 
   const load = async (archived = showArchived) => {
     setIsLoading(true);
@@ -122,6 +126,7 @@ export function Repositories() {
       }
       setForm(EMPTY_FORM);
       setEditingId(null);
+      setInspection(null);
       await load();
     } catch (saveError) {
       setError(
@@ -129,6 +134,30 @@ export function Repositories() {
       );
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleInspect = async () => {
+    setInspecting(true);
+    setError(null);
+    setInspection(null);
+    try {
+      setInspection(
+        await api.inspectTarget({
+          repository_url: form.repository_url.trim(),
+          default_ref: form.default_ref.trim() || "main",
+          setup_commands: toLines(form.setup),
+          validation_commands: toLines(form.validation)
+        })
+      );
+    } catch (inspectError) {
+      setError(
+        inspectError instanceof Error
+          ? inspectError.message
+          : "Unable to inspect the repository"
+      );
+    } finally {
+      setInspecting(false);
     }
   };
 
@@ -313,11 +342,19 @@ export function Repositories() {
           >
             {isSaving ? "Saving…" : editingId ? "Save changes" : "Add repository"}
           </button>
+          <button
+            disabled={inspecting || form.repository_url.trim() === ""}
+            onClick={() => void handleInspect()}
+            type="button"
+          >
+            {inspecting ? "Inspecting…" : "Inspect repository"}
+          </button>
           {editingId !== null && (
             <button
               onClick={() => {
                 setEditingId(null);
                 setForm(EMPTY_FORM);
+                setInspection(null);
               }}
               type="button"
             >
@@ -325,6 +362,49 @@ export function Repositories() {
             </button>
           )}
         </div>
+        <p className="muted small">
+          Inspect reads the repository before you save it — it checks the runtime is
+          one the runner image can build (Python or Node), and that your setup and
+          validation commands name a toolchain the repository actually has. It only
+          warns; you can still add the repository.
+        </p>
+
+        {inspection !== null &&
+          (() => {
+            const runtime = inspection.checks.find(
+              (check) => check.label === "Runtime compatibility"
+            );
+            const bad = runtime !== undefined && runtime.status !== "ok";
+            return (
+              <div className="stack">
+                {runtime !== undefined && (
+                  <div className={`callout ${bad ? "callout--warning" : "callout--ok"}`}>
+                    <div>
+                      <strong>
+                        {bad
+                          ? "This repository is likely not to work in the lab"
+                          : "Runtime looks compatible"}
+                      </strong>
+                      <p>{runtime.detail}</p>
+                      {runtime.items.length > 0 && (
+                        <ul className="check-items">
+                          {runtime.items.map((item) => (
+                            <li key={item}>{item}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                )}
+                <ReadinessReportView report={inspection} />
+                <div className="row">
+                  <button onClick={() => setInspection(null)} type="button">
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
       </div>
 
       <div className="card">

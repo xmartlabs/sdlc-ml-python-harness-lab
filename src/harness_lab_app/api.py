@@ -95,6 +95,7 @@ from harness_lab_app.schemas import (
     SuggestionReject,
     SuiteExperimentCreate,
     SwebenchImportRequest,
+    TargetInspectRequest,
     TargetRepositoryCreate,
     TargetRepositoryUpdate,
     TargetResolveRequest,
@@ -1292,6 +1293,28 @@ def create_app() -> FastAPI:
         except TargetNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(status_code=204)
+
+    @app.post("/api/targets/inspect")
+    def inspect_target(
+        data: TargetInspectRequest, session: Session = Depends(get_session)
+    ):
+        """Readiness for a repository before it is saved (the form's Inspect).
+
+        Lets a user learn a repository's runtime is unsupported — or that its
+        draft setup/validation commands mismatch it — before creating a target
+        and launching a run that would abort in provisioning. Nothing is saved.
+        """
+        from harness_lab_app.readiness_service import ReadinessService
+
+        try:
+            return ReadinessService(session).inspect(
+                data.repository_url,
+                data.default_ref,
+                setup_commands=data.setup_commands,
+                validation_commands=data.validation_commands,
+            )
+        except TargetError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/targets/{target_id}/readiness")
     def target_readiness(target_id: str, session: Session = Depends(get_session)):

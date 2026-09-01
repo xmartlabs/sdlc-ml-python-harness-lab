@@ -263,6 +263,46 @@ grows. See [ADR-0026](../docs/adr/0026-run-continuation-as-child-runs.md) and
 
 <!-- Add new learnings above this line -->
 
+## "Audit a third-party repo" fails at provisioning when setup_commands mismatch the language — 2026-08-31
+
+Every audit run against the `deepseek` target (`deepseek-ai/deepseek-harness`) died
+with a generic "agent error"/`failed` (exit code 1) in `[1/5] Preparing`, before the
+agent ran a single step. Root cause was not the harness, the model, or the network:
+the target's `setup_commands` were `["pnpm install --frozen-lockfile", "pip install -e ."]`
+and `validation_commands` `["pnpm test", "pytest -x -q"]` — a **JS/pnpm repo with
+Python setup lines bolted on**. `_provision_git_target` in `scripts/bench_run.py`
+runs each `setup_commands` entry as operator-authored shell (`subprocess.run(...,
+shell=True)`) and `sys.exit`s on the first non-zero rc. `pip install -e .` on a repo
+with no `setup.py`/`pyproject.toml` returns rc=1 ("does not appear to be a Python
+project"), so the run stops with "The agent would have started against a half-built
+repository". The UI surfaces only the terminal `failed` chip, so it reads as an agent
+fault.
+
+Two structural notes: (1) `setup_commands`/`validation_commands` are free-text shell
+with **no language validation** at target creation — the DB will happily store a
+command whose toolchain the repo cannot satisfy. The `Dockerfile.runner` image
+**does** ship Node 20 (npm/pnpm/yarn) *and* Python 3.11 (pip/uv/pytest) plus git —
+so `pnpm install` actually **succeeded** here; the abort was `pip install -e .` on a
+repo with no `pyproject.toml`/`setup.py`. The runner does **not** ship Go or Rust.
+So the real invariant is not "must be Python" but "each configured command's
+toolchain must exist in the repo AND in the runner image". (2) the failure is
+pre-agent, so `STEPS PARSED 0` and "No metadata.json" are expected, not extra bugs.
+
+**Fix applied:** added a clean Python target `click` (`pallets/click`, `main` →
+`36baa15`) via `POST /api/targets` — zero runtime deps, `requires-python >=3.10`,
+test deps just `pytest`, so `setup_commands=["pip install -e .", "pip install pytest"]`
+and `validation_commands=["pytest -q"]` install in seconds on the runner's Py3.11.
+Archived the `deepseek` target so it cannot be reused.
+
+**How to apply:** the runner image supports **Python and Node**, not Go/Rust/Java.
+A target is safe when it is a pip-installable Python project (`pyproject.toml`/
+`setup.py`) OR a Node project (`package.json`), and every configured setup/validation
+command names a toolchain the repo actually has (don't put `pip install -e .` on a
+repo with no `pyproject.toml`, or `pnpm install` on a repo with no `package.json`).
+Before creation, inspect a repo with `POST /api/targets/inspect` (or per-target
+`GET /api/targets/{id}/readiness`): the "Runtime compatibility" check warns — fail-open,
+not blocking — when the ecosystem is unsupported or a command's toolchain is missing.
+`readiness_service.runtime_compatibility(paths, setup, validation)` is the rule.
 
 ## In-platform sandboxes: worker-launched containers with dynamic host ports — 2026-07-08
 
