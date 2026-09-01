@@ -312,21 +312,30 @@ If all of that worked, your machine is fully onboarded.
 | Every step logs `stream error` (gateway model) | The self-hosted server behind that model (LM Studio / Ollama / NIM host) is off or unreachable from the gateway — start it and re-run. Run creation preflights this and rejects with a clear error when the backend is provably down (skip with `HARNESS_LAB_DISABLE_GATEWAY_PROBE=1`) |
 | No run attribution in Langfuse | `LITELLM_MASTER_KEY` matches your gateway's master key |
 
-## 6. Optional — trajectory scores (DeepEval)
+## 6. Trajectory scores (DeepEval) — on by default in Docker
 
 Three scores — `task_completion`, `step_efficiency` and `tool_correctness` — are
-computed by [DeepEval](https://github.com/confident-ai/deepeval), which is an
-optional dependency:
+computed by [DeepEval](https://github.com/confident-ai/deepeval) as part of the
+**default scoring profile**: every scored run gets them when the pieces are in
+place, and each metric skips with a stated reason (never a zero) when they are
+not.
 
-```bash
-uv sync --extra deepeval
-```
+What "in place" means:
 
-They need a judge model as well as the package: two of the three are `GEval`
-rubrics, so set `OPENAI_API_KEY` (or DeepEval's own model configuration) for the
-judge. Without either, those three metrics return **no score** — never a zero, so
-an aggregate can never read "not installed" as "did badly". Everything else in the
-lab behaves identically with DeepEval absent.
+- **The package.** The Docker images (`make app-up`) ship it. For host mode or
+  local development: `uv sync --extra deepeval` (note a plain `uv sync` removes
+  it again).
+- **A judge**, for the two `GEval` rubrics. Zero-config when your AI gateway is
+  set up: the judge defaults to the auditor's default model through
+  `GATEWAY_BASE_URL`/`GATEWAY_TOKEN` — the same endpoint and credentials the
+  audit already uses. Override with `DEEPEVAL_MODEL` (or `AUDITOR_MODEL`) in
+  `.env`.
+- `tool_correctness` is deterministic and needs no judge — but it only scores
+  cases that declare `files_expected` or `validation_commands`, because an
+  expectation nobody wrote down is not something to grade against.
+
+**Cost lever:** the two judged metrics are two small LLM calls per scored run.
+`DEEPEVAL_MODEL=off` in `.env` turns them off; the deterministic scores stay.
 
 ## 7. Optional — develop the lab itself
 

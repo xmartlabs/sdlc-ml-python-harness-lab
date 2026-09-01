@@ -226,3 +226,92 @@ def test_listing_paths_returns_tracked_paths(monkeypatch, tmp_path):
         "CLAUDE.md",
         "src/app/main.py",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Command inference: an auditor rarely knows a client's real test command
+# ---------------------------------------------------------------------------
+
+
+def test_a_makefile_test_target_is_the_repositorys_own_word():
+    from harness_lab_app.readiness_service import infer_commands
+
+    out = infer_commands(
+        ["Makefile", "src/app.py"],
+        {"Makefile": "build:\n\tgo build\ntest:\n\tgo test\n"},
+    )
+    assert "make test" in out["validation"]
+
+
+def test_npms_scaffold_placeholder_is_not_a_gate():
+    from harness_lab_app.readiness_service import infer_commands
+
+    scaffold = '{"scripts": {"test": "echo \\"Error: no test specified\\" && exit 1"}}'
+    out = infer_commands(["package.json"], {"package.json": scaffold})
+    assert out["validation"] == []
+
+
+def test_a_real_npm_test_script_suggests_ci_install_with_a_lockfile():
+    from harness_lab_app.readiness_service import infer_commands
+
+    out = infer_commands(
+        ["package.json", "package-lock.json"],
+        {"package.json": '{"scripts": {"test": "vitest run"}}'},
+    )
+    assert out["validation"] == ["npm test"]
+    assert out["setup"] == ["npm ci"]
+
+
+def test_a_python_repo_with_uv_lock_suggests_uv_flavoured_commands():
+    from harness_lab_app.readiness_service import infer_commands
+
+    out = infer_commands(
+        ["pyproject.toml", "uv.lock", "tests/test_app.py"],
+        {"pyproject.toml": "[tool.pytest.ini_options]\n"},
+    )
+    assert out["setup"] == ["uv sync"]
+    assert out["validation"] == ["uv run pytest -x -q"]
+
+
+def test_a_polyglot_repo_suggests_one_gate_per_ecosystem():
+    """deepseek-harness shape: TypeScript and Python side by side."""
+    from harness_lab_app.readiness_service import infer_commands
+
+    out = infer_commands(
+        [
+            "package.json",
+            "yarn.lock",
+            "pyproject.toml",
+            "python/sdk/tests/test_x.py",
+            "go.mod",
+        ],
+        {
+            "package.json": '{"scripts": {"test": "jest"}}',
+            "pyproject.toml": "[tool.pytest.ini_options]\n",
+        },
+    )
+    assert (
+        out["validation"] == ["yarn test", "go test ./..."]
+        or "yarn test" in out["validation"]
+    )
+    assert "go test ./..." in out["validation"]
+
+
+def test_suggestions_ride_on_the_readiness_report(session):
+    """The payload carries the inference so the UI can offer one-click adoption."""
+    from harness_lab_app.models import TargetRepository
+    from harness_lab_app.readiness_service import build
+
+    target = TargetRepository(
+        target_id="acme",
+        name="Acme",
+        repository_url="https://example.invalid/acme.git",
+    )
+    report = build(
+        target,
+        commit="abc123",
+        paths=["Makefile"],
+        suggested={"validation": ["make test"], "setup": []},
+    )
+    assert report["suggested_validation_commands"] == ["make test"]
+    assert report["suggested_setup_commands"] == []

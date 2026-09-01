@@ -1204,6 +1204,30 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {**experiment.model_dump(), "warnings": warnings}
 
+    @app.post("/api/experiments/{experiment_id}/abandon")
+    def abandon_experiment(experiment_id: str, session: Session = Depends(get_session)):
+        """Hide an experiment from the working set; its runs stay in the corpus."""
+        try:
+            return ExperimentService(session).abandon_experiment(experiment_id)
+        except ExperimentNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/experiments/{experiment_id}")
+    def delete_experiment(
+        experiment_id: str,
+        delete_runs: bool = False,
+        session: Session = Depends(get_session),
+    ):
+        """Erase an experiment — with its runs, or not at all (see the service)."""
+        try:
+            return ExperimentService(
+                session, enqueue_cleanup=enqueue_container_cleanup
+            ).delete_experiment(experiment_id, delete_runs=delete_runs)
+        except ExperimentNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ExperimentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.post("/api/experiments/{experiment_id}/launch", status_code=201)
     def launch_experiment(
         experiment_id: str,
@@ -1284,6 +1308,27 @@ def create_app() -> FastAPI:
             return ReadinessService(session).build(target_id)
         except TargetNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/targets/{target_id}/audit-report")
+    def target_audit_report(target_id: str, session: Session = Depends(get_session)):
+        """The audit as a client-facing markdown document.
+
+        Assembled live from what the lab holds — readiness, derived cases,
+        experiments, accepted findings — so it can never say more than the
+        evidence does. Regenerating after more runs simply says more.
+        """
+        from harness_lab_app.audit_report import build_report
+        from harness_lab_app.readiness_service import ReadinessService
+
+        try:
+            target = TargetService(session).get_target(target_id)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        readiness = ReadinessService(session).build(target_id)
+        return {
+            "target_id": target_id,
+            "markdown": build_report(session, target, readiness),
+        }
 
     @app.post("/api/targets/{target_id}/resolve")
     def resolve_target_ref(

@@ -24,6 +24,7 @@ from harness_lab_app.models import (
     RunEvent,
     RunState,
     Sandbox,
+    Score,
     TargetStatus,
     Validation,
     utc_now,
@@ -1175,7 +1176,17 @@ class RunService:
                 f"Run '{run_id}' has continuations ({names}). Delete those "
                 "first, or delete with force."
             )
-        for model in (Validation, Attribution, Audit, Sandbox, Artifact, RunEvent):
+        # Score included: without it a deleted run left its scores behind, and
+        # every aggregate kept being biased by a measurement whose run was gone.
+        for model in (
+            Validation,
+            Attribution,
+            Audit,
+            Sandbox,
+            Artifact,
+            RunEvent,
+            Score,
+        ):
             rows = self.session.exec(select(model).where(model.run_id == run_id)).all()
             for row in rows:
                 self.session.delete(row)

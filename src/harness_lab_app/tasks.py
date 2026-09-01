@@ -232,6 +232,14 @@ def _write_case_spec(
         # instead of inferring one from the shape of the data.
         spec["source"] = "git_target"
         spec["target"] = target
+        # ALSO at the top level, because that is where bench_run.py reads it
+        # (`case_spec.get("harness_source")`). Staging it only inside the
+        # target block silently degraded every declared `native`/`injected`
+        # run to `lab_root`: the agent ran from the lab root with the lab's
+        # own governance loaded — a control arm quietly turned into a second
+        # treatment arm, and the audit then judged it against documents the
+        # condition said it never had.
+        spec["harness_source"] = target.get("harness_source", "lab_root")
     if continuation_prompt:
         # A continuation replaces the instruction, not the case (ADR-0026): the
         # SWE fields, constraints and success criteria still describe the task

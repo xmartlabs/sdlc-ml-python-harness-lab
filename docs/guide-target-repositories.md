@@ -34,6 +34,16 @@ Press **Check** on the row to see the commit the default ref points at right now
 private repo with no credentials, or a typo'd branch, fails here — with git's own
 message — instead of after a container has started.
 
+### What the runner can execute
+
+Setup and validation commands run **inside the runner image**, not on your
+machine. The image ships git, Python 3.11 (`uv`, `pip`), and Node 20 with
+`npm`, `pnpm` and `yarn` baked in via corepack. A repository whose gate needs
+anything else — Go, Rust, a system dependency — needs that added to
+`Dockerfile.runner` first, or its setup fails fast with the tool's own
+"not found" before any agent time is spent (by design: the run stops rather
+than measuring an agent against a half-built repository).
+
 ### Credentials
 
 The clone happens inside the run container. An `https://` URL to a public repo needs

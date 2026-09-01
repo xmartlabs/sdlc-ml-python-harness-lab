@@ -126,6 +126,13 @@ A run whose trajectory carries too little signal returns **no score**, never a z
 "not measured" and "scored badly" are different claims, and an aggregate must never
 confuse them.
 
+The metrics ride in the **default scoring profile** (the graceful skips are what
+make that safe), the Docker images ship the dependency, and the judge resolves
+zero-config through the lab's own gateway — `DEEPEVAL_MODEL` overrides it and
+`DEEPEVAL_MODEL=off` is the cost lever. Host-mode development still needs
+`uv sync --extra deepeval`, and a plain `uv sync` removes it again — that
+remains the price of keeping it an optional extra.
+
 ### Runs from before scoring existed have no scores
 
 Every terminal run is now scored automatically, and re-validating rescores. Runs that

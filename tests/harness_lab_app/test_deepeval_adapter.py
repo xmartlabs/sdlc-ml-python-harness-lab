@@ -163,6 +163,9 @@ def test_no_judge_model_skips_only_the_judged_metrics(monkeypatch):
     install_fake_deepeval(monkeypatch)
     monkeypatch.delenv("DEEPEVAL_MODEL", raising=False)
     monkeypatch.delenv("AUDITOR_MODEL", raising=False)
+    # No gateway either — with one configured, the auditor's default model
+    # legitimately becomes the judge, which is its own test below.
+    monkeypatch.setattr(deepeval_adapter, "_gateway_config", lambda: ("", ""))
 
     by_name = {outcome.name: outcome for outcome in measure(trajectory())}
 
@@ -381,3 +384,78 @@ def test_a_run_with_no_recorded_steps_stores_no_trajectory_scores(
 
     # No zeros stood in for the metrics that could not be measured.
     assert not set(METRICS) & {score.name for score in stored}
+
+
+# --- the judge, resolved and transported ----------------------------------
+
+
+def test_a_configured_gateway_supplies_the_default_judge(monkeypatch):
+    """Zero-config: a lab that audits through its gateway also judges through it."""
+    monkeypatch.delenv("DEEPEVAL_MODEL", raising=False)
+    monkeypatch.delenv("AUDITOR_MODEL", raising=False)
+    monkeypatch.setattr(deepeval_adapter, "_env_or_dotenv", lambda _name: "")
+    monkeypatch.setattr(
+        deepeval_adapter, "_gateway_config", lambda: ("http://gw.invalid/v1", "tok")
+    )
+
+    from harness_lab_app.harness_lifecycle.judge import DEFAULT_JUDGE_MODEL
+
+    assert deepeval_adapter.judge_model() == DEFAULT_JUDGE_MODEL
+
+
+def test_deepeval_model_off_is_the_cost_lever(monkeypatch):
+    monkeypatch.setenv("DEEPEVAL_MODEL", "off")
+    monkeypatch.setattr(
+        deepeval_adapter, "_gateway_config", lambda: ("http://gw.invalid/v1", "tok")
+    )
+
+    assert deepeval_adapter.judge_model() == ""
+
+
+def test_without_gateway_credentials_the_bare_model_name_is_passed_through(
+    monkeypatch,
+):
+    monkeypatch.setattr(deepeval_adapter, "_gateway_config", lambda: ("", ""))
+
+    assert deepeval_adapter._gateway_judge("some-model") == "some-model"
+
+
+def test_extract_json_strips_fences_and_prose():
+    fenced = 'Here you go:\n```json\n{"score": 0.8, "reason": "ok"}\n```\nCheers.'
+    assert deepeval_adapter._extract_json(fenced) == '{"score": 0.8, "reason": "ok"}'
+    bare = 'prefix {"a": 1} suffix'
+    assert deepeval_adapter._extract_json(bare) == '{"a": 1}'
+
+
+def test_gateway_chat_speaks_openai_compatible_json(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": "judged text"}}]}
+            ).encode()
+
+    def fake_urlopen(request, timeout=0):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
+        captured["auth"] = request.headers.get("Authorization")
+        return FakeResponse()
+
+    monkeypatch.setattr(deepeval_adapter.urllib.request, "urlopen", fake_urlopen)
+
+    text = deepeval_adapter._gateway_chat(
+        "http://gw.invalid/v1", "tok", "gateway/gpt-5.4-mini", "Judge this."
+    )
+
+    assert text == "judged text"
+    assert captured["url"] == "http://gw.invalid/v1/chat/completions"
+    # The gateway wants the bare model name, and the bearer token.
+    assert captured["body"]["model"] == "gpt-5.4-mini"
+    assert captured["auth"] == "Bearer tok"

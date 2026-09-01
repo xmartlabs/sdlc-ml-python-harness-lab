@@ -13,6 +13,8 @@ large to clone for a look.
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -56,6 +58,8 @@ _TEST_MARKERS = (
     "pytest.ini",
     "pyproject.toml",
     "package.json",
+    "go.mod",
+    "Cargo.toml",
 )
 
 
@@ -175,6 +179,7 @@ def build(
     ref_error: str = "",
     paths: list[str] | None = None,
     read_error: str = "",
+    suggested: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """The readiness report for one repository.
 
@@ -226,6 +231,10 @@ def build(
         "ref": target.default_ref,
         "commit": commit,
         "detected": detected,
+        # Inferred, never adopted silently: a person clicks these into the
+        # target's configuration, and can edit them there.
+        "suggested_validation_commands": (suggested or {}).get("validation", []),
+        "suggested_setup_commands": (suggested or {}).get("setup", []),
         "read_error": read_error,
         "checks": [check.as_dict() for check in checks],
         # "Ready" is the narrow claim that a run would execute and be scored
@@ -236,6 +245,114 @@ def build(
             check.label for check in (reachable, gates) if check.status != "ok"
         ],
     }
+
+
+def infer_commands(paths: list[str], contents: dict[str, str]) -> dict[str, list[str]]:
+    """Infer validation and setup commands from what the repository ships.
+
+    An auditor rarely knows a client repository's real test command, and asking
+    them to guess defeats the point of an audit. This reads the conventional
+    markers instead — a Makefile's ``test:`` target, ``package.json`` scripts,
+    a pytest configuration, ``go.mod``, ``Cargo.toml`` — and proposes commands.
+
+    They are **suggestions**: shown as inferred, adopted by a person, editable
+    before any run depends on them. Inference that silently became
+    configuration would be the lab guessing a client's own quality gate.
+
+    ``contents`` holds the few small files worth reading (fetched lazily from
+    the blobless mirror); ``paths`` is the full tree listing.
+    """
+    path_set = set(paths)
+    validation: list[str] = []
+    setup: list[str] = []
+
+    # A task runner with an explicit `test` target outranks everything: it is
+    # the repository's own word for "this is how you check me".
+    makefile = contents.get("Makefile", "")
+    if re.search(r"^test\s*:", makefile, re.MULTILINE):
+        validation.append("make test")
+    justfile = contents.get("justfile", "")
+    if re.search(r"^test\b", justfile, re.MULTILINE):
+        validation.append("just test")
+
+    # Node: only when scripts.test is real — npm's scaffold placeholder
+    # ("no test specified") declares the opposite of a gate.
+    package_json = contents.get("package.json", "")
+    if package_json:
+        try:
+            scripts = (json.loads(package_json) or {}).get("scripts") or {}
+        except ValueError:
+            scripts = {}
+        test_script = str(scripts.get("test") or "")
+        if test_script and "no test specified" not in test_script:
+            if "pnpm-lock.yaml" in path_set:
+                setup.append("pnpm install --frozen-lockfile")
+                validation.append("pnpm test")
+            elif "yarn.lock" in path_set:
+                setup.append("yarn install --frozen-lockfile")
+                validation.append("yarn test")
+            else:
+                setup.append(
+                    "npm ci" if "package-lock.json" in path_set else "npm install"
+                )
+                validation.append("npm test")
+
+    # Python: any explicit pytest configuration, or a conventional test tree.
+    pyproject = contents.get("pyproject.toml", "")
+    has_pytest = (
+        "[tool.pytest" in pyproject
+        or "pytest.ini" in path_set
+        or "tox.ini" in path_set
+        or any(
+            part.startswith("tests/") and "test" in part.rsplit("/", 1)[-1]
+            for part in path_set
+        )
+    )
+    if pyproject or has_pytest:
+        if "uv.lock" in path_set:
+            setup.append("uv sync")
+            if has_pytest:
+                validation.append("uv run pytest -x -q")
+        elif "poetry.lock" in path_set:
+            setup.append("poetry install")
+            if has_pytest:
+                validation.append("poetry run pytest -x -q")
+        elif has_pytest:
+            setup.append("pip install -e .")
+            validation.append("pytest -x -q")
+
+    if "go.mod" in path_set:
+        validation.append("go test ./...")
+    if "Cargo.toml" in path_set:
+        validation.append("cargo test")
+
+    def _dedupe(items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for item in items:
+            if item not in seen:
+                seen.add(item)
+                out.append(item)
+        return out
+
+    return {"validation": _dedupe(validation), "setup": _dedupe(setup)}
+
+
+#: The files infer_commands wants to read, all small by convention.
+_INFERENCE_FILES = ("Makefile", "justfile", "package.json", "pyproject.toml")
+
+
+def read_file(mirror: Path, ref: str, path: str) -> str:
+    """One file's content at ``ref`` from the bare mirror, or "" if unreadable.
+
+    The mirror is blobless, so this triggers a lazy fetch of exactly one blob —
+    cheap for the handful of small marker files inference reads, which is why
+    inference stays possible on repositories too large to clone for a look.
+    """
+    from harness_lab_app.case_derivation import _git
+
+    result = _git(["--git-dir", str(mirror), "show", f"{ref or 'HEAD'}:{path}"])
+    return result.stdout if result.returncode == 0 else ""
 
 
 def list_paths(mirror: Path, ref: str) -> list[str]:
@@ -273,13 +390,21 @@ class ReadinessService:
 
         paths: list[str] | None = None
         read_error = ""
+        suggested: dict[str, list[str]] | None = None
         try:
             mirror = sync_mirror(
                 target.repository_url,
                 get_settings().target_mirrors_dir,
                 target.target_id,
             )
-            paths = list_paths(mirror, commit or target.default_ref)
+            ref = commit or target.default_ref
+            paths = list_paths(mirror, ref)
+            contents = {
+                name: read_file(mirror, ref, name)
+                for name in _INFERENCE_FILES
+                if name in set(paths)
+            }
+            suggested = infer_commands(paths, contents)
         except Exception as error:
             read_error = str(error)
 
@@ -289,4 +414,5 @@ class ReadinessService:
             ref_error=ref_error,
             paths=paths,
             read_error=read_error,
+            suggested=suggested,
         )

@@ -24,6 +24,7 @@ from harness_lab_app.models import (
     ExperimentMode,
     ExperimentStatus,
     HarnessSource,
+    RunState,
 )
 from harness_lab_app.run_service import RunService
 from harness_lab_app.schemas import (
@@ -700,3 +701,103 @@ def test_launch_enqueues_every_run_it_persists(session):
 
     assert len(runs) == 2
     assert sorted(published) == sorted(run.run_id for run in runs)
+
+
+def test_abandon_hides_the_experiment_but_keeps_its_runs(session):
+    """Abandonment is 'stop showing me this', never 'this never happened'."""
+    from sqlmodel import select
+
+    from harness_lab_app.models import Run
+
+    service = ExperimentService(session)
+    _skills_design(service, "old-junk")
+    service.launch("old-junk", _base_config())
+
+    abandoned = service.abandon_experiment("old-junk")
+
+    assert abandoned.status == ExperimentStatus.abandoned
+    assert len(list(session.exec(select(Run)).all())) == 2
+
+
+def test_deleting_an_experiment_with_runs_needs_the_explicit_flag(session):
+    """Half a deletion is worse than none: orphan runs would bias every board."""
+    service = ExperimentService(session)
+    _skills_design(service, "half-delete")
+    service.launch("half-delete", _base_config())
+    for run in service.runs("half-delete"):
+        run.state = RunState.completed
+        service.session.add(run)
+    service.session.commit()
+
+    with pytest.raises(ExperimentError, match="delete_runs=true"):
+        service.delete_experiment("half-delete")
+
+
+def test_deleting_with_runs_erases_the_whole_measurement(session):
+    """Experiment, conditions, runs, configs AND scores — nothing left to bias."""
+    from sqlmodel import select
+
+    from harness_lab_app.models import (
+        Experiment,
+        ExperimentCondition,
+        Run,
+        RunConfig,
+        Score,
+    )
+
+    service = ExperimentService(session)
+    _skills_design(service, "junk")
+    runs = service.launch("junk", _base_config())
+    for run in runs:
+        run.state = RunState.completed
+        session.add(run)
+    session.add(Score(run_id=runs[0].run_id, name="cost_usd", version=1, value_num=1.0))
+    session.commit()
+
+    result = service.delete_experiment("junk", delete_runs=True)
+
+    assert result["deleted_runs"] == 2
+    for model in (Run, RunConfig, Score, ExperimentCondition):
+        assert list(session.exec(select(model)).all()) == []
+    assert (
+        session.exec(
+            select(Experiment).where(Experiment.experiment_id == "junk")
+        ).first()
+        is None
+    )
+
+
+def test_a_live_experiment_cannot_be_deleted_mid_flight(session):
+    """Pending or running arms must be cancelled before the record disappears."""
+    service = ExperimentService(session)
+    _skills_design(service, "live")
+    service.launch("live", _base_config())  # runs persist as pending
+
+    with pytest.raises(ExperimentError, match="Cancel them first"):
+        service.delete_experiment("live", delete_runs=True)
+
+
+def test_a_caseless_draft_deletes_cleanly(session):
+    """The 'audit with no cases' fossil: a draft with nothing in it just goes."""
+    service = ExperimentService(session)
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="empty-draft",
+            name="Empty draft",
+            question="How does this repo behave under an agent?",
+            mode=ExperimentMode.discovery,
+            case_ids=[],
+            repetitions=2,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="as-is",
+                    role=ConditionRole.treatment,
+                    overrides={"target_repo_id": "somewhere"},
+                )
+            ],
+        )
+    )
+
+    result = service.delete_experiment("empty-draft")
+
+    assert result["deleted_runs"] == 0

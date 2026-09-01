@@ -230,3 +230,16 @@ def test_a_profile_can_exclude_judgement_entirely():
 def test_an_unknown_profile_is_refused():
     with pytest.raises(KeyError, match="Unknown evaluation profile"):
         run_profile("made-up", EvaluationContext(run_id="r1"))
+
+
+def test_trajectory_metrics_ride_in_the_default_profile():
+    """§12 completed: DeepEval is part of ordinary scoring, not a special mode.
+
+    Safe because the evaluator skips gracefully — a lab without the library,
+    a judge, or a recorded trajectory scores exactly as it did before.
+    """
+    from harness_lab_app.evaluation import PROFILES
+
+    assert "deepeval" in PROFILES["default"]
+    # And a bare context still evaluates without raising.
+    run_profile("default", EvaluationContext(run_id="r1"))

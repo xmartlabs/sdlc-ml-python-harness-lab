@@ -310,3 +310,68 @@ def test_the_case_spec_tells_the_runner_which_condition_to_build(
     )
     spec = tasks._target_spec(session, run)
     assert spec["harness_source"] == "injected"
+
+
+def test_case_spec_stages_harness_source_where_the_runner_reads_it(
+    session, tmp_path, monkeypatch
+):
+    """The staged spec must carry harness_source at the TOP level.
+
+    bench_run.py reads `case_spec.get("harness_source")` — root level. The
+    worker once staged it only inside the target block, so every declared
+    `native` run silently fell back to `lab_root`: the agent ran with the
+    lab's governance loaded, and the audit judged it against documents the
+    condition said it never had. The two runs of the first deepseek audit are
+    the fossil record of this bug.
+    """
+    import json
+    from types import SimpleNamespace
+
+    from harness_lab_app import tasks
+    from harness_lab_app.case_service import CaseService
+    from harness_lab_app.schemas import CaseCreate
+
+    CaseService(session).create_case(
+        CaseCreate(
+            case_id="native-spec-case",
+            name="Native spec case",
+            type="repo_task",
+            description="",
+            tags=[],
+            prompt_variants={"default": "Do the task."},
+            step_prompts=[],
+            success_criteria={},
+            scoring_rubric="",
+            constraints=[],
+            validation_commands=[],
+            max_steps=10,
+        )
+    )
+    monkey_dir = tmp_path / "runs"
+    monkeypatch.setattr(
+        tasks,
+        "get_settings",
+        lambda: SimpleNamespace(data_runs_dir=monkey_dir, repo_root=tmp_path),
+    )
+    tasks._write_case_spec(
+        session,
+        "native-spec-case-K-001",
+        "native-spec-case",
+        "default",
+        target={
+            "target_id": "acme",
+            "repo_url": "https://example.invalid/acme.git",
+            "ref": "main",
+            "commit": "abc123",
+            "setup": [],
+            "harness_source": "native",
+        },
+    )
+    spec = json.loads(
+        (monkey_dir / "native-spec-case-K-001" / "case_spec.json").read_text()
+    )
+
+    # Root level — the runner's contract — and still inside target for readers
+    # of the provisioning block.
+    assert spec["harness_source"] == "native"
+    assert spec["target"]["harness_source"] == "native"

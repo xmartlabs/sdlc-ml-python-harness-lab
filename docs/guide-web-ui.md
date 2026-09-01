@@ -695,6 +695,18 @@ confound.
 Low repetition counts are labelled wherever they appear. One trial is an exploratory
 result, and the screen says so rather than letting it look like a finding.
 
+Two lifecycle actions keep the working set honest, and they are deliberately
+different claims:
+
+- **Abandon** hides the experiment from the default list (a *Show abandoned*
+  toggle brings it back) and from the attention feed. Its runs **stay in the
+  corpus** — abandonment is "stop showing me this", never "this never happened".
+- **Delete** erases the measurement: the experiment, its conditions, its runs,
+  their configs, artifacts **and scores** leave every dashboard and aggregate.
+  An experiment with runs is only deletable together with them (half a deletion
+  would strand orphan measurements — the very bias a cleanup is trying to
+  remove), and one with pending or running arms must be cancelled first.
+
 ### Findings
 What the runs showed, what to do about it, and whether that was tested
 ([ADR-0035](adr/0035-findings-and-manual-maturity-assessment.md)). A finding carries

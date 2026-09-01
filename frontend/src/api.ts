@@ -289,6 +289,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  /** Hide an experiment from the working set; its runs stay in the corpus. */
+  abandonExperiment: (id: string) =>
+    request<ExperimentRecord>(`/api/experiments/${id}/abandon`, { method: "POST" }),
+  /** Erase an experiment and (explicitly) its runs, scores and artifacts. */
+  deleteExperiment: (id: string, deleteRuns: boolean) =>
+    request<{ experiment_id: string; deleted_runs: number }>(
+      `/api/experiments/${id}?delete_runs=${deleteRuns}`,
+      { method: "DELETE" }
+    ),
   summarizeExperiment: (id: string) =>
     request<ExperimentSummary>(`/api/experiments/${id}/summary`),
   launchExperiment: (id: string, config: RunConfigPayload) =>
@@ -365,6 +374,10 @@ export const api = {
     }),
   // Step 2 of the guided audit: what this repository already has, read from
   // the repository rather than assumed.
+  getAuditReport: (targetId: string) =>
+    request<{ target_id: string; markdown: string }>(
+      `/api/targets/${targetId}/audit-report`
+    ),
   getTargetReadiness: (targetId: string) =>
     request<ReadinessReport>(`/api/targets/${targetId}/readiness`),
   deriveCases: (targetId: string, limit = 20) =>

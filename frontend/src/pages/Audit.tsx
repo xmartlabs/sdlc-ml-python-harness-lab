@@ -58,6 +58,7 @@ export function Audit() {
   const [targets, setTargets] = useState<TargetRecord[]>([]);
   const [targetId, setTargetId] = useState("");
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
+  const [report, setReport] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<CaseCandidates | null>(null);
   const [accepted, setAccepted] = useState<string[]>([]);
   // The ids of the cases actually created — what the discovery experiment
@@ -97,6 +98,25 @@ export function Audit() {
     run("readiness", async () => {
       setReadiness(await api.getTargetReadiness(id));
       setStep("readiness");
+    });
+
+  const adoptInferred = (payload: {
+    validation_commands?: string[];
+    setup_commands?: string[];
+  }) =>
+    run("adopt", async () => {
+      await api.updateTarget(targetId, payload);
+      setNotice(
+        "Adopted. Future runs against this repository validate with its own " +
+          "commands — edit them any time under Evidence → Repositories."
+      );
+      await loadReadiness(targetId);
+    });
+
+  const generateReport = () =>
+    run("report", async () => {
+      const payload = await api.getAuditReport(targetId);
+      setReport(payload.markdown);
     });
 
   const derive = () =>
@@ -316,7 +336,11 @@ export function Audit() {
           {busy === "readiness" ? <Spinner label="Reading the repository" /> : null}
           {readiness ? (
             <>
-              <ReadinessReportView report={readiness} />
+              <ReadinessReportView
+                adopting={busy === "adopt"}
+                onAdopt={adoptInferred}
+                report={readiness}
+              />
               <div className="toolbar">
                 <button
                   className="primary"
@@ -517,7 +541,40 @@ export function Audit() {
               Open findings
               <IconArrowRight size={15} />
             </Link>
+            <button
+              className="secondary"
+              disabled={busy !== "" || !targetId}
+              onClick={() => void generateReport()}
+              type="button"
+            >
+              {busy === "report" ? "Assembling…" : "Generate client report"}
+            </button>
           </div>
+          {report ? (
+            <div className="card">
+              <div className="panel-head">
+                <h3>Client report (markdown)</h3>
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(report);
+                    setNotice("Report copied to the clipboard.");
+                  }}
+                  type="button"
+                >
+                  Copy
+                </button>
+              </div>
+              <p className="muted small">
+                Assembled live from the evidence — readiness, derived cases,
+                experiments and signed findings. Regenerate after more runs and
+                it simply says more. It never claims what was not measured.
+              </p>
+              <pre className="candidate-prompt" style={{ maxHeight: 480 }}>
+                {report}
+              </pre>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </section>

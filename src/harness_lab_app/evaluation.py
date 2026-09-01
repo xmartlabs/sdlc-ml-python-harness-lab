@@ -314,7 +314,11 @@ class DeepEvalEvaluator:
 # Named sets of evaluators. A profile is what an experiment declares, so two
 # arms are always scored by the same instruments.
 PROFILES: dict[str, tuple[str, ...]] = {
-    "default": ("deterministic", "efficiency", "harness_audit"),
+    # Trajectory metrics ride in the default: the evaluator skips gracefully
+    # (no library, no judge, no trajectory → no score, never a zero), so a lab
+    # without DeepEval scores exactly as it did before. Set DEEPEVAL_MODEL=off
+    # to keep the default deterministic-plus-audit only.
+    "default": ("deterministic", "efficiency", "harness_audit", "deepeval"),
     "with_trajectory": ("deterministic", "efficiency", "harness_audit", "deepeval"),
     "outcome_only": ("deterministic",),
     "no_judgement": ("deterministic", "efficiency"),

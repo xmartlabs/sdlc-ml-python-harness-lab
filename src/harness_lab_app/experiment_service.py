@@ -27,6 +27,7 @@ from harness_lab_app.models import (
     ExperimentStatus,
     Run,
     RunConfig,
+    RunState,
 )
 from harness_lab_app.run_service import RunService
 from harness_lab_app.schemas import RunConfigCreate
@@ -201,7 +202,7 @@ def repetition_warning(repetitions: int) -> str | None:
 
 
 class ExperimentService:
-    def __init__(self, session: Session, enqueue=None):
+    def __init__(self, session: Session, enqueue=None, enqueue_cleanup=None):
         self.session = session
         # Queue publisher, injected by the API layer exactly as RunService gets
         # it. Without this, `launch` persisted its runs and then silently never
@@ -209,6 +210,7 @@ class ExperimentService:
         # absent — leaving a whole experiment `pending` forever with no error
         # anywhere. Only `launch` needs it; every read path passes nothing.
         self.enqueue = enqueue
+        self.enqueue_cleanup = enqueue_cleanup
 
     def list_experiments(self) -> list[Experiment]:
         rows = list(self.session.exec(select(Experiment)).all())
@@ -369,6 +371,60 @@ class ExperimentService:
             ],
             "comparisons": comparisons,
         }
+
+    def abandon_experiment(self, experiment_id: str) -> Experiment:
+        """Take an experiment out of the working set without erasing anything.
+
+        Abandoned experiments disappear from the default list and from the
+        attention feed, but their runs STAY in the corpus — abandonment is
+        "stop showing me this", not "this never happened". To remove the
+        measurements themselves, delete the experiment with its runs.
+        """
+        experiment = self.get_experiment(experiment_id)
+        experiment.status = ExperimentStatus.abandoned
+        experiment.updated_at = datetime.now(UTC)
+        self.session.add(experiment)
+        self.session.commit()
+        self.session.refresh(experiment)
+        return experiment
+
+    def delete_experiment(
+        self, experiment_id: str, *, delete_runs: bool = False
+    ) -> dict[str, Any]:
+        """Erase an experiment — and, explicitly, its measurements.
+
+        Deleting the experiment while leaving its runs would strand orphan
+        measurements in every dashboard, which is precisely the bias a cleanup
+        is trying to remove — so an experiment with runs is only deletable
+        together with them, and only once nothing is still executing.
+        """
+        experiment = self.get_experiment(experiment_id)
+        runs = self.runs(experiment_id)
+        active = [
+            run for run in runs if run.state in (RunState.pending, RunState.running)
+        ]
+        if active:
+            raise ExperimentError(
+                f"Experiment '{experiment_id}' has {len(active)} run(s) still "
+                "pending or running. Cancel them first — deleting a live "
+                "measurement mid-flight is how corpora grow unexplained holes."
+            )
+        if runs and not delete_runs:
+            raise ExperimentError(
+                f"Experiment '{experiment_id}' has {len(runs)} run(s). Deleting "
+                "it without them would leave orphan measurements biasing every "
+                "aggregate — pass delete_runs=true to remove them too, or "
+                "abandon the experiment to hide it while keeping the corpus."
+            )
+        runs_service = RunService(self.session, enqueue_cleanup=self.enqueue_cleanup)
+        for run in runs:
+            # force: continuation chains inside the experiment go with it.
+            runs_service.delete_run(run.run_id, force=True)
+        for condition in self.conditions(experiment_id):
+            self.session.delete(condition)
+        self.session.delete(experiment)
+        self.session.commit()
+        return {"experiment_id": experiment_id, "deleted_runs": len(runs)}
 
     def create_experiment(self, data: ExperimentCreate) -> tuple[Experiment, list[str]]:
         experiment_id = data.experiment_id.strip()

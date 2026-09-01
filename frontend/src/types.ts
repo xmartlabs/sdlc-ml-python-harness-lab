@@ -638,6 +638,13 @@ export type ReadinessReport = {
     test_markers: string[];
   } | null;
   read_error: string;
+  /**
+   * Inferred from the repository's own files (Makefile test target,
+   * package.json scripts, pytest config, go.mod, Cargo.toml). Suggestions
+   * only — a person adopts them into the target, and can edit them there.
+   */
+  suggested_validation_commands?: string[];
+  suggested_setup_commands?: string[];
   checks: ReadinessCheck[];
   /** Narrowly: a run would execute and be scored. Not a governance verdict. */
   ready: boolean;

@@ -2881,3 +2881,15 @@ button.secondary:hover {
   max-height: 200px;
   overflow-y: auto;
 }
+
+
+/* Destructive actions look destructive before they are clicked. */
+button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+button.danger:hover {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}

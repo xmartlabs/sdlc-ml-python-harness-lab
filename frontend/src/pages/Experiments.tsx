@@ -704,16 +704,49 @@ function LaunchPanel({
 
 function ExperimentDetail({
   summary,
-  onLaunched
+  record,
+  onLaunched,
+  onAbandon,
+  onDelete
 }: {
   summary: ExperimentSummary;
+  record?: ExperimentRecord;
   onLaunched: () => void;
+  onAbandon: (experimentId: string) => void;
+  onDelete: (experimentId: string, runCount: number) => void;
 }) {
+  const runCount = record?.run_count ?? 0;
   return (
     <div className="stack">
       {summary.verdict ? <VerdictCard verdict={summary.verdict} /> : null}
       <div className="card">
-        <h2>{summary.question}</h2>
+        <div className="row space-between">
+          <h2>{summary.question}</h2>
+          <div className="button-row">
+            {record && record.status !== "abandoned" ? (
+              <button
+                className="secondary"
+                onClick={() => onAbandon(summary.experiment_id)}
+                title="Hide from the list. Its runs stay in the corpus — this is 'stop showing me this', not 'this never happened'."
+                type="button"
+              >
+                Abandon
+              </button>
+            ) : null}
+            <button
+              className="danger"
+              onClick={() => onDelete(summary.experiment_id, runCount)}
+              title={
+                runCount > 0
+                  ? `Erase this experiment and its ${runCount} run(s) — artifacts and scores leave every dashboard.`
+                  : "Erase this draft."
+              }
+              type="button"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
         <p className="muted">
           {MODE_LABEL[summary.mode] ?? summary.mode} · {summary.repetitions} repetition
           {summary.repetitions === 1 ? "" : "s"} per arm
@@ -834,6 +867,8 @@ export function Experiments() {
   const [error, setError] = useState<string | null>(null);
   // Bumped after a launch so the summary refetches with the queued runs in it.
   const [refresh, setRefresh] = useState(0);
+  // Abandoned experiments are clutter by definition — opt in to see them.
+  const [showAbandoned, setShowAbandoned] = useState(false);
 
   useEffect(() => {
     api
@@ -848,7 +883,7 @@ export function Experiments() {
         )
       )
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     if (selected === null) {
@@ -866,6 +901,39 @@ export function Experiments() {
         )
       );
   }, [selected, refresh]);
+
+  const handleAbandon = async (experimentId: string) => {
+    try {
+      await api.abandonExperiment(experimentId);
+      setRefresh((value) => value + 1);
+    } catch (abandonError) {
+      setError(
+        abandonError instanceof Error ? abandonError.message : "Unable to abandon"
+      );
+    }
+  };
+
+  const handleDelete = async (experimentId: string, runCount: number) => {
+    const message =
+      runCount > 0
+        ? `Delete "${experimentId}" AND its ${runCount} run(s)? Their artifacts ` +
+          "and scores disappear from every dashboard and aggregate. This cannot " +
+          "be undone."
+        : `Delete the draft "${experimentId}"? This cannot be undone.`;
+    if (!window.confirm(message)) {
+      return;
+    }
+    try {
+      await api.deleteExperiment(experimentId, runCount > 0);
+      setSelected(null);
+      setParams({});
+      setRefresh((value) => value + 1);
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error ? deleteError.message : "Unable to delete"
+      );
+    }
+  };
 
   return (
     <section className="stack">
@@ -895,7 +963,22 @@ export function Experiments() {
       {error !== null && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
       <div className="card">
-        <h2>All experiments</h2>
+        <div className="row space-between">
+          <h2>All experiments</h2>
+          {experiments.some((item) => item.status === "abandoned") ? (
+            <label className="row gap">
+              <input
+                checked={showAbandoned}
+                onChange={(event) => setShowAbandoned(event.target.checked)}
+                type="checkbox"
+              />
+              <span>
+                Show abandoned (
+                {experiments.filter((item) => item.status === "abandoned").length})
+              </span>
+            </label>
+          ) : null}
+        </div>
         {isLoading ? (
           <Spinner />
         ) : experiments.length === 0 ? (
@@ -930,7 +1013,12 @@ export function Experiments() {
               </tr>
             </thead>
             <tbody>
-              {experiments.map((experiment) => (
+              {experiments
+                .filter(
+                  (experiment) =>
+                    showAbandoned || experiment.status !== "abandoned"
+                )
+                .map((experiment) => (
                 <tr key={experiment.experiment_id}>
                   <td>
                     <strong>{experiment.experiment_id}</strong>
@@ -972,7 +1060,12 @@ export function Experiments() {
 
       {summary !== null && (
         <ExperimentDetail
+          onAbandon={(id) => void handleAbandon(id)}
+          onDelete={(id, runCount) => void handleDelete(id, runCount)}
           onLaunched={() => setRefresh((value) => value + 1)}
+          record={experiments.find(
+            (item) => item.experiment_id === summary.experiment_id
+          )}
           summary={summary}
         />
       )}

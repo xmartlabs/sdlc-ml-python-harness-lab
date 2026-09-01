@@ -115,3 +115,11 @@ bench_report_*.txt
 
 # SWE-bench subject repos cloned under benchmarks/ (never a submodule)
 /benchmarks/*__*/
+
+# pnpm walks up to the mount root to place its content-addressable store so it
+# can hardlink into workspaces on the same filesystem. Inside the runner that
+# mount root is /app — this repository. The runner pins the store to
+# data/pnpm-store (persistent cache across runs); both paths stay ignored so a
+# stray default can never flood git status again.
+.pnpm-store/
+data/pnpm-store/

@@ -445,7 +445,28 @@ export function Repositories() {
             and be scored. It says nothing about how good the repository's own AI
             governance is.
           </p>
-          <ReadinessReportView report={readiness} />
+          <ReadinessReportView
+            adopting={reading !== null}
+            onAdopt={(payload) => {
+              void (async () => {
+                setReading(readiness.target_id);
+                try {
+                  await api.updateTarget(readiness.target_id, payload);
+                  setTargets(await api.listTargets());
+                  setReadiness(await api.getTargetReadiness(readiness.target_id));
+                } catch (adoptError) {
+                  setError(
+                    adoptError instanceof Error
+                      ? adoptError.message
+                      : "Unable to adopt the inferred commands"
+                  );
+                } finally {
+                  setReading(null);
+                }
+              })();
+            }}
+            report={readiness}
+          />
           <button onClick={() => setReadiness(null)} type="button">
             Close
           </button>

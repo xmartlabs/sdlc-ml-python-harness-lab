@@ -2249,7 +2249,16 @@ def main(argv: list[str] | None = None) -> int:
 
     # The harness condition (ADR-0031) is decided before provisioning, because
     # `injected` is a step *of* provisioning.
-    harness_source = str((case_spec or {}).get("harness_source") or "lab_root")
+    # The worker historically staged this only inside the target block; read
+    # both so a spec from either generation resolves to the condition the run
+    # was actually created with. Falling back to "lab_root" here once silently
+    # turned a declared `native` control into a lab-harness arm — the exact
+    # collapse ADR-0031 exists to prevent.
+    harness_source = str(
+        (case_spec or {}).get("harness_source")
+        or ((case_spec or {}).get("target") or {}).get("harness_source")
+        or "lab_root"
+    )
     harness_projection: dict | None = None
 
     def _inject(ws: Path) -> None:
