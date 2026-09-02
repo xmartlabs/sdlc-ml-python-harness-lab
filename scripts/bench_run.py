@@ -69,6 +69,9 @@ try:
 except ImportError:
     sys.exit("PyYAML not found. Run with: uv run python scripts/bench_run.py ...")
 
+# The harness a run uses when neither the flag nor the runs.yaml cell names one.
+DEFAULT_HARNESS = "opencode"
+
 # ---------------------------------------------------------------------------
 # Prompt variant → short name mapping
 # ---------------------------------------------------------------------------
@@ -152,9 +155,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--harness",
-        default="opencode",
+        default=None,
         choices=["opencode", "codex", "claude"],
-        help="Agent CLI that drives the run. All harnesses (opencode, codex, "
+        help=f"Agent CLI that drives the run (default: {DEFAULT_HARNESS}). All harnesses (opencode, codex, "
         "claude) run inside the Docker runner under `make app-up`; claude auth "
         "comes from .env (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY). Host mode "
         "(`make app-host`, subprocess backend) is an alternative for driving a "
@@ -1823,6 +1826,7 @@ def write_usage_json(out_dir: Path, usage: dict | None) -> Path:
         "diff_lines": None,
         "detected_model": None,
         "detected_session": None,
+        "stop_reason": None,
     }
     if usage:
         skeleton.update(usage)
@@ -2124,10 +2128,23 @@ def main(argv: list[str] | None = None) -> int:
     # A resumed run learns its models from stored metadata, after the overlay
     # was first written; re-apply so a direct LM Studio executor is routable.
     apply_gateway_overlay(direct_models(args))
-    # Web/CLI runs pass the harness on the command line; runs.yaml rarely carries
-    # it, so record the actual harness in metadata (used by the improvement cycle).
-    if not run.get("harness"):
-        run["harness"] = args.harness
+    # Precedence mirrors the model flags: an explicit --harness wins over the
+    # harness recorded in runs.yaml. It used to be the other way round, and a
+    # web run whose id collided with a pre-declared cell was executed by one
+    # CLI while metadata.json — the file the corpus, the leaderboard and the
+    # improvement cycle all read — named another. A run filed under a harness
+    # that never executed it is worse than no record at all, so when the two
+    # disagree the flag wins and the divergence is announced rather than
+    # resolved in silence.
+    declared = str(run.get("harness") or "")
+    if args.harness and declared and declared != args.harness:
+        print(
+            f"  ! runs.yaml declares harness '{declared}' for {args.run}, but "
+            f"--harness {args.harness} was passed. Running (and recording) "
+            f"{args.harness}."
+        )
+    run["harness"] = args.harness or declared or DEFAULT_HARNESS
+    args.harness = run["harness"]
 
     workspace = WORKSPACE_ROOT / args.run
 
@@ -2397,6 +2414,10 @@ def main(argv: list[str] | None = None) -> int:
     max_steps = max(1, args.max_steps)
     steps_dir = out_dir / "steps"
     completed_steps = 0
+    # Which criterion ended the step loop. Recorded because a cost comparison
+    # between two arms is only readable against how each of them terminated:
+    # an arm that ran out of budget did not spend more, it was cut off.
+    stop_reason: str | None = None
 
     if args.score_mode == "none":
         print("  score-mode=none: skipping execution.")
@@ -2502,6 +2523,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"  ⚠️  {args.harness} exited with code {rc} — see {step_log.relative_to(REPO_ROOT)}"
                 )
+                stop_reason = "harness_error"
                 break
 
             if provisions_repo and case_spec is not None:
@@ -2519,33 +2541,43 @@ def main(argv: list[str] | None = None) -> int:
                         print(
                             f"  ✅ SWE-bench resolved after step {step_n} — stopping."
                         )
+                        stop_reason = "swe_resolved"
                         break
-                elif max_steps > 1:
-                    # No objective signal (Pro lane in the docker-less runner):
-                    # fall back to a no-progress detector so the loop doesn't
-                    # burn every remaining step re-summarizing finished work. A
-                    # step that changed nothing in the workspace is the
-                    # strongest done-signal available; validation still renders
-                    # the real verdict after the run.
-                    fp = workspace_fingerprint(workspace)
-                    if fp is not None and fp == last_workspace_fp:
-                        print(
-                            f"  ⏹  Step {step_n} changed nothing in the "
-                            "workspace and no objective eval is available — "
-                            "stopping (agent appears done)."
-                        )
-                        break
-                    last_workspace_fp = fp
 
             if max_steps > 1:
+                # A step that changed nothing in the workspace is the strongest
+                # done-signal available, and — unlike the prose sentinel below —
+                # every arm can reach it. It is checked FIRST and for every lane
+                # on purpose: when only the sentinel could stop the loop, an arm
+                # whose prompt never taught the phrase was structurally unable
+                # to terminate early and paid for the full budget in restarts.
+                # That turned a prompt-authoring detail into a cost difference
+                # and reported it as a treatment effect.
+                fp = workspace_fingerprint(workspace)
+                if fp is not None and fp == last_workspace_fp:
+                    print(
+                        f"  ⏹  Step {step_n} changed nothing in the workspace — "
+                        "stopping (agent appears done)."
+                    )
+                    stop_reason = "no_progress"
+                    break
+                last_workspace_fp = fp
+
                 step_text = step_log.read_text()
                 if not provisions_repo and detect_stop_signal(step_text):
                     print(f"  Agent signaled completion at step {step_n}.")
+                    stop_reason = "completion_signal"
                     break
                 if step_n < max_steps:
                     print(
                         f"  Step {step_n} complete — continuing to step {step_n + 1}..."
                     )
+                else:
+                    # Reaching here means the budget ran out with the agent
+                    # still editing. Recorded, because a truncated trajectory
+                    # is not a finished one and the scores must not pretend
+                    # otherwise.
+                    stop_reason = "budget_exhausted"
             else:
                 print("  opencode run finished.")
     else:
@@ -2596,6 +2628,8 @@ def main(argv: list[str] | None = None) -> int:
             usage.update(remote_usage)
         if completed_steps:
             usage["steps"] = completed_steps
+        if stop_reason:
+            usage["stop_reason"] = stop_reason
         write_usage_json(out_dir, usage or None)
         if args.fresh:
             # Managed web run: the API owns scoring (POST /score), so Phase 5
@@ -2684,6 +2718,8 @@ def main(argv: list[str] | None = None) -> int:
         merged_usage.update(remote_usage)
     if completed_steps > 1:
         merged_usage["steps"] = completed_steps
+    if stop_reason:
+        merged_usage["stop_reason"] = stop_reason
 
     usage_path = write_usage_json(out_dir, merged_usage or None)
     if merged_usage:

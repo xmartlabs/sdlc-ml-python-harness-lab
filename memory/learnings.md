@@ -3,6 +3,51 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## A comparison fails silently in five places at once — 2026-09-02
+
+The first real two-arm corpus (12 Tetris runs) produced a verdict that looked
+complete and was unreadable. Five independent mechanisms, none of which raised
+anything:
+
+1. **`clone_run` dropped `experiment_id`/`condition_label`.** They live on `Run`,
+   not `RunConfig`, so the careful field-by-field config copy did not carry them.
+   Four "Run again" repetitions executed the design and counted towards nothing.
+   This is the *third* time this exact shape has bitten (see the continuation
+   entry below): fields on the row rather than the config are the ones that get
+   dropped.
+2. **Only SWE-bench auto-scored.** Everything else parked in
+   `awaiting_manual_score` forever, so the comparison fell back to
+   `task_validation_pass` — for tetris-v1 a smoke check ("does it start"), which
+   is level_2 of a 0-10 rubric and cannot fall once both arms start. It reported
+   100% → 100% as *no difference observed*.
+3. **The stop criterion was arm-dependent.** `_STOP_RE` matches a prose sentinel
+   the `sdlc_full` prompt teaches and `naive` does not, and the no-progress
+   fallback existed only in the SWE lane. `agent_steps 10 → 1` measured prompt
+   authorship. Verified against the artifacts: K-009 had ten `# claude run
+   started` headers, K-011 had one and ended at `turns=50` — roughly 70 vs 50
+   turns of real work, reported as a 10× efficiency win.
+4. **Zero observed spread cleared the noise floor.** `stdev=0.0` on both arms
+   made `abs(delta) > 0.0` true, so three "beyond noise: yes" verdicts rested on
+   having measured the same thing twice.
+5. **`runs.yaml` out-voted `--harness`.** A web run whose id collided with a
+   pre-declared cell ran one CLI and recorded another (K-001..003: config
+   `claude`, `metadata.json` `opencode`), while the *model* flags used the
+   opposite precedence. Inconsistent precedence between two flags on the same
+   command is a bug generator.
+
+**Why it matters:** not one of these produced an error, an empty field, or a
+suspicious-looking number. Each one produced a plausible result for a comparison
+that was not being made. An evaluation lab's failure mode is not the crash — it
+is the finding.
+
+**How to apply:** before reading any experiment verdict, check (a) can the
+success metric physically move for this case, (b) did both arms terminate under
+the same rule, (c) is there any observed spread at all. Those three questions
+would have caught four of the five. And when a stored file and a CLI flag can
+both name the same thing, decide the precedence once and announce a divergence
+rather than resolving it silently. See
+[ADR-0038](../docs/adr/0038-every-run-leaves-with-a-score.md).
+
 ## An evaluation lab's real product is the refusals — 2026-08-30
 
 Building v2 (experiments, scores, findings) the pattern that kept recurring is that

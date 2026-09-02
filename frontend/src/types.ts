@@ -74,6 +74,11 @@ export type RunRecord = {
   batch_id?: string | null;
   // The run this one continues from (ADR-0026). Null for an original run.
   parent_run_id?: string | null;
+  // The arm this run answers for. Empty for a run created outside an
+  // experiment — which is a real state, not a bug, but one worth seeing in the
+  // list: an unattributed run counts towards no comparison.
+  experiment_id?: string | null;
+  condition_label?: string | null;
 };
 
 /**

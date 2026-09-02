@@ -28,6 +28,7 @@ from harness_lab_app.models import (
     Run,
     RunConfig,
     RunState,
+    Validation,
 )
 from harness_lab_app.run_service import RunService
 from harness_lab_app.schemas import RunConfigCreate
@@ -273,6 +274,12 @@ class ExperimentService:
         verdicts: dict[str, dict[str, bool | None]] = {
             condition.label: {} for condition in conditions
         }
+        # Why the arms stopped, per arm. Two arms that terminate under
+        # different rules are not two measurements of the same quantity, and
+        # the verdict has to say so before anyone reads the effort delta.
+        stop_reasons: dict[str, list[str]] = {
+            condition.label: [] for condition in conditions
+        }
         for run in runs:
             label = run.condition_label or ""
             if label not in per_condition:
@@ -287,6 +294,14 @@ class ExperimentService:
             per_condition[label].append(values)
             case_id = run_service.get_run_config(run.run_config_id).case_id
             verdicts[label][case_id] = values.get("task_validation_pass")
+            validation = self.session.exec(
+                select(Validation).where(Validation.run_id == run.run_id)
+            ).first()
+            reason = (
+                (validation.effort or {}).get("stop_reason") if validation else None
+            )
+            if reason:
+                stop_reasons[label].append(str(reason))
 
         summaries = {
             condition.label: summarize_condition(
@@ -342,6 +357,7 @@ class ExperimentService:
             treatment=summaries[first["treatment"]] if first else None,
             success=first["success"] if first else None,
             case_matrix=first["case_matrix"] if first else None,
+            stop_reasons=stop_reasons,
         )
 
         return {
@@ -651,10 +667,9 @@ class ExperimentService:
                 runs_service._next_run_id(config.case_id),
                 config,
                 target_commit=pins.get((config.target_repo_id, config.target_ref), ""),
+                experiment_id=experiment_id,
+                condition_label=label,
             )
-            run.experiment_id = experiment_id
-            run.condition_label = label
-            self.session.add(run)
             runs.append(run)
         experiment.status = ExperimentStatus.running
         experiment.updated_at = datetime.now(UTC)

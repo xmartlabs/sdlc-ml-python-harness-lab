@@ -77,11 +77,18 @@ def collect_cost(run_dir: Path) -> dict[str, Any]:
 def collect_effort(
     run_dir: Path, interventions: int | None, continuations: int = 0
 ) -> dict[str, Any]:
-    """Effort dimension: agent steps and human interventions.
+    """Effort dimension: agent work, loop restarts and human interventions.
 
     ``continuations`` is the run's chain depth (ADR-0026). Each link is a human
     who read the workspace and wrote a new instruction — effort the run's own
     step count cannot see, because the earlier steps belong to another run.
+
+    ``steps`` counts *restarts of the harness process*, not work: a run that
+    solved the task in one invocation of fifty turns reports one step, and a
+    run restarted ten times reports ten. ``turns`` and ``tool_calls`` are the
+    work measures. Both are kept because the gap between them is exactly what
+    a stop-criterion problem looks like, and ``stop_reason`` says which
+    criterion ended the loop.
     """
     usage = _read_json(run_dir / "usage.json")
     steps = usage.get("steps") if usage else None
@@ -92,6 +99,9 @@ def collect_effort(
             steps = len(logs) or None
     return {
         "steps": steps,
+        "turns": usage.get("turns") if usage else None,
+        "tool_calls": usage.get("tool_calls") if usage else None,
+        "stop_reason": usage.get("stop_reason") if usage else None,
         "interventions": interventions,
         "continuations": continuations,
     }

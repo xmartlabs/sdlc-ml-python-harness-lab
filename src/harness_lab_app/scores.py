@@ -155,7 +155,33 @@ _EFFICIENCY = [
         version="v1",
         source="efficiency",
         minimum=0.0,
-        description="Agent steps executed.",
+        description=(
+            "Harness restarts, not work: one invocation that ran fifty turns "
+            "counts 1. Read it with agent_turns and the run's stop_reason — "
+            "alone it reads a stop-criterion difference as an agent one."
+        ),
+    ),
+    _d(
+        name="agent_turns",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="efficiency",
+        minimum=0.0,
+        description="Assistant turns across every invocation — work actually done.",
+    ),
+    _d(
+        name="agent_tool_calls",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="efficiency",
+        minimum=0.0,
+        description="Tool invocations across every step of the run.",
     ),
     _d(
         name="wall_time_minutes",

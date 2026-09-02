@@ -66,6 +66,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0035 — Make a finding a testable claim, and keep the maturity assessment human](0035-findings-and-manual-maturity-assessment.md)
 - [0036 — Judge every run against the governance surface it actually had](0036-audit-judges-a-run-against-its-own-governance.md)
 - [0037 — Make the regression suite produce experiments, not run them](0037-regression-suite-produces-experiments.md)
+- [0038 — Every run leaves with a score, and the arms it is compared against must be commensurable](0038-every-run-leaves-with-a-score.md)
 
 ## Why ADRs exist
 

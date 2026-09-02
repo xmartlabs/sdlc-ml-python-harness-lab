@@ -177,6 +177,11 @@ class EfficiencyEvaluator:
             ("cost_usd", cost.get("cost_usd")),
             ("wall_time_minutes", cost.get("time_minutes")),
             ("agent_steps", effort.get("steps")),
+            # The work measures. `agent_steps` counts harness restarts, so on
+            # its own it reads a loop-protocol difference as an agent
+            # difference; these two do not.
+            ("agent_turns", effort.get("turns")),
+            ("agent_tool_calls", effort.get("tool_calls")),
         ):
             if value is not None:
                 scores.append(ScoreValue(name, float(value)))

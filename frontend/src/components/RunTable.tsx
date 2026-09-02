@@ -499,6 +499,14 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
                             batch
                           </span>
                         ) : null}
+                        {run.experiment_id ? (
+                          <span
+                            className="badge neutral"
+                            title={`Arm "${run.condition_label || "unlabelled"}" of experiment ${run.experiment_id}.`}
+                          >
+                            {run.condition_label || run.experiment_id}
+                          </span>
+                        ) : null}
                         {row.shortCase ? <span className="cell-truncate">{row.shortCase}</span> : null}
                         {row.tests ? (
                           <span className="run-tests">
@@ -578,6 +586,11 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
                     <button
                       disabled={isPending}
                       onClick={(event) => handleCloneRow(event, run.run_id)}
+                      title={
+                        run.experiment_id
+                          ? `Repeats this configuration and stays in ${run.experiment_id}, as another repetition of the same arm.`
+                          : "Repeats this configuration as a new run."
+                      }
                       type="button"
                     >
                       Run again

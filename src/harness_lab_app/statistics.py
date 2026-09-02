@@ -17,7 +17,10 @@ from __future__ import annotations
 import math
 import statistics
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
 
 # Repetition thresholds. Product defaults, not statistical law — what they buy is
 # a UI that cannot silently present one run as a result.
@@ -202,10 +205,19 @@ def compare(
                 (left.stdev if left and left.stdev else 0.0),
                 (right.stdev if right and right.stdev else 0.0),
             )
-            # With no spread to compare against (one repetition), the honest
-            # answer is "unknown", not "yes".
+            # With no spread to compare against, the honest answer is
+            # "unknown", not "yes". Two cases produce none:
+            #
+            #   * one repetition — there is nothing to take a spread over;
+            #   * every repetition landing on the same value, which makes the
+            #     noise floor exactly 0.0 and would wave *any* non-zero delta
+            #     through as "beyond noise". Coarse metrics at low repetition
+            #     counts hit this constantly (10,10 vs 1,1), and it is the most
+            #     confident-looking wrong answer the comparison can give.
             has_spread = (left and left.n > 1) or (right and right.n > 1)
-            delta.exceeds_spread = abs(delta.absolute) > noise if has_spread else None
+            delta.exceeds_spread = (
+                abs(delta.absolute) > noise if has_spread and noise > 0 else None
+            )
         deltas.append(delta)
     return deltas
 
@@ -322,6 +334,33 @@ def _movements(case_matrix: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
+def stop_reason_caveat(
+    control_label: str,
+    control_reasons: Sequence[str],
+    treatment_label: str,
+    treatment_reasons: Sequence[str],
+) -> str | None:
+    """Warn when the two arms stopped for different reasons.
+
+    Effort and cost metrics only compare like with like if the arms ran under
+    the same termination rule. An arm that ends on a completion signal after
+    one invocation and an arm that burns its whole step budget are not two
+    measurements of the same quantity: the gap between them is mostly the stop
+    criterion, and reading it as a treatment effect credits the prompt's
+    closing sentence with work the agent never did.
+    """
+    left = {reason for reason in control_reasons if reason}
+    right = {reason for reason in treatment_reasons if reason}
+    if not left or not right or left & right:
+        return None
+    return (
+        f"The arms stopped for different reasons — {control_label} "
+        f"({', '.join(sorted(left)).replace('_', ' ')}) against {treatment_label} "
+        f"({', '.join(sorted(right)).replace('_', ' ')}). Effort and cost "
+        "differences partly measure the stop criterion, not the work."
+    )
+
+
 def verdict(
     *,
     mode: str,
@@ -331,6 +370,7 @@ def verdict(
     treatment: ConditionSummary | None = None,
     success: dict[str, Any] | None = None,
     case_matrix: list[dict[str, Any]] | None = None,
+    stop_reasons: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """The answer an experiment page leads with, in words the design supports.
 
@@ -416,6 +456,18 @@ def verdict(
 
     movements = base["movements"]
     caveats: list[str] = []
+    confound = (
+        stop_reason_caveat(
+            control.label,
+            stop_reasons.get(control.label, ()),
+            treatment.label,
+            stop_reasons.get(treatment.label, ()),
+        )
+        if stop_reasons
+        else None
+    )
+    if confound:
+        caveats.append(confound)
     if repetitions < USEFUL_COMPARISON:
         caveats.append(
             f"{repetitions} repetition{'s' if repetitions != 1 else ''} per arm — "

@@ -142,6 +142,36 @@ def test_a_single_repetition_cannot_say_whether_a_delta_beats_the_noise():
     assert delta.exceeds_spread is None
 
 
+def test_identical_repetitions_do_not_manufacture_confidence():
+    """Both arms constant means a zero noise floor, not a proven delta.
+
+    This is the shape a coarse metric takes at low repetition counts — 10,10
+    against 1,1 — and comparing against a floor of 0.0 would wave it through
+    as "beyond noise" on the strength of having measured the same thing twice.
+    """
+    control = _arm("a", [10.0, 10.0], [True, True])
+    treatment = _arm("b", [1.0, 1.0], [True, True])
+    (delta,) = [
+        d
+        for d in compare(control, treatment, {"cost_usd": "lower_is_better"})
+        if d.name == "cost_usd"
+    ]
+    assert delta.absolute == pytest.approx(-9.0)
+    assert delta.exceeds_spread is None
+
+
+def test_a_real_spread_in_one_arm_still_supports_the_verdict():
+    control = _arm("a", [10.0, 14.0], [True, True])
+    treatment = _arm("b", [1.0, 1.0], [True, True])
+    (delta,) = [
+        d
+        for d in compare(control, treatment, {"cost_usd": "lower_is_better"})
+        if d.name == "cost_usd"
+    ]
+    # stdev(10,14) ≈ 2.83, and the delta of 11 clears it.
+    assert delta.exceeds_spread is True
+
+
 def test_success_delta_is_reported_in_percentage_points():
     control = _arm("a", [1.0, 1.0, 1.0, 1.0], [True, False, False, False])
     treatment = _arm("b", [1.0, 1.0, 1.0, 1.0], [True, True, True, False])
@@ -253,6 +283,47 @@ def test_the_same_move_over_two_repetitions_is_only_observed():
     assert answer["headline"] == "Improvement observed"
     assert answer["strength"] == "exploratory comparison"
     assert "within observed variance" in answer["caveats"][0].lower()
+
+
+def test_arms_that_stopped_differently_carry_a_confound_caveat():
+    """A stop criterion the arms do not share explains part of the effort gap."""
+    control, treatment = _pair(
+        [False, False, True, True, False], [True, True, True, True, True]
+    )
+    answer = verdict(
+        mode="harness_evaluation",
+        cases=1,
+        repetitions=5,
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+        stop_reasons={
+            control.label: ["budget_exhausted", "budget_exhausted"],
+            treatment.label: ["completion_signal", "completion_signal"],
+        },
+    )
+
+    assert any("stopped for different reasons" in c for c in answer["caveats"])
+
+
+def test_arms_that_share_a_stop_reason_carry_no_confound_caveat():
+    control, treatment = _pair(
+        [False, False, True, True, False], [True, True, True, True, True]
+    )
+    answer = verdict(
+        mode="harness_evaluation",
+        cases=1,
+        repetitions=5,
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+        stop_reasons={
+            control.label: ["budget_exhausted", "completion_signal"],
+            treatment.label: ["completion_signal"],
+        },
+    )
+
+    assert not any("stopped for different reasons" in c for c in answer["caveats"])
 
 
 def test_a_drop_is_named_a_regression():

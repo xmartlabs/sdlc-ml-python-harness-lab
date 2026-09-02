@@ -12,7 +12,7 @@ Start it with `make app-up` (brings up api + worker + redis + frontend).
 ```
 pick a Case → choose model + harness + prompt → Create run
    → watch it execute (logs stream live)
-   → it finishes: SWE-bench auto-scores; others wait for a manual score
+   → it finishes: SWE-bench auto-scores; a case with a rubric is LLM-judged
    → Compare runs across models / conditions
 ```
 
@@ -369,8 +369,12 @@ Where you launch and track runs. The **New run** form:
   See [ADR-0012](adr/0012-dynamic-gateway-model-list.md),
   [ADR-0016](adr/0016-opencode-config-overlay-for-model-routing.md) and
   [the direct lane](local-model-runtime-config.md#the-direct-lanes-skip-the-gateway-when-you-are-iterating).
-- **Score mode** — web runs are `manual` (interactive is CLI-only). SWE-bench
-  cases auto-score objectively regardless.
+- **Score mode** — web runs are `manual` (interactive is CLI-only), but
+  "manual" now means *a human may overwrite it*, not *a human must supply it*:
+  SWE-bench cases auto-score from their objective verdict, and any case that
+  carries a `scoring_rubric` is graded against that rubric by the audit LLM
+  (recorded with provenance `llm_judge`). A case with no rubric and no
+  objective verdict is the only one that still waits for a person.
 - **Max steps**, **Resume**, **Dry run** — run controls. Max steps is
   prefilled from the selected case's own `max_steps`, so a one-step case
   does not silently advertise a ten-step budget.
@@ -633,7 +637,8 @@ disabled with `0` (`HARNESS_LAB_RUN_STALL_SECONDS`,
 ### Cases
 The catalog of tasks. Three ways to get realistic cases:
 
-- **tetris-v1** — the seeded pilot (build a game; manual score + smoke floor).
+- **tetris-v1** — the seeded pilot (build a game; smoke floor + a 0-10
+  rubric the LLM judge grades against, overwritable by hand).
 - **SWE-bench** — import a real GitHub issue+fix from SWE-bench Lite/Verified via
   the *Import SWE-bench* box or `make swebench-import INSTANCE=<id>`. These
   **auto-score objectively** (resolved → 10). Only a validated subset runs in the
@@ -692,6 +697,25 @@ mean with its spread, colours a delta by the metric's **declared direction** (a 
 in cost is a win; a drop in pass rate is not), and flags a delta that sits inside
 run-to-run variance. Below it, the **case matrix** shows where a treatment helped and
 where it did not — an average of "+8 points" can be "fixed four cases, broke two".
+
+Two caveats are raised automatically because they are the ones that read as
+results when they are not:
+
+- **Beyond noise is left blank when there is no noise to compare against.** One
+  repetition per arm has no spread, and repetitions that all land on the same
+  value make the noise floor exactly `0.0` — which would wave *any* non-zero
+  delta through as "beyond noise". Coarse metrics at low repetition counts hit
+  this constantly, so the answer there is *unknown*, not *yes*.
+- **Arms that stopped for different reasons carry a warning.** Every run records
+  a `stop_reason` (`completion_signal`, `budget_exhausted`, `no_progress`,
+  `swe_resolved`, `harness_error`). An arm that ends on a completion signal and
+  an arm that burns its whole step budget are not two measurements of the same
+  quantity: the gap between them is partly the stop criterion, not the work, and
+  effort and cost deltas must be read with that in mind.
+
+`agent_steps` counts **harness restarts, not work** — one invocation that ran
+fifty turns counts 1. `agent_turns` and `agent_tool_calls` are the work metrics;
+compare those when you want to know how much the agent actually did.
 
 **Run this experiment** launches the declared design: you supply only what every arm
 shares (model, harness, step budget), and anything the design varies is overridden

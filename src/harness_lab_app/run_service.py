@@ -804,6 +804,8 @@ class RunService:
         batch_id: str | None = None,
         parent_run_id: str | None = None,
         target_commit: str = "",
+        experiment_id: str | None = None,
+        condition_label: str | None = None,
     ) -> Run:
         """Write the config + run rows. No preflight, no publish.
 
@@ -814,6 +816,10 @@ class RunService:
         reason: one ``git ls-remote`` per repository serves a whole batch, and
         every run of that batch must carry the *same* commit or the repetitions
         are not repetitions.
+
+        ``experiment_id``/``condition_label`` attribute the run to an arm. They
+        are written in the same transaction as the row rather than patched on
+        afterwards, so a run is never briefly visible as unattributed.
         """
         row = RunConfig(**config.model_dump(), target_commit=target_commit)
         self.session.add(row)
@@ -828,6 +834,8 @@ class RunService:
             command=command,
             batch_id=batch_id,
             parent_run_id=parent_run_id,
+            experiment_id=experiment_id,
+            condition_label=condition_label,
         )
         self.session.add(run)
         self.session.add(RunEvent(run_id=run_id, message="Run queued"))
@@ -908,6 +916,14 @@ class RunService:
 
         Powers the "Run again" action: same arm, new trial with its own
         workspace. resume is reset to False so it starts clean.
+
+        A clone of an experiment's run stays *in* that experiment, under the
+        same arm. Re-running a failed trial from the runs table is the most
+        natural way to top an arm back up, and dropping the attribution there
+        produced the worst possible outcome: runs that measured the design
+        exactly, sat in the corpus, and counted for nothing. Attribution is
+        carried rather than offered as a choice — the config is identical by
+        construction, so there is no consistency question to ask.
         """
         source = self.get_run(source_run_id)
         config = self.get_run_config(source.run_config_id)
@@ -934,7 +950,13 @@ class RunService:
         # since; that would be a different condition wearing the same label.
         self.preflight(new_config)
         run_id = self._next_run_id(new_config.case_id)
-        run = self._persist_run(run_id, new_config, target_commit=config.target_commit)
+        run = self._persist_run(
+            run_id,
+            new_config,
+            target_commit=config.target_commit,
+            experiment_id=source.experiment_id,
+            condition_label=source.condition_label,
+        )
         self._publish(run.run_id)
         return run
 
@@ -961,6 +983,12 @@ class RunService:
         the only deliberate difference is the prompt, and runs with
         ``resume=True`` so the runner keeps the seeded workspace instead of
         resetting it.
+
+        Unlike ``clone_run`` it does *not* join the parent's experiment. A
+        continuation is a human intervention: counting it as another repetition
+        of the arm would score the operator's hint as if the agent had earned
+        it. The asymmetry is the point — a clone repeats the condition, a
+        continuation changes it.
         """
         parent = self.get_run(parent_run_id)
         if parent.state not in CONTINUABLE_STATES:

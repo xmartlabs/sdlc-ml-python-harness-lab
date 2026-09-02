@@ -36,9 +36,27 @@ JUDGE_SYSTEM_PROMPT = (
     "and never include secrets, tokens, or local filesystem paths."
 )
 
+RUBRIC_SYSTEM_PROMPT = (
+    "You are grading an autonomous coding agent's output against a rubric "
+    "supplied by the person who wrote the task. The rubric is the ONLY scale "
+    "you may use: do not substitute your own idea of quality, and do not "
+    "reward effort the rubric does not ask for. Output ONLY a JSON object: "
+    '{"score": <integer 0-10>, "rationale": <string>}. '
+    "Rubric levels are cumulative unless the rubric says otherwise: award the "
+    "HIGHEST level whose requirement is evidenced, and every level below it "
+    "must hold too. Judge from the evidence given — the diff, the automated "
+    "check summary, the agent's own report — and treat the agent's claims as "
+    "claims, not results: a report asserting a feature that the diff does not "
+    "implement earns nothing. When the evidence cannot distinguish two levels, "
+    "take the lower one and say why in the rationale. Name the level you "
+    "awarded and the evidence for it in 1-3 sentences. Never include secrets, "
+    "tokens, or local filesystem paths."
+)
+
 # Keep the prompt bounded: the diff is the signal, the rest is context.
 _DIFF_CLIP = 24000
 _TEXT_CLIP = 8000
+_RUBRIC_CLIP = 12000
 
 
 def build_judge_message(
@@ -98,3 +116,59 @@ def judge_functional_score(
         report=report,
     )
     return parse_judge_score(gateway(model, JUDGE_SYSTEM_PROMPT, user))
+
+
+def build_rubric_message(
+    *,
+    task: str,
+    rubric: str,
+    diff: str,
+    objective_summary: str = "",
+    report: str = "",
+) -> str:
+    """Render rubric + task + evidence as one prompt. Pure assembly.
+
+    The rubric goes first and the evidence after it, so the scale is fixed
+    before the model reads anything that might tempt it to invent one.
+    """
+    blocks = [
+        "Score the agent's work against the rubric below.",
+        f"## Rubric\n\n{rubric.strip()[:_RUBRIC_CLIP]}",
+        f"## Task given to the agent\n\n{task.strip()[:_TEXT_CLIP]}",
+    ]
+    if objective_summary.strip():
+        blocks.append(
+            "## Automated checks already run (facts, not opinions)\n\n"
+            f"{objective_summary.strip()[:_TEXT_CLIP]}"
+        )
+    diff = diff.strip()
+    blocks.append(
+        f"## Agent diff\n\n{diff[:_DIFF_CLIP] if diff else '(no diff produced)'}"
+    )
+    if report.strip():
+        blocks.append(
+            "## Agent report (the agent's own claims — verify against the diff)"
+            f"\n\n{report.strip()[:_TEXT_CLIP]}"
+        )
+    return "\n\n".join(blocks)
+
+
+def judge_rubric_score(
+    *,
+    task: str,
+    rubric: str,
+    diff: str,
+    gateway: Callable[[str, str, str], str],
+    objective_summary: str = "",
+    report: str = "",
+    model: str = DEFAULT_JUDGE_MODEL,
+) -> dict:
+    """One gateway call → ``{score, rationale}``. Raises on an unparseable reply."""
+    user = build_rubric_message(
+        task=task,
+        rubric=rubric,
+        diff=diff,
+        objective_summary=objective_summary,
+        report=report,
+    )
+    return parse_judge_score(gateway(model, RUBRIC_SYSTEM_PROMPT, user))
