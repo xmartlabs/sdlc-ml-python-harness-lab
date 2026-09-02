@@ -1,15 +1,23 @@
 import type {
   ArtifactRecord,
+  AttentionFeed,
   AttributionRecord,
   AuditRecord,
   ImprovementsDoc,
   CaseCreatePayload,
+  CaseCandidates,
+  ConditionRecord,
   CaseRecord,
   ContextProbeResult,
   DocContent,
+  ExperimentRecord,
+  ExperimentSummary,
+  LaunchConfigSummary,
+  FindingRecord,
   DocEntry,
   EnvSettings,
   EnvUpdateResult,
+  EvidenceSummary,
   GatewayModelRecord,
   GatewayTestResult,
   HarnessSkill,
@@ -23,10 +31,13 @@ import type {
   RuntimeFacts,
   LeaderboardRunRow,
   ModelCatalog,
+  OverviewReport,
   OfficialReferenceRow,
+  ReadinessReport,
   GroupIssueResult,
   ProposalIssue,
   RunConfigPayload,
+  ScoreRecord,
   RunBatchPayload,
   RunBatchResult,
   RunCreatePayload,
@@ -34,6 +45,7 @@ import type {
   SaveImprovementsResult,
   SavedProposalRecord,
   SessionState,
+  RunContext,
   RunEventRecord,
   RunRecord,
   SandboxRecord,
@@ -42,7 +54,11 @@ import type {
   StagedSkillImportPreview,
   StagedSkillPromoteResult,
   StagedSkillRecord,
+  SuggestionRecord,
   SwebenchProInstance,
+  TargetCreatePayload,
+  TargetRecord,
+  TargetResolveResult,
   ValidationRecord
 } from "./types";
 
@@ -231,6 +247,157 @@ export const api = {
     request<void>(`/api/staged-skills/${name}/files/${encodeFilePath(path)}`, {
       method: "DELETE"
     }),
+  getOverview: () => request<OverviewReport>("/api/overview"),
+  // The home page's two calls. Kept separate because they answer different
+  // questions: what should I do next, and what does the lab currently hold.
+  getRunContext: (runId: string) => request<RunContext>(`/api/runs/${runId}/context`),
+  getAttention: () => request<AttentionFeed>("/api/attention"),
+  getEvidenceSummary: () => request<EvidenceSummary>("/api/evidence-summary"),
+  listExperiments: () => request<ExperimentRecord[]>("/api/experiments"),
+  getExperiment: (id: string) =>
+    request<
+      ExperimentRecord & {
+        conditions: ConditionRecord[];
+        runs: unknown[];
+        launch_config: LaunchConfigSummary | null;
+      }
+    >(`/api/experiments/${id}`),
+  createExperiment: (payload: unknown) =>
+    request<ExperimentRecord>("/api/experiments", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  /**
+   * A regression suite, as an experiment (§13).
+   *
+   * The suite contributes the design — which cases, repeated how often — and
+   * the caller contributes the harness change. There is no second runner: what
+   * comes back is an ordinary `harness_evaluation` experiment, read through the
+   * same case matrix as everything else.
+   */
+  createExperimentFromSuite: (payload: {
+    experiment_id: string;
+    suite_id?: string;
+    control: { label: string; description?: string; overrides: Record<string, unknown> };
+    treatment: { label: string; description?: string; overrides: Record<string, unknown> };
+    prompt_variant?: string;
+    question?: string;
+    name?: string;
+    notes?: string;
+  }) =>
+    request<ExperimentRecord & { warnings?: string[] }>("/api/experiments/from-suite", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  /** Hide an experiment from the working set; its runs stay in the corpus. */
+  abandonExperiment: (id: string) =>
+    request<ExperimentRecord>(`/api/experiments/${id}/abandon`, { method: "POST" }),
+  /** Erase an experiment and (explicitly) its runs, scores and artifacts. */
+  deleteExperiment: (id: string, deleteRuns: boolean) =>
+    request<{ experiment_id: string; deleted_runs: number }>(
+      `/api/experiments/${id}?delete_runs=${deleteRuns}`,
+      { method: "DELETE" }
+    ),
+  summarizeExperiment: (id: string) =>
+    request<ExperimentSummary>(`/api/experiments/${id}/summary`),
+  launchExperiment: (id: string, config: RunConfigPayload) =>
+    request<{ count: number; run_ids: string[] }>(
+      `/api/experiments/${id}/launch`,
+      { method: "POST", body: JSON.stringify({ config }) }
+    ),
+  listFindings: () => request<FindingRecord[]>("/api/findings"),
+  createFinding: (payload: unknown) =>
+    request<FindingRecord>("/api/findings", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  updateFinding: (id: string, payload: unknown) =>
+    request<FindingRecord>(`/api/findings/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  draftExperimentFromFinding: (id: string) =>
+    request<Record<string, unknown>>(`/api/findings/${id}/experiment-draft`, {
+      method: "POST"
+    }),
+  listSuggestions: () =>
+    request<{ suggestions: SuggestionRecord[] }>("/api/findings/suggestions"),
+  // Accepting writes a finding with the accepter's name on it; rejecting
+  // writes the refusal down so the pattern is not offered again.
+  acceptSuggestion: (
+    key: string,
+    payload: { author: string; finding_id?: string; overrides?: Record<string, unknown> }
+  ) =>
+    request<{ finding: FindingRecord; warnings: string[] }>(
+      `/api/findings/suggestions/${encodeFilePath(key)}/accept`,
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
+  rejectSuggestion: (key: string, payload: { author: string; reason?: string }) =>
+    request<FindingRecord>(
+      `/api/findings/suggestions/${encodeFilePath(key)}/reject`,
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
+  getScoreDefinitions: () =>
+    request<{
+      count: number;
+      categories: Record<
+        string,
+        { name: string; direction: string; provenance: string; category: string }[]
+      >;
+    }>("/api/scores/definitions"),
+  listRunScores: (runId: string) =>
+    request<ScoreRecord[]>(`/api/runs/${runId}/scores`),
+  evaluateRunScores: (runId: string) =>
+    request<ScoreRecord[]>(`/api/runs/${runId}/scores`, { method: "POST" }),
+  listTargets: (includeArchived = false) =>
+    request<TargetRecord[]>(
+      `/api/targets?include_archived=${includeArchived ? "true" : "false"}`
+    ),
+  createTarget: (payload: TargetCreatePayload) =>
+    request<TargetRecord>("/api/targets", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  updateTarget: (targetId: string, payload: Partial<TargetCreatePayload>) =>
+    request<TargetRecord>(`/api/targets/${targetId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload)
+    }),
+  archiveTarget: (targetId: string) =>
+    request<void>(`/api/targets/${targetId}`, { method: "DELETE" }),
+  // Resolve a ref without creating anything: the operator sees the exact
+  // commit a run would be pinned to before spending a container on it.
+  resolveTargetRef: (targetId: string, ref: string) =>
+    request<TargetResolveResult>(`/api/targets/${targetId}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ ref })
+    }),
+  // Step 2 of the guided audit: what this repository already has, read from
+  // the repository rather than assumed.
+  getAuditReport: (targetId: string) =>
+    request<{ target_id: string; markdown: string }>(
+      `/api/targets/${targetId}/audit-report`
+    ),
+  getTargetReadiness: (targetId: string) =>
+    request<ReadinessReport>(`/api/targets/${targetId}/readiness`),
+  // Inspect a repository before it is saved: the same readiness report a target
+  // would produce, so a mismatch (unsupported runtime, or a command whose
+  // toolchain the repo lacks) is caught before creation rather than at a run.
+  inspectTarget: (payload: {
+    repository_url: string;
+    default_ref?: string;
+    setup_commands?: string[];
+    validation_commands?: string[];
+  }) =>
+    request<ReadinessReport>("/api/targets/inspect", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  deriveCases: (targetId: string, limit = 20) =>
+    request<CaseCandidates>(
+      `/api/targets/${targetId}/derive-cases?limit=${limit}`,
+      { method: "POST" }
+    ),
   listCases: () => request<CaseRecord[]>("/api/cases"),
   createCase: (payload: CaseCreatePayload) =>
     request<CaseRecord>("/api/cases", {

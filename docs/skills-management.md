@@ -215,6 +215,6 @@ and it is regenerated on every sync — it is not the place for attribution.
 [NOTICE](../NOTICE) is.
 
 **When you import an external skill, add its upstream URL, author and license to
-[NOTICE](../NOTICE) in the same change.** Two components already in the tree were
-imported without that record and their terms are still unresolved; recovering
-provenance afterwards is the expensive path.
+[NOTICE](../NOTICE) in the same change.** One component already in the tree —
+`writing-clearly-and-concisely` — was imported without that record and its terms
+are still unresolved; recovering provenance afterwards is the expensive path.

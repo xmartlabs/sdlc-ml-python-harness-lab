@@ -24,7 +24,7 @@ export function RunDetailRoute({
   if (run === null) {
     return (
       <section className="run-detail-page">
-        <Link className="run-detail-back" to="/runs">
+        <Link className="run-detail-back" to="/advanced/runs">
           ← Runs
         </Link>
         <div className="empty-state">

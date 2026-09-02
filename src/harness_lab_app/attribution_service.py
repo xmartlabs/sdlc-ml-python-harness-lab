@@ -14,6 +14,7 @@ from harness_lab_app.attribution import (
     read_step_logs,
 )
 from harness_lab_app.config import get_settings
+from harness_lab_app.governance import reading_surface, resolve_surface
 from harness_lab_app.models import Attribution, utc_now
 
 if TYPE_CHECKING:
@@ -32,11 +33,30 @@ class AttributionService:
     def _run_dir(self, run_id: str) -> Path:
         return get_settings().data_runs_dir / run_id
 
-    def _skills_available(self, run_dir: Path) -> list[str]:
+    def _metadata(self, run_dir: Path) -> dict[str, Any]:
         try:
             meta = json.loads((run_dir / "metadata.json").read_text())
         except (OSError, json.JSONDecodeError):
-            return []
+            return {}
+        return meta if isinstance(meta, dict) else {}
+
+    def _governance(self, run_dir: Path, meta: dict[str, Any]) -> dict[str, Any]:
+        """The governance surface this run actually had (ADR-0031).
+
+        Read coverage is a ratio, and the denominator has to be the documents
+        the agent could reach. A `native` run never received the lab's
+        `.github/standards.md`, so counting it as an unread governance doc
+        penalises the target team for the lab's own conventions.
+        """
+        surface = resolve_surface(
+            lab_root=get_settings().repo_root,
+            run_dir=run_dir,
+            harness=str(meta.get("harness") or "") or None,
+            harness_source=str(meta.get("harness_source") or "") or "lab_root",
+        )
+        return surface.as_dict() | {"reading_surface": reading_surface(surface)}
+
+    def _skills_available(self, meta: dict[str, Any]) -> list[str]:
         bundle = meta.get("skills_bundle")
         if isinstance(bundle, list):
             return [str(item) for item in bundle]
@@ -46,21 +66,29 @@ class AttributionService:
 
     def index_run(self, run_id: str) -> Attribution:
         run_dir = self._run_dir(run_id)
+        meta = self._metadata(run_dir)
+        governance = self._governance(run_dir, meta)
+        surface = governance.pop("reading_surface")
+        skills = self._skills_available(meta)
         # claude stream-json events are first-class tool calls — strictly
         # richer than log parsing; prefer them whenever the run produced any.
         event_lines, event_steps = read_step_events(run_dir)
         if event_lines:
             data: dict[str, Any] = build_attribution_from_events(
                 event_lines,
-                skills_available=self._skills_available(run_dir),
+                skills_available=skills,
                 steps_parsed=event_steps,
+                reading_surface=surface,
+                governance=governance,
             )
         else:
             log_text, steps = read_step_logs(run_dir)
             data = build_attribution(
                 log_text,
-                skills_available=self._skills_available(run_dir),
+                skills_available=skills,
                 steps_parsed=steps,
+                reading_surface=surface,
+                governance=governance,
             )
 
         attribution = self.get_attribution(run_id)

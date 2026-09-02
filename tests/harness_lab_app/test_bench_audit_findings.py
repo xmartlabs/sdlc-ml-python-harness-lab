@@ -134,3 +134,74 @@ def test_build_findings_user_message_lists_catalog():
     )
     assert "verify_changes (skill)" in message
     assert "make check" in message
+
+
+def _run_dir(tmp_path, *, metadata, workspace=None):
+    out_dir = tmp_path / "runs" / "r1"
+    out_dir.mkdir(parents=True)
+    (out_dir / "metadata.json").write_text(json.dumps(metadata))
+    (out_dir / "prompt.md").write_text("do the thing\n")
+    for relative, body in (workspace or {}).items():
+        path = out_dir / "workspace" / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+    return out_dir
+
+
+def test_build_inputs_judges_a_native_run_by_the_targets_rulebook(tmp_path):
+    """Never evaluate the native control against rules it did not receive."""
+    out_dir = _run_dir(
+        tmp_path,
+        metadata={"harness": "claude", "harness_source": "native"},
+        workspace={"CLAUDE.md": "the target team's own rules\n"},
+    )
+
+    inputs = bench_audit.build_inputs({}, out_dir)
+
+    assert inputs["rules"] == "the target team's own rules\n"
+    assert inputs["harness_source"] == "native"
+    assert inputs["governance"]["source"] == "target_workspace"
+    assert inputs["governance"]["files"] == ["CLAUDE.md"]
+    assert inputs["governance"]["fingerprint"]
+    assert inputs["rules_warning"] == ""
+
+
+def test_build_inputs_names_a_target_with_no_governance(tmp_path):
+    """No rulebook is a finding about the target, not a reason to lend the lab's."""
+    out_dir = _run_dir(
+        tmp_path,
+        metadata={"harness": "claude", "harness_source": "native"},
+        workspace={"README.md": "just a readme\n"},
+    )
+
+    inputs = bench_audit.build_inputs({}, out_dir)
+
+    assert "ships no CLAUDE.md" in inputs["rules"]
+    assert inputs["governance"]["file_count"] == 0
+
+
+def test_build_inputs_falls_back_to_the_lab_when_the_workspace_is_gone(tmp_path):
+    out_dir = _run_dir(
+        tmp_path, metadata={"harness": "claude", "harness_source": "native"}
+    )
+
+    inputs = bench_audit.build_inputs({}, out_dir)
+
+    assert inputs["governance"]["source"] == "lab_root"
+    # The verdict is degraded and the record says so.
+    assert "archived" in inputs["rules_warning"]
+
+
+def test_user_message_states_the_surface_it_judges_against(tmp_path):
+    out_dir = _run_dir(
+        tmp_path,
+        metadata={"harness": "claude", "harness_source": "native"},
+        workspace={"CLAUDE.md": "target rules\n"},
+    )
+    inputs = bench_audit.build_inputs({}, out_dir)
+
+    message = bench_audit.build_user_message("r1", inputs)
+
+    assert "target_workspace" in message
+    assert "native" in message
+    assert "CLAUDE.md" in message

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 from sqlmodel import Session, select
@@ -11,6 +12,7 @@ from harness_lab_app.config import get_settings
 from harness_lab_app.executors import SubprocessRunExecutor, get_executor
 from harness_lab_app.models import Run, RunEvent, Validation, utc_now
 from harness_lab_app.run_service import RunService
+from harness_lab_app.target_service import TargetError, TargetService
 from harness_lab_app.validation import (
     build_validation_spec,
     collect_cost,
@@ -88,7 +90,15 @@ class ValidationService:
         config = services.get_run_config(run.run_config_id)
         case = CaseService(self.session).get_case(config.case_id)
 
-        spec = build_validation_spec(case, run_id)
+        # A run against an external target is validated by that repository's
+        # own gates, not by the case's (ADR-0029).
+        target_commands: list[str] | None = None
+        if config.target_repo_id:
+            with contextlib.suppress(TargetError):
+                target = TargetService(self.session).get_target(config.target_repo_id)
+                target_commands = list(target.validation_commands) or None
+
+        spec = build_validation_spec(case, run_id, target_commands)
         self.session.add(
             RunEvent(
                 run_id=run_id,

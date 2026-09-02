@@ -85,6 +85,8 @@ src/logger/data/*
 data/app/
 # SWE-bench Pro eval staging (containerized run_script/parser scratch)
 data/tmp/
+# Blobless mirrors of registered target repositories (rebuildable cache).
+data/target-mirrors/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
@@ -113,3 +115,17 @@ bench_report_*.txt
 
 # SWE-bench subject repos cloned under benchmarks/ (never a submodule)
 /benchmarks/*__*/
+
+# pnpm walks up to the mount root to place its content-addressable store so it
+# can hardlink into workspaces on the same filesystem. Inside the runner that
+# mount root is /app — this repository. The runner pins the store to
+# data/pnpm-store (persistent cache across runs); both paths stay ignored so a
+# stray default can never flood git status again.
+.pnpm-store/
+data/pnpm-store/
+
+# `make backup` snapshots the state the lab cannot regenerate (the SQLite DB,
+# run artifacts, .env) into BACKUP_DIR, which defaults to backups/. Those
+# archives are hundreds of MB and routinely exceed GitHub's 100 MB blob limit —
+# they are disaster-recovery copies, not history.
+backups/

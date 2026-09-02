@@ -27,15 +27,27 @@ from ml_python_base.skills_sync.models import (
 _PROTECTED_NAMES = frozenset({".generated-manifest.tsv"})
 
 
-def link_tool(root: Path, tool: ToolSpec, skills: list[Skill]) -> dict[str, str]:
+def link_tool(
+    root: Path,
+    tool: ToolSpec,
+    skills: list[Skill],
+    strategy: str | None = None,
+) -> dict[str, str]:
     """Project ``skills`` into ``tool``'s native view.
 
     Returns a ``{skill_name: folder_hash}`` mapping for tools that need a
     manifest; an empty mapping otherwise.
+
+    ``strategy`` overrides the tool's declared ``link_strategy``. It exists for
+    one case: projecting a harness into a **foreign** root (a cloned target
+    repository), where a symlink would encode a path relative to a root the
+    skills do not live under. Callers projecting in place must leave it unset so
+    the registry stays the single source of truth.
     """
     if not tool.has_native_view:
         return {}
 
+    effective = strategy or tool.link_strategy
     dest_root = root / tool.native_skills_dir
     dest_root.mkdir(parents=True, exist_ok=True)
     desired = {skill.name for skill in skills}
@@ -43,9 +55,9 @@ def link_tool(root: Path, tool: ToolSpec, skills: list[Skill]) -> dict[str, str]
 
     hashes: dict[str, str] = {}
     for skill in skills:
-        if tool.link_strategy == LINK_SYMLINK:
+        if effective == LINK_SYMLINK:
             _link_symlink(root, dest_root, tool, skill)
-        elif tool.link_strategy == LINK_COPY:
+        elif effective == LINK_COPY:
             hashes[skill.name] = _link_copy(dest_root, skill)
     return hashes
 

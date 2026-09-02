@@ -48,13 +48,19 @@ class AuditService:
         return audit
 
     def store_result(
-        self, run_id: str, markdown: str, findings: dict | None = None
+        self,
+        run_id: str,
+        markdown: str,
+        findings: dict | None = None,
+        governance: dict | None = None,
     ) -> Audit:
         audit = self._upsert(run_id)
         audit.status = "done"
         audit.markdown = markdown
         if findings is not None:
             audit.findings_json = findings
+        if governance:
+            audit.governance_json = governance
         audit.error = None
         audit.updated_at = utc_now()
         self.session.add(audit)
@@ -76,6 +82,22 @@ class AuditService:
         """Read the audit.md the worker's bench_audit subprocess wrote."""
         path = self._audit_path(run_id)
         return path.read_text() if path.exists() else ""
+
+    def read_audit_governance(self, run_id: str) -> dict | None:
+        """Read the governance surface the auditor recorded, tolerating absence.
+
+        Absence is meaningful: an audit produced before the surface was
+        persisted does not know what it judged, and the reader is told that
+        rather than shown a plausible default.
+        """
+        path = get_settings().data_runs_dir / run_id / "audit_governance.json"
+        if not path.exists():
+            return None
+        try:
+            parsed = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
     def read_audit_findings(self, run_id: str) -> dict | None:
         """Read audit_findings.json (structured verdicts), tolerating absence."""

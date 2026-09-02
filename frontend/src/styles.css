@@ -1965,3 +1965,931 @@ button.ghost {
   padding: 0.75rem;
   margin-bottom: 0.75rem;
 }
+
+
+/* --- Experiments, findings, derived cases (v2 surfaces) ------------------ */
+
+/* A delta's colour follows the metric's declared direction, never its sign:
+   a drop in cost is a win, a drop in pass rate is not. */
+.delta-better {
+  color: var(--ok, #1a7f37);
+  font-weight: 600;
+}
+
+.delta-worse {
+  color: var(--error, #b42318);
+  font-weight: 600;
+}
+
+.warning-list {
+  margin: 0;
+  padding: 0.75rem 1rem 0.75rem 2rem;
+  border-left: 3px solid var(--warn, #b54708);
+  background: var(--surface-2, rgba(181, 71, 8, 0.06));
+  border-radius: 4px;
+}
+
+.warning-list li {
+  margin: 0.25rem 0;
+  font-size: 0.9em;
+}
+
+.candidate-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.candidate-list > li {
+  border-top: 1px solid var(--border, rgba(128, 128, 128, 0.2));
+  padding: 0.5rem 0;
+}
+
+/* Provenance is the field that must reach the eye: a judgement rendered like a
+   test result borrows authority it has not earned. */
+.provenance-fact {
+  color: var(--ok, #1a7f37);
+}
+
+.provenance-observation {
+  color: var(--text-muted, #667085);
+}
+
+.provenance-judgement {
+  color: var(--warn, #b54708);
+  font-style: italic;
+}
+
+
+/* Overview: side-by-side panels that stack on a narrow viewport. */
+.row.wrap {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.row.wrap > .panel {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.metric small {
+  display: block;
+  font-size: 0.75em;
+  font-weight: 400;
+}
+
+/* ==========================================================================
+   Lab v2 — intent-driven surfaces
+   --------------------------------------------------------------------------
+   Colour carries meaning here and nowhere else: green is an improvement or a
+   pass, red a regression or a failure, amber a warning or an exploratory
+   claim, blue information and the control arm. Nothing is coloured to be
+   decorative — if a reader cannot say what a colour means, it should not be
+   on the page.
+   ========================================================================== */
+
+/* --- primitives the pages already assumed existed ------------------------ */
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-sm);
+}
+
+.card > h2:first-child,
+.card > h3:first-child {
+  margin-top: 0;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin-top: var(--space-3);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+}
+
+.field > span {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.field-row > .field {
+  flex: 1 1 220px;
+}
+
+/* --- callouts ------------------------------------------------------------ */
+
+.callout {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.callout p {
+  margin: 0;
+}
+
+.callout--warning {
+  border-left-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.callout--ok {
+  border-left-color: var(--success);
+  background: var(--success-soft);
+}
+
+.callout--danger {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+/* --- tabs ---------------------------------------------------------------- */
+
+.tab-bar {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: var(--space-2) var(--space-3);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tab--active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* --- navigation groups --------------------------------------------------- */
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: var(--space-3);
+}
+
+.nav-group-title {
+  margin: var(--space-3) 12px var(--space-1);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* --- Home: the three modes ----------------------------------------------- */
+
+.home {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.mode-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.mode-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-md);
+}
+
+.mode-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.mode-card h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.mode-card-question {
+  color: var(--muted);
+  margin: 0;
+}
+
+.mode-card-design {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  font-size: 0.78rem;
+}
+
+.mode-card-design .badge {
+  font-size: 0.72rem;
+}
+
+.mode-card-note {
+  font-size: 0.82rem;
+  color: var(--muted);
+  border-left: 2px solid var(--line-strong);
+  padding-left: var(--space-3);
+  margin: 0;
+}
+
+.mode-card-cta {
+  margin-top: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: flex-start;
+}
+
+/* --- Home: what needs attention ------------------------------------------ */
+
+.attention-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.attention-item {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.attention-item--critical {
+  border-left-color: var(--danger);
+}
+
+.attention-item--warning {
+  border-left-color: var(--warning);
+}
+
+.attention-item--info {
+  border-left-color: var(--accent);
+}
+
+.attention-item--critical .attention-item-icon {
+  color: var(--danger);
+}
+
+.attention-item--warning .attention-item-icon {
+  color: var(--warning);
+}
+
+.attention-item--info .attention-item-icon {
+  color: var(--accent);
+}
+
+.attention-item-body {
+  flex: 1;
+}
+
+.attention-item-body strong {
+  display: block;
+}
+
+.attention-item-body p {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.attention-item-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.attention-clear {
+  color: var(--success);
+}
+
+/* --- Home: evidence summary and onboarding ------------------------------- */
+
+.evidence-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-4);
+}
+
+.evidence-summary > div span {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.evidence-summary > div strong {
+  font-size: 1.3rem;
+}
+
+.onboarding {
+  border-style: dashed;
+}
+
+.onboarding-steps {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+  color: var(--muted);
+}
+
+.onboarding-steps li {
+  margin-bottom: var(--space-1);
+}
+
+/* --- the guided audit ---------------------------------------------------- */
+
+.stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stepper-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.stepper-item--current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.stepper-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--panel-soft);
+  font-size: 0.72rem;
+}
+
+/* Readiness checks: three states, because "not detected" and "could not be
+   read" are different claims about a client's repository. */
+.check-list {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.check {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.check p {
+  margin: var(--space-1) 0 0;
+  font-size: 0.86rem;
+}
+
+.check--ok .check-icon {
+  color: var(--success);
+}
+
+.check--missing .check-icon {
+  color: var(--warning);
+}
+
+.check--unknown .check-icon {
+  color: var(--muted);
+}
+
+.check-items {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-size: 0.8rem;
+}
+
+.blocking-list {
+  margin: var(--space-3) 0 0;
+  padding-left: var(--space-5);
+  color: var(--warning);
+  font-size: 0.86rem;
+}
+
+/* --- selection lists shared by the wizard and the audit ------------------- */
+
+.pick-list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.pick {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.pick--selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.checkbox {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.mode-switch {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.design-preview {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-soft);
+  font-size: 0.86rem;
+}
+
+/* --- candidates and suggestions ------------------------------------------ */
+
+.candidate,
+.suggestion {
+  border-left: 3px solid var(--line-strong);
+}
+
+.candidate-head,
+.suggestion-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.candidate-head h3,
+.suggestion-head h3 {
+  margin: var(--space-1) 0 0;
+  font-size: 1rem;
+}
+
+.suggestion--high {
+  border-left-color: var(--danger);
+}
+
+.suggestion--medium {
+  border-left-color: var(--warning);
+}
+
+.suggestion--low {
+  border-left-color: var(--line-strong);
+}
+
+/* --- the experiment verdict ---------------------------------------------- */
+
+.verdict {
+  border-left: 4px solid var(--line-strong);
+}
+
+.verdict--better {
+  border-left-color: var(--success);
+}
+
+.verdict--worse {
+  border-left-color: var(--danger);
+}
+
+.verdict--neutral {
+  border-left-color: var(--accent);
+}
+
+.verdict-head {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.verdict-head h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.verdict-head p {
+  margin: var(--space-1) 0 0;
+}
+
+.verdict-kicker {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.verdict-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  background: var(--panel-soft);
+}
+
+.verdict--better .verdict-icon {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.verdict--worse .verdict-icon {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.verdict--neutral .verdict-icon {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.verdict-strength {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.verdict-highlights {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.verdict-highlight span {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.verdict-highlight strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.verdict-movements {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.verdict-evidence {
+  margin: var(--space-3) 0 0;
+  font-size: 0.86rem;
+}
+
+/* Case-level movement, which is the number that survives an average. */
+.movement {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px 8px;
+  border-radius: var(--radius-lg);
+  font-size: 0.78rem;
+  border: 1px solid transparent;
+}
+
+.movement--fixed {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.movement--broken {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.movement--unchanged {
+  color: var(--muted);
+  background: var(--panel-soft);
+}
+
+.movement--incomplete {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.outcome {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+}
+
+.outcome--pass {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.outcome--fail {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.outcome--unknown {
+  color: var(--muted);
+}
+
+/* --- provenance: fact / observation / judgement --------------------------- */
+
+.provenance-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius-lg);
+  font-size: 0.72rem;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+.provenance-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 0 0 var(--space-3);
+}
+
+.provenance-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* --- run detail ----------------------------------------------------------- */
+
+.run-condition {
+  border-left: 3px solid var(--accent);
+}
+
+.governance-surface {
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-soft);
+  font-size: 0.86rem;
+}
+
+.governance-surface summary {
+  cursor: pointer;
+}
+
+/* --- empty states that say what to do ------------------------------------ */
+
+.empty-state-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+@media (max-width: 720px) {
+  .mode-cards,
+  .evidence-summary,
+  .verdict-highlights {
+    grid-template-columns: 1fr;
+  }
+
+  .attention-item {
+    flex-direction: column;
+  }
+}
+
+/* ==========================================================================
+   Utilities the markup has always used and the stylesheet never defined.
+   Tables, inline type and row layout were rendering with browser defaults,
+   which is most of why the app read as a prototype rather than an instrument.
+   ========================================================================== */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.row.gap {
+  gap: var(--space-3);
+}
+
+.row.space-between {
+  justify-content: space-between;
+  width: 100%;
+}
+
+.small {
+  font-size: 0.82rem;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 0.82rem;
+}
+
+.error-text {
+  color: var(--danger);
+}
+
+button {
+  padding: 6px 12px;
+}
+
+/* A link that acts as a button has to look like one — the three mode CTAs and
+   every empty-state action are links, because they navigate. */
+a.primary,
+a.secondary,
+button.secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  border: 1px solid var(--line);
+}
+
+a.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+a.secondary,
+button.secondary {
+  background: var(--panel);
+  color: var(--accent);
+  border-color: var(--line-strong);
+}
+
+a.secondary:hover,
+button.secondary:hover {
+  border-color: var(--accent);
+}
+
+/* Dense by default: this is a table of evidence, not a marketing layout. */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: var(--space-3);
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.data-table th {
+  font-size: 0.74rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+  border-bottom-color: var(--line-strong);
+}
+
+.data-table tbody tr:hover {
+  background: var(--panel-soft);
+}
+
+.data-table td:not(:first-child) {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Wide tables scroll inside themselves rather than pushing the page sideways. */
+.table-scroll {
+  overflow-x: auto;
+}
+
+.suggestion-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.candidate-prompt {
+  white-space: pre-wrap;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  font-size: 0.8rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+
+/* Destructive actions look destructive before they are clicked. */
+button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+button.danger:hover {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}

@@ -16,11 +16,31 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:${PATH}"
 
 # node 20 is required by opencode and the conductor plugin.
+# libatomic1: pnpm honours a target repo's `packageManager` pin by fetching
+# its standalone binary, which links against libatomic — absent from -slim.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git \
+    && apt-get install -y --no-install-recommends ca-certificates curl git libatomic1 \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# pnpm and yarn, baked at build time. Target repositories declare their own
+# setup commands (often inferred by the readiness step — a pnpm lockfile means
+# `pnpm install`), and those commands execute inside THIS image, so the
+# package managers have to already be here. Plain npm installs rather than
+# corepack: corepack's on-demand download stalls without a visible error in
+# this build environment, and a build step that hangs is worse than a boring
+# one.
+RUN npm install -g pnpm yarn \
+    && pnpm --version && yarn --version
+
+# Pin pnpm's store inside the repo mount but under an ignored path. Left to its
+# default, pnpm walks up to the mount root (/app — the bind-mounted repository)
+# and creates .pnpm-store/ there, flooding the host repo's git status with
+# thousands of content-addressed files. data/pnpm-store keeps the hardlink
+# benefit (same filesystem as the workspaces) AND survives across runs as a
+# shared download cache.
+ENV npm_config_store_dir=/app/data/pnpm-store
 
 WORKDIR /app
 

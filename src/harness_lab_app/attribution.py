@@ -27,8 +27,15 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pathlib import Path
 
-# The harness "reading surface": governance docs + project memory the agent is
-# expected to consult. Coverage over this set is the core attribution signal.
+# The *fallback* reading surface: governance docs + project memory the lab
+# itself ships. Coverage over this set is the core attribution signal, but the
+# set is only correct for a run that executed against the lab's own repository.
+#
+# A run under ``harness_source="native"`` never had these files — it had the
+# target team's. Scoring it against this tuple measures the wrong repository, so
+# callers that know the run pass its own surface (see
+# ``harness_lab_app.governance.resolve_surface``) and this stays the default for
+# a run whose condition cannot be resolved.
 HARNESS_READING_SURFACE = (
     ".github/architecture.md",
     ".github/standards.md",
@@ -196,22 +203,36 @@ def _assemble(
     skills_available: list[str] | None,
     steps_parsed: int,
     skills_note: str,
+    reading_surface: tuple[str, ...] | None = None,
+    governance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    surface: tuple[str, ...] = HARNESS_READING_SURFACE
+    if reading_surface is not None:
+        surface = tuple(reading_surface)
     read_set = set(parsed["files_read"]) | set(parsed["files_edited"])
-    docs_read = [doc for doc in HARNESS_READING_SURFACE if doc in read_set]
+    docs_read = [doc for doc in surface if doc in read_set]
     skills_available = sorted(skills_available or [])
 
     harness_usage = {
-        "governance_docs_available": list(HARNESS_READING_SURFACE),
+        "governance_docs_available": list(surface),
         "governance_docs_read": docs_read,
-        "governance_coverage": f"{len(docs_read)}/{len(HARNESS_READING_SURFACE)}",
+        "governance_coverage": f"{len(docs_read)}/{len(surface)}",
         "skills_available": skills_available,
         "skills_consulted": parsed["skills_consulted"],
         "skills_note": skills_note,
     }
+    # Which repository the denominator came from. Without it a coverage figure
+    # is unreadable: 2/9 against the lab's docs and 2/9 against a client's are
+    # different measurements that would otherwise render identically.
+    if governance:
+        harness_usage["governance_source"] = governance.get("source", "")
+        harness_usage["governance_fingerprint"] = governance.get("fingerprint", "")
+        harness_usage["harness_source"] = governance.get("harness_source", "")
+        if governance.get("warning"):
+            harness_usage["governance_warning"] = governance["warning"]
     tools = parsed["tools"]
     summary = (
-        f"read {len(docs_read)}/{len(HARNESS_READING_SURFACE)} governance docs; "
+        f"read {len(docs_read)}/{len(surface)} governance docs; "
         f"{tools['edit']} edits, {tools['read']} reads, {tools['bash']} bash; "
         f"modes: {','.join(sorted(parsed['agent_modes'])) or 'n/a'}"
     )
@@ -232,6 +253,8 @@ def build_attribution(
     *,
     skills_available: list[str] | None = None,
     steps_parsed: int = 0,
+    reading_surface: tuple[str, ...] | None = None,
+    governance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Full attribution from opencode permission logs."""
     return _assemble(
@@ -242,6 +265,8 @@ def build_attribution(
             "skill invocation is context-injected, not file-read; "
             "'consulted' only counts SKILL.md reads and is a lower bound"
         ),
+        reading_surface=reading_surface,
+        governance=governance,
     )
 
 
@@ -250,6 +275,8 @@ def build_attribution_from_events(
     *,
     skills_available: list[str] | None = None,
     steps_parsed: int = 0,
+    reading_surface: tuple[str, ...] | None = None,
+    governance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Full attribution from claude stream-json events (first-class tool calls)."""
     return _assemble(
@@ -260,6 +287,8 @@ def build_attribution_from_events(
             "events-based: 'consulted' counts real Skill-tool invocations "
             "plus SKILL.md reads"
         ),
+        reading_surface=reading_surface,
+        governance=governance,
     )
 
 

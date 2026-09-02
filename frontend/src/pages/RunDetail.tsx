@@ -4,6 +4,7 @@ import { api, ApiError } from "../api";
 import { ArtifactsPanel } from "../components/ArtifactsPanel";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HarnessCatalog } from "../components/HarnessCatalog";
+import { ScoresPanel } from "../components/ScoresPanel";
 import { LogViewer } from "../components/LogViewer";
 import { Markdown } from "../components/Markdown";
 import { SandboxPanel } from "../components/SandboxPanel";
@@ -15,6 +16,7 @@ import type {
   ImprovementsDoc,
   LangfuseStatus,
   ProposalIssue,
+  RunContext,
   RunEventRecord,
   RunMetadata,
   RunRecord,
@@ -52,6 +54,93 @@ const CONTINUE_STEP_OPTIONS = [1, 3, 6, 10];
 // to the summary-only note when its attribution carries no signals (old runs).
 const SUMMARY_ONLY_HARNESSES = new Set(["claude", "codex"]);
 
+const HARNESS_SOURCE_BLURB: Record<string, string> = {
+  native:
+    "The agent saw the target repository's own setup. The lab injected nothing, " +
+    "so this is the control for any governance comparison.",
+  injected:
+    "The lab's harness was copied into the target workspace. Whatever this run " +
+    "did with governance, it did with the lab's, not the repository's.",
+  lab_root:
+    "The agent ran inside the lab repository itself — no external target " +
+    "workspace was materialised."
+};
+
+/**
+ * What condition this run was, above the outcome and far above the logs (§16).
+ *
+ * A run is only interpretable as a member of a design. Reading stdout without
+ * knowing which arm produced it, against which commit, with whose governance,
+ * is how a pile of runs gets mistaken for a measurement.
+ */
+function RunConditionStrip({ context }: { context: RunContext }) {
+  return (
+    <div className="panel run-condition">
+      <div className="panel-head">
+        <h3>Condition</h3>
+        {context.experiment_id ? (
+          <Link to={`/evaluate/experiments?experiment=${context.experiment_id}`}>
+            {context.experiment_id} ↗
+          </Link>
+        ) : (
+          <span className="badge neutral">Ad-hoc run — not part of an experiment</span>
+        )}
+      </div>
+      {context.experiment_question ? (
+        <p className="muted">{context.experiment_question}</p>
+      ) : null}
+      <div className="detail-grid">
+        <div>
+          <span>Arm</span>
+          <strong>{context.condition_label || "—"}</strong>
+        </div>
+        <div>
+          <span>Case</span>
+          <strong>{context.case_name || context.case_id || "—"}</strong>
+        </div>
+        <div>
+          <span>Repository</span>
+          <strong>{context.target_repo_id || "the lab itself"}</strong>
+        </div>
+        <div>
+          <span>Commit</span>
+          <strong className="mono">
+            {context.target_commit ? context.target_commit.slice(0, 10) : "—"}
+          </strong>
+        </div>
+        <div>
+          <span>Harness</span>
+          <strong>{context.harness}</strong>
+        </div>
+        <div>
+          <span>Governance</span>
+          <strong>{context.harness_source}</strong>
+        </div>
+        <div>
+          <span>Executor model</span>
+          <strong>{context.executor_model || "—"}</strong>
+        </div>
+        <div>
+          <span>Step budget</span>
+          <strong>{context.max_steps}</strong>
+        </div>
+      </div>
+      <p className="muted small">
+        {HARNESS_SOURCE_BLURB[context.harness_source] ?? ""}
+      </p>
+      {context.validation_commands.length > 0 ? (
+        <p className="muted small">
+          Validated by: <code>{context.validation_commands.join(" && ")}</code>
+        </p>
+      ) : (
+        <p className="muted small">
+          No validation gate — this run can only ever be scored by hand.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function harnessFromCommand(command: string[] | undefined): string {
   if (!command) return "opencode";
   const i = command.indexOf("--harness");
@@ -76,6 +165,7 @@ export function RunDetail({
   const [scoreValue, setScoreValue] = useState(0);
   const [interventionsValue, setInterventionsValue] = useState(0);
   const [notesValue, setNotesValue] = useState("");
+  const [runContext, setRunContext] = useState<RunContext | null>(null);
   const [validation, setValidation] = useState<ValidationRecord | null>(null);
   const [attribution, setAttribution] = useState<AttributionRecord | null>(null);
   const [audit, setAudit] = useState<AuditRecord | null>(null);
@@ -196,6 +286,19 @@ export function RunDetail({
         }
       });
     };
+    // Available the moment the run exists — it describes the design, not the
+    // outcome — so it is fetched once and never retried.
+    api
+      .getRunContext(run.run_id)
+      .then((result) => {
+        if (active) {
+          setRunContext(result);
+        }
+      })
+      .catch(() => {
+        // Pre-context runs and deleted configs: the strip stays hidden rather
+        // than guessing at a condition nobody recorded.
+      });
     fetchWithRetry(
       () =>
         api.getValidation(run.run_id).then((result) => {
@@ -278,7 +381,7 @@ export function RunDetail({
   if (run === null) {
     return (
       <section className="run-detail-page">
-        <Link className="run-detail-back" to="/runs">
+        <Link className="run-detail-back" to="/advanced/runs">
           ← Runs
         </Link>
         <p className="muted">Select a run to view status, artifacts, score, and audit.</p>
@@ -318,7 +421,7 @@ export function RunDetail({
     onContinueRun(run.run_id, prompt, continueSteps)
       .then((created) => {
         setContinuePrompt("");
-        navigate(`/runs/${created.run_id}`);
+        navigate(`/advanced/runs/${created.run_id}`);
       })
       .catch((error: Error) => setActionError(error.message))
       .finally(() => setActionPending(false));
@@ -568,7 +671,7 @@ export function RunDetail({
 
   return (
     <section className="run-detail-page">
-      <Link className="run-detail-back" to="/runs">
+      <Link className="run-detail-back" to="/advanced/runs">
         ← Runs
       </Link>
       <div className="run-detail-header">
@@ -646,6 +749,7 @@ export function RunDetail({
       {tab !== "detail" ? <SandboxPanel key={tab} kind={tab} runId={run.run_id} /> : null}
       {tab === "detail" ? (
         <>
+      {runContext ? <RunConditionStrip context={runContext} /> : null}
       <div className="detail-grid">
         <div>
           <span>Score</span>
@@ -944,6 +1048,34 @@ export function RunDetail({
             ) : (
               <p className="muted">No governance docs were read in this run.</p>
             )}
+            {/*
+              The denominator's provenance. "2/9" against a client's own
+              documents and "2/9" against the lab's are different measurements
+              that would otherwise render identically — and a native run scored
+              against the lab's rules would be scored against rules it never
+              received (ADR-0036).
+            */}
+            {attribution.harness_usage?.governance_source ? (
+              <p className="muted small">
+                Denominator: the{" "}
+                <strong>
+                  {attribution.harness_usage.governance_source === "target_workspace"
+                    ? "target repository's own"
+                    : "lab repository's"}
+                </strong>{" "}
+                governance surface, under{" "}
+                <code>harness_source={attribution.harness_usage.harness_source}</code>
+                {attribution.harness_usage.governance_fingerprint
+                  ? ` · fingerprint ${attribution.harness_usage.governance_fingerprint.slice(0, 12)}`
+                  : ""}
+                .
+              </p>
+            ) : null}
+            {attribution.harness_usage?.governance_warning ? (
+              <p className="callout callout--warning small">
+                {attribution.harness_usage.governance_warning}
+              </p>
+            ) : null}
             <p className="muted">{attribution.harness_usage?.skills_note}</p>
           </>
         )}
@@ -981,6 +1113,49 @@ export function RunDetail({
           <ErrorBanner message={audit.error ?? "Audit failed"} />
         ) : (
           <div className="audit-body">
+            {/*
+              What the auditor was allowed to judge against, stated before its
+              judgement. ADR-0036: a `native` run is evaluated against the
+              target repository's own governance, an `injected` one against the
+              harness the lab actually put there. Never against rules the run
+              did not receive.
+            */}
+            {audit.governance_json && "fingerprint" in audit.governance_json ? (
+              <details className="governance-surface">
+                <summary>
+                  Judged against{" "}
+                  {audit.governance_json.source === "target_workspace"
+                    ? "the target repository's own governance"
+                    : "the lab repository's governance"}{" "}
+                  · {audit.governance_json.file_count} file(s) ·{" "}
+                  <code>{audit.governance_json.fingerprint.slice(0, 12)}</code>
+                </summary>
+                <p className="muted small">
+                  Rulebook: <code>{audit.governance_json.rules_file}</code> ·{" "}
+                  <code>harness_source={audit.governance_json.harness_source}</code>
+                  {audit.governance_json.truncated
+                    ? " · file list truncated for the fingerprint"
+                    : ""}
+                </p>
+                {audit.governance_json.warning ? (
+                  <p className="callout callout--warning small">
+                    {audit.governance_json.warning}
+                  </p>
+                ) : null}
+                <ul className="check-items">
+                  {audit.governance_json.files.map((file) => (
+                    <li key={file}>
+                      <code>{file}</code>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : (
+              <p className="muted small">
+                This audit predates per-run governance surfaces, so what it was
+                judged against was not recorded. Re-run the audit to pin it.
+              </p>
+            )}
             <Markdown>{audit.markdown}</Markdown>
           </div>
         )}
@@ -993,9 +1168,9 @@ export function RunDetail({
               <span className="badge ok">{improvements.proposals.length} proposal(s)</span>
             ) : null}
             <select
-              aria-label="Estrictez de la síntesis"
+              aria-label="Synthesis strictness"
               onChange={(e) => setImproveStrictness(e.target.value)}
-              title="Estrictez del filtro: strict = pocas proposals con evidencia fuerte; lenient = más permisivo."
+              title="Filter strictness: strict keeps only proposals with strong evidence; lenient admits more."
               value={improveStrictness}
             >
               <option value="strict">strict</option>
@@ -1022,19 +1197,19 @@ export function RunDetail({
               <button
                 disabled={savingProposals}
                 onClick={handleSaveProposals}
-                title="Guarda estas proposals en la tabla cross-run (menú Improvements) para agruparlas en un issue combinado."
+                title="Save these proposals to the cross-run table (Improvements) so they can be grouped into one combined issue."
                 type="button"
               >
-                {savingProposals ? "Guardando…" : "Guardar"}
+                {savingProposals ? "Saving…" : "Save"}
               </button>
             ) : null}
             {saveResult !== null ? (
               <Link
                 className="badge ok save-feedback"
-                title="Abrir el menú Improvements con las proposals guardadas"
-                to="/improvements"
+                title="Open Improvements with the saved proposals"
+                to="/advanced/improvements"
               >
-                Guardadas {saveResult.saved + saveResult.updated} · ver tabla ↗
+                Saved {saveResult.saved + saveResult.updated} · view table ↗
               </Link>
             ) : null}
           </div>
@@ -1052,8 +1227,8 @@ export function RunDetail({
               <>
                 {improvements.gate?.skipped ? (
                   <p className="muted">
-                    ✅ La corrida estuvo dentro de lo esperado para este caso+modelo —{" "}
-                    {improvements.gate.reason} Podés forzar la síntesis con{" "}
+                    This run was within the expected range for this case and model —{" "}
+                    {improvements.gate.reason} You can force the synthesis with{" "}
                     <code>make improve RUN={run.run_id} IMPROVE_FORCE=1</code>.
                   </p>
                 ) : (
@@ -1063,11 +1238,11 @@ export function RunDetail({
                 )}
                 {/* Close the loop: 0 proposals still persists improvements.json,
                     so the Runs list already reflects this run as "no" — say so,
-                    since there is nothing to "Guardar" into the cross-run worklist. */}
+                    since there is nothing to save into the cross-run worklist. */}
                 <p className="muted">
-                  Sin proposals para guardar. Este run ya quedó registrado como{" "}
-                  <span className="badge neutral">no</span> en la lista de{" "}
-                  <Link to="/runs">Runs</Link> (columna Improvements).
+                  No proposals to save. This run is already recorded as{" "}
+                  <span className="badge neutral">no</span> in the{" "}
+                  <Link to="/advanced/runs">Runs</Link> list (Improvements column).
                 </p>
               </>
             ) : (
@@ -1106,10 +1281,10 @@ export function RunDetail({
       </div>
       <div className="panel subtle">
         <div className="panel-head">
-          <h3>Issue sanitizado (ml-python-base)</h3>
+          <h3>Sanitised issue (ml-python-base)</h3>
           <div className="run-actions">
             <button disabled={proposalLoading} onClick={handleGenerateIssue} type="button">
-              {proposalLoading ? "Generando…" : "Generar issue sanitizado (ml-python-base)"}
+              {proposalLoading ? "Generating…" : "Generate sanitised issue (ml-python-base)"}
             </button>
           </div>
         </div>
@@ -1123,8 +1298,8 @@ export function RunDetail({
         {proposalIssue === null ? (
           <p className="muted">
             {proposalLoading
-              ? "Sintetizando un issue sanitizado a partir de la auditoría (corre un LLM en el servidor; puede tardar entre 15 y 40 segundos)."
-              : "Genera un issue de GitHub sanitizado para ml-python-base a partir de la auditoría de este run. Corré la auditoría primero si todavía no está lista."}
+              ? "Synthesising a sanitised issue from the audit (this runs an LLM on the server and can take 15 to 40 seconds)."
+              : "Generate a sanitised GitHub issue for ml-python-base from this run's audit. Run the audit first if it is not ready yet."}
           </p>
         ) : (
           <>
@@ -1141,15 +1316,15 @@ export function RunDetail({
                   textDecoration: "none"
                 }}
               >
-                Abrir issue pre-cargado en GitHub ↗
+                Open prefilled issue on GitHub ↗
               </a>
             </div>
             <p className="muted" style={{ fontSize: "0.85rem" }}>
-              El link abre el form <code>{proposalIssue.form.template}</code> de{" "}
-              {proposalIssue.repository} con todos los campos ya cargados. Confirmá los dos
-              campos marcados <strong>recomendado</strong> (canal y SemVer) y tildá las
-              casillas de sanitización antes de crear. Cada campo también se puede copiar
-              suelto por si preferís pegar a mano.
+              The link opens the <code>{proposalIssue.form.template}</code> form on{" "}
+              {proposalIssue.repository} with every field already filled in. Confirm the two
+              fields marked <strong>recommended</strong> (channel and SemVer) and tick the
+              sanitisation boxes before creating it. Each field can also be copied on its
+              own if you would rather paste by hand.
             </p>
             <div className="proposal-fields" style={{ display: "grid", gap: "0.75rem" }}>
               {proposalIssue.form.fields.map((field) => (
@@ -1158,14 +1333,14 @@ export function RunDetail({
                     <h4 style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
                       {field.label}
                       {field.recommended ? (
-                        <span className="badge ok">recomendado</span>
+                        <span className="badge ok">recommended</span>
                       ) : null}
                     </h4>
                     <button
                       onClick={() => handleCopyField(field.id, field.value)}
                       type="button"
                     >
-                      {copiedField === field.id ? "Copiado ✓" : "Copiar"}
+                      {copiedField === field.id ? "Copied" : "Copy"}
                     </button>
                   </div>
                   {field.reason ? (
@@ -1186,11 +1361,11 @@ export function RunDetail({
               ))}
             </div>
             <details style={{ marginTop: "1rem" }}>
-              <summary>Ver como markdown único (copia y pega manual)</summary>
+              <summary>View as a single markdown block (manual copy and paste)</summary>
               <div className="panel-head" style={{ marginTop: "0.5rem" }}>
-                <span className="muted">Issue para {proposalIssue.repository}</span>
+                <span className="muted">Issue for {proposalIssue.repository}</span>
                 <button onClick={handleCopyIssue} type="button">
-                  {proposalCopied ? "Copiado ✓" : "Copiar todo"}
+                  {proposalCopied ? "Copied" : "Copy all"}
                 </button>
               </div>
               <pre
@@ -1232,6 +1407,7 @@ export function RunDetail({
           <h3>Artifacts</h3>
           <span className="muted">data/runs/{run.run_id}</span>
         </div>
+        <ScoresPanel runId={run.run_id} />
         <ArtifactsPanel runId={run.run_id} />
       </div>
       </div>

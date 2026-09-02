@@ -31,6 +31,14 @@ all from the web UI.
 - **Behavioural audit** — an LLM reads a run's artifacts and reports skill usage, loops,
   and SDLC adherence.
 - **A/B comparison** — control vs harness-wrapped arms to isolate the harness's effect.
+- **Experiments over runs** — state the question first, declare the arms, and the lab
+  *refuses* a design its mode cannot answer. Results are read as a **case matrix**
+  (fixed / broken / unchanged), not as one composite number
+  ([ADR-0033](docs/adr/0033-experiment-above-run.md)).
+- **Three ways in** — evaluate a harness change, test one across repositories, or
+  audit a repository you have never seen
+  ([ADR-0028](docs/adr/0028-evaluation-modes.md)). The UI starts from the question,
+  not from the schema.
 - **Batch runs** — queue a whole cross-product (cases × harnesses × prompts × models ×
   repetitions) from one form, validated all-or-nothing (see
   [ADR-0023](docs/adr/0023-batch-run-execution.md)).
@@ -107,7 +115,7 @@ you improve. The full loop, tied to it:
    **Attribution** panel shows which skills were consulted; the **Audit** button
    writes a behavioural diagnosis. `make harness-status` shows which template version
    the lab is currently running.
-2. **Generate the issue.** On the run, click **"Generar issue sanitizado"**. It shows
+2. **Generate the issue.** On the run, open the **Sanitised issue** panel. It shows
    a ready-to-paste, sanitized markdown issue (no private data). **Copy the whole block
    and open a new issue in
    [`ml-python-base`](https://github.com/xmartlabs/sdlc-ml-python-base)** — the first
@@ -147,6 +155,13 @@ you improve. The full loop, tied to it:
    **Audit** against the earlier run: did the symptom improve? Did the success
    criterion hold? If yes, the new version is validated; if not, iterate again.
 
+   For a release rather than a single symptom, run the **regression suite as an
+   experiment** — *Evaluate → New evaluation*, tick **Use the regression suite**, with
+   the previous version as control and the new one as treatment. The suite supplies
+   the canonical cases and their repetition counts, and the answer arrives as
+   *fixed / broken / unchanged*
+   ([ADR-0037](docs/adr/0037-regression-suite-produces-experiments.md)).
+
 Deliberately light and human-driven — full playbook in
 **[docs/harness-lifecycle/improvement-methodology.md](docs/harness-lifecycle/improvement-methodology.md)**.
 For the rigorous, fully-traceable form (immutable releases + the canonical regression
@@ -162,10 +177,14 @@ suite with hard gates), see the
 | **Trialling a new skill** | [Skill validation guide](docs/guide-skill-validation.md) — import from a URL, A/B it, promote it; [Skills management](docs/skills-management.md) — the governed catalog and the sync engine |
 | **Diagnosing a lab that misbehaves** | The **Health** screen ([guide](docs/guide-web-ui.md#health)) — reachability, drift and the four repairs ([ADR-0018](docs/adr/0018-health-and-drift-panel.md)); [Onboarding troubleshooting](docs/onboarding.md#5-smoke-test--your-first-run) |
 | **Improving the template** | [Improvement methodology](docs/harness-lifecycle/improvement-methodology.md) — when to trust a proposal; [Lab sync workflow](docs/harness-lifecycle/lab-sync-workflow.md) — adopt & validate a release; [Harness lifecycle](docs/harness-lifecycle/README.md) — the rigorous form |
+| **Auditing another team's repository** | [Auditing someone else's repository](docs/guide-web-ui.md#auditing-someone-elses-repository--worked-example) — the end-to-end walkthrough; [Target repositories](docs/guide-target-repositories.md) — the reference ([ADR-0029](docs/adr/0029-target-repositories-pinned-per-run.md)) |
+| **Designing a comparison** | [Web UI guide](docs/guide-web-ui.md#new-evaluation--the-wizard-for-modes-a-and-b) — the wizard, and why it will not let you build an unanswerable design; [Lab v2 roadmap](docs/roadmap-lab-v2.md) — experiments, modes and what each licenses ([ADR-0028](docs/adr/0028-evaluation-modes.md), [ADR-0033](docs/adr/0033-experiment-above-run.md)); [score registry](docs/adr/0034-score-registry.md) — facts, observations and judgements kept apart; [ADR-0036](docs/adr/0036-audit-judges-a-run-against-its-own-governance.md) — why a `native` control is never judged against the lab's rules |
 | **Comparing harnesses / models** | [Harness adapters](docs/harness-adapters.md) — claude/opencode/codex design; [claude & codex runbook](docs/runbook-claude-codex.md); [First-run benchmark runbook](docs/runbook-first-run.md) |
 | **Using SWE-bench lanes** | [SWE-bench cases](docs/design-swe-bench-cases.md); [SWE-bench Pro lane](docs/design-swe-bench-pro-lane.md); [Curated set](docs/swebench-curated-set.md) |
 | **Running self-hosted models** | [Local model runtime config](docs/local-model-runtime-config.md); [Task sizing](docs/task-sizing.md); [OpenCode workflow](docs/opencode-workflow.md) |
 | **Developing the lab itself** | [Agentic workflow](docs/agentic-workflow.md) — the working loop; [ADRs](docs/adr/README.md) — why things are the way they are; [Skills management](docs/skills-management.md) |
+| **Where the lab is going** | [Lab v2 roadmap](docs/roadmap-lab-v2.md) — experiments over runs, target repositories, the four-level evaluation model; [Local web app roadmap](docs/roadmap-local-webapp.md) — how v1 was built |
+| **Adding trajectory scores** | [Onboarding § DeepEval](docs/onboarding.md#6-optional--trajectory-scores-deepeval) — the optional extra, the judge model it needs, and what happens without it |
 | **Knowing what it does *not* do** | [Known limitations](docs/known-limitations.md) — accepted debt, stated up front; [SECURITY.md](SECURITY.md) — what a run container can actually reach |
 
 ## 📋 Prerequisites
@@ -519,7 +538,7 @@ runner image with auth supplied from `.env` (`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHRO
 
 ```bash
 make app-up          # build the runner image + start the full stack
-make stop-docker     # stop containers
+make app-down        # stop the stack (required before make app-reset-db)
 ```
 
 ## 📝 Configuration

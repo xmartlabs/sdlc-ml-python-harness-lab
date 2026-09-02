@@ -69,6 +69,9 @@ try:
 except ImportError:
     sys.exit("PyYAML not found. Run with: uv run python scripts/bench_run.py ...")
 
+# The harness a run uses when neither the flag nor the runs.yaml cell names one.
+DEFAULT_HARNESS = "opencode"
+
 # ---------------------------------------------------------------------------
 # Prompt variant → short name mapping
 # ---------------------------------------------------------------------------
@@ -152,9 +155,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--harness",
-        default="opencode",
+        default=None,
         choices=["opencode", "codex", "claude"],
-        help="Agent CLI that drives the run. All harnesses (opencode, codex, "
+        help=f"Agent CLI that drives the run (default: {DEFAULT_HARNESS}). All harnesses (opencode, codex, "
         "claude) run inside the Docker runner under `make app-up`; claude auth "
         "comes from .env (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY). Host mode "
         "(`make app-host`, subprocess backend) is an alternative for driving a "
@@ -356,6 +359,54 @@ def apply_skill_views(skills: list) -> None:
         if tool.needs_manifest and tool.manifest_path:
             write_manifest(REPO_ROOT / tool.manifest_path, hashes)
         render_tool(REPO_ROOT, registry, tool, skills=skills)
+
+
+def inject_harness(workspace: Path, skills: list, tool_id: str) -> dict:
+    """Project the lab harness into a target workspace (ADR-0031).
+
+    This is the `injected` arm. The agent runs inside the cloned repository, so
+    the harness has to be *there* — a governance surface in the lab is invisible
+    from a cwd the agent never visits.
+
+    ``skills`` is the run's **effective** set, so an ablated arm stays ablated
+    inside the target. Passing the full governed set here would silently undo
+    the ablation for exactly the runs meant to measure it.
+    """
+    from ml_python_base.skills_sync.config import DEFAULT_REGISTRY_PATH, load_registry
+    from ml_python_base.skills_sync.projection import project_harness
+
+    registry = load_registry(REPO_ROOT / DEFAULT_REGISTRY_PATH)
+    governance = (
+        *registry.governance.files,
+        registry.governance.automation,
+        registry.governance.orchestration,
+    )
+    result = project_harness(
+        REPO_ROOT,
+        workspace,
+        registry,
+        skills=skills,
+        tool_ids=(tool_id,),
+        governance_files=tuple(doc for doc in governance if doc),
+    )
+    print(
+        f"  ✓ Harness projected into the target: {len(result.skills)} skill(s), "
+        f"{result.agents} agent(s), tool={tool_id}"
+    )
+    if result.collisions:
+        # Replacing a repository's own governance changes the thing being
+        # measured, so it is announced and recorded, never silent.
+        print(
+            "  ⚠️  Replaced the target's own governance: "
+            f"{', '.join(result.collisions)} (kept as *.native.bak)"
+        )
+    return {
+        "tools": result.tools,
+        "skills": sorted(result.skills),
+        "agents": result.agents,
+        "files_written": sorted(result.files_written),
+        "collisions": sorted(result.collisions),
+    }
 
 
 def restore_full_skill_views() -> None:
@@ -828,6 +879,10 @@ def write_metadata(
     prompt_short: str,
     prompt_source: Path | None = None,
     task_path: Path | None = None,
+    target: dict | None = None,
+    harness_source: str = "",
+    harness_root: Path | None = None,
+    harness_projection: dict | None = None,
 ) -> Path:
     meta = {
         "project": "ai-sdlc-lab",
@@ -852,6 +907,11 @@ def write_metadata(
         "subagents": discover_subagents(),
         "base_commit": task.get("base_commit", ""),
         "workspace": f"workspace/{args.run}",
+        # Which external repository this run worked in, if any (ADR-0029).
+        "target_repo_id": (target or {}).get("target_id", ""),
+        "target_commit": (target or {}).get("commit", ""),
+        # Which harness the agent could see, and from where (ADR-0031).
+        "harness_source": harness_source or "lab_root",
         # Lineage for a continuation run (ADR-0026); "" for an original run.
         # Carried in the archived artifact so a chain stays reconstructable
         # from disk alone (ADR-0021).
@@ -873,6 +933,10 @@ def write_metadata(
         task_path=task_path,
         runner_image=os.environ.get("HARNESS_LAB_RUNNER_IMAGE"),
         skills_disabled=tuple(meta["skills_disabled"]),
+        target=target,
+        harness_source=harness_source,
+        harness_root=harness_root,
+        harness_projection=harness_projection,
         skills_extra_hashes=staged_skill_hashes(
             list(getattr(args, "extra_skill", []) or [])
         ),
@@ -1048,16 +1112,110 @@ def _load_case_spec(out_dir: Path) -> dict | None:
 
 
 def spec_provisions_repo(spec: dict | None) -> bool:
-    """Whether this case needs a subject repo cloned before the agent runs.
+    """Whether this run needs a repository cloned before the agent runs.
 
-    Only a cloneable ``owner/repo`` counts: a case may carry a bare
-    ``subject_repo`` for provenance (Tetris says ``ml-python-base``), and a
-    DB-native case leaves the field empty.
+    Two independent reasons to provision. An external **target repository**
+    (ADR-0029) says so explicitly through ``source``; that is the discriminator
+    ADR-0030 introduced, and it is checked first because a target is orthogonal
+    to the case type — the same case may run locally or against a clone.
+
+    Otherwise a cloneable ``owner/repo`` counts, and only that: a case may carry
+    a bare ``subject_repo`` for provenance (Tetris says ``ml-python-base``), and
+    a DB-native case leaves the field empty.
     """
+    if (spec or {}).get("source") == "git_target":
+        return True
     return "/" in (spec or {}).get("repo", "")
 
 
-def provision_workspace(workspace: Path, spec: dict) -> None:
+def _provision_git_target(
+    workspace: Path, spec: dict, on_provisioned: object = None
+) -> None:
+    """Materialize an external target repository at its pinned commit (ADR-0029).
+
+    The commit — never the ref — is what gets checked out. It was resolved once,
+    at run creation, and shipped in the spec; resolving a ref here would let the
+    run execute against a commit its own provenance does not name.
+
+    Setup commands run before the agent and their output is committed along with
+    the checkout, so the agent's later ``git diff HEAD`` contains only the
+    agent's work. Build artifacts a repo already ignores (``.venv``,
+    ``node_modules``) stay ignored — ``git add -A`` honors ``.gitignore``, and an
+    ignored file never appears in the diff anyway.
+    """
+    import swebench_common as swe
+
+    target = spec.get("target") or {}
+    repo_url = str(target.get("repo_url") or "")
+    commit = str(target.get("commit") or "")
+    target_id = str(target.get("target_id") or "?")
+    if not repo_url or not commit:
+        sys.exit(
+            f"❌ Target '{target_id}' is missing a repo_url or a resolved commit. "
+            "The worker stages both into case_spec.json — the run should never "
+            "have started without them."
+        )
+
+    if workspace.exists():
+        workspace.rmdir()  # let git clone create it
+    print(f"  Provisioning target {target_id} @ {commit[:10]} …")
+    swe.clone_checkout(workspace, repo_url, commit)
+
+    for command in [str(item) for item in target.get("setup", []) if str(item).strip()]:
+        rendered = command.format(workspace=str(workspace))
+        print(f"  setup: {rendered}")
+        # Shell is intentional and is the contract: setup entries are
+        # operator-authored shell lines (`uv sync && make build`), exactly like
+        # a case's validation_commands. They come from the lab's own database,
+        # not from the agent or the target repository, and they already run
+        # inside the per-run container.
+        result = subprocess.run(  # nosec B602 - operator-authored setup command
+            rendered,
+            shell=True,
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            print(result.stdout[-1500:])
+            print(result.stderr[-1500:])
+            sys.exit(
+                f"❌ Target setup failed (rc={result.returncode}): {rendered}\n"
+                "The agent would have started against a half-built repository, so "
+                "the run is stopped instead."
+            )
+
+    # The harness lands BEFORE the baseline commit on purpose: projected into a
+    # committed tree it would show up in the agent's `git diff HEAD` as though
+    # the agent had written it, and every diff-based measurement would be wrong.
+    if callable(on_provisioned):
+        on_provisioned(workspace)
+
+    _run_git(["git", "-C", str(workspace), "add", "-A"], cwd=REPO_ROOT)
+    _run_git(
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "-c",
+            "user.email=lab@harness.local",
+            "-c",
+            "user.name=harness-lab",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            f"target: provisioned {target_id} @ {commit[:10]}",
+        ],
+        cwd=REPO_ROOT,
+    )
+    print(f"  ✓ Target {target_id} provisioned at {commit[:10]}.")
+
+
+def provision_workspace(
+    workspace: Path, spec: dict, on_provisioned: object = None
+) -> None:
     """Clone + set up a subject repo in the workspace before the agent runs.
 
     Repo-task / SWE-bench flow (ADR-0009): clone @ base_commit, apply the
@@ -1073,6 +1231,10 @@ def provision_workspace(workspace: Path, spec: dict) -> None:
         return
     if workspace.exists() and any(workspace.iterdir()):
         sys.exit(f"❌ workspace/{workspace.name}/ is not empty; cannot provision repo.")
+
+    if spec.get("source") == "git_target":
+        _provision_git_target(workspace, spec, on_provisioned)
+        return
 
     if spec.get("case_type") == "swe_pro":
         # Pro lane: copy the repo out of the instance's prebuilt image (needs
@@ -1680,6 +1842,7 @@ def write_usage_json(out_dir: Path, usage: dict | None) -> Path:
         "diff_lines": None,
         "detected_model": None,
         "detected_session": None,
+        "stop_reason": None,
     }
     if usage:
         skeleton.update(usage)
@@ -1981,10 +2144,23 @@ def main(argv: list[str] | None = None) -> int:
     # A resumed run learns its models from stored metadata, after the overlay
     # was first written; re-apply so a direct LM Studio executor is routable.
     apply_gateway_overlay(direct_models(args))
-    # Web/CLI runs pass the harness on the command line; runs.yaml rarely carries
-    # it, so record the actual harness in metadata (used by the improvement cycle).
-    if not run.get("harness"):
-        run["harness"] = args.harness
+    # Precedence mirrors the model flags: an explicit --harness wins over the
+    # harness recorded in runs.yaml. It used to be the other way round, and a
+    # web run whose id collided with a pre-declared cell was executed by one
+    # CLI while metadata.json — the file the corpus, the leaderboard and the
+    # improvement cycle all read — named another. A run filed under a harness
+    # that never executed it is worse than no record at all, so when the two
+    # disagree the flag wins and the divergence is announced rather than
+    # resolved in silence.
+    declared = str(run.get("harness") or "")
+    if args.harness and declared and declared != args.harness:
+        print(
+            f"  ! runs.yaml declares harness '{declared}' for {args.run}, but "
+            f"--harness {args.harness} was passed. Running (and recording) "
+            f"{args.harness}."
+        )
+    run["harness"] = args.harness or declared or DEFAULT_HARNESS
+    args.harness = run["harness"]
 
     workspace = WORKSPACE_ROOT / args.run
 
@@ -2064,8 +2240,11 @@ def main(argv: list[str] | None = None) -> int:
         if skills_ablation:
             sys.exit(f"❌ Could not sync skill views before ablation: {exc!r}")
         print(f"  ⚠️  Skill view sync skipped: {exc!r}")
+    # Always resolved, ablated or not: the `injected` harness condition projects
+    # this exact set into the target, so a run with no ablation still needs to
+    # know what "the harness" currently is.
+    effective_skills = build_effective_skills(args.disable_skill, args.extra_skill)
     if skills_ablation:
-        effective_skills = build_effective_skills(args.disable_skill, args.extra_skill)
         apply_skill_views(effective_skills)
         import atexit
 
@@ -2101,16 +2280,48 @@ def main(argv: list[str] | None = None) -> int:
         validate_workspace(workspace, args.run, args.resume, fresh=args.fresh)
     workspace.mkdir(parents=True, exist_ok=True)
 
-    if provisions_repo and case_spec is not None:
-        provision_workspace(workspace, case_spec)
+    # The harness condition (ADR-0031) is decided before provisioning, because
+    # `injected` is a step *of* provisioning.
+    # The worker historically staged this only inside the target block; read
+    # both so a spec from either generation resolves to the condition the run
+    # was actually created with. Falling back to "lab_root" here once silently
+    # turned a declared `native` control into a lab-harness arm — the exact
+    # collapse ADR-0031 exists to prevent.
+    harness_source = str(
+        (case_spec or {}).get("harness_source")
+        or ((case_spec or {}).get("target") or {}).get("harness_source")
+        or "lab_root"
+    )
+    harness_projection: dict | None = None
 
-    # Control-arm hygiene (harness A/B): Claude Code auto-loads CLAUDE.md and
-    # .claude/skills/ from its cwd, so a "bare" default-variant run launched
-    # from the repo root silently inherits the whole lab harness. The default
-    # arm therefore runs from inside the subject repo (truly bare context);
-    # the harness variant keeps the repo-root cwd so the surface is available.
+    def _inject(ws: Path) -> None:
+        nonlocal harness_projection
+        harness_projection = inject_harness(ws, effective_skills, args.harness)
+
+    if provisions_repo and case_spec is not None:
+        provision_workspace(
+            workspace,
+            case_spec,
+            _inject if harness_source == "injected" else None,
+        )
+
+    # Where the agent runs decides which harness it can see. Claude Code and
+    # opencode auto-load their adapter file and native skills from the cwd, so
+    # cwd IS the harness condition:
+    #
+    #   lab_root  — the lab repository: the agent sees the lab's harness and
+    #               edits the workspace from outside. The historical default.
+    #   native    — inside the target: whatever governance that repo ships, and
+    #               nothing else.
+    #   injected  — inside the target, with the lab harness projected into it.
+    #
+    # Running `native` from the repo root would silently hand the agent the lab
+    # harness and quietly turn the control arm into a second treatment arm.
     agent_cwd: Path | None = None
-    if args.harness == "claude" and provisions_repo and prompt_short == "swe_default":
+    if harness_source in ("native", "injected"):
+        agent_cwd = workspace
+    elif args.harness == "claude" and provisions_repo and prompt_short == "swe_default":
+        # Pre-existing control-arm hygiene for the SWE lane, unchanged.
         agent_cwd = workspace
 
     repo_note: str | None = None
@@ -2149,6 +2360,18 @@ def main(argv: list[str] | None = None) -> int:
             if runs_path is not None
             else out_dir / "case_spec.json"
         ),
+        target=(case_spec or {}).get("target"),
+        harness_source=harness_source,
+        # An in-target harness is fingerprinted from the workspace, never from
+        # the lab — otherwise `native` and `injected` hash identically and the
+        # two arms silently merge into one.
+        #
+        # Gated on the declared condition, NOT on `agent_cwd`: the SWE lane has
+        # set `agent_cwd = workspace` for its bare claude arm since long before
+        # harness conditions existed, and moving that arm's fingerprint now
+        # would re-bin every historical SWE run against a hash it never had.
+        harness_root=(workspace if harness_source in ("native", "injected") else None),
+        harness_projection=harness_projection,
     )
     print(f"  Metadata:    {(out_dir / 'metadata.json').relative_to(REPO_ROOT)}")
 
@@ -2207,6 +2430,10 @@ def main(argv: list[str] | None = None) -> int:
     max_steps = max(1, args.max_steps)
     steps_dir = out_dir / "steps"
     completed_steps = 0
+    # Which criterion ended the step loop. Recorded because a cost comparison
+    # between two arms is only readable against how each of them terminated:
+    # an arm that ran out of budget did not spend more, it was cut off.
+    stop_reason: str | None = None
 
     if args.score_mode == "none":
         print("  score-mode=none: skipping execution.")
@@ -2312,6 +2539,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"  ⚠️  {args.harness} exited with code {rc} — see {step_log.relative_to(REPO_ROOT)}"
                 )
+                stop_reason = "harness_error"
                 break
 
             if provisions_repo and case_spec is not None:
@@ -2329,33 +2557,43 @@ def main(argv: list[str] | None = None) -> int:
                         print(
                             f"  ✅ SWE-bench resolved after step {step_n} — stopping."
                         )
+                        stop_reason = "swe_resolved"
                         break
-                elif max_steps > 1:
-                    # No objective signal (Pro lane in the docker-less runner):
-                    # fall back to a no-progress detector so the loop doesn't
-                    # burn every remaining step re-summarizing finished work. A
-                    # step that changed nothing in the workspace is the
-                    # strongest done-signal available; validation still renders
-                    # the real verdict after the run.
-                    fp = workspace_fingerprint(workspace)
-                    if fp is not None and fp == last_workspace_fp:
-                        print(
-                            f"  ⏹  Step {step_n} changed nothing in the "
-                            "workspace and no objective eval is available — "
-                            "stopping (agent appears done)."
-                        )
-                        break
-                    last_workspace_fp = fp
 
             if max_steps > 1:
+                # A step that changed nothing in the workspace is the strongest
+                # done-signal available, and — unlike the prose sentinel below —
+                # every arm can reach it. It is checked FIRST and for every lane
+                # on purpose: when only the sentinel could stop the loop, an arm
+                # whose prompt never taught the phrase was structurally unable
+                # to terminate early and paid for the full budget in restarts.
+                # That turned a prompt-authoring detail into a cost difference
+                # and reported it as a treatment effect.
+                fp = workspace_fingerprint(workspace)
+                if fp is not None and fp == last_workspace_fp:
+                    print(
+                        f"  ⏹  Step {step_n} changed nothing in the workspace — "
+                        "stopping (agent appears done)."
+                    )
+                    stop_reason = "no_progress"
+                    break
+                last_workspace_fp = fp
+
                 step_text = step_log.read_text()
                 if not provisions_repo and detect_stop_signal(step_text):
                     print(f"  Agent signaled completion at step {step_n}.")
+                    stop_reason = "completion_signal"
                     break
                 if step_n < max_steps:
                     print(
                         f"  Step {step_n} complete — continuing to step {step_n + 1}..."
                     )
+                else:
+                    # Reaching here means the budget ran out with the agent
+                    # still editing. Recorded, because a truncated trajectory
+                    # is not a finished one and the scores must not pretend
+                    # otherwise.
+                    stop_reason = "budget_exhausted"
             else:
                 print("  opencode run finished.")
     else:
@@ -2406,6 +2644,8 @@ def main(argv: list[str] | None = None) -> int:
             usage.update(remote_usage)
         if completed_steps:
             usage["steps"] = completed_steps
+        if stop_reason:
+            usage["stop_reason"] = stop_reason
         write_usage_json(out_dir, usage or None)
         if args.fresh:
             # Managed web run: the API owns scoring (POST /score), so Phase 5
@@ -2494,6 +2734,8 @@ def main(argv: list[str] | None = None) -> int:
         merged_usage.update(remote_usage)
     if completed_steps > 1:
         merged_usage["steps"] = completed_steps
+    if stop_reason:
+        merged_usage["stop_reason"] = stop_reason
 
     usage_path = write_usage_json(out_dir, merged_usage or None)
     if merged_usage:

@@ -42,6 +42,23 @@ GOVERNANCE_DOCS = (
 # settings are intentionally excluded so the fingerprint is machine-independent).
 HOOK_FILES = (".claude/settings.json",)
 
+# The surfaces an agent actually reads from its working directory. Used when the
+# harness lives in a *workspace* rather than in the lab (ADR-0031): a cloned
+# repository has no `skills-lock.json`, so the fingerprint has to be taken from
+# what is materialized on disk, not from the lock file that describes the lab.
+NATIVE_SKILL_DIRS = (
+    ".claude/skills",
+    ".opencode/skills",
+    ".codex/skills",
+    ".agents/skills",
+)
+ADAPTER_FILES = (
+    "CLAUDE.md",
+    "AGENTS.md",
+    "OPENCODE.md",
+    ".github/copilot-instructions.md",
+)
+
 # Paths whose modification vs the committed tree makes a run's harness "dirty".
 HARNESS_TRACKED_PATHS = (
     ".github/skills",
@@ -135,6 +152,64 @@ def _conductor_plugin_version(root: Path) -> str | None:
     return None
 
 
+def _hash_tree(root: Path) -> str | None:
+    """Content hash of a directory tree, or None when it does not exist.
+
+    Deliberately local rather than reusing ``skills_sync.hashing``: provenance
+    must stay importable with nothing but the standard library, so a run can
+    always record what it ran under.
+    """
+    if not root.is_dir():
+        return None
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(b"<unreadable>")
+    return "sha256:" + digest.hexdigest()
+
+
+def build_workspace_harness_fingerprint(root: Path) -> dict[str, Any]:
+    """Hashable identity of the harness *as materialized in a workspace*.
+
+    The distinction from :func:`build_harness_fingerprint` is the whole point of
+    the `native` / `injected` comparison. The lab-root version reads
+    ``skills-lock.json``, which a cloned repository never has — so using it for
+    both arms would hash them identically, the two conditions would collapse
+    into one ``condition_hash``, and the comparison would silently stop being a
+    comparison. This one hashes the directories and files the agent can actually
+    read from its cwd, so "nothing there" and "the whole harness there" are
+    different identities, and a target that ships governance of its own is
+    different again.
+    """
+    core: dict[str, Any] = {
+        "native_skills": {
+            rel: digest
+            for rel in NATIVE_SKILL_DIRS
+            if (digest := _hash_tree(root / rel)) is not None
+        },
+        "native_agents": {
+            rel: digest
+            for rel in (".claude/agents", ".opencode/agents", ".codex/agents")
+            if (digest := _hash_tree(root / rel)) is not None
+        },
+        "adapter_files": {
+            rel: digest
+            for rel in ADAPTER_FILES
+            if (digest := hash_file(root / rel)) is not None
+        },
+        "governance_docs": _hash_named_files(root, GOVERNANCE_DOCS),
+        "hooks": _hash_named_files(root, HOOK_FILES),
+        "opencode_version": _tool_version(["opencode", "--version"]),
+    }
+    harness_hash = hash_text(json.dumps(core, sort_keys=True, separators=(",", ":")))
+    return {"harness_hash": harness_hash, "harness_root": "workspace", **core}
+
+
 def build_harness_fingerprint(repo_root: Path) -> dict[str, Any]:
     """Hashable identity of the engineering harness at run time."""
     core: dict[str, Any] = {
@@ -196,6 +271,8 @@ def compute_condition_hash(
     skills_disabled: tuple[str, ...] = (),
     skills_extra_hashes: dict[str, str] | None = None,
     gateway_overlay_hash: str | None = None,
+    target: dict[str, Any] | None = None,
+    harness_source: str = "",
 ) -> str:
     """Deterministic id of the experimental arm (excludes provenance-only fields).
 
@@ -226,6 +303,19 @@ def compute_condition_hash(
         identity["skills_extra"] = dict(sorted(skills_extra_hashes.items()))
     if gateway_overlay_hash:
         identity["gateway_overlay"] = gateway_overlay_hash
+    if harness_source and harness_source != "lab_root":
+        # Same non-default-only rule as the fields above: `lab_root` is what
+        # every historical run did, so including it would re-bin all of them.
+        identity["harness_source"] = harness_source
+    if target and target.get("target_id"):
+        # The repository AND the commit, never the ref: two runs of "main" a
+        # week apart are different conditions, and recording the ref would let
+        # them share an arm (ADR-0029). Same non-empty-only rule as the
+        # ablation fields above — an absent target must not re-bin history.
+        identity["target"] = {
+            "target_id": target.get("target_id"),
+            "commit": target.get("commit"),
+        }
     return hash_text(json.dumps(identity, sort_keys=True, separators=(",", ":")))
 
 
@@ -242,9 +332,23 @@ def build_condition(
     skills_extra_hashes: dict[str, str] | None = None,
     skills_extra_hash_algo: str = "",
     gateway_overlay_hash: str | None = None,
+    target: dict[str, Any] | None = None,
+    harness_source: str = "",
+    harness_root: Path | None = None,
+    harness_projection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Assemble the full, hashable trial condition manifest."""
-    fingerprint = build_harness_fingerprint(repo_root)
+    """Assemble the full, hashable trial condition manifest.
+
+    ``harness_root`` moves the fingerprint to where the agent actually reads its
+    harness from. Without it a `native` and an `injected` run would both be
+    fingerprinted against the lab and share an arm — see
+    :func:`build_workspace_harness_fingerprint`.
+    """
+    fingerprint = (
+        build_workspace_harness_fingerprint(harness_root)
+        if harness_root is not None
+        else build_harness_fingerprint(repo_root)
+    )
     model_condition = build_model_condition(run, executor_model, planner_model)
     prompt_hash = hash_file(prompt_source) if prompt_source is not None else None
     case_hash = hash_file(task_path) if task_path is not None else None
@@ -261,8 +365,19 @@ def build_condition(
             skills_disabled=skills_disabled,
             skills_extra_hashes=skills_extra_hashes,
             gateway_overlay_hash=gateway_overlay_hash,
+            target=target,
+            harness_source=harness_source,
         ),
         "gateway_overlay_hash": gateway_overlay_hash,
+        "harness_source": harness_source or "lab_root",
+        # What the projection actually placed, and what it displaced. Recorded,
+        # not hashed: the fingerprint above already covers the resulting
+        # surfaces, while this says how they got there.
+        "harness_projection": harness_projection,
+        # Recorded in full (url, ref, commit) even though only id+commit are
+        # hashed: the ref is how a human reads the run, the commit is what makes
+        # it reproducible, and the url is what makes it fetchable again.
+        "target_repository": target or None,
         # Which digest produced skills_extra_hashes. Recorded, never hashed:
         # it labels the two generations of staged-skill arms (SKILL.md-only vs
         # whole-tree, ADR-0017) without re-binning anything a second time.
@@ -292,6 +407,10 @@ def enrich_metadata(
     skills_extra_hashes: dict[str, str] | None = None,
     skills_extra_hash_algo: str = "",
     gateway_overlay_hash: str | None = None,
+    target: dict[str, Any] | None = None,
+    harness_source: str = "",
+    harness_root: Path | None = None,
+    harness_projection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Add the condition manifest to a metadata dict; never raises."""
     with contextlib.suppress(Exception):
@@ -308,6 +427,10 @@ def enrich_metadata(
                 skills_extra_hashes=skills_extra_hashes,
                 skills_extra_hash_algo=skills_extra_hash_algo,
                 gateway_overlay_hash=gateway_overlay_hash,
+                target=target,
+                harness_source=harness_source,
+                harness_root=harness_root,
+                harness_projection=harness_projection,
             )
         )
     return meta

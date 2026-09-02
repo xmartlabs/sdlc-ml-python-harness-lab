@@ -59,7 +59,7 @@ where later sources win:
 
 ```
 Remote → Global → OPENCODE_CONFIG (file path env var)
-       → Project opencode.json → .opencode/
+       → Project opencode.json → .opencode/ 
        → OPENCODE_CONFIG_CONTENT (inline JSON env var) → Managed
 ```
 

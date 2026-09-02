@@ -161,7 +161,7 @@ export function Improvements() {
       .catch((error: Error) => {
         if (error instanceof ApiError && error.status === 422) {
           setGenerateError(
-            `El sanitizador rechazó el resultado (posible fuga de datos privados). Deseleccioná la proposal problemática y reintentá. Detalle: ${error.message}`
+            `The sanitiser rejected the result (possible leak of private data). Deselect the offending proposal and try again. Detail: ${error.message}`
           );
         } else {
           setGenerateError(error.message);
@@ -177,17 +177,20 @@ export function Improvements() {
           <p className="eyebrow">Improvements</p>
           <h1>Saved proposals</h1>
           <p className="lede">
-            Proposals guardadas desde cada run (botón "Guardar" en Improvement
-            proposals). Seleccioná una o varias — incluso de runs distintos — y generá
-            UN issue sanitizado combinado para ml-python-base.
+            Proposals saved from individual runs (the "Save" button in the Improvement
+            proposals panel). Select one or several — they may come from different runs —
+            and generate a single combined, sanitised issue for ml-python-base.
           </p>
         </div>
       </header>
       {loadError ? <ErrorBanner message={loadError} onDismiss={() => setLoadError(null)} /> : null}
       {proposals !== null && proposals.length === 0 ? (
         <EmptyState
-          title="No hay proposals guardadas"
-          description='Corré un run, generá sus Improvement proposals y usá el botón "Guardar" del panel para traerlas acá.'
+          title="No saved proposals yet."
+          description={
+            "Run a case, generate its improvement proposals, and use the " +
+            'panel\'s "Save" button to bring them here.'
+          }
         />
       ) : null}
       {proposals !== null && proposals.length > 0 ? (
@@ -196,17 +199,17 @@ export function Improvements() {
             <h2>Worklist</h2>
             <span className="muted">
               {selected.size > 0
-                ? `${selected.size} seleccionada(s) de ${visible.length}`
+                ? `${selected.size} of ${visible.length} selected`
                 : `${visible.length} proposal(s)`}
             </span>
           </div>
           <div className="improvements-toolbar">
             <select
-              aria-label="Filtrar por repo"
+              aria-label="Filter by repository"
               onChange={(e) => setRepoFilter(e.target.value)}
               value={repoFilter}
             >
-              <option value={ALL}>repo: todas</option>
+              <option value={ALL}>repo: all</option>
               {distinct(proposals.map((p) => p.repo)).map((repo) => (
                 <option key={repo} value={repo}>
                   {repo.split("/").pop()}
@@ -214,11 +217,11 @@ export function Improvements() {
               ))}
             </select>
             <select
-              aria-label="Filtrar por kind"
+              aria-label="Filter by kind"
               onChange={(e) => setKindFilter(e.target.value)}
               value={kindFilter}
             >
-              <option value={ALL}>kind: todos</option>
+              <option value={ALL}>kind: all</option>
               {distinct(proposals.map((p) => p.kind)).map((kind) => (
                 <option key={kind} value={kind}>
                   {kind}
@@ -226,11 +229,11 @@ export function Improvements() {
               ))}
             </select>
             <select
-              aria-label="Filtrar por case"
+              aria-label="Filter by case"
               onChange={(e) => setCaseFilter(e.target.value)}
               value={caseFilter}
             >
-              <option value={ALL}>case: todos</option>
+              <option value={ALL}>case: all</option>
               {distinct(proposals.map((p) => p.case)).map((caseId) => (
                 <option key={caseId} value={caseId}>
                   {caseId}
@@ -238,12 +241,12 @@ export function Improvements() {
               ))}
             </select>
             <select
-              aria-label="Filtrar por harness"
+              aria-label="Filter by harness"
               onChange={(e) => setHarnessFilter(e.target.value)}
-              title="La herramienta que corrió el harness — define si un issue toca CLAUDE.md, opencode o la capa .github/ compartida."
+              title="The tool that drove the harness — it decides whether an issue touches CLAUDE.md, opencode, or the shared .github/ layer."
               value={harnessFilter}
             >
-              <option value={ALL}>harness: todas</option>
+              <option value={ALL}>harness: all</option>
               {distinct(proposals.map((p) => p.harness)).map((harness) => (
                 <option key={harness} value={harness}>
                   {harness}
@@ -252,14 +255,14 @@ export function Improvements() {
             </select>
             <label
               className="switch"
-              title={`Solo temas propuestos desde ≥${RECURRENCE_MIN_RUNS} runs distintos (mismo kind+target).`}
+              title={`Only themes proposed from ${RECURRENCE_MIN_RUNS} or more distinct runs (same kind and target).`}
             >
               <input
                 checked={onlyRecurrent}
                 onChange={(e) => setOnlyRecurrent(e.target.checked)}
                 type="checkbox"
               />
-              <span>solo recurrentes</span>
+              <span>recurrent only</span>
             </label>
             <span className="toolbar-spacer" />
             <button
@@ -268,20 +271,20 @@ export function Improvements() {
               onClick={handleGenerate}
               title={
                 selected.size === 0
-                  ? "Seleccioná al menos una proposal con los checkboxes."
+                  ? "Select at least one proposal with the checkboxes."
                   : undefined
               }
               type="button"
             >
               {generating
-                ? "Generando…"
-                : `Generar issue combinado (${selected.size})`}
+                ? "Generating…"
+                : `Generate combined issue (${selected.size})`}
             </button>
           </div>
           {generating ? (
             <p className="muted">
-              Sintetizando un issue sanitizado combinado (corre un LLM en el servidor;
-              puede tardar entre 15 y 40 segundos).
+              Synthesising a combined, sanitised issue (this runs an LLM on the
+              server and can take 15 to 40 seconds).
             </p>
           ) : null}
           <div className="table-scroll">
@@ -289,7 +292,7 @@ export function Improvements() {
               <div className="table-row table-head">
                 <span>
                   <input
-                    aria-label="Seleccionar todas las visibles"
+                    aria-label="Select all visible"
                     checked={allVisibleSelected}
                     onChange={toggleAllVisible}
                     type="checkbox"
@@ -300,7 +303,7 @@ export function Improvements() {
                 <span>Repo</span>
                 <span>Harness</span>
                 <span>Run · case</span>
-                <span>Fecha · template</span>
+                <span>Date · template</span>
                 <span>Status</span>
                 <span />
               </div>
@@ -308,7 +311,7 @@ export function Improvements() {
                 <div className="table-row" key={proposal.id}>
                   <span>
                     <input
-                      aria-label={`Seleccionar ${proposal.title}`}
+                      aria-label={`Select ${proposal.title}`}
                       checked={selected.has(proposal.id)}
                       onChange={() => toggle(proposal.id)}
                       type="checkbox"
@@ -325,9 +328,9 @@ export function Improvements() {
                     {runCount(proposal) >= RECURRENCE_MIN_RUNS ? (
                       <span
                         className="badge ok"
-                        title={`Mismo kind+target propuesto desde ${runCount(proposal)} runs distintos — evidencia repetida, buen candidato a issue.`}
+                        title={`The same kind and target were proposed from ${runCount(proposal)} distinct runs — repeated evidence, a good issue candidate.`}
                       >
-                        recurrente ×{runCount(proposal)}
+                        recurrent ×{runCount(proposal)}
                       </span>
                     ) : null}
                     {proposal.target ? (
@@ -345,7 +348,7 @@ export function Improvements() {
                     {proposal.harness ? (
                       <span
                         className="badge neutral"
-                        title={`Harness: ${proposal.harness} — un issue generado apuntaría a su adapter (o a .github/ si la selección mezcla harness).`}
+                        title={`Harness: ${proposal.harness} — a generated issue would target its adapter, or .github/ if the selection mixes harnesses.`}
                       >
                         {proposal.harness}
                       </span>
@@ -357,7 +360,7 @@ export function Improvements() {
                     <Link
                       className="cell-truncate"
                       title={proposal.run_id}
-                      to={`/runs/${proposal.run_id}`}
+                      to={`/advanced/runs/${proposal.run_id}`}
                     >
                       {shortRunId(proposal.run_id)}
                     </Link>
@@ -379,7 +382,7 @@ export function Improvements() {
                             : null
                         ]
                           .filter(Boolean)
-                          .join(" · ") || "Sin datos del template"
+                          .join(" · ") || "No template metadata"
                       }
                     >
                       {proposal.template_version ||
@@ -408,7 +411,7 @@ export function Improvements() {
                   </span>
                   <span className="row-actions">
                     <button onClick={() => handleDelete(proposal.id)} type="button">
-                      Quitar
+                      Remove
                     </button>
                   </span>
                 </div>
@@ -416,7 +419,7 @@ export function Improvements() {
             </div>
           </div>
           {visible.length === 0 ? (
-            <p className="muted">Ninguna proposal coincide con los filtros.</p>
+            <p className="muted">No proposal matches the current filters.</p>
           ) : null}
         </section>
       ) : null}
@@ -426,7 +429,7 @@ export function Improvements() {
       {groupIssue ? (
         <section className="panel">
           <div className="panel-head">
-            <h2>Issue combinado (ml-python-base)</h2>
+            <h2>Combined issue (ml-python-base)</h2>
             <span className="muted">
               {groupIssue.proposal_ids.length} proposal(s) ·{" "}
               {groupIssue.source_run_ids.length} run(s)
