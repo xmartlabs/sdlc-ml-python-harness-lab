@@ -138,7 +138,7 @@ CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Restart the stack after editing `.env` (`make stop-docker && make app-up`) — the
+Restart the stack after editing `.env` (`make app-down && make app-up`) — the
 token flows into the runner container from there. No gateway involvement for the
 runs themselves. Design details: [harness-adapters.md](harness-adapters.md).
 
@@ -197,8 +197,24 @@ This builds the per-run runner image and starts four services:
 | Celery worker + Redis | internal |
 | Runner | one container **per run**, created on demand |
 
-Stop everything with `make stop-docker`. (For a server that stays on, use
-`make app-up-prod` instead — one origin on `:8080`; see below.)
+Stop everything with `make app-down`. Containers are removed; the database, run
+artifacts and staged skills under `data/` survive, so `make app-up` brings the
+same lab back. (For a server that stays on, use `make app-up-prod` instead — one
+origin on `:8080`; see below.)
+
+> **Stop the stack before any host-side command that rewrites the database.**
+> `make app-reset-db` and restoring a backup both replace
+> `data/app/harness_lab.db` from your host, while the `api` and `worker`
+> containers hold that file open across a bind mount. Doing it live splits their
+> view of the database and every run you create afterwards sits `pending`
+> forever — with no error anywhere. `app-reset-db` now refuses while the stack
+> is up; the safe sequence is:
+>
+> ```bash
+> make app-down && make app-reset-db && make app-up
+> ```
+>
+> See [known-limitations.md](known-limitations.md#the-database-cannot-be-rewritten-from-the-host-while-the-stack-runs).
 
 > **Reaching the UI from another machine.** The API is published on `127.0.0.1`
 > by default. Authentication is only enforced once an admin password exists, so

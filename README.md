@@ -538,7 +538,7 @@ runner image with auth supplied from `.env` (`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHRO
 
 ```bash
 make app-up          # build the runner image + start the full stack
-make stop-docker     # stop containers
+make app-down        # stop the stack (required before make app-reset-db)
 ```
 
 ## 📝 Configuration

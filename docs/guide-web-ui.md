@@ -203,7 +203,15 @@ governance-loaded variant with the full skill catalog). Two levers move
 together on purpose — the claim is about the harness as a unit; ablate factors
 afterwards to see which parts do the work. The prompt pair is drawn from the
 selected cases' own variants (`naive`→`sdlc`, `swe_default`→`swe_harness`), and
-`prompt_variant` is a first-class condition axis for exactly this reason. "Add skills" offers the *staged* catalog and
+`prompt_variant` is a first-class condition axis for exactly this reason.
+
+Setting **both arms to the same prompt** is allowed, and is often the better
+design: the bare arm still hides the whole governed catalog, so the arms remain
+distinct conditions and the experiment varies one axis instead of two — which is
+what the backend's own confounding rule asks for. The wizard says so rather than
+refusing, since the result is then a claim about the skills, not about the
+harness as a unit. It is refused only when the arms would be genuinely
+identical: same prompt with no governed skills to hide. "Add skills" offers the *staged* catalog and
 "Remove skills" the *governed* one, because that is what `skills_extra` and
 `skills_disabled` each accept.
 
@@ -214,6 +222,14 @@ variants), the step budget, dry run — so the wizard is the whole journey.
 *Create without launching* leaves a draft the experiment page can launch later. The panel at
 the bottom shows the exact arms about to be created, and lists what is blocking
 creation until nothing is.
+
+**Check config** runs the same creation preflight as the classic form, and it
+checks the *shared* configuration only — case, models, harness, budget — never
+the per-arm prompts or skills. So a green "Ready" is withheld while anything is
+blocking creation, where it would otherwise read as permission to launch; a
+refusal is always shown, since it carries a reason the blockers cannot. Editing
+anything that shapes the arms voids the verdict, which describes only the
+configuration that produced it.
 
 Repetitions are chosen from three named levels — **2 (exploratory only)**,
 **5 (useful comparison)**, **10 (stronger evidence)**. Below five, the lab will

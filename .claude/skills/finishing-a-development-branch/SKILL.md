@@ -1,1 +1,0 @@
-../../../.github/skills-external/finishing-a-development-branch/SKILL.md

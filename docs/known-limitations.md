@@ -170,6 +170,48 @@ opposite of what a finding is for.
 comparison. `target repo A + harness repo B + plugin repo C` remains out of scope —
 see [ADR-0031](adr/0031-harness-source-is-a-run-condition.md).
 
+## Local stack operations
+
+### The database cannot be rewritten from the host while the stack runs
+
+`data/app/harness_lab.db` is SQLite on a bind mount, opened concurrently by the
+`api` and `worker` containers. SQLite coordinates concurrent readers through a
+WAL and a `-shm` shared-memory index, and that index is not coherent across the
+container/host boundary on macOS (virtiofs) — each side can believe it is the
+only connection.
+
+So a host-side command that rewrites the file — `make app-reset-db`, or
+restoring a backup over it — while the containers are up leaves them reading
+**different files**. The API keeps serving and writing to the file it already
+had open; the worker reads the new one. Nothing errors:
+
+- the UI accepts a new experiment and shows its runs as `pending`;
+- Celery delivers `execute_run` and the worker logs `succeeded in 0.004s`,
+  because `execute_run` looks the run up, gets `None`, and returns;
+- the runs sit `pending` indefinitely, and the API's rows exist only in an
+  unlinked inode that is lost the moment the container restarts.
+
+`make app-reset-db` now refuses while `api` or `worker` are running. The safe
+sequence is `make app-down && make app-reset-db && make app-up`. `FORCE=1`
+bypasses the check and is only ever correct when the stack is genuinely down.
+
+The same hazard applies to any host process that opens the database while the
+stack is up, including an ad-hoc `sqlite3` session: closing it can unlink the
+`-wal`/`-shm` the containers are still using. Read the database through
+`docker compose exec api` instead, or stop the stack first.
+
+Not fixed at the root. The structural fix is to move the database off the bind
+mount onto a named volume (so WAL and `-shm` live on the VM's own filesystem),
+or to stop sharing it between processes at all and have the worker reach the
+API over HTTP. Both are larger than the guard, and the guard removes the silent
+failure mode.
+
+### `make stop-docker` does not stop the dev stack
+
+It stops a single container named `ml-python-base-server`, inherited from the
+template, which this compose stack never creates. It is a no-op here and is
+kept only for the template's own Docker target. Use `make app-down`.
+
 ## Packaging
 
 ### `pyproject.toml` metadata is minimal

@@ -447,6 +447,16 @@ app-up:
 		echo "    Run: make set-password"; \
 	fi
 
+# Stop the dev stack. Containers are removed; named volumes and everything
+# under data/ survive, so `make app-up` brings the same lab back.
+#
+# Required before any host-side command that rewrites data/app/harness_lab.db
+# (`make app-reset-db`, restoring a backup) — see the guard on app-reset-db.
+app-down:
+	@echo "🛑 Stopping local web app stack..."
+	@docker compose --profile dev down
+	@echo "✅ Stack stopped. 'make app-up' to start it again."
+
 # Always-on stack (prod, ADR-0019): the SPA is baked into nginx, which also
 # fronts /api, so the browser sees one origin on :8080. The API is pinned to
 # loopback — nginx is the only LAN entrance. Services restart with the host.
@@ -627,7 +637,29 @@ langfuse-backfill:
 # Reset the application SQLite database and reseed the Tetris pilot case.
 # Pass PURGE=1 to also remove on-disk run state (data/runs/*, workspace/*) so a
 # re-created run id cannot collide with a stale workspace. PURGE is destructive.
+#
+# Refuses to run while the stack is up. This target rewrites the database from
+# the HOST; the api and worker containers reach the same file across a bind
+# mount, and SQLite's WAL index (-shm) does not stay coherent across that
+# boundary. Resetting under a live stack leaves the two containers reading
+# different files, and the failure is silent for hours: the API accepts new
+# runs, the worker cannot find them, and they sit "pending" forever.
+# FORCE=1 skips the check — only ever correct if the stack is genuinely down.
 app-reset-db:
+	@running=$$(docker compose ps --services --filter status=running 2>/dev/null \
+		| grep -E '^(api|worker)$$' | tr '\n' ' '); \
+	if [ -n "$$running" ] && [ -z "$(FORCE)" ]; then \
+		echo "✋ Refusing to reset: the stack is running ($$running)."; \
+		echo "   Resetting the database from the host while those containers"; \
+		echo "   hold it open splits their view of it — the API keeps writing to"; \
+		echo "   the old file while the worker reads the new one, and every run"; \
+		echo "   you create afterwards stays 'pending' because the worker cannot"; \
+		echo "   see it. Nothing errors; you find out hours later."; \
+		echo ""; \
+		echo "   Do this instead:"; \
+		echo "     make app-down && make app-reset-db && make app-up"; \
+		exit 1; \
+	fi
 	@echo "🧹 Resetting application database..."
 	@if [ ! -d .venv ]; then make install; fi
 	@set -a; [ -f .env ] && . ./.env; set +a; \
@@ -895,8 +927,10 @@ help:
 	@echo "  make run-question        Test with a predefined question"
 	@echo "  make run-interactive     Start interactive CLI mode"
 	@echo "  make app-up              Start the local web app (api + celery worker + redis + frontend)"
+	@echo "  make app-down            Stop the local web app (required before make app-reset-db)"
 	@echo "  make app-up-prod         Start the always-on stack (nginx :8080, API not on the LAN)"
 	@echo "  make app-down-prod       Stop the always-on stack"
+	@echo "  make app-reset-db        Wipe the database and reseed (stack must be down)"
 	@echo "  make backup              Snapshot .env, the database and run artifacts"
 	@echo "  make app-smoke-test      Verify Docker stack health and run lifecycle"
 	@echo "  make app-runner-smoke    Run one benchmark inside the runner container (RUN=...)"
@@ -950,4 +984,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-up-prod app-down-prod backup app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models set-password case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill
+.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models set-password case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill

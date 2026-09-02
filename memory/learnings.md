@@ -3,6 +3,37 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## Resetting the database under a live stack splits it in two — 2026-09-02
+
+`make app-reset-db` runs `scripts/reset_db.py` from the **host** while the `api`
+and `worker` containers hold `data/app/harness_lab.db` open across a bind mount.
+SQLite coordinates concurrent connections through a WAL plus a `-shm`
+shared-memory index, and that index is not coherent across the container/host
+boundary on macOS (virtiofs): the host process believes it is the only
+connection and unlinks the `-wal`/`-shm` the containers are still using.
+
+The two containers then read **different files**, and nothing errors. The API
+keeps serving and writing to the file it already had open; the worker reads the
+new one. An experiment created afterwards shows its runs as `pending`, Celery
+delivers `execute_run`, the worker looks the run up, gets `None`, returns, and
+logs `succeeded in 0.004s`. The runs never execute. The API's rows exist only in
+an unlinked inode and are lost the moment the container restarts — so the
+symptom is discovered hours later and the evidence is destroyed by the fix.
+
+Diagnosis shortcut: `docker exec <container> sh -c 'ls -l /proc/*/fd' | grep
+'\.db'`. A `(deleted)` marker on `-wal`/`-shm` means the split has already
+happened. Comparing a row count from inside the worker against the same query
+from the host confirms it in one step.
+
+`app-reset-db` now refuses while `api` or `worker` are running. The same hazard
+applies to any host process that opens the database while the stack is up,
+including an ad-hoc `sqlite3` session — closing it unlinks the sidecar files.
+Read the database through `docker compose exec api`, or stop the stack.
+
+Not fixed at the root: the database still lives on the bind mount. The
+structural fix is a named volume (WAL and `-shm` on the VM's own filesystem) or
+having the worker reach the API over HTTP instead of sharing a file.
+
 ## A comparison fails silently in five places at once — 2026-09-02
 
 The first real two-arm corpus (12 Tetris runs) produced a verdict that looked

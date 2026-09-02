@@ -1,1 +1,0 @@
-../../../.github/skills/generate_migration_plan.md

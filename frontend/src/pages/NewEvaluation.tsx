@@ -466,7 +466,10 @@ export function NewEvaluation() {
         {
           label: "bare",
           role: "control" as const,
-          description: `Plain prompt ('${bareVariant || "?"}') with every governed skill hidden.`,
+          description:
+            bareVariant && bareVariant === harnessVariant
+              ? `Same prompt ('${bareVariant}') with every governed skill hidden.`
+              : `Plain prompt ('${bareVariant || "?"}') with every governed skill hidden.`,
           overrides: {
             ...base,
             prompt_variant: bareVariant,
@@ -557,9 +560,17 @@ export function NewEvaluation() {
           "The selected cases define fewer than two prompt variants, so there " +
             "is no bare-versus-governed pair to compare."
         );
-      } else if (bareVariant && bareVariant === harnessVariant) {
+      } else if (
+        bareVariant &&
+        bareVariant === harnessVariant &&
+        skills.length === 0
+      ) {
+        // Equal prompts alone are not degenerate: the bare arm still hides the
+        // whole governed catalog, which is a treatment on its own. The arms
+        // only collapse into one condition when there are no skills to hide.
         problems.push(
-          "The bare arm and the full-harness arm use the same prompt variant."
+          "Both arms use the same prompt variant and there are no governed " +
+            "skills to hide, so the two arms would be identical."
         );
       }
     }
@@ -573,25 +584,65 @@ export function NewEvaluation() {
     bareVariant,
     harnessVariant,
     skillNames,
+    skills,
     targetId,
     useSuite,
     variantOptions,
     venue
   ]);
 
+  // Not everything worth saying blocks creation. A design can be legitimate and
+  // still measure something narrower than the factor's name suggests, and the
+  // operator should read that before the results rather than after them.
+  const advisories = useMemo(() => {
+    const notes: string[] = [];
+    if (
+      mode === "harness_evaluation" &&
+      factorKey === "full_harness" &&
+      bareVariant &&
+      bareVariant === harnessVariant &&
+      skills.length > 0
+    ) {
+      notes.push(
+        `Both arms run '${bareVariant}', so the treatment is the skill catalog ` +
+          "alone rather than the harness as a unit. That is a sound ablation — " +
+          "it is what the 'Remove skills' factor states directly — but read the " +
+          "result as a claim about the skills, not about the whole harness."
+      );
+    }
+    return notes;
+  }, [bareVariant, factorKey, harnessVariant, mode, skills]);
+
   // A verdict only describes the configuration that produced it, so any edit
   // voids it rather than leaving a stale green tick above the Launch button.
+  //
+  // "The configuration" is everything that shapes what will be launched, not
+  // only the fields `buildLaunchConfig` sends to the preflight. The per-arm
+  // prompts, the skills and the arm harnesses decide what the arms *are*, and
+  // a verdict taken before one of them moved describes an experiment nobody is
+  // about to run. Keep this list in step with the `conditions` memo.
   useEffect(() => {
     setCheck(null);
   }, [
+    bareVariant,
     caseIds,
+    controlHarness,
+    crossRepoIds,
     dryRun,
     executorModel,
     factorKey,
     harness,
+    harnessVariant,
     maxSteps,
+    mode,
     plannerModel,
-    promptVariant
+    promptVariant,
+    skillNames,
+    skills,
+    targetId,
+    treatmentHarness,
+    useSuite,
+    venue
   ]);
 
   const handleCheck = async () => {
@@ -1313,6 +1364,13 @@ export function NewEvaluation() {
             </div>
           </div>
         ) : null}
+        {advisories.length > 0 ? (
+          <ul className="blocking-list blocking-list--warning">
+            {advisories.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        ) : null}
         {notice ? <p className="callout callout--ok">{notice}</p> : null}
         {warnings.length > 0 ? (
           <ul className="blocking-list blocking-list--warning">
@@ -1321,7 +1379,14 @@ export function NewEvaluation() {
             ))}
           </ul>
         ) : null}
-        {check ? (
+        {/*
+          The preflight checks the shared run configuration — case, models,
+          harness, budget — and knows nothing about the arms. A green "Ready"
+          under an unresolved blocker therefore answers a question nobody
+          asked, and reads as permission to launch. A refusal still shows: it
+          carries the provider's own reason, which the blockers cannot.
+        */}
+        {check && !(check.ok && blocking.length > 0) ? (
           <p className={`callout ${check.ok ? "callout--ok" : "callout--warning"}`}>
             <strong>{check.ok ? "Ready" : "Blocked"}</strong> — {check.detail}
           </p>

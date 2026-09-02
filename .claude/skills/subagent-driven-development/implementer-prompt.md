@@ -1,1 +1,0 @@
-../../../.github/skills-external/subagent-driven-development/implementer-prompt.md
