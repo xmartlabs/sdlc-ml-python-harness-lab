@@ -14,6 +14,7 @@ from sqlmodel import Session, select
 from harness_lab_app.config import get_settings, read_env_file_value
 from harness_lab_app.constants import EXAMPLE_LMSTUDIO_URL, EXAMPLE_OLLAMA_URL
 from harness_lab_app.models import (
+    IN_TARGET_HARNESS_SOURCES,
     Artifact,
     Attribution,
     Audit,
@@ -23,11 +24,18 @@ from harness_lab_app.models import (
     RunEvent,
     RunState,
     Sandbox,
+    Score,
+    TargetStatus,
     Validation,
     utc_now,
 )
 from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.schemas import RunBatchCreate, RunConfigCreate, RunCreate
+from harness_lab_app.target_service import (
+    TargetError,
+    TargetService,
+    resolve_ref,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -139,6 +147,8 @@ def _batch_size(data: RunBatchCreate, variants: Mapping[str, Sequence[str]]) -> 
         * len(data.harnesses)
         * len(data.executor_models)
         * len(data.planner_models)
+        * len(data.target_repo_ids)
+        * len(data.harness_sources)
         * data.repetitions
     )
 
@@ -169,12 +179,17 @@ def _expand_batch(
             resume=False,
             skills_disabled=list(data.skills_disabled),
             skills_extra=list(data.skills_extra),
+            target_repo_id=target_repo_id,
+            target_ref=data.target_ref,
+            harness_source=harness_source,
         )
         for case_id in data.case_ids
         for prompt_variant in variants[case_id]
         for harness in data.harnesses
         for executor_model in data.executor_models
         for planner_model in data.planner_models
+        for target_repo_id in data.target_repo_ids
+        for harness_source in data.harness_sources
         for _ in range(data.repetitions)
     ]
 
@@ -198,6 +213,8 @@ def _preflight_key(config: RunConfigCreate) -> tuple:
         config.executor_model,
         tuple(sorted(set(config.skills_disabled))),
         tuple(sorted(set(config.skills_extra))),
+        config.target_repo_id,
+        config.harness_source,
     )
 
 
@@ -214,6 +231,9 @@ def _resume_config(config: RunConfig) -> RunConfigCreate:
         harness=config.harness,
         planner_model=config.planner_model,
         executor_model=config.executor_model,
+        target_repo_id=config.target_repo_id,
+        target_ref=config.target_ref,
+        harness_source=config.harness_source,
         score_mode=config.score_mode,
         max_steps=config.max_steps,
         resume=True,
@@ -322,6 +342,7 @@ class RunService:
         ``POST /api/runs/preflight``: same checks, nothing persisted, so the
         answer is the one ``create_run`` would give.
         """
+        self._check_target(config)
         if config.dry_run:
             return
         self._check_runner_image()
@@ -718,10 +739,61 @@ class RunService:
             )
         return explicit
 
+    def _check_target(self, config: RunConfigCreate) -> None:
+        """Reject a target that cannot be used, without touching the network.
+
+        Deliberately cheap and deliberately part of ``preflight``: an unknown or
+        archived target is knowable from the database, so it must fail at
+        creation rather than inside a container. The network call that resolves
+        the ref is a separate step (``_resolve_target``) because a batch needs it
+        once per repository, not once per run.
+        """
+        if not config.target_repo_id:
+            if config.harness_source in IN_TARGET_HARNESS_SOURCES:
+                raise RunPreflightError(
+                    f"harness_source='{config.harness_source.value}' runs the agent "
+                    "inside a target repository, so a target is required. Pick one, "
+                    "or use harness_source='lab_root'."
+                )
+            return
+        try:
+            target = TargetService(self.session).get_target(config.target_repo_id)
+        except TargetError as exc:
+            raise RunPreflightError(str(exc)) from exc
+        if target.status != TargetStatus.active:
+            raise RunPreflightError(
+                f"Target repository '{target.target_id}' is archived. Reactivate "
+                "it, or pick another target."
+            )
+
+    def _resolve_target(
+        self, config: RunConfigCreate, *, pinned_commit: str = ""
+    ) -> str:
+        """Resolve the run's ref to an immutable commit SHA (ADR-0029).
+
+        ``pinned_commit`` short-circuits the lookup and is what makes a clone or
+        a retry honest: re-resolving ``main`` for "the same arm, another trial"
+        would silently move the run to whatever was pushed since, producing two
+        runs that claim one condition and ran two.
+        """
+        if not config.target_repo_id:
+            return ""
+        if pinned_commit:
+            return pinned_commit
+        target = TargetService(self.session).get_target(config.target_repo_id)
+        ref = (config.target_ref or target.default_ref or "").strip()
+        try:
+            return resolve_ref(target.repository_url, ref)
+        except TargetError as exc:
+            raise RunPreflightError(
+                f"Could not pin '{target.target_id}' at ref '{ref}': {exc}"
+            ) from exc
+
     def create_run(self, data: RunCreate) -> Run:
         self.preflight(data.config)
+        target_commit = self._resolve_target(data.config)
         run_id = self._resolve_run_id(data)
-        run = self._persist_run(run_id, data.config)
+        run = self._persist_run(run_id, data.config, target_commit=target_commit)
         self._publish(run.run_id)
         return run
 
@@ -731,13 +803,25 @@ class RunService:
         config: RunConfigCreate,
         batch_id: str | None = None,
         parent_run_id: str | None = None,
+        target_commit: str = "",
+        experiment_id: str | None = None,
+        condition_label: str | None = None,
     ) -> Run:
         """Write the config + run rows. No preflight, no publish.
 
         Split out of ``create_run`` so batching can validate once and persist
         many, rather than re-running network preflight per generated run.
+
+        ``target_commit`` is passed in rather than resolved here for the same
+        reason: one ``git ls-remote`` per repository serves a whole batch, and
+        every run of that batch must carry the *same* commit or the repetitions
+        are not repetitions.
+
+        ``experiment_id``/``condition_label`` attribute the run to an arm. They
+        are written in the same transaction as the row rather than patched on
+        afterwards, so a run is never briefly visible as unattributed.
         """
-        row = RunConfig(**config.model_dump())
+        row = RunConfig(**config.model_dump(), target_commit=target_commit)
         self.session.add(row)
         self.session.commit()
         self.session.refresh(row)
@@ -750,6 +834,8 @@ class RunService:
             command=command,
             batch_id=batch_id,
             parent_run_id=parent_run_id,
+            experiment_id=experiment_id,
+            condition_label=condition_label,
         )
         self.session.add(run)
         self.session.add(RunEvent(run_id=run_id, message="Run queued"))
@@ -801,9 +887,23 @@ class RunService:
             seen.add(key)
             self.preflight(config)
 
+        # One `git ls-remote` per (repository, ref), not per run: every
+        # repetition of an arm must carry the same commit, and re-resolving
+        # per run would let a push mid-batch split one arm into two.
+        pins: dict[tuple[str, str], str] = {}
+        for config in configs:
+            key = (config.target_repo_id, config.target_ref)
+            if config.target_repo_id and key not in pins:
+                pins[key] = self._resolve_target(config)
+
         batch_id = f"batch-{uuid4().hex[:12]}"
         runs = [
-            self._persist_run(self._next_run_id(config.case_id), config, batch_id)
+            self._persist_run(
+                self._next_run_id(config.case_id),
+                config,
+                batch_id,
+                target_commit=pins.get((config.target_repo_id, config.target_ref), ""),
+            )
             for config in configs
         ]
         # Publish only after every row exists, so a batch is never half-queued.
@@ -816,6 +916,14 @@ class RunService:
 
         Powers the "Run again" action: same arm, new trial with its own
         workspace. resume is reset to False so it starts clean.
+
+        A clone of an experiment's run stays *in* that experiment, under the
+        same arm. Re-running a failed trial from the runs table is the most
+        natural way to top an arm back up, and dropping the attribution there
+        produced the worst possible outcome: runs that measured the design
+        exactly, sat in the corpus, and counted for nothing. Attribution is
+        carried rather than offered as a choice — the config is identical by
+        construction, so there is no consistency question to ask.
         """
         source = self.get_run(source_run_id)
         config = self.get_run_config(source.run_config_id)
@@ -833,8 +941,24 @@ class RunService:
             # that dropped it would quietly compare a different condition.
             skills_disabled=list(config.skills_disabled),
             skills_extra=list(config.skills_extra),
+            target_repo_id=config.target_repo_id,
+            target_ref=config.target_ref,
+            harness_source=config.harness_source,
         )
-        return self.create_run(RunCreate(config=new_config))
+        # Same arm, new trial — so the *commit* is carried, not the ref. Cloning
+        # a run pinned to `main` must not silently pick up whatever was pushed
+        # since; that would be a different condition wearing the same label.
+        self.preflight(new_config)
+        run_id = self._next_run_id(new_config.case_id)
+        run = self._persist_run(
+            run_id,
+            new_config,
+            target_commit=config.target_commit,
+            experiment_id=source.experiment_id,
+            condition_label=source.condition_label,
+        )
+        self._publish(run.run_id)
+        return run
 
     def list_children(self, run_id: str) -> list[Run]:
         """Runs continuing from this one, oldest first."""
@@ -859,6 +983,12 @@ class RunService:
         the only deliberate difference is the prompt, and runs with
         ``resume=True`` so the runner keeps the seeded workspace instead of
         resetting it.
+
+        Unlike ``clone_run`` it does *not* join the parent's experiment. A
+        continuation is a human intervention: counting it as another repetition
+        of the arm would score the operator's hint as if the agent had earned
+        it. The asymmetry is the point — a clone repeats the condition, a
+        continuation changes it.
         """
         parent = self.get_run(parent_run_id)
         if parent.state not in CONTINUABLE_STATES:
@@ -891,10 +1021,21 @@ class RunService:
             continuation_prompt=prompt_text,
             skills_disabled=list(config.skills_disabled),
             skills_extra=list(config.skills_extra),
+            target_repo_id=config.target_repo_id,
+            target_ref=config.target_ref,
+            harness_source=config.harness_source,
         )
         self.preflight(new_config)
         run_id = self._next_continuation_run_id(parent_run_id)
-        run = self._persist_run(run_id, new_config, parent_run_id=parent_run_id)
+        # The child continues the parent's workspace, so it is by definition at
+        # the parent's commit. Re-resolving the ref would record a commit the
+        # seeded tree is not at.
+        run = self._persist_run(
+            run_id,
+            new_config,
+            parent_run_id=parent_run_id,
+            target_commit=config.target_commit,
+        )
         self.session.add(
             RunEvent(run_id=run_id, message=f"Continues run {parent_run_id}")
         )
@@ -1063,7 +1204,17 @@ class RunService:
                 f"Run '{run_id}' has continuations ({names}). Delete those "
                 "first, or delete with force."
             )
-        for model in (Validation, Attribution, Audit, Sandbox, Artifact, RunEvent):
+        # Score included: without it a deleted run left its scores behind, and
+        # every aggregate kept being biased by a measurement whose run was gone.
+        for model in (
+            Validation,
+            Attribution,
+            Audit,
+            Sandbox,
+            Artifact,
+            RunEvent,
+            Score,
+        ):
             rows = self.session.exec(select(model).where(model.run_id == run_id)).all()
             for row in rows:
                 self.session.delete(row)

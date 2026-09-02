@@ -54,7 +54,14 @@ def auth_headers(config: LangfuseConfig) -> dict[str, str]:
 
 
 class LangfuseTransport(Protocol):
-    def send(self, payload: dict[str, Any]) -> SendResult: ...
+    def send(self, payload: dict[str, Any], url: str | None = None) -> SendResult:
+        """``url`` overrides the default OTLP endpoint.
+
+        Spans go over OTLP; scores go to the ingestion route, which is the
+        only other thing v4 accepts (ADR-0027). One transport, two
+        destinations — the auth and error handling are identical.
+        """
+        ...
 
 
 class NullTransport:
@@ -63,7 +70,7 @@ class NullTransport:
     def __init__(self, reason: str = "Langfuse is disabled.") -> None:
         self._reason = reason
 
-    def send(self, payload: dict[str, Any]) -> SendResult:  # noqa: ARG002
+    def send(self, payload: dict[str, Any], url: str | None = None) -> SendResult:  # noqa: ARG002
         return SendResult(ok=False, reason=self._reason)
 
 
@@ -89,11 +96,11 @@ class OtlpHttpTransport:
     def _headers(self) -> dict[str, str]:
         return auth_headers(self._config)
 
-    def send(self, payload: dict[str, Any]) -> SendResult:
+    def send(self, payload: dict[str, Any], url: str | None = None) -> SendResult:
         body = json.dumps(payload).encode()
         # The URL is the operator's own LANGFUSE_HOST, not user input.
         request = urllib.request.Request(
-            self._config.traces_url,
+            url or self._config.traces_url,
             data=body,
             headers=self._headers(),
             method="POST",

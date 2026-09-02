@@ -57,6 +57,77 @@ def test_migration_adds_findings_json_to_legacy_audit(tmp_path, monkeypatch):
     db_module._apply_sqlite_compat_migrations()
 
 
+def _legacy_score_engine(tmp_path):
+    """A DB whose score/audit tables predate the governance-surface columns."""
+    engine = create_engine(f"sqlite:///{tmp_path}/scores.db")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE audit ("
+                "id INTEGER PRIMARY KEY, run_id VARCHAR, auditor_model VARCHAR, "
+                "status VARCHAR, markdown VARCHAR, error VARCHAR, "
+                "findings_json JSON, created_at DATETIME, updated_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE score ("
+                "id INTEGER PRIMARY KEY, run_id VARCHAR, name VARCHAR, "
+                "version VARCHAR, category VARCHAR, provenance VARCHAR, "
+                "source VARCHAR, value_num FLOAT, value_bool BOOLEAN, "
+                "value_text VARCHAR, reason VARCHAR, confidence FLOAT, "
+                "created_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE run (id INTEGER PRIMARY KEY, run_id VARCHAR, "
+                "state VARCHAR, notes VARCHAR, cancel_requested BOOLEAN)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO score (run_id, name, version, value_num) "
+                "VALUES ('r1', 'task_completion', 'v1', 0.5)"
+            )
+        )
+    return engine
+
+
+def test_migration_adds_the_governance_surface_columns(tmp_path, monkeypatch):
+    """Existing rows must survive: they are historical measurements."""
+    engine = _legacy_score_engine(tmp_path)
+    monkeypatch.setattr(db_module, "engine", engine)
+    monkeypatch.setattr(
+        db_module,
+        "get_settings",
+        lambda: SimpleNamespace(database_url=f"sqlite:///{tmp_path}/scores.db"),
+    )
+
+    db_module._apply_sqlite_compat_migrations()
+
+    with engine.begin() as connection:
+        audit_columns = {
+            row[1]
+            for row in connection.execute(text("PRAGMA table_info('audit')")).fetchall()
+        }
+        score_columns = {
+            row[1]
+            for row in connection.execute(text("PRAGMA table_info('score')")).fetchall()
+        }
+        rows = connection.execute(
+            text("SELECT name, value_num, provenance_json FROM score")
+        ).fetchall()
+
+    assert "governance_json" in audit_columns
+    assert "provenance_json" in score_columns
+    # A score recorded before the adapter existed keeps its value and gets an
+    # empty provenance, not a null the readers would have to special-case.
+    assert rows == [("task_completion", 0.5, "{}")]
+
+    db_module._apply_sqlite_compat_migrations()
+
+
 def _legacy_staged_skill_engine(tmp_path):
     """A DB whose stagedskill table predates multi-file trees (one SKILL.md)."""
     engine = create_engine(f"sqlite:///{tmp_path}/staged.db")
@@ -178,5 +249,140 @@ def test_migration_adds_continuation_columns_to_a_legacy_db(tmp_path, monkeypatc
     assert "parent_run_id" in run_columns
     assert "continuation_prompt" in config_columns
     assert parent is None
+
+    db_module._apply_sqlite_compat_migrations()
+
+
+def _legacy_runconfig_engine(tmp_path):
+    """A DB whose runconfig predates target repositories (ADR-0029)."""
+    engine = create_engine(f"sqlite:///{tmp_path}/targets.db")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE runconfig ("
+                "id INTEGER PRIMARY KEY, case_id VARCHAR, prompt_variant VARCHAR, "
+                "harness VARCHAR, score_mode VARCHAR, max_steps INTEGER, "
+                "skills_disabled JSON, skills_extra JSON, "
+                "continuation_prompt VARCHAR, created_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE run (id INTEGER PRIMARY KEY, run_id VARCHAR, "
+                "state VARCHAR, notes VARCHAR, cancel_requested BOOLEAN, "
+                "batch_id VARCHAR, parent_run_id VARCHAR)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO runconfig (case_id, prompt_variant, harness) "
+                "VALUES ('tetris-v1', 'sdlc', 'opencode')"
+            )
+        )
+    return engine
+
+
+def test_migration_adds_target_columns_without_touching_historical_runs(
+    tmp_path, monkeypatch
+):
+    engine = _legacy_runconfig_engine(tmp_path)
+    SQLModel.metadata.create_all(engine)  # adds targetrepository
+    monkeypatch.setattr(db_module, "engine", engine)
+    monkeypatch.setattr(
+        db_module,
+        "get_settings",
+        lambda: SimpleNamespace(database_url=f"sqlite:///{tmp_path}/targets.db"),
+    )
+
+    db_module._apply_sqlite_compat_migrations()
+
+    with engine.begin() as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('runconfig')")
+            ).fetchall()
+        }
+        tables = {
+            row[0]
+            for row in connection.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+        }
+        legacy = connection.execute(
+            text(
+                "SELECT case_id, target_repo_id, target_ref, target_commit, "
+                "harness_source FROM runconfig"
+            )
+        ).fetchone()
+
+    assert {"target_repo_id", "target_ref", "target_commit"} <= columns
+    assert "harness_source" in columns
+    assert "targetrepository" in tables
+    # A run that predates targets reads as "no external target" — empty string,
+    # never NULL, so every reader can treat absence as a real state.
+    # `lab_root` is not a placeholder for the historical row — it is what that
+    # run actually did, so the backfilled column is accurate, not merely present.
+    assert legacy == ("tetris-v1", "", "", "", "lab_root")
+
+    # Idempotent: running again must not fail on the existing columns.
+    db_module._apply_sqlite_compat_migrations()
+
+
+def _legacy_finding_engine(tmp_path):
+    """A DB whose finding table predates the suggested-finding columns (§14)."""
+    engine = create_engine(f"sqlite:///{tmp_path}/findings.db")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE finding ("
+                "id INTEGER PRIMARY KEY, finding_id VARCHAR, title VARCHAR, "
+                "body VARCHAR, severity VARCHAR, status VARCHAR, "
+                "target_repo_id VARCHAR, recommendation VARCHAR, "
+                "intervention VARCHAR, created_at DATETIME)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE run (id INTEGER PRIMARY KEY, run_id VARCHAR, "
+                "state VARCHAR, notes VARCHAR, cancel_requested BOOLEAN)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO finding (finding_id, title, status) "
+                "VALUES ('migrations', 'Agents edit migrations', 'open')"
+            )
+        )
+    return engine
+
+
+def test_migration_adds_the_accountability_columns_to_legacy_findings(
+    tmp_path, monkeypatch
+):
+    engine = _legacy_finding_engine(tmp_path)
+    monkeypatch.setattr(db_module, "engine", engine)
+    monkeypatch.setattr(
+        db_module,
+        "get_settings",
+        lambda: SimpleNamespace(database_url=f"sqlite:///{tmp_path}/findings.db"),
+    )
+
+    db_module._apply_sqlite_compat_migrations()
+
+    with engine.begin() as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('finding')")
+            ).fetchall()
+        }
+        row = connection.execute(
+            text("SELECT origin, author, accepted_at FROM finding")
+        ).fetchone()
+    assert {"origin", "author", "accepted_at"} <= columns
+    # A finding that predates suggestions has no origin and no acceptance —
+    # backfilling either would invent a provenance that never existed.
+    assert row == ("", "", None)
 
     db_module._apply_sqlite_compat_migrations()

@@ -101,7 +101,7 @@ web UI lets you group evidence from several runs into a single issue:
 ```
 run detail  →  "Propose improvements"  →  "Guardar"        # snapshot to the DB
 Improvements page  →  select N proposals (any runs/cases)  →
-"Generar issue combinado (N)"  →  ONE sanitized ml-python-base issue
+"Generate combined issue (N)"  →  ONE sanitized ml-python-base issue
 ```
 
 1. **Save** (`POST /api/runs/{id}/improvements/save`): snapshots each proposal

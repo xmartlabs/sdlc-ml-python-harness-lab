@@ -399,6 +399,37 @@ def test_clone_run_reuses_config_with_new_id():
         assert "7" in clone.command
 
 
+def test_clone_run_stays_in_the_source_experiment():
+    """ "Run again" on an experiment's run tops up that arm, not the corpus."""
+    with make_session() as session:
+        service = RunService(session)
+        source = service.create_run(
+            RunCreate(run_id="arm-1", config=_stub_config(case_id="autoid-e"))
+        )
+        source.experiment_id = "does-the-harness-help"
+        source.condition_label = "full-harness"
+        session.add(source)
+        session.commit()
+
+        clone = service.clone_run("arm-1")
+
+        assert clone.experiment_id == "does-the-harness-help"
+        assert clone.condition_label == "full-harness"
+
+
+def test_clone_of_an_unattributed_run_stays_unattributed():
+    with make_session() as session:
+        service = RunService(session)
+        service.create_run(
+            RunCreate(run_id="loose-1", config=_stub_config(case_id="autoid-f"))
+        )
+
+        clone = service.clone_run("loose-1")
+
+        assert clone.experiment_id is None
+        assert clone.condition_label is None
+
+
 def test_delete_run_removes_run_and_dependent_rows():
     with make_session() as session:
         service = RunService(session)

@@ -1,4 +1,4 @@
-# ADR-0028: Step traces carry per-call detail parsed from run artifacts
+# ADR-0039: Step traces carry per-call detail parsed from run artifacts
 
 - **Status:** Accepted
 - **Date:** 2026-08-27

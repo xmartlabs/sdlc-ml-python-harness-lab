@@ -3,6 +3,179 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## Resetting the database under a live stack splits it in two — 2026-09-02
+
+`make app-reset-db` runs `scripts/reset_db.py` from the **host** while the `api`
+and `worker` containers hold `data/app/harness_lab.db` open across a bind mount.
+SQLite coordinates concurrent connections through a WAL plus a `-shm`
+shared-memory index, and that index is not coherent across the container/host
+boundary on macOS (virtiofs): the host process believes it is the only
+connection and unlinks the `-wal`/`-shm` the containers are still using.
+
+The two containers then read **different files**, and nothing errors. The API
+keeps serving and writing to the file it already had open; the worker reads the
+new one. An experiment created afterwards shows its runs as `pending`, Celery
+delivers `execute_run`, the worker looks the run up, gets `None`, returns, and
+logs `succeeded in 0.004s`. The runs never execute. The API's rows exist only in
+an unlinked inode and are lost the moment the container restarts — so the
+symptom is discovered hours later and the evidence is destroyed by the fix.
+
+Diagnosis shortcut: `docker exec <container> sh -c 'ls -l /proc/*/fd' | grep
+'\.db'`. A `(deleted)` marker on `-wal`/`-shm` means the split has already
+happened. Comparing a row count from inside the worker against the same query
+from the host confirms it in one step.
+
+`app-reset-db` now refuses while `api` or `worker` are running. The same hazard
+applies to any host process that opens the database while the stack is up,
+including an ad-hoc `sqlite3` session — closing it unlinks the sidecar files.
+Read the database through `docker compose exec api`, or stop the stack.
+
+Not fixed at the root: the database still lives on the bind mount. The
+structural fix is a named volume (WAL and `-shm` on the VM's own filesystem) or
+having the worker reach the API over HTTP instead of sharing a file.
+
+## A comparison fails silently in five places at once — 2026-09-02
+
+The first real two-arm corpus (12 Tetris runs) produced a verdict that looked
+complete and was unreadable. Five independent mechanisms, none of which raised
+anything:
+
+1. **`clone_run` dropped `experiment_id`/`condition_label`.** They live on `Run`,
+   not `RunConfig`, so the careful field-by-field config copy did not carry them.
+   Four "Run again" repetitions executed the design and counted towards nothing.
+   This is the *third* time this exact shape has bitten (see the continuation
+   entry below): fields on the row rather than the config are the ones that get
+   dropped.
+2. **Only SWE-bench auto-scored.** Everything else parked in
+   `awaiting_manual_score` forever, so the comparison fell back to
+   `task_validation_pass` — for tetris-v1 a smoke check ("does it start"), which
+   is level_2 of a 0-10 rubric and cannot fall once both arms start. It reported
+   100% → 100% as *no difference observed*.
+3. **The stop criterion was arm-dependent.** `_STOP_RE` matches a prose sentinel
+   the `sdlc_full` prompt teaches and `naive` does not, and the no-progress
+   fallback existed only in the SWE lane. `agent_steps 10 → 1` measured prompt
+   authorship. Verified against the artifacts: K-009 had ten `# claude run
+   started` headers, K-011 had one and ended at `turns=50` — roughly 70 vs 50
+   turns of real work, reported as a 10× efficiency win.
+4. **Zero observed spread cleared the noise floor.** `stdev=0.0` on both arms
+   made `abs(delta) > 0.0` true, so three "beyond noise: yes" verdicts rested on
+   having measured the same thing twice.
+5. **`runs.yaml` out-voted `--harness`.** A web run whose id collided with a
+   pre-declared cell ran one CLI and recorded another (K-001..003: config
+   `claude`, `metadata.json` `opencode`), while the *model* flags used the
+   opposite precedence. Inconsistent precedence between two flags on the same
+   command is a bug generator.
+
+**Why it matters:** not one of these produced an error, an empty field, or a
+suspicious-looking number. Each one produced a plausible result for a comparison
+that was not being made. An evaluation lab's failure mode is not the crash — it
+is the finding.
+
+**How to apply:** before reading any experiment verdict, check (a) can the
+success metric physically move for this case, (b) did both arms terminate under
+the same rule, (c) is there any observed spread at all. Those three questions
+would have caught four of the five. And when a stored file and a CLI flag can
+both name the same thing, decide the precedence once and announce a divergence
+rather than resolving it silently. See
+[ADR-0038](../docs/adr/0038-every-run-leaves-with-a-score.md).
+
+## An evaluation lab's real product is the refusals — 2026-08-30
+
+Building v2 (experiments, scores, findings) the pattern that kept recurring is that
+the valuable code is what the system *declines* to say:
+
+- an experiment that varies harness **and** repository is rejected at creation, not
+  rendered as an average later (`validate_design`);
+- a mean from one observation reports **no** spread — `stdev=0.0` would claim perfect
+  consistency from a single run;
+- a delta with no spread to compare against reports `exceeds_spread=None`, not `True`;
+- a missing cost emits **nothing**, never `0` — zero is a claim, and a flattering one;
+- a confidence interval under N=3 returns `None`;
+- a maturity level above 2 without evidence is refused outright;
+- the DeepEval adapter emits nothing when unwired, because "not measured" and "scored
+  badly" must never merge in an aggregate.
+
+Each of these is one branch. Together they are the difference between a lab and a job
+runner that renders averages — and none of them would ever be missed by a test that
+only checked the happy path, because the failure is a plausible-looking number.
+
+Second recurring rule, now applied five times: **a new field enters `condition_hash`
+only when it differs from the historical default** (`skills_disabled` non-empty,
+`target` present, `harness_source != lab_root`). Break it once and the whole
+historical corpus re-bins against hashes it never had.
+
+Third: an axis added to `RunConfig` must be carried by every path that claims to
+reproduce a run — clone, retry, continuation, and each repetition of a batch. That is
+four call sites per axis, and missing one splits an arm invisibly.
+
+## cwd *is* the harness condition, and the fingerprint has to follow it — 2026-08-30
+
+Claude Code and opencode auto-load their adapter file and native skills from the
+process cwd. `bench_run` already knew this — it set `agent_cwd = workspace` for one
+hardcoded case so a "bare" SWE arm would not silently inherit the lab harness. So the
+`native` / `injected` comparison (ADR-0031) is not new machinery, it is that side
+effect promoted to a declared condition.
+
+The trap is in the fingerprint, and it fails **silently**. `build_harness_fingerprint`
+reads `skills-lock.json`, which a cloned repository never has. Point both arms at it
+and they produce the same `harness_hash` → the same `condition_hash` → one arm where
+there should be two, and every downstream comparison quietly stops comparing. No test
+fails, no error appears; the numbers just become meaningless. Hence
+`build_workspace_harness_fingerprint`, which hashes what is actually readable from the
+agent's cwd (native skill dirs, projected agents, adapter files, governance docs).
+
+Three smaller things the implementation forced:
+
+- **Project before the baseline commit.** Provisioning commits the workspace so
+  `git diff HEAD` is only the agent's work. A harness copied in afterwards lands in
+  that diff as though the agent wrote it.
+- **Copy, never symlink.** `link_tool`'s symlink strategy encodes a path relative to
+  the root it writes into; a lab skill is unreachable that way from a clone, and the
+  archived workspace has to stand alone anyway.
+- **Gate the fingerprint move on the declared condition, not on `agent_cwd`.** The SWE
+  lane has set `agent_cwd = workspace` since long before this existed; keying off it
+  would re-bin every historical SWE arm against a hash it never had.
+
+**And do not compare `lab_root` against `native`** — they differ in the harness *and*
+in whether the agent works inside the repo at all. Two changes, one number. See
+[ADR-0031](../docs/adr/0031-harness-source-is-a-run-condition.md).
+
+## A pinned commit must survive every path that "repeats" a run — 2026-08-30
+
+Target repositories (ADR-0029) resolve a ref to a SHA at run creation. The obvious
+implementation resolves it once, in `create_run`, and is wrong in four places:
+`clone_run`, `continue_run`, `_resume_config` (retry) and `create_batch` all produce
+runs that claim to be the *same arm* as an earlier one. Any of them re-reading
+`main` silently splits one arm in two the moment someone pushes — and the split is
+invisible, because both runs are labelled `main`.
+
+So resolution takes a `pinned_commit` short-circuit, and every one of those paths
+passes the stored commit instead of the ref. `create_batch` resolves once per
+`(repo, ref)` and hands the same SHA to all N repetitions, for the same reason
+`_preflight_key` deduplicates preflight: the expensive call is not the problem, the
+*inconsistent* call is.
+
+Two smaller traps in the same change:
+
+- **`condition_hash` must hash the commit, never the ref.** Hashing `main` makes two
+  different experiments share an arm. And it enters the identity *only when
+  non-empty*, following the existing ablation rule — otherwise every historical arm
+  re-bins.
+- **`git ls-remote <url>` with a url starting with `-`** is argument injection
+  (`--upload-pack=…` is remote command execution). `validate_repository_url` is a
+  security boundary, not input tidying; and `GIT_TERMINAL_PROMPT=0` +
+  `ssh -oBatchMode=yes` turn a missing credential into an error instead of a hung
+  API worker.
+
+**Also discovered, and it changes what is feasible next:** `skills_sync` is already
+fully root-parameterized (`discover_skills(root)`, `link_tool(root, …)`,
+`render_tool(root, …)`, `project_agents(root, …)`). Only
+[bench_run.py](../scripts/bench_run.py) hardcodes `REPO_ROOT`. Injecting the harness
+into a *foreign* workspace is therefore a `source_root`/`target_root` split, not a
+rewrite — which is what makes the `native` vs `injected` comparison in
+[the v2 roadmap](../docs/roadmap-lab-v2.md#phase-2--harness-conditions-on-an-external-target)
+tractable.
+
 ## Langfuse v4 takes traces only over OTLP, and its SDK cannot backdate them — 2026-08-27
 
 Wiring run traces to Langfuse looked like a two-line SDK call. It was not:
@@ -97,7 +270,7 @@ can never fail the audit. The UI treats findings as optional garnish.
 
 Every `gateway/lmstudio-qwen3.6-35b*` card failed while the same model answered fine
 on the Direct lane. Nothing was mis-named: `/model/info` showed
-`lmstudio-qwen3.6-35b` -> `lm_studio/qwen/qwen3.6-35b-a3b` @ the LM Studio host,
+`lmstudio-qwen3.6-35b` -> `lm_studio/qwen/qwen3.6-35b-a3b` @ `http://192.168.0.223:1234/v1`,
 exactly LM Studio's id, and 19 completed runs on that alias prove the wiring. The rig
 was simply off — ping 100% loss, ARP incomplete — and the Direct lane looked alive
 only because its 15s TTL cache still held the last good listing.
@@ -122,43 +295,6 @@ cards `reachable: false` with a reason — host down, id absent from that host, 
 gateway card fails, check the backend host before touching the alias. In ai-gateway,
 `test_every_fallback_alias_is_a_declared_card` is now the startup check LiteLLM does
 not do.
-
-## A green check on a Dependabot PR can mean "never tested"
-
-`docs-quality-guardrails.yml` has two jobs: a Python gate (`make check`) and a
-frontend gate (`make check-frontend`). **Neither builds a container.** So the four
-base-image PRs in the 2026-08-20 Dependabot sweep — nginx, node, python — all
-reported ✅ without a single line of them being executed. The check was measuring the
-absence of a test, not the presence of a pass.
-
-Building `Dockerfile.frontend.prod` by hand found a bug that had been live the whole
-time and had nothing to do with the bump: the `HEALTHCHECK` probed
-`http://localhost/`, which resolves to `::1` first inside the container, while
-`deploy/nginx.conf` declares only `listen 80` (IPv4). Every probe got
-`ECONNREFUSED`, so the production frontend container reported `unhealthy` for its
-entire life while serving traffic perfectly. It reproduces identically on
-`nginx:1.27-alpine`, so it predates the upgrade — CI simply had no way to see it.
-
-The same sweep showed Dependabot's one-major-per-PR split creating *unmergeable*
-PRs: `@vitejs/plugin-react@6` requires `vite@^8` and `vite@8` breaks
-`plugin-react@4`, so each PR failed `npm ci` alone and only passed together. Five
-frontend PRs also shared one `package-lock.json`. Merging them one at a time was not
-a slower path to the same place — for two of them it was not a path at all.
-
-**Why it matters:** dependency PRs are where review attention is thinnest and the
-green check does the most work. When the gate does not cover the artifact being
-changed, the check is decoration, and the temptation is to batch-merge on it. The
-upgrade was also genuinely security-relevant — `npm audit` went from 4 findings
-(2 high on postcss/nanoid, 2 moderate on react-router including an open-redirect
-CVE bypass) to 0 — so the cost of getting it wrong was real in both directions.
-
-**How to apply:** before merging anything that changes a Dockerfile, build the image
-and exercise it (`/`, a client-side route, a hashed asset, and the healthcheck) —
-`make check` will not. When two Dependabot PRs fail on each other's peer ranges,
-stop trying to sequence them and replace the set with one verified branch. Base
-images now move only with the gate that verifies them, enforced by `ignore` rules in
-`.github/dependabot.yml`; see
-[ADR-0024](../docs/adr/0024-base-images-track-ci-verified-toolchains.md).
 
 ## Continuing a run: a child run was the cheap design, and two bugs sat next to it
 
@@ -217,6 +353,46 @@ across copies of a run directory, which is why OTEL ids are salted with
 
 <!-- Add new learnings above this line -->
 
+## "Audit a third-party repo" fails at provisioning when setup_commands mismatch the language — 2026-08-31
+
+Every audit run against the `deepseek` target (`deepseek-ai/deepseek-harness`) died
+with a generic "agent error"/`failed` (exit code 1) in `[1/5] Preparing`, before the
+agent ran a single step. Root cause was not the harness, the model, or the network:
+the target's `setup_commands` were `["pnpm install --frozen-lockfile", "pip install -e ."]`
+and `validation_commands` `["pnpm test", "pytest -x -q"]` — a **JS/pnpm repo with
+Python setup lines bolted on**. `_provision_git_target` in `scripts/bench_run.py`
+runs each `setup_commands` entry as operator-authored shell (`subprocess.run(...,
+shell=True)`) and `sys.exit`s on the first non-zero rc. `pip install -e .` on a repo
+with no `setup.py`/`pyproject.toml` returns rc=1 ("does not appear to be a Python
+project"), so the run stops with "The agent would have started against a half-built
+repository". The UI surfaces only the terminal `failed` chip, so it reads as an agent
+fault.
+
+Two structural notes: (1) `setup_commands`/`validation_commands` are free-text shell
+with **no language validation** at target creation — the DB will happily store a
+command whose toolchain the repo cannot satisfy. The `Dockerfile.runner` image
+**does** ship Node 20 (npm/pnpm/yarn) *and* Python 3.11 (pip/uv/pytest) plus git —
+so `pnpm install` actually **succeeded** here; the abort was `pip install -e .` on a
+repo with no `pyproject.toml`/`setup.py`. The runner does **not** ship Go or Rust.
+So the real invariant is not "must be Python" but "each configured command's
+toolchain must exist in the repo AND in the runner image". (2) the failure is
+pre-agent, so `STEPS PARSED 0` and "No metadata.json" are expected, not extra bugs.
+
+**Fix applied:** added a clean Python target `click` (`pallets/click`, `main` →
+`36baa15`) via `POST /api/targets` — zero runtime deps, `requires-python >=3.10`,
+test deps just `pytest`, so `setup_commands=["pip install -e .", "pip install pytest"]`
+and `validation_commands=["pytest -q"]` install in seconds on the runner's Py3.11.
+Archived the `deepseek` target so it cannot be reused.
+
+**How to apply:** the runner image supports **Python and Node**, not Go/Rust/Java.
+A target is safe when it is a pip-installable Python project (`pyproject.toml`/
+`setup.py`) OR a Node project (`package.json`), and every configured setup/validation
+command names a toolchain the repo actually has (don't put `pip install -e .` on a
+repo with no `pyproject.toml`, or `pnpm install` on a repo with no `package.json`).
+Before creation, inspect a repo with `POST /api/targets/inspect` (or per-target
+`GET /api/targets/{id}/readiness`): the "Runtime compatibility" check warns — fail-open,
+not blocking — when the ecosystem is unsupported or a command's toolchain is missing.
+`readiness_service.runtime_compatibility(paths, setup, validation)` is the rule.
 
 ## In-platform sandboxes: worker-launched containers with dynamic host ports — 2026-07-08
 
@@ -722,13 +898,12 @@ it, a stuck tool call does not. See
 ## A green check on a Dependabot PR can mean "never tested"
 
 `docs-quality-guardrails.yml` has two jobs: a Python gate (`make check`) and a
-frontend gate (`make check-frontend`). **Neither builds a container.** So the four
-base-image PRs in the 2026-08-20 Dependabot sweep — nginx, node, python — all
-reported ✅ without a single line of them being executed. The check was measuring the
-absence of a test, not the presence of a pass.
+frontend gate (`make check-frontend`). **Neither builds a container.** So a
+base-image PR — nginx, node, python — reports ✅ without a single line of it being
+executed. The check is measuring the absence of a test, not the presence of a pass.
 
 Building `Dockerfile.frontend.prod` by hand found a bug that had been live the whole
-time and had nothing to do with the bump: the `HEALTHCHECK` probed
+time and had nothing to do with any bump: the `HEALTHCHECK` probed
 `http://localhost/`, which resolves to `::1` first inside the container, while
 `deploy/nginx.conf` declares only `listen 80` (IPv4). Every probe got
 `ECONNREFUSED`, so the production frontend container reported `unhealthy` for its
@@ -737,9 +912,9 @@ entire life while serving traffic perfectly. It reproduces identically on
 
 The same sweep showed Dependabot's one-major-per-PR split creating *unmergeable*
 PRs: `@vitejs/plugin-react@6` requires `vite@^8` and `vite@8` breaks
-`plugin-react@4`, so each PR failed `npm ci` alone and only passed together. Five
-frontend PRs also shared one `package-lock.json`. Merging them one at a time was not
-a slower path to the same place — for two of them it was not a path at all.
+`plugin-react@4`, so each PR fails `npm ci` alone and only passes together. Five
+frontend PRs also share one `package-lock.json`. Merging them one at a time is not
+a slower path to the same place — for two of them it is not a path at all.
 
 **Why it matters:** dependency PRs are where review attention is thinnest and the
 green check does the most work. When the gate does not cover the artifact being

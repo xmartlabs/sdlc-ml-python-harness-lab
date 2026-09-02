@@ -1,16 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { api, SESSION_EXPIRED_EVENT } from "./api";
 import { CaseEditor } from "./components/CaseEditor";
 import { Layout } from "./components/Layout";
 import { RunDetailRoute } from "./components/RunDetailRoute";
+import { Audit } from "./pages/Audit";
 import { Cases } from "./pages/Cases";
 import { Compare } from "./pages/Compare";
+import { Experiments } from "./pages/Experiments";
+import { Findings } from "./pages/Findings";
+import { Repositories } from "./pages/Repositories";
 import { Dashboard } from "./pages/Dashboard";
 import { Guide } from "./pages/Guide";
 import { Health } from "./pages/Health";
+import { Home } from "./pages/Home";
 import { Improvements } from "./pages/Improvements";
 import { Login } from "./pages/Login";
+import { NewEvaluation } from "./pages/NewEvaluation";
 import { Runs } from "./pages/Runs";
 import { Settings } from "./pages/Settings";
 import { Skills } from "./pages/Skills";
@@ -45,6 +51,28 @@ const previewRun: RunRecord = {
 
 const fallbackCases: CaseRecord[] = [previewCase];
 const fallbackRuns: RunRecord[] = [previewRun];
+
+/** Old path → new home. Nothing moved out of the app, only around inside it. */
+const LEGACY_ROUTES: [string, string][] = [
+  ["/experiments", "/evaluate/experiments"],
+  ["/findings", "/evidence/findings"],
+  ["/repositories", "/evidence/repositories"],
+  ["/skills", "/evidence/skills"],
+  ["/cases", "/evidence/cases"],
+  ["/runs", "/advanced/runs"],
+  ["/compare", "/advanced/compare"],
+  ["/improvements", "/advanced/improvements"],
+  ["/dashboard", "/advanced/benchmarks"],
+  ["/health", "/system/health"],
+  ["/guide", "/system/guide"],
+  ["/settings", "/system/settings"]
+];
+
+/** `/runs/:runId` carries an id, so it cannot be a static redirect. */
+function LegacyRunRedirect() {
+  const { runId } = useParams();
+  return <Navigate replace to={`/advanced/runs/${runId ?? ""}`} />;
+}
 
 export default function App() {
   const [cases, setCases] = useState<CaseRecord[]>(fallbackCases);
@@ -265,33 +293,13 @@ export default function App() {
           />
         }
       >
-        <Route element={<Dashboard apiStatus={apiStatus} cases={cases} runs={runs} />} path="/" />
-        <Route
-          element={
-            <Runs
-              cases={cases}
-              onCancelRun={cancelRun}
-              onCloneRun={cloneRun}
-              onCreateRun={createRun}
-              onCreateRunBatch={createRunBatch}
-              onDeleteRun={deleteRun}
-              runs={runs}
-            />
-          }
-          path="/runs"
-        />
-        <Route
-          element={
-            <RunDetailRoute
-              onCancelRun={cancelRun}
-              onContinueRun={continueRun}
-              onRetryRun={retryRun}
-              onScoreRun={scoreRun}
-              runs={runs}
-            />
-          }
-          path="/runs/:runId"
-        />
+        <Route element={<Home />} path="/" />
+        <Route element={<NewEvaluation />} path="/evaluate/new" />
+        <Route element={<Audit />} path="/evaluate/audit" />
+        <Route element={<Experiments />} path="/evaluate/experiments" />
+        <Route element={<Findings />} path="/evidence/findings" />
+        <Route element={<Repositories />} path="/evidence/repositories" />
+        <Route element={<Skills />} path="/evidence/skills" />
         <Route
           element={
             <>
@@ -315,14 +323,56 @@ export default function App() {
               ) : null}
             </>
           }
-          path="/cases"
+          path="/evidence/cases"
         />
-        <Route element={<Skills />} path="/skills" />
-        <Route element={<Improvements />} path="/improvements" />
-        <Route element={<Compare runs={runs} />} path="/compare" />
-        <Route element={<Guide />} path="/guide" />
-        <Route element={<Health />} path="/health" />
-        <Route element={<Settings onThemeChange={setTheme} theme={theme} />} path="/settings" />
+        <Route
+          element={
+            <Runs
+              cases={cases}
+              onCancelRun={cancelRun}
+              onCloneRun={cloneRun}
+              onCreateRun={createRun}
+              onCreateRunBatch={createRunBatch}
+              onDeleteRun={deleteRun}
+              runs={runs}
+            />
+          }
+          path="/advanced/runs"
+        />
+        <Route
+          element={
+            <RunDetailRoute
+              onCancelRun={cancelRun}
+              onContinueRun={continueRun}
+              onRetryRun={retryRun}
+              onScoreRun={scoreRun}
+              runs={runs}
+            />
+          }
+          path="/advanced/runs/:runId"
+        />
+        <Route element={<Compare runs={runs} />} path="/advanced/compare" />
+        <Route
+          element={<Dashboard apiStatus={apiStatus} cases={cases} runs={runs} />}
+          path="/advanced/benchmarks"
+        />
+        <Route element={<Improvements />} path="/advanced/improvements" />
+        <Route element={<Health />} path="/system/health" />
+        <Route element={<Guide />} path="/system/guide" />
+        <Route
+          element={<Settings onThemeChange={setTheme} theme={theme} />}
+          path="/system/settings"
+        />
+        {/* The flat routes the app shipped with. Kept as redirects rather than
+            deleted: a bookmark or a link in an ADR should not break because the
+            navigation was regrouped. */}
+        {LEGACY_ROUTES.map(([from, to]) => (
+          <Route element={<Navigate replace to={to} />} key={from} path={from} />
+        ))}
+        <Route
+          element={<LegacyRunRedirect />}
+          path="/runs/:runId"
+        />
         <Route element={<Navigate replace to="/" />} path="*" />
       </Route>
     </Routes>

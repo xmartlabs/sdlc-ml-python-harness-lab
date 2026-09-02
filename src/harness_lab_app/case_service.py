@@ -72,6 +72,10 @@ _CONDUCTOR_PREAMBLE = (
 )
 
 
+class CaseExistsError(ValueError):
+    """A case with that id is already in the catalog."""
+
+
 class CaseService:
     def __init__(self, session: Session):
         self.session = session
@@ -127,6 +131,15 @@ class CaseService:
         return None
 
     def create_case(self, data: CaseCreate) -> Case:
+        # Named refusal, not an IntegrityError 500: "already exists" is an
+        # ordinary answer (the audit flow re-offers candidates a past session
+        # already accepted), and the caller needs to tell it apart from a real
+        # failure to treat it as the non-event it is.
+        existing = self.session.exec(
+            select(Case).where(Case.case_id == data.case_id)
+        ).first()
+        if existing is not None:
+            raise CaseExistsError(f"Case already exists: {data.case_id}")
         case = Case(**data.model_dump())
         self.session.add(case)
         self.session.commit()

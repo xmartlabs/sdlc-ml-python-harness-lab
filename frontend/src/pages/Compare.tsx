@@ -5,7 +5,8 @@ import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { HelpPanel } from "../components/HelpPanel";
 import { StateBadge } from "../components/StateBadge";
-import type { RunRecord, ValidationRecord } from "../types";
+import { IconAlert } from "../components/icons";
+import type { RunRecord, ScoreRecord, ValidationRecord } from "../types";
 
 type CompareProps = {
   runs: RunRecord[];
@@ -49,6 +50,9 @@ type Column = {
   run: RunRecord;
   flags: RunFlags;
   validation: ValidationRecord | null;
+  // Registry scores, keyed by name. These carry direction and provenance, so a
+  // metric the comparison has never seen still knows which way is better.
+  scores: Record<string, ScoreRecord>;
 };
 
 // One comparison row: how to read the display + optional numeric for best-cell.
@@ -57,6 +61,10 @@ type Metric = {
   display: (col: Column) => string;
   numeric?: (col: Column) => number | null;
   better?: "high" | "low";
+  // Set for registry rows: a fact, an observation and a judgement are three
+  // different kinds of claim, and a comparison table is exactly where that
+  // distinction is easiest to lose.
+  provenance?: string;
 };
 
 const METRICS: Metric[] = [
@@ -150,6 +158,28 @@ function bestIndex(metric: Metric, columns: Column[]): number | null {
 
 export function Compare({ runs }: CompareProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [scoresByRun, setScoresByRun] = useState<
+    Record<string, Record<string, ScoreRecord>>
+  >({});
+  // name → direction, from the registry. Not stored on a score row: direction
+  // is a property of the definition, and duplicating it per value is how the
+  // two drift apart.
+  const [directions, setDirections] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    api
+      .getScoreDefinitions()
+      .then((payload) => {
+        const map: Record<string, string> = {};
+        for (const group of Object.values(payload.categories)) {
+          for (const definition of group) {
+            map[definition.name] = definition.direction;
+          }
+        }
+        setDirections(map);
+      })
+      .catch(() => setDirections({}));
+  }, []);
   const [validations, setValidations] = useState<Record<string, ValidationRecord | null>>({});
 
   // Default to the two most recent runs once the list arrives.
@@ -174,6 +204,30 @@ export function Compare({ runs }: CompareProps) {
     };
   }, [selectedIds, validations]);
 
+  // Same, for the registry scores.
+  useEffect(() => {
+    let active = true;
+    for (const id of selectedIds) {
+      if (id in scoresByRun) continue;
+      api
+        .listRunScores(id)
+        .then(
+          (rows) =>
+            active &&
+            setScoresByRun((prev) => ({
+              ...prev,
+              [id]: Object.fromEntries(rows.map((row) => [row.name, row]))
+            }))
+        )
+        .catch(
+          () => active && setScoresByRun((prev) => ({ ...prev, [id]: {} }))
+        );
+    }
+    return () => {
+      active = false;
+    };
+  }, [selectedIds, scoresByRun]);
+
   const columns: Column[] = useMemo(
     () =>
       selectedIds
@@ -183,9 +237,50 @@ export function Compare({ runs }: CompareProps) {
           run,
           flags: parseFlags(run.command),
           validation: validations[run.run_id] ?? null,
+          scores: scoresByRun[run.run_id] ?? {}
         })),
-    [selectedIds, runs, validations]
+    [selectedIds, runs, validations, scoresByRun]
   );
+
+  // Every registry metric present on any selected run, so a comparison never
+  // silently drops a score one arm recorded and the other did not.
+  const scoreRows: Metric[] = useMemo(() => {
+    const seen = new Map<string, ScoreRecord>();
+    for (const column of columns) {
+      for (const score of Object.values(column.scores)) {
+        if (!seen.has(score.name)) seen.set(score.name, score);
+      }
+    }
+    return [...seen.values()]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((sample) => ({
+        label: `${sample.name}`,
+        provenance: sample.provenance,
+        display: (column: Column) => {
+          const score = column.scores[sample.name];
+          if (!score) return "—";
+          if (score.value_bool !== null) return score.value_bool ? "pass" : "fail";
+          if (score.value_num !== null) {
+            return String(Number(score.value_num.toPrecision(4)));
+          }
+          return score.value_text ?? "—";
+        },
+        numeric: (column: Column) => {
+          const score = column.scores[sample.name];
+          if (!score) return null;
+          if (score.value_bool !== null) return score.value_bool ? 1 : 0;
+          return score.value_num;
+        },
+        // Direction comes from the registry, never from the sign: a drop in
+        // cost is a win, a drop in pass rate is not.
+        better:
+          directions[sample.name] === "higher_is_better"
+            ? ("high" as const)
+            : directions[sample.name] === "lower_is_better"
+              ? ("low" as const)
+              : undefined
+      }));
+  }, [columns, directions]);
 
 
   const setColumn = (index: number, runId: string) =>
@@ -201,14 +296,25 @@ export function Compare({ runs }: CompareProps) {
     <section className="page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Compare</p>
-          <h1>Run comparison</h1>
+          <p className="eyebrow">Advanced</p>
+          <h1>Advanced Compare</h1>
           <p className="lede">
             Line up runs of the same case across models or harness conditions —
             objective score, cost, and effort side by side.
           </p>
         </div>
       </header>
+
+      <div className="callout callout--warning">
+        <IconAlert size={16} />
+        <p>
+          <strong>Ad-hoc comparison.</strong> No causal claim is implied unless the
+          conditions satisfy an experiment design. These runs were not necessarily
+          matched on repository, model or repetition count, so a difference here can
+          come from anything that differed between them. To make a claim, run an{" "}
+          <Link to="/evaluate/new">experiment</Link>.
+        </p>
+      </div>
 
       <HelpPanel title="How to read this comparison" docHref="docs/guide-web-ui.md">
         <ol className="skills-howto">
@@ -270,11 +376,20 @@ export function Compare({ runs }: CompareProps) {
                 </tr>
               </thead>
               <tbody>
-                {METRICS.map((metric) => {
+                {[...METRICS, ...scoreRows].map((metric) => {
                   const winner = bestIndex(metric, columns);
                   return (
                     <tr key={metric.label}>
-                      <th scope="row">{metric.label}</th>
+                      <th scope="row">
+                        {metric.label}
+                        {metric.provenance && (
+                          <div
+                            className={`small provenance-${metric.provenance}`}
+                          >
+                            {metric.provenance}
+                          </div>
+                        )}
+                      </th>
                       {columns.map((col, i) => (
                         <td className={winner === i ? "compare-best" : undefined} key={col.run.run_id}>
                           {metric.display(col)}
@@ -287,9 +402,19 @@ export function Compare({ runs }: CompareProps) {
             </table>
           </div>
 
+          {scoreRows.length > 0 && (
+            <p className="muted small">
+              Rows below the divider come from the score registry. Their
+              &ldquo;best&rdquo; cell follows each metric&apos;s <em>declared
+              direction</em>, not the sign — a lower cost wins, a lower pass rate
+              does not. A judgement is a model&apos;s opinion and is marked as
+              one; it should not be read beside a fact as the same kind of claim.
+            </p>
+          )}
+
           <p className="muted">
             Looking for the aggregated ranking by condition (% resolved, harness,
-            version)? It moved to the <Link to="/">Dashboard</Link>.
+            version)? It moved to the <Link to="/advanced/benchmarks">Benchmarks</Link>.
           </p>
         </>
       )}

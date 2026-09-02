@@ -37,6 +37,7 @@ from harness_lab_app.run_service import RunService, continuation_source_dir
 from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.sandbox_service import SandboxService
 from harness_lab_app.schemas import RunConfigCreate
+from harness_lab_app.target_service import TargetError, TargetService
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,45 @@ def _config_payload(session: Session, run: Run) -> RunConfigCreate:
         continuation_prompt=config.continuation_prompt,
         skills_disabled=list(config.skills_disabled),
         skills_extra=list(config.skills_extra),
+        target_repo_id=config.target_repo_id,
+        target_ref=config.target_ref,
+        harness_source=config.harness_source,
     )
+
+
+def _target_spec(session: Session, run: Run) -> dict[str, Any] | None:
+    """The target block for ``case_spec.json``, or None for a local run.
+
+    The runner container has no database, so everything it needs to clone and
+    set up the repository is staged here by the worker (the same channel
+    ``case_spec.json`` already uses for cases, ADR-0009).
+
+    The **commit** is what is shipped, never the ref: the ref was already
+    resolved at run creation (ADR-0029), and re-resolving it in the runner would
+    let a run execute against a commit its own provenance does not name.
+    """
+    config = RunService(session).get_run_config(run.run_config_id)
+    if not config.target_repo_id:
+        return None
+    try:
+        target = TargetService(session).get_target(config.target_repo_id)
+    except TargetError:
+        # An archived-then-deleted target must not silently downgrade the run to
+        # a local one: the case would run in a bare workspace and look fine.
+        raise RuntimeError(
+            f"Run {run.run_id} targets unknown repository '{config.target_repo_id}'."
+        ) from None
+    return {
+        "target_id": target.target_id,
+        "repo_url": target.repository_url,
+        "ref": config.target_ref or target.default_ref,
+        "commit": config.target_commit,
+        "setup": list(target.setup_commands),
+        # Which harness the agent will see inside the clone (ADR-0031). The
+        # runner acts on this: `injected` projects the lab harness into the
+        # workspace, `native` deliberately leaves the repo as it is.
+        "harness_source": str(config.harness_source),
+    }
 
 
 def _case_prompt_text(case: Case, prompt_variant: str) -> str:
@@ -102,6 +141,7 @@ def _write_case_spec(
     *,
     continuation_prompt: str = "",
     parent_run_id: str | None = None,
+    target: dict[str, Any] | None = None,
 ) -> None:
     """Stage the case, as the DB holds it, for the DB-blind runner container.
 
@@ -183,6 +223,23 @@ def _write_case_spec(
             "constraints": list(case.constraints),
             "success_criteria": dict(case.success_criteria),
         }
+    if target:
+        # An external target repository (ADR-0029). Carried alongside the case
+        # rather than inside it: the case describes the task, the target
+        # describes where it runs, and the same case must be pairable with any
+        # number of repositories. `source` is the explicit provisioning
+        # discriminator (ADR-0030) — the runner selects a strategy from it
+        # instead of inferring one from the shape of the data.
+        spec["source"] = "git_target"
+        spec["target"] = target
+        # ALSO at the top level, because that is where bench_run.py reads it
+        # (`case_spec.get("harness_source")`). Staging it only inside the
+        # target block silently degraded every declared `native`/`injected`
+        # run to `lab_root`: the agent ran from the lab root with the lab's
+        # own governance loaded — a control arm quietly turned into a second
+        # treatment arm, and the audit then judged it against documents the
+        # condition said it never had.
+        spec["harness_source"] = target.get("harness_source", "lab_root")
     if continuation_prompt:
         # A continuation replaces the instruction, not the case (ADR-0026): the
         # SWE fields, constraints and success criteria still describe the task
@@ -564,6 +621,7 @@ def _execute_run_body(
                 config_payload.prompt_variant,
                 continuation_prompt=config_payload.continuation_prompt,
                 parent_run_id=run.parent_run_id,
+                target=_target_spec(session, run),
             )
             # Pro lane only: image-based provisioning needs docker, which the
             # runner lacks — do it here before the container starts. Skipped for
@@ -612,11 +670,16 @@ def _execute_run_body(
                 )
                 if failure is None:
                     _run_objective_validation(session, run_id)
-                    _autoscore_objective_case(session, run_id)
+                    _autoscore_run(session, run_id)
             # Attribution is useful for any run that produced step logs
             # (including cancelled/failed), so index it regardless of outcome.
             _index_attribution(session, run_id)
             _index_artifacts(session, run_id)
+            _check_harness_provenance(session, run_id)
+            # Scored for every terminal run, not only successful ones: a run
+            # that failed still spent tokens and produced a diff, and excluding
+            # it would make cost aggregates describe only the runs that worked.
+            _record_scores(session, run_id)
             # Last, and outside every branch: a failed run is exactly the one
             # an operator wants to open in Langfuse.
             _export_langfuse_traces(session, run_id)
@@ -641,6 +704,41 @@ def _index_artifacts(session: Session, run_id: str) -> None:
         session.commit()
 
 
+def _check_harness_provenance(session: Session, run_id: str) -> None:
+    """Warn when metadata.json names a different harness than the run config.
+
+    The config is what the operator asked for; metadata.json is what the runner
+    actually executed. They diverged silently once — a runs.yaml cell out-voted
+    the ``--harness`` flag — and the corpus carried runs filed under a CLI that
+    never touched them, which is the one error a comparison cannot recover
+    from, since every arm looks well-formed. Recording the mismatch on the run
+    makes it visible where it matters instead of only to whoever opens the
+    JSON. Best-effort: a missing or unreadable file says nothing.
+    """
+    try:
+        run_service = RunService(session)
+        run = run_service.get_run(run_id)
+        config = run_service.get_run_config(run.run_config_id)
+        path = get_settings().data_runs_dir / run_id / "metadata.json"
+        executed = str(json.loads(path.read_text(encoding="utf-8")).get("harness", ""))
+        if not executed or not config.harness or executed == config.harness:
+            return
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="error",
+                message=(
+                    f"Harness provenance mismatch: configured "
+                    f"'{config.harness}', executed '{executed}'. Do not pool "
+                    "this run with either harness until it is resolved."
+                ),
+            )
+        )
+        session.commit()
+    except Exception:  # a provenance check must never fail the run
+        return
+
+
 def _index_attribution(session: Session, run_id: str) -> None:
     """Best-effort structured harness attribution from the run's logs."""
     from harness_lab_app.attribution_service import AttributionService
@@ -658,26 +756,32 @@ def _index_attribution(session: Session, run_id: str) -> None:
         session.commit()
 
 
-def _autoscore_objective_case(
+def _autoscore_run(
     session: Session,
     run_id: str,
     *,
     gateway: Callable[[str, str, str], str] | None = None,
 ) -> None:
-    """Complete objectively-scored cases without a manual score (SWE-bench).
+    """Score a parked run automatically when its case gives a scale to use.
 
-    SWE-bench's official score is binary and fully automatic: resolved iff all
-    FAIL_TO_PASS pass and no PASS_TO_PASS regresses — exactly what the run's
-    objective validation already computed. For both swe_bench_instance and
-    swe_pro_instance cases with a conclusive verdict we apply the score
-    ourselves (resolved → 10, else 0) and complete the run.
+    Two scales exist, and which one applies is a property of the case:
 
-    SWE-bench Pro tests often cannot deliver a conclusive verdict in this
-    environment (heavy per-instance images). Rather than park those runs in
-    awaiting_manual_score — a human cannot eyeball a Pro resolution the way they
-    VNC into Tetris — the audit LLM grades the diff and the run is recorded as
-    ``llm_judge``. Best-effort throughout: any trouble leaves the run awaiting a
-    manual score, never fails it. ``gateway`` is injectable for tests.
+    - **An objective verdict.** SWE-bench's official score is binary and fully
+      automatic: resolved iff all FAIL_TO_PASS pass and no PASS_TO_PASS
+      regresses — exactly what objective validation already computed. Where
+      that verdict is conclusive it *is* the score (resolved → 10, else 0), and
+      no model opinion is invited on top of a fact.
+    - **A written rubric.** Every other case type carries the rubric its author
+      wrote (``case.scoring_rubric``), and the audit LLM grades the run against
+      it. Parking these in ``awaiting_manual_score`` was the lab's largest
+      blind spot: an experiment can only compare what has been scored, and a
+      smoke check that asks "does it start" cannot move once both arms start.
+      A judged rubric score is an opinion and is recorded as one — provenance
+      ``llm_judge`` — but an opinion on the record beats a blank a human never
+      gets around to filling in, and a human can still overwrite it.
+
+    Best-effort throughout: any trouble leaves the run awaiting a manual score
+    and never fails it. ``gateway`` is injectable for tests.
     """
     from harness_lab_app.models import Validation
 
@@ -688,8 +792,6 @@ def _autoscore_objective_case(
             return
         config = run_service.get_run_config(run.run_config_id)
         case = CaseService(session).get_case(config.case_id)
-        if case.type not in (CaseType.swe_bench_instance, CaseType.swe_pro_instance):
-            return
         validation = session.exec(
             select(Validation).where(Validation.run_id == run_id)
         ).first()
@@ -697,23 +799,26 @@ def _autoscore_objective_case(
         passed = objective.get("passed")
         summary = objective.get("summary", "")
 
-        if passed is not None:
-            label = (
-                "SWE-bench Pro"
-                if case.type == CaseType.swe_pro_instance
-                else "SWE-bench"
-            )
-            score = 10 if passed else 0
-            notes = f"auto-scored ({label} objective): {summary}".strip()
-            _record_autoscore(
-                session, run_service, run_id, score, notes, source="objective"
-            )
+        if case.type in (CaseType.swe_bench_instance, CaseType.swe_pro_instance):
+            if passed is not None:
+                label = (
+                    "SWE-bench Pro"
+                    if case.type == CaseType.swe_pro_instance
+                    else "SWE-bench"
+                )
+                score = 10 if passed else 0
+                notes = f"auto-scored ({label} objective): {summary}".strip()
+                _record_autoscore(
+                    session, run_service, run_id, score, notes, source="objective"
+                )
+                return
+            # No conclusive objective verdict.
+            if case.type == CaseType.swe_bench_instance:
+                return  # bare SWE-bench without a verdict → manual fallback
+            _llm_judge_swe_pro(session, run_service, run_id, summary, gateway)
             return
 
-        # No conclusive objective verdict.
-        if case.type == CaseType.swe_bench_instance:
-            return  # bare SWE-bench without a verdict → manual fallback
-        _llm_judge_swe_pro(session, run_service, run_id, summary, gateway)
+        _llm_judge_rubric(session, run_service, run_id, case, summary, gateway)
     except Exception as exc:  # auto-scoring must never fail the run
         session.add(
             RunEvent(
@@ -777,6 +882,64 @@ def _llm_judge_swe_pro(
     notes = f"LLM-judged ({model}): {rationale}".strip()
     _record_autoscore(
         session, run_service, run_id, result["score"], notes, source="llm_judge"
+    )
+
+
+def _rubric_text(case: Case) -> str:
+    """The case's rubric, whether it is stored inline or as a repo path.
+
+    ``scoring_rubric`` holds a path for benchmark cases synced from disk
+    (``benchmarks/tetris/scoring.md``) and inline markdown for cases created in
+    the UI. Both are legitimate; the judge needs the text either way.
+    """
+    raw = (case.scoring_rubric or "").strip()
+    if not raw or "\n" in raw:
+        return raw
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = get_settings().repo_root / candidate
+    try:
+        return candidate.read_text(encoding="utf-8")
+    except OSError:
+        # A path that no longer resolves is not a rubric; better to skip
+        # auto-scoring than to grade against a filename.
+        return ""
+
+
+def _llm_judge_rubric(
+    session: Session,
+    run_service: RunService,
+    run_id: str,
+    case: Case,
+    objective_summary: str,
+    gateway: Callable[[str, str, str], str] | None,
+) -> None:
+    """Grade a run against its case's written rubric with the audit LLM."""
+    from harness_lab_app.harness_lifecycle import judge
+
+    rubric = _rubric_text(case)
+    if not rubric:
+        return  # no scale to grade against → manual fallback
+    run_dir = get_settings().data_runs_dir / run_id
+    task = _read_run_text(run_dir / "prompt.md") or case.description
+    diff = _read_run_text(run_dir / "diff.patch")
+    report = _read_run_text(run_dir / "report.md")
+    if not diff and not report:
+        return  # nothing to grade → manual fallback
+    gateway = gateway or _worker_gateway()
+    model = os.environ.get("AUDITOR_MODEL") or judge.DEFAULT_JUDGE_MODEL
+    result = judge.judge_rubric_score(
+        task=task,
+        rubric=rubric,
+        diff=diff,
+        objective_summary=objective_summary,
+        report=report,
+        gateway=gateway,
+        model=model,
+    )
+    notes = f"LLM-judged against {case.case_id} rubric ({model}): {result['rationale']}"
+    _record_autoscore(
+        session, run_service, run_id, result["score"], notes.strip(), source="llm_judge"
     )
 
 
@@ -868,6 +1031,40 @@ def _export_langfuse_traces(session: Session, run_id: str) -> None:
         session.commit()
 
 
+def _record_scores(session: Session, run_id: str) -> None:
+    """Score the run against the registry, right after validation.
+
+    Scoring used to be on demand, which made the registry effectively
+    write-only: nothing aggregates a metric no run has recorded, so every
+    dashboard and comparison silently fell back to the older `Validation`
+    fields. Running it here is what makes the score corpus exist at all.
+
+    Best-effort, like validation and the trace export around it: a missing
+    score is a gap in a chart, never a reason to fail a run that worked.
+    """
+    from harness_lab_app.score_service import ScoreService
+
+    try:
+        scores = ScoreService(session).evaluate_run(run_id)
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="info",
+                message=f"Recorded {len(scores)} score(s) against the registry.",
+            )
+        )
+        session.commit()
+    except Exception as exc:  # scoring must never fail the run
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="error",
+                message=f"Scoring could not run: {exc!r}",
+            )
+        )
+        session.commit()
+
+
 def _run_objective_validation(session: Session, run_id: str) -> None:
     """Best-effort objective validation after a successful run."""
     from harness_lab_app.validation_service import ValidationService
@@ -899,7 +1096,11 @@ def validate_run(run_id: str) -> None:
         _run_objective_validation(session, run_id)
         # Re-validate also completes SWE-bench runs that were parked awaiting a
         # manual score before auto-scoring existed (or whose validation ran late).
-        _autoscore_objective_case(session, run_id)
+        _autoscore_run(session, run_id)
+        # Scores come after validation because they read its verdict, cost and
+        # effort; re-scoring overwrites in place, so a re-validate refreshes
+        # them rather than accumulating contradictions.
+        _record_scores(session, run_id)
         # Re-export so the validation verdict and the new score reach the trace
         # too; deterministic ids mean this updates rather than duplicates.
         _export_langfuse_traces(session, run_id)
@@ -949,7 +1150,10 @@ def audit_run(run_id: str, auditor_model: str | None = None) -> None:
             markdown = service.read_audit_markdown(run_id)
             if markdown:
                 service.store_result(
-                    run_id, markdown, findings=service.read_audit_findings(run_id)
+                    run_id,
+                    markdown,
+                    findings=service.read_audit_findings(run_id),
+                    governance=service.read_audit_governance(run_id),
                 )
             else:
                 service.store_error(run_id, "Audit finished but wrote no audit.md")

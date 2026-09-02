@@ -53,7 +53,7 @@ One run is one **session**, id `bench-<run_id>` — the same id
   on disk (claude's `result` event), the step also carries its own token usage,
   cost, `stop_reason`, `ttft_ms` and turn count.
 - **Inside each step** — the timeline the step's artifacts can reconstruct
-  ([ADR-0028](adr/0028-step-traces-carry-per-call-detail.md)):
+  ([ADR-0039](adr/0039-step-traces-carry-per-call-detail.md)):
   - *generations* — one per LLM call. claude runs get one per assistant
     message (real model, per-turn input/cache tokens from the stream events);
     opencode runs get one per `stream`→`loop` window in the log (real
@@ -154,7 +154,7 @@ right side of that trade.
 
 - [ADR-0027](adr/0027-langfuse-traces-rebuilt-from-run-artifacts.md) — why
   traces are rebuilt from artifacts instead of emitted live.
-- [ADR-0028](adr/0028-step-traces-carry-per-call-detail.md) — how the inside
+- [ADR-0039](adr/0039-step-traces-carry-per-call-detail.md) — how the inside
   of a step becomes generations and tool calls, and what the timing labels
   promise.
 - [plans/2026-08-langfuse-observability.md](plans/2026-08-langfuse-observability.md)

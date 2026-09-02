@@ -142,3 +142,36 @@ def test_update_case_flags_drift_once_a_case_has_been_synced(session):
     )
 
     assert updated.sync_state == CaseSyncState.modified_since_sync
+
+
+def test_creating_a_duplicate_case_is_a_named_refusal(session):
+    """'Already exists' is an answer, not a 500.
+
+    The audit flow re-offers candidates a past session already accepted, so a
+    duplicate create is an expected event — the caller must be able to tell it
+    apart from a real failure and treat it as idempotent success.
+    """
+    import pytest
+
+    from harness_lab_app.case_service import CaseExistsError, CaseService
+    from harness_lab_app.schemas import CaseCreate
+
+    service = CaseService(session)
+    payload = CaseCreate(
+        case_id="derived-once",
+        name="Derived once",
+        type="single_prompt",
+        description="",
+        tags=[],
+        prompt_variants={"default": "Do the thing."},
+        step_prompts=[],
+        success_criteria={},
+        scoring_rubric="",
+        constraints=[],
+        validation_commands=[],
+        max_steps=10,
+    )
+    service.create_case(payload)
+
+    with pytest.raises(CaseExistsError, match="derived-once"):
+        service.create_case(payload)

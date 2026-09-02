@@ -6,6 +6,11 @@ import { caseOptionLabel } from "../caseLabels";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
 import { ModelPicker } from "../components/ModelPicker";
+import {
+  HARNESS_NATIVE_MODELS,
+  HARNESS_OPTIONS,
+  HOST_HARNESSES
+} from "../harnesses";
 import { RunTable } from "../components/RunTable";
 import type {
   CaseRecord,
@@ -16,8 +21,11 @@ import type {
   RunConfigPayload,
   RunCreatePayload,
   RunRecord,
+  HarnessSource,
   RunValidationResult,
-  StagedSkillRecord
+  StagedSkillRecord,
+  TargetRecord,
+  TargetResolveResult
 } from "../types";
 
 type RunsProps = {
@@ -31,7 +39,7 @@ type RunsProps = {
 };
 
 /** Add or remove `value` in a Set, returning a new Set (never mutating state). */
-function toggleInSet(current: Set<string>, value: string): Set<string> {
+function toggleInSet<T extends string>(current: Set<T>, value: T): Set<T> {
   const next = new Set(current);
   if (next.has(value)) {
     next.delete(value);
@@ -41,28 +49,12 @@ function toggleInSet(current: Set<string>, value: string): Set<string> {
   return next;
 }
 
-const HARNESS_OPTIONS = ["opencode", "codex", "claude", "antigravity"] as const;
-// Harnesses that run via the host CLI (native auth) instead of the runner
-// container — they need the host worker (subprocess backend).
-const HOST_HARNESSES = new Set(["codex", "claude"]);
+
 const FALLBACK_EXECUTOR_MODEL = "gateway/lmstudio-qwen3.6-35b-build";
 // Offered budgets. The selected case's own max_steps is merged in, so a case
 // authored with 1 or 4 steps is selectable rather than silently rounded up.
 const MAX_STEPS_OPTIONS = [3, 6, 10] as const;
 const DEFAULT_MAX_STEPS = 10;
-
-// Native model menus for the host-CLI harnesses. Values are passed straight to
-// the CLI's --model, so keep them to ids the CLI accepts. Edit these as new
-// versions ship — this is the systematic-lab knob for host harnesses.
-const HARNESS_NATIVE_MODELS: Record<string, ModelOption[]> = {
-  claude: [
-    { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
-    { id: "claude-opus-4-8", label: "Claude Opus 4.8" },
-    { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" }
-  ],
-  // Only the confirmed CLI default is listed — add your codex model ids here.
-  codex: [{ id: "codex-mini-latest", label: "Codex Mini (latest)" }]
-};
 
 export function Runs({
   cases,
@@ -103,6 +95,21 @@ export function Runs({
   const [extraSkills, setExtraSkills] = useState<Set<string>>(new Set());
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [reloadingModels, setReloadingModels] = useState(false);
+  // Target repository (ADR-0029). Empty = the run works in the lab's own
+  // workspace, which is what every run did before targets existed.
+  const [targets, setTargets] = useState<TargetRecord[]>([]);
+  const [targetRepoId, setTargetRepoId] = useState("");
+  const [targetRef, setTargetRef] = useState("");
+  const [targetPin, setTargetPin] = useState<TargetResolveResult | string | null>(
+    null
+  );
+  const [checkingPin, setCheckingPin] = useState(false);
+  const [batchTargets, setBatchTargets] = useState<Set<string>>(new Set());
+  // The harness condition (ADR-0031). Only meaningful with a target selected.
+  const [harnessSource, setHarnessSource] = useState<HarnessSource>("lab_root");
+  const [batchHarnessSources, setBatchHarnessSources] = useState<Set<HarnessSource>>(
+    new Set()
+  );
 
   // --- Batch mode ----------------------------------------------------------
   // Off by default, and while off every control above behaves exactly as it did
@@ -190,6 +197,17 @@ export function Runs({
       })
       .catch(() => {
         // No staged skills endpoint / API offline — group stays hidden.
+      });
+    api
+      .listTargets()
+      .then((rows) => {
+        if (active) {
+          setTargets(rows);
+        }
+      })
+      .catch(() => {
+        // No targets endpoint / API offline — the selector stays hidden and
+        // the form behaves exactly as it did before targets existed.
       });
     loadModels()
       .then((catalog) => {
@@ -368,8 +386,17 @@ export function Runs({
     resume,
     dryRun,
     disabledSkills,
-    extraSkills
+    extraSkills,
+    targetRepoId,
+    targetRef,
+    harnessSource
   ]);
+
+  // The pin describes one (repository, ref) pair; changing either makes the
+  // displayed commit describe a configuration the form no longer holds.
+  useEffect(() => {
+    setTargetPin(null);
+  }, [targetRepoId, targetRef]);
 
   const buildConfig = (): RunConfigPayload => ({
     case_id: caseId,
@@ -382,7 +409,10 @@ export function Runs({
     resume,
     dry_run: dryRun,
     skills_disabled: [...disabledSkills].sort(),
-    skills_extra: [...extraSkills].sort()
+    skills_extra: [...extraSkills].sort(),
+    target_repo_id: targetRepoId,
+    target_ref: targetRef.trim(),
+    harness_source: harnessSource
   });
 
   // Same checks Create run applies, minus the write. The slow part (measuring
@@ -426,10 +456,20 @@ export function Runs({
     .filter((entry) => entry.count === 0)
     .map((entry) => entry.caseId);
 
+  // Same shape as the executor axis: no selection means "do not vary the
+  // repository", which the API spells as a single empty string.
+  const batchTargetAxis: string[] =
+    batchTargets.size > 0 ? [...batchTargets] : [""];
+
+  const batchHarnessSourceAxis: HarnessSource[] =
+    batchHarnessSources.size > 0 ? [...batchHarnessSources] : ["lab_root"];
+
   const batchRunCount =
     variantsPerCase.reduce((total, entry) => total + entry.count, 0) *
     batchHarnesses.size *
     batchExecutorAxis.length *
+    batchTargetAxis.length *
+    batchHarnessSourceAxis.length *
     Math.max(repetitions, 0);
 
   const overBatchCap = maxBatchRuns !== null && batchRunCount > maxBatchRuns;
@@ -452,7 +492,10 @@ export function Runs({
           max_steps: maxSteps,
           dry_run: dryRun,
           skills_disabled: [...disabledSkills].sort(),
-          skills_extra: [...extraSkills].sort()
+          skills_extra: [...extraSkills].sort(),
+          target_repo_ids: batchTargetAxis,
+          target_ref: targetRef.trim(),
+          harness_sources: batchHarnessSourceAxis
         })
       );
     } catch (error) {
@@ -476,7 +519,7 @@ export function Runs({
         label: label.trim() || undefined,
         config: buildConfig()
       });
-      navigate(`/runs/${created.run_id}`);
+      navigate(`/advanced/runs/${created.run_id}`);
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : "Unable to create run");
     } finally {
@@ -611,6 +654,61 @@ export function Runs({
                   used for every run.
                 </small>
               </fieldset>
+              {targets.length > 0 ? (
+                <fieldset className="batch-axis">
+                  <legend>Target repositories ({batchTargets.size})</legend>
+                  <div className="batch-options">
+                    {targets.map((target) => (
+                      <label className="skill-checkbox" key={target.target_id}>
+                        <input
+                          checked={batchTargets.has(target.target_id)}
+                          onChange={() =>
+                            setBatchTargets((current) =>
+                              toggleInSet(current, target.target_id)
+                            )
+                          }
+                          type="checkbox"
+                        />
+                        <span>{target.target_id}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <small className="muted">
+                    Vary the repository to test whether the harness holds outside the
+                    repo it was designed in. Scores across different repositories are
+                    not comparable as though conditions were identical — read them per
+                    repository, not pooled.
+                  </small>
+                </fieldset>
+              ) : null}
+              {targets.length > 0 ? (
+                <fieldset className="batch-axis">
+                  <legend>Harness ({batchHarnessSources.size})</legend>
+                  <div className="batch-options">
+                    {(["lab_root", "native", "injected"] as HarnessSource[]).map(
+                      (source) => (
+                        <label className="skill-checkbox" key={source}>
+                          <input
+                            checked={batchHarnessSources.has(source)}
+                            onChange={() =>
+                              setBatchHarnessSources((current) =>
+                                toggleInSet(current, source)
+                              )
+                            }
+                            type="checkbox"
+                          />
+                          <span>{source}</span>
+                        </label>
+                      )
+                    )}
+                  </div>
+                  <small className="muted">
+                    Selecting <code>native</code> and <code>injected</code> together on
+                    one repository is the harness A/B: same repo, same case, same
+                    model, harness varied. Both require a target repository.
+                  </small>
+                </fieldset>
+              ) : null}
               <label>
                 <span>Repetitions</span>
                 <input
@@ -721,7 +819,7 @@ export function Runs({
           >
             <small className="muted">
               {HARNESS_NATIVE_MODELS[harness]
-                ? `Native ${harness} CLI models (passed to --model). Edit the list in Runs.tsx as versions ship.`
+                ? `Native ${harness} CLI models (passed to --model). Edit the list in harnesses.ts as versions ship.`
                 : modelSource === "opencode.json"
                   ? "Gateway unreachable — showing opencode.json models."
                   : modelSource === "gateway"
@@ -756,6 +854,93 @@ export function Runs({
             <span>Dry run</span>
             <input checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} type="checkbox" />
           </label>
+          {targets.length > 0 ? (
+            <>
+              <label>
+                <span>Target repository</span>
+                <select
+                  disabled={batchMode}
+                  onChange={(event) => setTargetRepoId(event.target.value)}
+                  value={targetRepoId}
+                >
+                  <option value="">None — run in the lab workspace</option>
+                  {targets.map((target) => (
+                    <option key={target.target_id} value={target.target_id}>
+                      {target.target_id}
+                    </option>
+                  ))}
+                </select>
+                <small className="muted">
+                  {batchMode
+                    ? "Varied as a batch axis below."
+                    : "The repository the agent works in. Cloned fresh per run."}
+                </small>
+              </label>
+              {targetRepoId !== "" || batchTargets.size > 0 ? (
+                <label>
+                  <span>Ref</span>
+                  <input
+                    onChange={(event) => setTargetRef(event.target.value)}
+                    placeholder={
+                      targets.find((item) => item.target_id === targetRepoId)
+                        ?.default_ref ?? "main"
+                    }
+                    value={targetRef}
+                  />
+                  <small className="muted">
+                    {targetPin === null ? (
+                      <button
+                        disabled={checkingPin || targetRepoId === ""}
+                        onClick={() => {
+                          setCheckingPin(true);
+                          api
+                            .resolveTargetRef(targetRepoId, targetRef.trim())
+                            .then((resolved) => setTargetPin(resolved))
+                            .catch((error: unknown) =>
+                              setTargetPin(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Could not resolve"
+                              )
+                            )
+                            .finally(() => setCheckingPin(false));
+                        }}
+                        type="button"
+                      >
+                        {checkingPin ? "Checking…" : "Check commit"}
+                      </button>
+                    ) : typeof targetPin === "string" ? (
+                      <span className="error-text">{targetPin}</span>
+                    ) : (
+                      <>Pins to {targetPin.commit.slice(0, 10)}</>
+                    )}
+                  </small>
+                </label>
+              ) : null}
+              {targetRepoId !== "" && !batchMode ? (
+                <label>
+                  <span>Harness</span>
+                  <select
+                    onChange={(event) =>
+                      setHarnessSource(event.target.value as HarnessSource)
+                    }
+                    value={harnessSource}
+                  >
+                    <option value="lab_root">Lab harness (from the lab repo)</option>
+                    <option value="native">Native — the target's own conventions</option>
+                    <option value="injected">Injected — our harness inside the target</option>
+                  </select>
+                  <small className="muted">
+                    {harnessSource === "lab_root"
+                      ? "The agent works from the lab repo and edits the target from outside."
+                      : harnessSource === "native"
+                        ? "Control arm: the agent works inside the repo with only what that repo ships."
+                        : "Treatment arm: the agent works inside the repo with our harness projected into it."}
+                  </small>
+                </label>
+              ) : null}
+            </>
+          ) : null}
         </div>
         {harnessSkills.length > 0 ? (
           <div className="skills-section">

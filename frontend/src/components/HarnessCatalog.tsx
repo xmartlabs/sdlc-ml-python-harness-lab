@@ -25,10 +25,10 @@ const KIND_LABEL: Record<CatalogRow["kind"], string> = {
 };
 
 const VERDICT_LABEL: Record<AuditFinding["verdict"], string> = {
-  useful: "útil",
-  redundant: "redundante",
-  improve: "a mejorar",
-  unknown: "sin evidencia"
+  useful: "useful",
+  redundant: "redundant",
+  improve: "needs work",
+  unknown: "no evidence"
 };
 
 function verdictBadgeClass(verdict: AuditFinding["verdict"]): string {

@@ -1,6 +1,25 @@
 import { useEffect, useState } from "react";
+import type { ComponentType } from "react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
+
+import type { IconProps } from "./icons";
+import {
+  IconBook,
+  IconCompare,
+  IconFiles,
+  IconFlask,
+  IconHome,
+  IconLightbulb,
+  IconList,
+  IconPlus,
+  IconPulse,
+  IconPuzzle,
+  IconRepo,
+  IconSearch,
+  IconSettings,
+  IconTrophy
+} from "./icons";
 
 type ShellProps = {
   children: ReactNode;
@@ -11,17 +30,62 @@ type ShellProps = {
 
 const COLLAPSED_STORAGE_KEY = "ahl.sidebar.collapsed";
 
-const NAV_ITEMS = [
-  { to: "/", label: "Dashboard", icon: "🏠", end: true },
-  { to: "/runs", label: "Runs", icon: "▶", end: false },
-  { to: "/cases", label: "Cases", icon: "🗂", end: false },
-  { to: "/skills", label: "Skills", icon: "🧩", end: false },
-  { to: "/improvements", label: "Improvements", icon: "💡", end: false },
-  { to: "/compare", label: "Compare", icon: "⇄", end: false },
-  { to: "/health", label: "Health", icon: "🩺", end: false },
-  { to: "/guide", label: "Guide", icon: "📖", end: false },
-  { to: "/settings", label: "Settings", icon: "⚙", end: false }
-] as const;
+type NavItem = {
+  to: string;
+  label: string;
+  icon: ComponentType<IconProps>;
+  end?: boolean;
+};
+
+type NavGroup = { title: string; items: NavItem[] };
+
+/**
+ * Navigation grouped by what a person came to do, not by which table backs it.
+ *
+ * "Evaluate" is where you go with a question, "Evidence" is what the lab knows,
+ * "Advanced" is the operational machinery underneath. Nothing was removed in
+ * the regrouping — Runs, Compare and the leaderboard all still exist, they just
+ * stopped competing with the workflows for the top of the page.
+ */
+const NAV_GROUPS: NavGroup[] = [
+  {
+    title: "",
+    items: [{ to: "/", label: "Home", icon: IconHome, end: true }]
+  },
+  {
+    title: "Evaluate",
+    items: [
+      { to: "/evaluate/new", label: "New evaluation", icon: IconPlus },
+      { to: "/evaluate/experiments", label: "Experiments", icon: IconFlask }
+    ]
+  },
+  {
+    title: "Evidence",
+    items: [
+      { to: "/evidence/findings", label: "Findings", icon: IconSearch },
+      { to: "/evidence/cases", label: "Cases", icon: IconFiles },
+      { to: "/evidence/repositories", label: "Repositories", icon: IconRepo },
+      { to: "/evidence/skills", label: "Skills", icon: IconPuzzle }
+    ]
+  },
+  {
+    title: "Advanced",
+    items: [
+      { to: "/advanced/runs", label: "Runs", icon: IconList },
+      { to: "/advanced/compare", label: "Compare", icon: IconCompare },
+      { to: "/advanced/benchmarks", label: "Benchmarks", icon: IconTrophy },
+      { to: "/advanced/improvements", label: "Improvements", icon: IconLightbulb }
+    ]
+  },
+  {
+    title: "System",
+    items: [
+      { to: "/system/health", label: "Health", icon: IconPulse },
+      { to: "/system/guide", label: "Guide", icon: IconBook },
+      { to: "/system/settings", label: "Settings", icon: IconSettings }
+    ]
+  }
+];
 
 function getStoredCollapsed(): boolean {
   if (typeof window === "undefined") {
@@ -64,19 +128,33 @@ export function Shell({ children, authEnabled, onLogout }: ShellProps) {
           </div>
         </div>
         <nav className="nav">
-          {NAV_ITEMS.map((item) => (
-            <NavLink
-              className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}
-              end={item.end}
-              key={item.to}
-              title={item.label}
-              to={item.to}
-            >
-              <span aria-hidden="true" className="nav-item-icon">
-                {item.icon}
-              </span>
-              {collapsed ? null : <span className="nav-item-label">{item.label}</span>}
-            </NavLink>
+          {NAV_GROUPS.map((group) => (
+            <div className="nav-group" key={group.title || "root"}>
+              {group.title && !collapsed ? (
+                <p className="nav-group-title">{group.title}</p>
+              ) : null}
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <NavLink
+                    className={({ isActive }) =>
+                      isActive ? "nav-item active" : "nav-item"
+                    }
+                    end={item.end}
+                    key={item.to}
+                    title={item.label}
+                    to={item.to}
+                  >
+                    <span className="nav-item-icon">
+                      <Icon size={16} />
+                    </span>
+                    {collapsed ? null : (
+                      <span className="nav-item-label">{item.label}</span>
+                    )}
+                  </NavLink>
+                );
+              })}
+            </div>
           ))}
         </nav>
         {collapsed ? null : (

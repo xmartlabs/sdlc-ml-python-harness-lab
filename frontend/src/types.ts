@@ -74,6 +74,41 @@ export type RunRecord = {
   batch_id?: string | null;
   // The run this one continues from (ADR-0026). Null for an original run.
   parent_run_id?: string | null;
+  // The arm this run answers for. Empty for a run created outside an
+  // experiment — which is a real state, not a bug, but one worth seeing in the
+  // list: an unattributed run counts towards no comparison.
+  experiment_id?: string | null;
+  condition_label?: string | null;
+};
+
+/**
+ * The condition a run *was*, composed from run, config, experiment and target.
+ *
+ * §16: a run page leads with this and keeps the logs available further down.
+ * Which arm of which experiment, against which commit, with whose governance,
+ * is what makes a log worth reading in the first place.
+ */
+export type RunContext = {
+  run_id: string;
+  experiment_id: string;
+  experiment_question: string;
+  experiment_mode: string;
+  condition_label: string;
+  case_id: string;
+  case_name: string;
+  prompt_variant: string;
+  harness: string;
+  harness_source: string;
+  executor_model: string;
+  planner_model: string;
+  target_repo_id: string;
+  target_name: string;
+  target_url: string;
+  target_ref: string;
+  target_commit: string;
+  validation_commands: string[];
+  max_steps: number;
+  parent_run_id: string;
 };
 
 export type RunEventRecord = {
@@ -127,6 +162,17 @@ export type AttributionRecord = {
     skills_available?: string[];
     skills_consulted?: string[];
     skills_note?: string;
+    /**
+     * Which repository the coverage denominator came from (ADR-0036).
+     * `target_workspace` = the run's own archived workspace, `lab_root` = the
+     * repository the lab itself runs from. 2/9 against a client's documents
+     * and 2/9 against the lab's are different measurements, and without this
+     * they render identically.
+     */
+    governance_source?: string;
+    governance_fingerprint?: string;
+    harness_source?: string;
+    governance_warning?: string;
   };
   summary: string;
   steps_parsed: number;
@@ -145,12 +191,27 @@ export type AuditFindings = {
   parse_error?: string;
 };
 
+/** The governance surface an audit judged one run against (ADR-0036). */
+export type GovernanceSurface = {
+  source: string;
+  root: string;
+  harness_source: string;
+  rules_file: string;
+  files: string[];
+  file_count: number;
+  fingerprint: string;
+  truncated: boolean;
+  warning: string;
+};
+
 export type AuditRecord = {
   run_id: string;
   auditor_model: string;
   status: "running" | "done" | "failed";
   markdown: string;
   findings_json?: AuditFindings;
+  /** Empty for audits recorded before the surface was pinned per run. */
+  governance_json?: GovernanceSurface | Record<string, never>;
   error: string | null;
   created_at: string;
   updated_at: string;
@@ -275,6 +336,392 @@ export type StagedSkillPromoteResult = {
   next_steps: string;
 };
 
+/**
+ * A repository a case can be run against, independent of the case (ADR-0029).
+ *
+ * `default_ref` is what a run pins when it names no ref of its own. The commit
+ * itself is never stored here — a repository moves, and the immutable commit
+ * belongs to the run that used it.
+ */
+/**
+ * Which harness the agent can see (ADR-0031).
+ *
+ * `lab_root` is the historical default: the agent works from the lab repo and
+ * edits the target from outside. `native` and `injected` both put it *inside*
+ * the target — with the repo's own conventions, or with ours projected on top.
+ * That pair is the comparison; `lab_root` vs `native` would mix two changes.
+ */
+export type HarnessSource = "lab_root" | "native" | "injected";
+
+/** What the lab knows about itself. Every figure carries its denominator. */
+export type OverviewRate = { rate: number | null; n: number; note: string };
+
+/** One registry metric aggregated across the corpus, direction attached. */
+export type ScoreAggregate = {
+  name: string;
+  version: string;
+  category: string;
+  provenance: string;
+  direction: string;
+  description: string;
+  runs: number;
+  mean: number | null;
+  median: number | null;
+  stdev: number | null;
+  minimum: number | null;
+  maximum: number | null;
+  true_rate: number | null;
+};
+
+export type OverviewReport = {
+  window_days: number;
+  harness_version: string | null;
+  experiments: { total: number; recent: number };
+  success: OverviewRate;
+  success_all_time: OverviewRate;
+  regressions: {
+    count: number;
+    eligible_cases: number;
+    rate: number | null;
+    cases: string[];
+  };
+  cost: {
+    median_usd: number | null;
+    n: number;
+    total_usd: number | null;
+    cost_per_success: number | null;
+    successes: number;
+  };
+  regression_suite: { cases: number; of_active: number };
+  findings: { open: number; validated: number; total: number };
+  scoring: { scored: number; terminal: number };
+  trend: { week_ending: string; n: number; rate: number | null }[];
+  runs: { total: number; recent: number };
+  scores: {
+    runs: number;
+    adherence: ScoreAggregate | null;
+    useful: ScoreAggregate | null;
+    redundant: ScoreAggregate | null;
+    diff_size: ScoreAggregate | null;
+    forbidden: ScoreAggregate | null;
+    metrics: ScoreAggregate[];
+  };
+};
+
+export type ExperimentMode = "harness_evaluation" | "cross_repo" | "discovery";
+export type ConditionRole = "control" | "treatment";
+
+export type ExperimentRecord = {
+  experiment_id: string;
+  name: string;
+  question: string;
+  mode: ExperimentMode;
+  status: "draft" | "running" | "complete" | "abandoned";
+  case_ids: string[];
+  prompt_variants: string[];
+  repetitions: number;
+  notes: string;
+  condition_count?: number;
+  run_count?: number;
+  warnings?: string[];
+};
+
+/**
+ * The shared configuration an experiment's real runs were launched with.
+ * Null while the experiment is a draft (dry-run rehearsals do not count).
+ * Once set, the backend refuses a relaunch that differs — so the UI shows
+ * this instead of asking for the configuration a second time.
+ */
+export type LaunchConfigSummary = {
+  harness: string;
+  executor_model: string | null;
+  planner_model: string | null;
+  prompt_variant: string;
+  max_steps: number;
+  score_mode: string;
+};
+
+export type ConditionRecord = {
+  label: string;
+  role: ConditionRole;
+  description: string;
+  overrides: Record<string, unknown>;
+};
+
+/** One metric aggregated over a condition's repetitions. */
+export type AggregateRecord = {
+  name: string;
+  n: number;
+  mean: number | null;
+  median: number | null;
+  stdev: number | null;
+  minimum: number | null;
+  maximum: number | null;
+  missing: number;
+};
+
+export type ConditionSummary = {
+  label: string;
+  role: ConditionRole;
+  runs: number;
+  scored_runs: number;
+  success_rate: number | null;
+  warnings: string[];
+  metrics: Record<string, AggregateRecord>;
+};
+
+export type DeltaRecord = {
+  name: string;
+  control: number | null;
+  treatment: number | null;
+  absolute: number | null;
+  relative: number | null;
+  direction: string;
+  exceeds_spread: boolean | null;
+};
+
+export type CaseMatrixRow = {
+  case_id: string;
+  control: boolean | null;
+  treatment: boolean | null;
+  movement: "fixed" | "broken" | "unchanged" | "incomplete";
+};
+
+/** One number worth putting at the top of the page, with both arms' values. */
+export type VerdictHighlight = {
+  label: string;
+  metric: string;
+  control: number | null;
+  treatment: number | null;
+};
+
+/**
+ * The ten-second answer, computed on the backend.
+ *
+ * Deliberately not assembled in the browser: what an experiment is allowed to
+ * claim follows from its mode and its repetition count, and that rule belongs
+ * next to the design validation that enforces it — not in a template.
+ */
+export type VerdictBlock = {
+  /** False for any mode that cannot support a causal claim. */
+  causal: boolean;
+  headline: string;
+  claim: string;
+  /** "exploratory" … "stronger evidence". Never "significant". */
+  strength: string;
+  /** e.g. "12 cases x 5 repetitions". */
+  evidence: string;
+  highlights: VerdictHighlight[];
+  movements: { fixed: number; broken: number; unchanged: number; incomplete: number };
+  caveats: string[];
+};
+
+export type ExperimentSummary = {
+  experiment_id: string;
+  question: string;
+  mode: ExperimentMode;
+  repetitions: number;
+  case_repetitions?: Record<string, number>;
+  suite_id?: string | null;
+  verdict?: VerdictBlock;
+  conditions: ConditionSummary[];
+  comparisons: {
+    control: string;
+    treatment: string;
+    deltas: DeltaRecord[];
+    success: { control: number | null; treatment: number | null; points: number | null };
+    case_matrix: CaseMatrixRow[];
+  }[];
+};
+
+export type FindingRecord = {
+  finding_id: string;
+  title: string;
+  body: string;
+  severity: "low" | "medium" | "high";
+  status:
+    | "suggested"
+    | "open"
+    | "proposed"
+    | "experiment_running"
+    | "validated"
+    | "refuted"
+    | "dismissed";
+  target_repo_id: string;
+  evidence_run_ids: string[];
+  affected_case_ids: string[];
+  recommendation: string;
+  intervention: string;
+  experiment_id: string | null;
+  outcome: string;
+  /** The suggestion key this finding came from, empty when a person wrote it. */
+  origin?: string;
+  /** Who put their name on it. Required to accept a suggestion. */
+  author?: string;
+  accepted_at?: string | null;
+  warnings?: string[];
+};
+
+/**
+ * A pattern the lab noticed. Not a finding, and the distinction is the point:
+ * nothing here is a claim until a person accepts it and their name goes on it.
+ */
+export type SuggestionRecord = {
+  key: string;
+  title: string;
+  body: string;
+  severity: "low" | "medium" | "high";
+  recommendation: string;
+  intervention: string;
+  target_repo_id: string;
+  evidence_run_ids: string[];
+  affected_case_ids: string[];
+  source: string;
+  status: "suggested";
+};
+
+/** One thing worth doing, with the way into it attached. */
+export type AttentionItem = {
+  kind: string;
+  severity: "critical" | "warning" | "info";
+  count: number;
+  headline: string;
+  detail: string;
+  action: string;
+  route: string;
+};
+
+export type AttentionFeed = {
+  items: AttentionItem[];
+  clear: boolean;
+};
+
+/** The five or six numbers the home page is allowed to show. */
+export type EvidenceSummary = {
+  experiments_active: number;
+  repositories: number;
+  cases: number;
+  success: { rate: number | null; n: number; note: string };
+  // Field names mirror `overview_service` exactly. They carry their unit in the
+  // name, and a type that renamed them would compile happily while reading
+  // `undefined` off every payload.
+  cost: {
+    median_usd: number | null;
+    total_usd: number | null;
+    cost_per_success: number | null;
+    successes: number;
+    n: number;
+  };
+  findings_open: number;
+  harness_version: string | null;
+  window_days: number;
+};
+
+/** One readiness line. `unknown` means "we could not look", never "absent". */
+export type ReadinessCheck = {
+  label: string;
+  status: "ok" | "missing" | "unknown";
+  detail: string;
+  items: string[];
+};
+
+export type ReadinessReport = {
+  target_id: string;
+  name: string;
+  repository_url: string;
+  ref: string;
+  commit: string | null;
+  detected: {
+    rules_files: string[];
+    skills: string[];
+    agents: string[];
+    commands: string[];
+    governance_docs: string[];
+    memory: string[];
+    adrs: string[];
+    ci_workflows: string[];
+    test_markers: string[];
+  } | null;
+  read_error: string;
+  /**
+   * Inferred from the repository's own files (Makefile test target,
+   * package.json scripts, pytest config, go.mod, Cargo.toml). Suggestions
+   * only — a person adopts them into the target, and can edit them there.
+   */
+  suggested_validation_commands?: string[];
+  suggested_setup_commands?: string[];
+  checks: ReadinessCheck[];
+  /** Narrowly: a run would execute and be scored. Not a governance verdict. */
+  ready: boolean;
+  blocking: string[];
+};
+
+/** One recorded metric. `provenance` is the field that must reach the eye. */
+export type ScoreRecord = {
+  run_id: string;
+  name: string;
+  version: string;
+  category: string;
+  provenance: "fact" | "observation" | "judgement" | string;
+  source: string;
+  value_num: number | null;
+  value_bool: boolean | null;
+  value_text: string | null;
+  reason: string;
+};
+
+export type TargetRecord = {
+  target_id: string;
+  name: string;
+  description: string;
+  repository_url: string;
+  default_ref: string;
+  status: "active" | "archived";
+  setup_commands: string[];
+  validation_commands: string[];
+  language: string;
+  team: string;
+  tags: string[];
+};
+
+/** A case mined from a target's history — a proposal, nothing persisted. */
+export type CaseCandidate = {
+  commit: string;
+  subject: string;
+  authored_at: string;
+  source_files: string[];
+  test_files: string[];
+  suggested_case_id: string;
+  suggested_prompt: string;
+};
+
+export type CaseCandidates = {
+  target_id: string;
+  ref: string;
+  scanned: number;
+  candidates: CaseCandidate[];
+};
+
+export type TargetCreatePayload = {
+  target_id: string;
+  name: string;
+  repository_url: string;
+  description?: string;
+  default_ref?: string;
+  setup_commands?: string[];
+  validation_commands?: string[];
+  language?: string;
+  team?: string;
+  tags?: string[];
+};
+
+/** What `main` resolves to right now — shown before a run is created. */
+export type TargetResolveResult = {
+  target_id: string;
+  ref: string;
+  commit: string;
+};
+
 export type RunConfigPayload = {
   case_id: string;
   prompt_variant: string;
@@ -287,6 +734,9 @@ export type RunConfigPayload = {
   dry_run: boolean;
   skills_disabled?: string[];
   skills_extra?: string[];
+  target_repo_id?: string;
+  target_ref?: string;
+  harness_source?: HarnessSource;
 };
 
 export type RunCreatePayload = {
@@ -308,6 +758,10 @@ export type RunBatchPayload = {
   harnesses: string[];
   executor_models: (string | null)[];
   planner_models: (string | null)[];
+  /** The Mode B axis: one case family, N repositories. `[""]` = no target. */
+  target_repo_ids?: string[];
+  target_ref?: string;
+  harness_sources?: HarnessSource[];
   repetitions: number;
   score_mode: string;
   max_steps: number;

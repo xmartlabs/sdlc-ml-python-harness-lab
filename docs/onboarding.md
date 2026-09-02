@@ -4,7 +4,7 @@ Step-by-step setup for a developer cloning the lab on a **new machine**. At the 
 you will have the web app running, one benchmark run executed, and the improvement
 loop within reach.
 
-Already set up? Jump to [Operating the lab](#7-what-next--operating-the-lab).
+Already set up? Jump to [Operating the lab](#8-what-next--operating-the-lab).
 
 ---
 
@@ -138,7 +138,7 @@ CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Restart the stack after editing `.env` (`make stop-docker && make app-up`) — the
+Restart the stack after editing `.env` (`make app-down && make app-up`) — the
 token flows into the runner container from there. No gateway involvement for the
 runs themselves. Design details: [harness-adapters.md](harness-adapters.md).
 
@@ -197,8 +197,24 @@ This builds the per-run runner image and starts four services:
 | Celery worker + Redis | internal |
 | Runner | one container **per run**, created on demand |
 
-Stop everything with `make stop-docker`. (For a server that stays on, use
-`make app-up-prod` instead — one origin on `:8080`; see below.)
+Stop everything with `make app-down`. Containers are removed; the database, run
+artifacts and staged skills under `data/` survive, so `make app-up` brings the
+same lab back. (For a server that stays on, use `make app-up-prod` instead — one
+origin on `:8080`; see below.)
+
+> **Stop the stack before any host-side command that rewrites the database.**
+> `make app-reset-db` and restoring a backup both replace
+> `data/app/harness_lab.db` from your host, while the `api` and `worker`
+> containers hold that file open across a bind mount. Doing it live splits their
+> view of the database and every run you create afterwards sits `pending`
+> forever — with no error anywhere. `app-reset-db` now refuses while the stack
+> is up; the safe sequence is:
+>
+> ```bash
+> make app-down && make app-reset-db && make app-up
+> ```
+>
+> See [known-limitations.md](known-limitations.md#the-database-cannot-be-rewritten-from-the-host-while-the-stack-runs).
 
 > **Reaching the UI from another machine.** The API is published on `127.0.0.1`
 > by default. Authentication is only enforced once an admin password exists, so
@@ -312,7 +328,32 @@ If all of that worked, your machine is fully onboarded.
 | Every step logs `stream error` (gateway model) | The self-hosted server behind that model (LM Studio / Ollama / NIM host) is off or unreachable from the gateway — start it and re-run. Run creation preflights this and rejects with a clear error when the backend is provably down (skip with `HARNESS_LAB_DISABLE_GATEWAY_PROBE=1`) |
 | No run attribution in Langfuse | `LITELLM_MASTER_KEY` matches your gateway's master key |
 
-## 6. Optional — develop the lab itself
+## 6. Trajectory scores (DeepEval) — on by default in Docker
+
+Three scores — `task_completion`, `step_efficiency` and `tool_correctness` — are
+computed by [DeepEval](https://github.com/confident-ai/deepeval) as part of the
+**default scoring profile**: every scored run gets them when the pieces are in
+place, and each metric skips with a stated reason (never a zero) when they are
+not.
+
+What "in place" means:
+
+- **The package.** The Docker images (`make app-up`) ship it. For host mode or
+  local development: `uv sync --extra deepeval` (note a plain `uv sync` removes
+  it again).
+- **A judge**, for the two `GEval` rubrics. Zero-config when your AI gateway is
+  set up: the judge defaults to the auditor's default model through
+  `GATEWAY_BASE_URL`/`GATEWAY_TOKEN` — the same endpoint and credentials the
+  audit already uses. Override with `DEEPEVAL_MODEL` (or `AUDITOR_MODEL`) in
+  `.env`.
+- `tool_correctness` is deterministic and needs no judge — but it only scores
+  cases that declare `files_expected` or `validation_commands`, because an
+  expectation nobody wrote down is not something to grade against.
+
+**Cost lever:** the two judged metrics are two small LLM calls per scored run.
+`DEEPEVAL_MODEL=off` in `.env` turns them off; the deterministic scores stay.
+
+## 7. Optional — develop the lab itself
 
 ```bash
 make install       # pin Python, create .venv, sync deps (uv)
@@ -324,7 +365,7 @@ cd frontend && npm install && npx tsc --noEmit   # frontend typecheck
 A Dev Container config is included (VS Code → "Reopen in Container") for a
 zero-setup Linux environment.
 
-## 7. What next — operating the lab
+## 8. What next — operating the lab
 
 Once set up, your day-to-day is the **improvement cycle**: run → audit → propose →
 file an issue → improve the template → re-measure.

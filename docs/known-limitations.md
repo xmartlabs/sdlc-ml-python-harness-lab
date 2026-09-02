@@ -34,12 +34,14 @@ multiplications and a `422`. But `repetitions` itself accepts any positive integ
 so the rejection message can quote an implausible number. Harmless; noted so the
 absence of a field-level bound is not read as an oversight.
 
-### `suite.yaml` is not wired to the batch endpoint
+### `suite.yaml` produces experiments, not batches
 
-`benchmarks/harness-regression-v1/suite.yaml` already models cases × repetitions
-with declarative gates, and is reachable only from the lifecycle CLI. It should
-become a *producer* of batches rather than a second execution path. Deferred, not
-rejected — see ADR-0023.
+`benchmarks/harness-regression-v1/suite.yaml` models cases × repetitions with
+declarative gates. It is now a *producer* of experiments rather than a second
+execution path ([ADR-0037](adr/0037-regression-suite-produces-experiments.md)) — it
+was never wired to the batch endpoint, and no longer needs to be: an experiment is
+the unit above a batch ([ADR-0033](adr/0033-experiment-above-run.md)). The lifecycle
+CLI's own suite path still exists alongside the API route.
 
 ## Run failure reporting
 
@@ -102,6 +104,114 @@ This is partly environmental: `fastapi.testclient` requires `httpx`, which the
 current lockfile does not provide, so `TestClient` raises on import. Adding it is
 the prerequisite for closing this gap.
 
+## Lab v2 (experiments, scores, findings)
+
+The [v2 roadmap](roadmap-lab-v2.md) is implemented. These are the parts that landed
+deliberately short, so the gap is discovered here rather than in use.
+
+### DeepEval covers three metrics, and only three
+
+`task_completion`, `step_efficiency` and `tool_correctness` are wired: a run's
+recorded trajectory is mapped onto DeepEval's test-case shape and the results are
+persisted with their evaluator, its adapter version, and the rubric or judge model
+used. Two of the three are `GEval` rubrics rather than DeepEval's own metrics —
+DeepEval's task-completion metric reads a *live* trace and the lab evaluates archived
+runs, and step efficiency has no DeepEval metric at all. Both are declared
+`judgement` in the registry, which is what they are. Plan quality and plan adherence
+are **not** wired, deliberately — the lab owns the
+evaluation model and DeepEval is an adapter to it, so each metric is added only when
+the lab can say what it means.
+
+A run whose trajectory carries too little signal returns **no score**, never a zero:
+"not measured" and "scored badly" are different claims, and an aggregate must never
+confuse them.
+
+The metrics ride in the **default scoring profile** (the graceful skips are what
+make that safe), the Docker images ship the dependency, and the judge resolves
+zero-config through the lab's own gateway — `DEEPEVAL_MODEL` overrides it and
+`DEEPEVAL_MODEL=off` is the cost lever. Host-mode development still needs
+`uv sync --extra deepeval`, and a plain `uv sync` removes it again — that
+remains the price of keeping it an optional extra.
+
+### Runs from before scoring existed have no scores
+
+Every terminal run is now scored automatically, and re-validating rescores. Runs that
+finished before that landed carry none until someone opens them and presses **Score
+this run**; they are absent from the corpus aggregate and from any experiment summary
+until then. The Dashboard's "worth attention" panel counts them.
+
+### The regression suite runs through experiments, with one caveat
+
+`POST /api/experiments/from-suite` turns a suite into an ordinary
+`harness_evaluation` experiment — the suite supplies the cases and their per-case
+repetitions, the caller supplies the two arms, and everything after that is the
+existing design validation and case matrix
+([ADR-0037](adr/0037-regression-suite-produces-experiments.md)). There is no second
+runner.
+
+What remains: the lifecycle CLI's own suite path still exists alongside it, and a
+suite invocation that varies a field the suite controls is now *refused* rather than
+silently accepted.
+
+### Findings are authored by hand, on purpose
+
+The corpus is mined for **suggestions** — regressions, cases that have never passed,
+harness items the auditor keeps judging unused — and they appear in a review queue
+labelled `suggested`. None of them becomes a finding without a person accepting it
+and their name being recorded against it. A rejection is written down too, so the
+same pattern is not re-raised next week.
+
+Nothing here auto-promotes: a generated claim with nobody accountable for it is the
+opposite of what a finding is for.
+
+### A harness from a third repository is still unsupported
+
+`native` (the target's own) and `injected` (the lab's, projected in) cover the harness
+comparison. `target repo A + harness repo B + plugin repo C` remains out of scope —
+see [ADR-0031](adr/0031-harness-source-is-a-run-condition.md).
+
+## Local stack operations
+
+### The database cannot be rewritten from the host while the stack runs
+
+`data/app/harness_lab.db` is SQLite on a bind mount, opened concurrently by the
+`api` and `worker` containers. SQLite coordinates concurrent readers through a
+WAL and a `-shm` shared-memory index, and that index is not coherent across the
+container/host boundary on macOS (virtiofs) — each side can believe it is the
+only connection.
+
+So a host-side command that rewrites the file — `make app-reset-db`, or
+restoring a backup over it — while the containers are up leaves them reading
+**different files**. The API keeps serving and writing to the file it already
+had open; the worker reads the new one. Nothing errors:
+
+- the UI accepts a new experiment and shows its runs as `pending`;
+- Celery delivers `execute_run` and the worker logs `succeeded in 0.004s`,
+  because `execute_run` looks the run up, gets `None`, and returns;
+- the runs sit `pending` indefinitely, and the API's rows exist only in an
+  unlinked inode that is lost the moment the container restarts.
+
+`make app-reset-db` now refuses while `api` or `worker` are running. The safe
+sequence is `make app-down && make app-reset-db && make app-up`. `FORCE=1`
+bypasses the check and is only ever correct when the stack is genuinely down.
+
+The same hazard applies to any host process that opens the database while the
+stack is up, including an ad-hoc `sqlite3` session: closing it can unlink the
+`-wal`/`-shm` the containers are still using. Read the database through
+`docker compose exec api` instead, or stop the stack first.
+
+Not fixed at the root. The structural fix is to move the database off the bind
+mount onto a named volume (so WAL and `-shm` live on the VM's own filesystem),
+or to stop sharing it between processes at all and have the worker reach the
+API over HTTP. Both are larger than the guard, and the guard removes the silent
+failure mode.
+
+### `make stop-docker` does not stop the dev stack
+
+It stops a single container named `ml-python-base-server`, inherited from the
+template, which this compose stack never creates. It is a no-op here and is
+kept only for the template's own Docker target. Use `make app-down`.
+
 ## Packaging
 
 ### `pyproject.toml` metadata is minimal
@@ -126,8 +236,25 @@ the lab runs from**. Selecting a harness in the UI picks which CLI is invoked, n
 which governance surface is loaded. Testing a different harness means cloning it
 and running the lab inside it.
 
+Partly lifted for runs against an external target
+([ADR-0031](adr/0031-harness-source-is-a-run-condition.md)): `harness_source` picks
+between the lab's harness projected into the target (`injected`) and the target's own
+conventions (`native`), which is enough for a harness A/B on someone else's
+repository. What remains true is the general statement: a harness sourced from a
+*third* repository is still not supported.
+
+The audit half of that gap is closed. Each run is now judged against the governance
+surface it actually had — the target's own for a `native` arm, the injected harness
+for an `injected` one — and the surface's source, file list and fingerprint are
+persisted with the audit
+([ADR-0036](adr/0036-audit-judges-a-run-against-its-own-governance.md)). Audits
+recorded before that carry no surface and say so rather than being backfilled.
+
 This is the deliberate narrowing described in
 [the readiness plan](plans/2026-08-open-source-readiness-and-batch-runs.md), and it
-is the prerequisite for most of the "out of scope" items there. It is stated in the
+is the prerequisite for most of the "out of scope" items there. The *target* side of
+that coupling — running a case against an arbitrary external repository — is
+planned in [the v2 roadmap](roadmap-lab-v2.md#phase-1--targetrepository); the
+harness side stays out of scope there too. It is stated in the
 README as well, because it is the limitation most likely to surprise someone who
 expected a harness-agnostic platform.
