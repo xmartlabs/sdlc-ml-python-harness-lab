@@ -6,6 +6,8 @@ import type {
   ImprovementsDoc,
   CaseCreatePayload,
   CaseCandidates,
+  CaseDraftRequest,
+  CaseDraftResponse,
   ConditionRecord,
   CaseRecord,
   ContextProbeResult,
@@ -436,7 +438,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ instance_id: instanceId })
     }),
+  generateCaseDraft: (payload: CaseDraftRequest) =>
+    request<CaseDraftResponse>("/api/cases/generate-draft", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
   seedTetris: () => request<CaseRecord>("/api/cases/seed/tetris", { method: "POST" }),
+
   listRuns: () => request<RunRecord[]>("/api/runs"),
   getLeaderboard: () => request<LeaderboardRunRow[]>("/api/leaderboard"),
   getLeaderboardReference: () =>

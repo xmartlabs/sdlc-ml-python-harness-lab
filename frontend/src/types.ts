@@ -41,6 +41,20 @@ export type CaseCreatePayload = {
   max_steps: number;
 };
 
+export interface CaseDraftRequest {
+  description: string;
+  model?: string;
+  selected_skills: string[];
+}
+
+export interface CaseDraftResponse {
+  subject: string;
+  instruction: string;
+  validation_commands: string[];
+  max_steps: number;
+}
+
+
 export type RunRecord = {
   run_id: string;
   state: RunState;
