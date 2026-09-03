@@ -49,3 +49,31 @@ def test_generate_case_draft_missing_gateway():
         with pytest.raises(ValueError, match="Gateway not configured"):
             generate_case_draft(CaseDraftRequest(description="valid desc"))
 
+
+def test_api_generate_case_draft_route():
+    from harness_lab_app.api import create_app
+
+    app = create_app()
+    found = False
+    for route in app.router.routes:
+        if getattr(route, "path", None) == "/api/cases/generate-draft":
+            found = True
+            endpoint = route.endpoint
+            break
+    assert found, "Route /api/cases/generate-draft not found"
+
+    with patch("harness_lab_app.api.generate_case_draft") as mock_gen:
+        mock_gen.return_value = CaseDraftResponse(
+            subject="Test subject",
+            instruction="Do task",
+            validation_commands=["test -f {workspace}/out.txt"],
+            max_steps=5,
+        )
+        res = endpoint(
+            req=CaseDraftRequest(description="Test case description", model="gpt-5.4-nano")
+        )
+        assert res.subject == "Test subject"
+        assert res.max_steps == 5
+
+
+
