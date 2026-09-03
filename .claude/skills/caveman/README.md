@@ -1,1 +1,0 @@
-../../../data/skills_staging/caveman/README.md

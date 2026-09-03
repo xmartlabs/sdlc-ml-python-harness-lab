@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { api, ApiError } from "../api";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { XmartlabsLogo } from "../components/XmartlabsLogo";
 
 type LoginProps = {
   onAuthenticated: () => void;
@@ -36,7 +37,10 @@ export function Login({ onAuthenticated }: LoginProps) {
   return (
     <main className="login-shell">
       <form className="panel login-panel" onSubmit={submit}>
-        <div className="panel-head">
+        <div className="login-logo-wrap">
+          <XmartlabsLogo height={32} width={160} />
+        </div>
+        <div className="panel-head login-panel-head">
           <h2>Agentic Harness Lab</h2>
         </div>
         <p className="muted">Sign in to manage runs, models and skills.</p>

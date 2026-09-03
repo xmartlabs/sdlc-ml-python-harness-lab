@@ -73,7 +73,7 @@ Read the governed skills below directly from `.github/skills/` (internal) and `.
 - `using-git-worktrees` — Use when starting feature work that needs isolation from current workspace or before executing implementation plans - ensures an isolated workspace exists via native tools or git worktree fallback
 - `writing-clearly-and-concisely` — Apply Strunk's timeless writing rules to ANY prose humans will read—documentation, commit messages, error messages, explanations, reports, or UI text. Makes your writing clearer, stronger, and more professional.
 - `writing-plans` — Use when you have a spec or requirements for a multi-step task, before touching code
-- `caveman` — 
+- `xmartlabs-branding` — Xmartlabs brand guidelines for creating artifacts, presentations, one-pagers, pitch decks, and any market-facing materials. Use this skill whenever creating a visual artifact, document, or HTML/React output for Xmartlabs or any of its offerings (e.g. AI Intake offering, client case studies, proposals).
 
 Refresh this layout with `make sync-skills` (or `make check-sync` to verify it is current).
 <!-- END GENERATED SKILLS -->
