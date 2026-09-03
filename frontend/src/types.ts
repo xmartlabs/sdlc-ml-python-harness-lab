@@ -408,7 +408,16 @@ export type OverviewReport = {
   };
 };
 
-export type ExperimentMode = "harness_evaluation" | "cross_repo" | "discovery";
+export type ExperimentMode =
+  | "harness_evaluation"
+  | "cross_repo"
+  | "discovery"
+  /**
+   * Does the tool I built work reliably across harnesses and models? (ADR-0040)
+   * The harness is a setting here, not the subject — so this mode has no
+   * ablated arm and reports a pass rate per arm, never a delta.
+   */
+  | "subject_validation";
 export type ConditionRole = "control" | "treatment";
 
 export type ExperimentRecord = {
@@ -416,6 +425,8 @@ export type ExperimentRecord = {
   name: string;
   question: string;
   mode: ExperimentMode;
+  /** What is under test when it is not the harness. Empty under every other mode. */
+  subject: string;
   status: "draft" | "running" | "complete" | "abandoned";
   case_ids: string[];
   prompt_variants: string[];
@@ -491,8 +502,16 @@ export type CaseMatrixRow = {
 export type VerdictHighlight = {
   label: string;
   metric: string;
-  control: number | null;
-  treatment: number | null;
+  /** A control/treatment pair — present for a mode that compares two arms. */
+  control?: number | null;
+  treatment?: number | null;
+  /**
+   * One arm on its own — present under `subject_validation`, where the label is
+   * the arm and there is nothing to compare it against.
+   */
+  successes?: number;
+  scored_runs?: number;
+  rate?: number | null;
 };
 
 /**
@@ -516,10 +535,19 @@ export type VerdictBlock = {
   caveats: string[];
 };
 
+/** One cell of the per-arm, per-case grid: a count, never a verdict. */
+export type CaseOutcomeCell = {
+  runs: number;
+  scored_runs: number;
+  successes: number;
+};
+
 export type ExperimentSummary = {
   experiment_id: string;
   question: string;
   mode: ExperimentMode;
+  /** The named subject under `subject_validation`; empty elsewhere. */
+  subject?: string;
   repetitions: number;
   case_repetitions?: Record<string, number>;
   suite_id?: string | null;
@@ -532,6 +560,13 @@ export type ExperimentSummary = {
     success: { control: number | null; treatment: number | null; points: number | null };
     case_matrix: CaseMatrixRow[];
   }[];
+  /**
+   * Per-arm, per-case counts: {arm label: {case_id: {runs, scored_runs,
+   * successes}}}. Raw grid with the repetitions kept — not a comparison:
+   * `comparisons[].case_matrix` pairs a control against a treatment, which a
+   * mode without a control never has.
+   */
+  case_outcomes?: Record<string, Record<string, CaseOutcomeCell>>;
 };
 
 export type FindingRecord = {

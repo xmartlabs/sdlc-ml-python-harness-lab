@@ -22,6 +22,7 @@ import {
 } from "../harnesses";
 import type {
   AggregateRecord,
+  CaseOutcomeCell,
   ConditionSummary,
   DeltaRecord,
   ExperimentRecord,
@@ -36,7 +37,8 @@ import type {
 const MODE_LABEL: Record<string, string> = {
   harness_evaluation: "Harness evaluation",
   cross_repo: "Cross-repo",
-  discovery: "Discovery"
+  discovery: "Discovery",
+  subject_validation: "Subject validation"
 };
 
 /** What each mode does and does not license — shown, not assumed known. */
@@ -46,7 +48,9 @@ const MODE_CAVEAT: Record<string, string> = {
   cross_repo:
     "Harness and model held fixed; the repository varies. Read per repository: scores from different codebases are not equivalent conditions and must never be pooled.",
   discovery:
-    "No control. Exploratory evidence, not experimental evidence — this mode describes, it does not demonstrate."
+    "No control. Exploratory evidence, not experimental evidence — this mode describes, it does not demonstrate.",
+  subject_validation:
+    "No control, nothing ablated. Reports how reliably the declared subject passed under each harness/model arm — one rate per arm, never pooled, and nothing about the harness."
 };
 
 function formatNumber(value: number | null | undefined, digits = 3): string {
@@ -124,8 +128,8 @@ const MOVEMENT_CLASS: Record<string, string> = {
  * lab does not run hypothesis tests and must not sound as though it does.
  */
 /** A rate reads as a percentage, a cost as money, everything else as a number. */
-function formatHighlight(metric: string, value: number | null): string {
-  if (value === null) {
+function formatHighlight(metric: string, value: number | null | undefined): string {
+  if (value === null || value === undefined) {
     return "—";
   }
   if (metric.endsWith("_rate") || metric.endsWith("_ratio")) {
@@ -135,6 +139,61 @@ function formatHighlight(metric: string, value: number | null): string {
     return `$${value.toFixed(2)}`;
   }
   return formatNumber(value);
+}
+
+/**
+ * The per-arm, per-case grid for a mode with no control: counts per cell, with
+ * the repetitions kept. There is no movement column because there is nothing
+ * to move relative to.
+ */
+function CaseOutcomeGrid({
+  outcomes
+}: {
+  outcomes: Record<string, Record<string, CaseOutcomeCell>>;
+}) {
+  const labels = Object.keys(outcomes);
+  const caseIds = [
+    ...new Set(labels.flatMap((label) => Object.keys(outcomes[label] ?? {})))
+  ];
+  if (caseIds.length === 0) {
+    return null;
+  }
+  return (
+    <div className="card">
+      <h3>Per case, per arm</h3>
+      <p className="muted small">
+        Passed of scored, for every cell. Each arm is read down its own column —
+        the columns are not combined.
+      </p>
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>Case</th>
+            {labels.map((label) => (
+              <th key={label}>{label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {caseIds.map((caseId) => (
+            <tr key={caseId}>
+              <td className="mono small">{caseId}</td>
+              {labels.map((label) => {
+                const cell = outcomes[label]?.[caseId];
+                return (
+                  <td key={label}>
+                    {!cell || cell.scored_runs === 0
+                      ? "—"
+                      : `${cell.successes} of ${cell.scored_runs}`}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
@@ -167,11 +226,28 @@ function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
       {verdict.highlights.length > 0 ? (
         <div className="verdict-highlights">
           {verdict.highlights.map((highlight) => (
-            <div className="verdict-highlight" key={highlight.metric}>
+            <div
+              className="verdict-highlight"
+              key={`${highlight.label}:${highlight.metric}`}
+            >
               <span>{highlight.label}</span>
               <strong>
-                {formatHighlight(highlight.metric, highlight.control)} →{" "}
-                {formatHighlight(highlight.metric, highlight.treatment)}
+                {highlight.scored_runs === undefined ? (
+                  <>
+                    {formatHighlight(highlight.metric, highlight.control)} →{" "}
+                    {formatHighlight(highlight.metric, highlight.treatment)}
+                  </>
+                ) : (
+                  /* One arm on its own: a rate with nothing to compare it
+                     against, so it is shown with the counts behind it rather
+                     than as an arrow between two numbers. */
+                  <>
+                    {formatHighlight(highlight.metric, highlight.rate)}{" "}
+                    <span className="muted">
+                      ({highlight.successes} of {highlight.scored_runs})
+                    </span>
+                  </>
+                )}
               </strong>
             </div>
           ))}
@@ -752,6 +828,11 @@ function ExperimentDetail({
           {summary.repetitions === 1 ? "" : "s"} per arm
         </p>
         <p className="muted small">{MODE_CAVEAT[summary.mode]}</p>
+        {summary.subject ? (
+          <p className="muted">
+            Subject under test: <strong>{summary.subject}</strong>
+          </p>
+        ) : null}
         {summary.conditions.flatMap((condition) => condition.warnings).length > 0 && (
           <ul className="warning-list">
             {[
@@ -771,6 +852,10 @@ function ExperimentDetail({
       </div>
 
       <LaunchPanel experimentId={summary.experiment_id} onLaunched={onLaunched} />
+
+      {summary.mode === "subject_validation" && summary.case_outcomes ? (
+        <CaseOutcomeGrid outcomes={summary.case_outcomes} />
+      ) : null}
 
       {summary.comparisons.map((comparison) => (
         <div className="card" key={`${comparison.control}-${comparison.treatment}`}>

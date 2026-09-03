@@ -68,6 +68,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0037 — Make the regression suite produce experiments, not run them](0037-regression-suite-produces-experiments.md)
 - [0038 — Every run leaves with a score, and the arms it is compared against must be commensurable](0038-every-run-leaves-with-a-score.md)
 - [0039 — Step traces carry per-call detail parsed from run artifacts](0039-step-traces-carry-per-call-detail.md)
+- [0040 — Validating a tool is its own mode, not a harness evaluation](0040-subject-validation-mode.md)
 
 ## Why ADRs exist
 

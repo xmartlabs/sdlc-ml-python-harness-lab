@@ -261,6 +261,25 @@ label {
   margin: 0;
 }
 
+/* Right-hand side of a page header: one action, or the reason there is none. */
+.page-header-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+  text-align: right;
+}
+
+.page-header-action p {
+  margin: 0;
+}
+
+/* One declared arm of a subject validation, stacked rather than side by side:
+   each carries a harness, a model picker and its own label. */
+.arm-list > li {
+  display: block;
+}
+
 .lede,
 .muted,
 .empty-state p {

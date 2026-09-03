@@ -179,6 +179,16 @@ def _apply_sqlite_compat_migrations() -> None:
                     "NOT NULL DEFAULT ''"
                 )
             )
+        # What is under test when it is not the harness (ADR-0040). Backfills
+        # empty, which is accurate: every experiment that predates the mode was
+        # interrogating the harness, and had no separate subject to name.
+        if experiment_columns and "subject" not in experiment_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE experiment ADD COLUMN subject VARCHAR "
+                    "NOT NULL DEFAULT ''"
+                )
+            )
 
         finding_columns = {
             row[1]

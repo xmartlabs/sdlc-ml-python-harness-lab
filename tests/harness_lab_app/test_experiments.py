@@ -178,6 +178,65 @@ def test_discovery_has_no_design_to_invalidate():
     )
 
 
+def test_subject_validation_needs_no_control():
+    """Every arm is a peer. There is nothing for the others to be measured against."""
+    assert (
+        validate_design(
+            ExperimentMode.subject_validation,
+            [
+                _condition("claude", harness="claude"),
+                _condition("opencode", harness="opencode"),
+            ],
+        )
+        == []
+    )
+
+
+def test_subject_validation_accepts_a_single_arm():
+    """ "Does it work under my setup?" is a legitimate question with one answer."""
+    assert (
+        validate_design(
+            ExperimentMode.subject_validation, [_condition("claude", harness="claude")]
+        )
+        == []
+    )
+
+
+def test_subject_validation_may_not_vary_the_repository():
+    with pytest.raises(ExperimentDesignError, match="holds the repository fixed"):
+        validate_design(
+            ExperimentMode.subject_validation,
+            [
+                _condition("here", target_repo_id="a"),
+                _condition("there", target_repo_id="b"),
+            ],
+        )
+
+
+def test_subject_validation_may_not_ablate():
+    """Ablation is the other mode's question; allowing it here smuggles it in."""
+    with pytest.raises(ExperimentDesignError, match="does not ablate"):
+        validate_design(
+            ExperimentMode.subject_validation,
+            [
+                _condition("full", skills_disabled=[]),
+                _condition("stripped", skills_disabled=["planning"]),
+            ],
+        )
+
+
+def test_subject_validation_warns_when_harness_and_model_both_vary():
+    """The cross product is the point — but each cell is its own population."""
+    warnings = validate_design(
+        ExperimentMode.subject_validation,
+        [
+            _condition("a", harness="claude", executor_model="x"),
+            _condition("b", harness="opencode", executor_model="y"),
+        ],
+    )
+    assert any("one <harness>/<model> arm at a time" in w for w in warnings)
+
+
 @pytest.mark.parametrize(
     ("reps", "expected"),
     [(1, "exploratory only"), (3, "exploratory comparison"), (5, None), (10, None)],
@@ -422,6 +481,101 @@ def test_the_summary_reports_per_case_repetitions_from_a_suite(lab):
     assert summary["case_repetitions"] == {"add-endpoint": 1}
     # The weakest case governs the wording, not the headline number.
     assert summary["verdict"]["strength"] == "exploratory"
+
+
+# --------------------------------------------------------------------------
+# Subject validation — the mode that tests a tool, not the harness (ADR-0040)
+# --------------------------------------------------------------------------
+
+
+def _subject_payload(**over) -> ExperimentCreate:
+    base = {
+        "experiment_id": "does-notion-work",
+        "question": "Does the Notion skill save the page reliably?",
+        "mode": ExperimentMode.subject_validation,
+        "subject": "notion-export skill",
+        "case_ids": ["save-to-txt"],
+        "prompt_variants": ["default"],
+        "repetitions": 3,
+        "conditions": [
+            ExperimentConditionCreate(label="claude", overrides={"harness": "claude"}),
+            ExperimentConditionCreate(
+                label="opencode", overrides={"harness": "opencode"}
+            ),
+        ],
+    }
+    base.update(over)
+    return ExperimentCreate(**base)
+
+
+@pytest.fixture
+def validated_case(lab):
+    """A case that declares what success is — the precondition of this mode."""
+    CaseService(lab.session).create_case(
+        CaseCreate(
+            case_id="save-to-txt",
+            name="Save the page to a txt",
+            type=CaseType.repo_task,
+            prompt_variants={"default": "Read the page and save it to notes.txt"},
+            validation_commands=["test -s {workspace}/notes.txt"],
+        )
+    )
+    return lab
+
+
+def test_subject_validation_needs_a_named_subject(validated_case):
+    with pytest.raises(ExperimentError, match="needs a subject"):
+        validated_case.create_experiment(_subject_payload(subject="  "))
+
+
+def test_subject_validation_refuses_a_case_that_never_says_what_success_is(lab):
+    """The gate that keeps this mode from running blind.
+
+    Without an executable command the runs still execute, produce no verdict,
+    and the pass rate this mode exists to report is simply absent — with no
+    error anywhere to explain why. Refusing at creation is the whole point.
+    """
+    CaseService(lab.session).create_case(
+        CaseCreate(
+            case_id="vibes-only",
+            name="Vibes",
+            type=CaseType.repo_task,
+            prompt_variants={"default": "Do the thing"},
+            # Prose, not a command: `build_validation_spec` drops it silently.
+            validation_commands=["the file should look right"],
+        )
+    )
+    with pytest.raises(ExperimentError, match="executable validation command"):
+        lab.create_experiment(_subject_payload(case_ids=["vibes-only"]))
+
+
+def test_subject_validation_creates_without_a_control(validated_case):
+    experiment, warnings = validated_case.create_experiment(_subject_payload())
+
+    assert experiment.subject == "notion-export skill"
+    assert [c.role for c in validated_case.conditions("does-notion-work")] == [
+        ConditionRole.treatment,
+        ConditionRole.treatment,
+    ]
+    assert any("exploratory comparison" in w for w in warnings)
+
+
+def test_subject_validation_summary_reports_per_arm_and_never_pools(validated_case):
+    validated_case.create_experiment(_subject_payload())
+
+    summary = validated_case.summarize("does-notion-work")
+
+    assert summary["subject"] == "notion-export skill"
+    # No control means no delta, whatever roles the rows carry.
+    assert summary["comparisons"] == []
+    assert summary["verdict"]["causal"] is False
+    assert [c["label"] for c in summary["conditions"]] == ["claude", "opencode"]
+    assert any(
+        "says nothing about the harness" in c for c in summary["verdict"]["caveats"]
+    )
+    assert any("not pooled" in c for c in summary["verdict"]["caveats"])
+    # The grid is counts per cell, so repetitions survive; nothing has run here.
+    assert summary["case_outcomes"] == {"claude": {}, "opencode": {}}
 
 
 def test_launch_preflights_every_arm_not_just_the_baseline(session):

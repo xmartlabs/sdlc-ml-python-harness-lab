@@ -61,11 +61,19 @@ class ExperimentMode(StrEnum):
 
     The mode is not decoration: it decides which comparisons are valid, and the
     lab refuses a design that contradicts the mode it declares.
+
+    ``subject_validation`` (ADR-0040) is the odd one and deliberately so. The
+    other three interrogate the harness; this one holds the harness as *setting*
+    and asks whether some other thing — a tool, an MCP server, an internal API,
+    and the skill that drives it — does its job reliably across harnesses and
+    models. Mechanically it is the same runs. Epistemically it has no ablated
+    arm, so it can report a pass rate per arm and nothing about the harness.
     """
 
     harness_evaluation = "harness_evaluation"
     cross_repo = "cross_repo"
     discovery = "discovery"
+    subject_validation = "subject_validation"
 
 
 class ExperimentStatus(StrEnum):
@@ -269,6 +277,12 @@ class Experiment(SQLModel, table=True):
     name: str
     question: str
     mode: ExperimentMode
+    # What is under test, when the answer is not "the harness" (ADR-0040).
+    # Required for `subject_validation`, empty everywhere else. Declared rather
+    # than recovered from the conditions on purpose: the sentence this mode
+    # licenses names the subject, and a name reconstructed from overrides is the
+    # reconstruction ADR-0033 exists to refuse.
+    subject: str = ""
     status: ExperimentStatus = ExperimentStatus.draft
     case_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     prompt_variants: list[str] = Field(default_factory=list, sa_column=Column(JSON))

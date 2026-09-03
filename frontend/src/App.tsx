@@ -20,6 +20,7 @@ import { NewEvaluation } from "./pages/NewEvaluation";
 import { Runs } from "./pages/Runs";
 import { Settings } from "./pages/Settings";
 import { Skills } from "./pages/Skills";
+import { SubjectValidation } from "./pages/SubjectValidation";
 import { applyTheme, getStoredTheme } from "./theme";
 import type { ThemeMode } from "./theme";
 import type {
@@ -296,6 +297,7 @@ export default function App() {
         <Route element={<Home />} path="/" />
         <Route element={<NewEvaluation />} path="/evaluate/new" />
         <Route element={<Audit />} path="/evaluate/audit" />
+        <Route element={<SubjectValidation />} path="/evaluate/subject" />
         <Route element={<Experiments />} path="/evaluate/experiments" />
         <Route element={<Findings />} path="/evidence/findings" />
         <Route element={<Repositories />} path="/evidence/repositories" />

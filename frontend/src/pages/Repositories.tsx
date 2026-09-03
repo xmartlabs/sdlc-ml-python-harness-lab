@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
@@ -103,6 +104,10 @@ export function Repositories() {
     void load(showArchived);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showArchived]);
+
+  // Archived repositories are still listed when the box is ticked, but a mode
+  // that varies the repository can only vary the ones that still run.
+  const activeTargets = targets.filter((target) => target.status !== "archived");
 
   const handleSubmit = async () => {
     setIsSaving(true);
@@ -232,6 +237,24 @@ export function Repositories() {
             repository at the run, so the same case can be evaluated across several
             of them.
           </p>
+        </div>
+        {/*
+          Cross-repo lives here rather than on the home page: it is the one mode
+          that cannot be started without the thing this page holds. Offered on
+          the front page it was a door that did not open; offered here it appears
+          exactly when the second repository does.
+        */}
+        <div className="page-header-action">
+          {activeTargets.length >= 2 ? (
+            <Link className="primary" to="/evaluate/new?mode=cross_repo">
+              Test the harness across these repositories
+            </Link>
+          ) : (
+            <p className="muted">
+              Cross-repo evaluation needs at least two active repositories to vary —{" "}
+              {activeTargets.length === 0 ? "none" : "one"} registered so far.
+            </p>
+          )}
         </div>
       </header>
 

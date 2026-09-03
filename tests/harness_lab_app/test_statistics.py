@@ -406,3 +406,86 @@ def test_headline_metrics_lead_with_success_then_cost():
 )
 def test_evidence_strength_uses_prudent_words_only(reps, word):
     assert evidence_strength(reps) == word
+
+
+# --------------------------------------------------------------------------
+# Subject validation — a pass rate per arm, and no claim beyond it (ADR-0040)
+# --------------------------------------------------------------------------
+
+
+def test_subject_validation_reports_each_arm_and_never_pools_them():
+    """The sentence this mode licenses names the subject and one arm at a time.
+
+    Pooling "8 of 9 under claude" with "4 of 9 under opencode" into "12 of 18"
+    would describe a configuration nobody runs — the exact composite the lab
+    refuses everywhere else.
+    """
+    arms = [
+        _arm("claude/sonnet", [1.0] * 9, [True] * 8 + [False]),
+        _arm("opencode/sonnet", [1.0] * 9, [True] * 4 + [False] * 5),
+    ]
+    answer = verdict(
+        mode="subject_validation",
+        cases=3,
+        repetitions=3,
+        subject="notion-export skill",
+        arms=arms,
+    )
+
+    assert answer["causal"] is False
+    assert answer["headline"] == "Reliability per arm"
+    assert "notion-export skill passed 8 of 9 under claude/sonnet" in answer["claim"]
+    assert "4 of 9 under opencode/sonnet" in answer["claim"]
+    # One highlight per arm, each carrying its own numerator and denominator.
+    assert [h["label"] for h in answer["highlights"]] == [
+        "claude/sonnet",
+        "opencode/sonnet",
+    ]
+    assert [(h["successes"], h["scored_runs"]) for h in answer["highlights"]] == [
+        (8, 9),
+        (4, 9),
+    ]
+    assert any("says nothing about the harness" in c for c in answer["caveats"])
+
+
+def test_subject_validation_names_every_arm_even_on_a_tie():
+    """Two arms at the same rate are two arms, not one arm twice."""
+    answer = verdict(
+        mode="subject_validation",
+        cases=1,
+        repetitions=3,
+        subject="the exporter",
+        arms=[
+            _arm("claude", [1.0] * 3, [True] * 3),
+            _arm("opencode", [1.0] * 3, [True] * 3),
+        ],
+    )
+
+    assert "3 of 3 under claude and 3 of 3 under opencode" in answer["claim"]
+
+
+def test_subject_validation_with_one_arm_states_it_plainly():
+    answer = verdict(
+        mode="subject_validation",
+        cases=1,
+        repetitions=5,
+        subject="the MCP server",
+        arms=[_arm("claude", [1.0] * 5, [True] * 5)],
+    )
+
+    assert "the MCP server passed 5 of 5 scored run(s) under claude" in answer["claim"]
+
+
+def test_subject_validation_keeps_its_disclaimers_before_anything_is_scored():
+    """The design caveats hold at zero runs — when they matter most."""
+    answer = verdict(
+        mode="subject_validation",
+        cases=1,
+        repetitions=3,
+        subject="the MCP server",
+        arms=[_arm("claude", [], [])],
+    )
+
+    assert answer["headline"] == "Not enough evidence yet"
+    assert answer["causal"] is False
+    assert any("not pooled" in c for c in answer["caveats"])

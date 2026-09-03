@@ -132,6 +132,9 @@ class ExperimentCreate(BaseModel):
     name: str = ""
     question: str
     mode: ExperimentMode
+    # What is under test, for a mode where that is not the harness (ADR-0040).
+    # Required for `subject_validation`, ignored otherwise.
+    subject: str = ""
     case_ids: list[str] = Field(default_factory=list)
     prompt_variants: list[str] = Field(default_factory=list)
     conditions: list[ExperimentConditionCreate] = Field(default_factory=list)

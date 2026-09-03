@@ -3,6 +3,47 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## The mode is what licenses the conclusion, so a missing mode gets borrowed — 2026-09-03
+
+The most common thing an outside team brings to this lab is not a harness change.
+It is a thing they built — an agent behind a local API, an MCP server, a service
+wrapper — plus a skill that drives it, and the question "does it work reliably?".
+The lab ran that fine: cases, arms, repetitions, `task_validation_pass`, the
+sandbox. Every number was already computable. What was missing was a **name** for
+the question, and the three declared modes of
+[ADR-0028](../docs/adr/0028-evaluation-modes.md) all asked about the harness.
+
+A missing mode does not stay missing. It gets borrowed from the nearest one, and
+`harness_evaluation` was the nearest one. That produces a correctly computed pass
+rate attached to a claim the design cannot support — "the tool passed 8 of 9" read
+as evidence about the harness, when no arm was ablated and there is no baseline to
+subtract. It is the exact defect ADR-0028 was written to prevent, reintroduced
+through the label instead of through the display.
+
+The second finding sits underneath it: the hard gate of the new mode is not
+statistical, it is **a case with at least one executable validation command**. It
+has to be a block, not a warning, because the failure is silent and downstream.
+`build_validation_spec` skips non-executable entries without complaining, so a case
+whose validation is prose yields zero commands → `parse_objective` returns
+`passed=None` → `task_validation_pass` is never emitted → `scored_runs == 0` → the
+pass rate is `None`. The experiment runs in full, costs real money, and answers
+nothing without saying so.
+
+**Why it matters:** the modes are the product. Adding a fourth is not feature
+creep — it is the only way to stop a fourth question from being answered with a
+third question's authority. And the honesty of the number depends on a gate placed
+*before* money is spent, not on a caveat rendered after.
+
+**How to apply:** when a new use of the lab appears, ask what sentence it licenses
+before asking what it computes. If no declared mode's sentence fits, the mode is
+missing — do not run it under the closest label. When adding a gate, trace the
+failure path to where it surfaces: if the bad input degrades into an empty result
+rather than an error, it must be refused at creation. Known limit accepted here:
+the gate can force a validation command to exist and to be executable; it cannot
+force it to be able to fail (a smoke check that the game starts cannot fail once
+the game starts). That judgement stays with whoever writes the case. See
+[ADR-0040](../docs/adr/0040-subject-validation-mode.md).
+
 ## Resetting the database under a live stack splits it in two — 2026-09-02
 
 `make app-reset-db` runs `scripts/reset_db.py` from the **host** while the `api`

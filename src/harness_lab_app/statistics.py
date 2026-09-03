@@ -371,6 +371,8 @@ def verdict(
     success: dict[str, Any] | None = None,
     case_matrix: list[dict[str, Any]] | None = None,
     stop_reasons: Mapping[str, Sequence[str]] | None = None,
+    subject: str = "",
+    arms: Sequence[ConditionSummary] | None = None,
 ) -> dict[str, Any]:
     """The answer an experiment page leads with, in words the design supports.
 
@@ -378,8 +380,9 @@ def verdict(
     rather than a template in the frontend:
 
     - **A mode that cannot make a causal claim never gets one.** Discovery
-      describes; cross-repo reports per repository. Only ``harness_evaluation``
-      is allowed a directional verdict, and ``causal`` says so on every payload.
+      describes; cross-repo reports per repository; subject validation reports
+      a pass rate per arm. Only ``harness_evaluation`` is allowed a directional
+      verdict, and ``causal`` says so on every payload.
     - **No invented significance.** The vocabulary is exploratory / useful
       comparison / stronger evidence / within observed variance / improvement
       observed — the wording moves with the repetition count, and no p-value is
@@ -429,6 +432,74 @@ def verdict(
             "caveats": [
                 "Scores from different repositories are not pooled. Read this "
                 "experiment one repository at a time."
+            ],
+        }
+
+    if mode == "subject_validation":
+        # One line per arm, and never a line across them. Pooling "8 of 9 under
+        # claude" with "4 of 9 under opencode" into "12 of 18" would describe a
+        # setup nobody runs, and is the exact composite this lab refuses
+        # everywhere else (ADR-0040).
+        named = subject or "This subject"
+        scored = [arm for arm in (arms or []) if arm.scored_runs]
+        # Facts about the design, not about the data, so they hold with zero
+        # runs scored — which is exactly when a reader is most likely to
+        # mislabel what this page is.
+        structural = [
+            "No arm was ablated, so this experiment says nothing about the "
+            "harness — only how reliably this subject completed its cases "
+            "under each harness and model.",
+            "Rates from different arms are not pooled. A combined number "
+            "would describe a configuration nobody runs.",
+        ]
+        highlights = [
+            {
+                "label": arm.label,
+                "metric": "success_rate",
+                "successes": arm.successes,
+                "scored_runs": arm.scored_runs,
+                "rate": arm.success_rate,
+            }
+            for arm in scored
+        ]
+        if not scored:
+            return {
+                **base,
+                "headline": "Not enough evidence yet",
+                "claim": (
+                    f"No run of {named} has produced a validation verdict yet, so "
+                    "there is no pass rate to report."
+                ),
+                "caveats": structural,
+            }
+        if len(scored) == 1:
+            only = scored[0]
+            claim = (
+                f"{named} passed {only.successes} of {only.scored_runs} scored "
+                f"run(s) under {only.label}, over {evidence}."
+            )
+        else:
+            # Every arm, best first. Naming only the extremes reads as a
+            # comparison, and on a tie the two extremes are the same arm.
+            ordered = sorted(
+                scored, key=lambda arm: (arm.success_rate or 0.0), reverse=True
+            )
+            parts = [
+                f"{arm.successes} of {arm.scored_runs} under {arm.label}"
+                for arm in ordered
+            ]
+            listed = ", ".join(parts[:-1]) + f" and {parts[-1]}"
+            claim = (
+                f"{named} passed {listed}, over {evidence}. Read each arm on its own."
+            )
+        return {
+            **base,
+            "headline": "Reliability per arm",
+            "claim": claim,
+            "highlights": highlights,
+            "caveats": [
+                *structural,
+                f"{repetitions} repetition(s) per arm — {strength}.",
             ],
         }
 

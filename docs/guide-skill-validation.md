@@ -4,6 +4,16 @@ How to answer "does this skill actually help?" with runs instead of opinions.
 Two lanes share the same machinery (ADR-0011): **ablate** an existing governed
 skill, or **trial** a brand-new staged skill.
 
+> **Two different questions live here, and they are not interchangeable.**
+> Lanes A and B ask about the **harness**: does adding or removing this skill
+> change the outcome? That needs an ablated arm, and it is what
+> `harness_evaluation` licenses. Lane C asks about a **subject you built** — an
+> agent behind an API, an MCP server, a service wrapper — driven by a skill:
+> does it work reliably across harnesses and models? Nothing is ablated there,
+> so it says nothing about the harness, and it runs under its own mode,
+> `subject_validation` ([ADR-0040](adr/0040-subject-validation-mode.md)). Pick
+> the lane by the question, not by the machinery — the machinery is the same.
+
 ## The core idea
 
 A run's `condition_hash` identifies its experimental arm (harness + model +
@@ -73,6 +83,52 @@ reasonable start) and compare distributions, not single runs.
 > import guards (https-only, no private addresses, no archive traversal, size
 > caps) protect *this host* while fetching; they say nothing about what the
 > skill instructs. Read the preview. See ADR-0017.
+
+## Lane C — validate a subject you built
+
+Use this when the skill is not the thing under test: it is the driver for
+something you wrote — an agent served behind a local API, an MCP server, an
+internal service, a wrapper. The question is whether that subject does its job
+reliably when a real agent drives it, under more than one harness or model.
+
+Start from **Home → Validate your tool** (`/evaluate/subject`). It is a wizard
+with gates, and each gate exists because skipping it produces a number that
+cannot be read.
+
+1. **Bring your tool.** Stage the skill that drives your subject — import,
+   upload, or write it in the browser (same staging as Lane B). If the skill is
+   already promoted into the governed harness, say so explicitly instead of
+   staging a copy.
+2. **Declare what success is.** Name the subject, write the instruction the
+   agent gets, and declare **at least one executable validation command**. This
+   gate is a hard block, in the client and again in the API: a case whose only
+   "validation" is prose produces zero commands, so `task_validation_pass` is
+   never emitted and the pass rate comes back empty *after* the runs have been
+   paid for.
+   **The gate can force a command to exist; it cannot force it to be able to
+   fail.** A smoke check that the game starts cannot fail once the game starts.
+   Write the command that would go red if the subject were broken.
+3. **Choose the arms.** One arm per harness/model cell, labelled
+   `<harness>/<model>`. There is no control role — every arm is a peer. Set the
+   repetitions and read the backend's repetition warning **before** launching,
+   not after.
+4. **Watch it, and go in.** As runs finish, open the sandbox (terminal or
+   desktop) on any run and look at what actually happened. Record your judgement
+   with the manual score if you want it on the record — it is the same
+   `POST /api/runs/{id}/score` used everywhere else.
+5. **Read the result.** A pass rate **per arm** — `N of M` — plus the per-case
+   grid and the cost per arm. There is no pooled number and no control/treatment
+   delta, because averaging the arms would describe a configuration nobody runs.
+
+The only sentence this lane licenses is **"this subject passed N of M under
+`<harness>`/`<model>`"**. It is not evidence about the harness: no arm was
+ablated, so there is nothing to attribute a difference to. If that is the
+question you actually have, use Lane A or B.
+
+Two designs are refused outright: varying the **target repository** (the
+sentence stops being readable — passed 8 of 9 in *which* repo? that is
+`cross_repo`) and disabling skills (**ablation is Lane A's question**, and
+allowing it here builds a harness evaluation wearing the wrong label).
 
 ## What to look at when judging a skill
 

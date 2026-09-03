@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { ArtifactsPanel } from "../components/ArtifactsPanel";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -186,7 +186,14 @@ export function RunDetail({
   const [proposalNotice, setProposalNotice] = useState<string | null>(null);
   const [proposalCopied, setProposalCopied] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [tab, setTab] = useState<"detail" | "terminal" | "desktop">("detail");
+  // The sandbox is reachable by link, not only by clicking through: a wizard
+  // that tells you to go and look inside the workspace has to be able to point
+  // at it. Read once, at mount — after that the tab is yours.
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const [tab, setTab] = useState<"detail" | "terminal" | "desktop">(
+    requestedTab === "terminal" || requestedTab === "desktop" ? requestedTab : "detail"
+  );
   const consoleRef = useRef<HTMLDivElement | null>(null);
   // A claude run with events-based attribution has real tool counts; only fall
   // back to the summary-only explainer when there is nothing to show.
@@ -794,14 +801,19 @@ export function RunDetail({
           <strong>{run.failure_reason ?? "None"}</strong>
         </div>
       </div>
-      {run.state === "awaiting_manual_score" ? (
+      {run.state === "awaiting_manual_score" || run.state === "completed" ? (
         <div className="panel subtle">
           <div className="panel-head">
             <h3>Manual score</h3>
             <span className="muted">
               {isSwebench
                 ? "SWE-bench runs auto-score from validation — use Re-validate below instead"
-                : "Required to complete run"}
+                : run.state === "completed"
+                  ? // A run with objective validation completes on its own, so this
+                    // form would never appear for it — and the human judgement of
+                    // *how* it did is exactly what the objective verdict cannot say.
+                    "Already scored objectively — add your judgement of the work"
+                  : "Required to complete run"}
             </span>
           </div>
           <div className="form-grid score-form-grid">

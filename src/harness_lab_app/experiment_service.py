@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 from sqlmodel import Session, select
 
 from harness_lab_app.models import (
+    Case,
     ConditionRole,
     Experiment,
     ExperimentCondition,
@@ -121,6 +122,34 @@ def validate_design(
 
     varying = _varying_fields(conditions)
     controls = [c for c in conditions if c.get("role") == ConditionRole.control]
+
+    if mode == ExperimentMode.subject_validation:
+        # Returns before the exactly-one-control check below, because this mode
+        # has no control by construction (ADR-0040): every arm is a peer, and
+        # none is the baseline the others are measured against. What it reports
+        # is a pass rate *per arm* — never a delta, never a pooled number.
+        if "target_repo_id" in varying:
+            raise ExperimentDesignError(
+                "Mode 'subject_validation' holds the repository fixed. Varying it "
+                "makes the result unreadable — 'the subject passed 8 of 9' says "
+                "nothing without naming where. Use mode 'cross_repo' to vary the "
+                "repository, or give every condition the same target."
+            )
+        if "skills_disabled" in varying:
+            raise ExperimentDesignError(
+                "Mode 'subject_validation' does not ablate anything: the subject "
+                "under test is the tool and the skill driving it, not the harness. "
+                "Conditions that vary 'skills_disabled' are a harness evaluation "
+                "wearing this mode's label — use mode 'harness_evaluation'."
+            )
+        subject_axes = varying & {"harness", "executor_model"}
+        if len(subject_axes) > 1:
+            warnings.append(
+                "Both the harness and the executor model vary. That cross product "
+                "is the point of this mode, but each cell is its own population: "
+                "read one <harness>/<model> arm at a time, never averaged."
+            )
+        return warnings
 
     if len(conditions) > 1 and len(controls) != 1:
         raise ExperimentDesignError(
@@ -274,6 +303,12 @@ class ExperimentService:
         verdicts: dict[str, dict[str, bool | None]] = {
             condition.label: {} for condition in conditions
         }
+        # Per arm, per case: how many runs were scored and how many passed.
+        # `verdicts` keeps one outcome per cell for the paired case matrix;
+        # with repetitions that is the last run's, which is not a rate.
+        case_counts: dict[str, dict[str, dict[str, int]]] = {
+            condition.label: {} for condition in conditions
+        }
         # Why the arms stopped, per arm. Two arms that terminate under
         # different rules are not two measurements of the same quantity, and
         # the verdict has to say so before anyone reads the effort delta.
@@ -293,7 +328,15 @@ class ExperimentService:
                 )
             per_condition[label].append(values)
             case_id = run_service.get_run_config(run.run_config_id).case_id
-            verdicts[label][case_id] = values.get("task_validation_pass")
+            passed = values.get("task_validation_pass")
+            verdicts[label][case_id] = passed
+            cell = case_counts[label].setdefault(
+                case_id, {"runs": 0, "scored_runs": 0, "successes": 0}
+            )
+            cell["runs"] += 1
+            if passed is not None:
+                cell["scored_runs"] += 1
+                cell["successes"] += int(bool(passed))
             validation = self.session.exec(
                 select(Validation).where(Validation.run_id == run.run_id)
             ).first()
@@ -315,11 +358,15 @@ class ExperimentService:
 
         control = next((c for c in conditions if c.role == ConditionRole.control), None)
         comparisons: list[dict[str, Any]] = []
-        # Discovery has no control arm by construction (ADR-0028) and must not
-        # acquire one here: a mode that cannot support a causal claim never
-        # renders a control-versus-treatment delta, whatever roles the rows
-        # happen to carry.
-        if experiment.mode == ExperimentMode.discovery:
+        # Discovery has no control arm by construction (ADR-0028), and neither
+        # does subject validation (ADR-0040). Neither must acquire one here: a
+        # mode that cannot support a causal claim never renders a
+        # control-versus-treatment delta, whatever roles the rows happen to
+        # carry.
+        if experiment.mode in (
+            ExperimentMode.discovery,
+            ExperimentMode.subject_validation,
+        ):
             control = None
         if control is not None:
             for condition in conditions:
@@ -358,12 +405,17 @@ class ExperimentService:
             success=first["success"] if first else None,
             case_matrix=first["case_matrix"] if first else None,
             stop_reasons=stop_reasons,
+            # Subject validation reads every arm rather than a control/treatment
+            # pair, so it needs the arms themselves — there is no `first`.
+            subject=experiment.subject,
+            arms=list(summaries.values()),
         )
 
         return {
             "experiment_id": experiment_id,
             "question": experiment.question,
             "mode": experiment.mode,
+            "subject": experiment.subject,
             "repetitions": experiment.repetitions,
             "case_repetitions": dict(experiment.case_repetitions),
             "suite_id": experiment.suite_id,
@@ -386,6 +438,13 @@ class ExperimentService:
                 for summary in summaries.values()
             ],
             "comparisons": comparisons,
+            # Per-arm, per-case counts: {label: {case_id: {runs, scored_runs,
+            # successes}}}. Not a comparison — `comparisons[].case_matrix` pairs
+            # a control against a treatment, which a mode without a control
+            # never has. This is the raw grid, with the repetitions kept, which
+            # is the only matrix subject validation can show and is useful under
+            # every mode.
+            "case_outcomes": case_counts,
         }
 
     def abandon_experiment(self, experiment_id: str) -> Experiment:
@@ -442,6 +501,53 @@ class ExperimentService:
         self.session.commit()
         return {"experiment_id": experiment_id, "deleted_runs": len(runs)}
 
+    def _check_subject_validation(self, data: ExperimentCreate) -> None:
+        """Refuse a subject validation that cannot produce its own number.
+
+        Two requirements, both hard, both for the same reason: this mode's whole
+        output is "the subject passed N of M under <arm>", and neither half of
+        that sentence can be reconstructed later.
+
+        The validation command is a rejection rather than a warning because of
+        how the pipeline fails without one. ``build_validation_spec`` silently
+        drops entries that do not look executable, so a case whose only
+        "validation" is prose yields zero commands, ``parse_objective`` returns
+        ``passed=None``, ``task_validation_pass`` is never emitted, and the arm
+        ends with ``scored_runs == 0`` and no pass rate at all. The experiment
+        runs in full, costs real money, and answers nothing — without ever
+        saying so. Better to refuse at creation, while it is still one edit away.
+        """
+        from harness_lab_app.validation import _looks_executable
+
+        if not data.subject.strip():
+            raise ExperimentError(
+                "Mode 'subject_validation' needs a subject: the tool, service or "
+                "skill under test. The result this mode produces is a sentence "
+                "about that subject, and it cannot be recovered from the arms."
+            )
+        if not data.case_ids:
+            raise ExperimentError(
+                "Mode 'subject_validation' needs at least one case. The case is "
+                "the definition of what 'works' means for this subject."
+            )
+        unvalidated: list[str] = []
+        for case_id in data.case_ids:
+            case = self.session.exec(
+                select(Case).where(Case.case_id == case_id)
+            ).first()
+            if case is None:
+                raise ExperimentError(f"Unknown case: {case_id}")
+            if not any(_looks_executable(raw) for raw in case.validation_commands):
+                unvalidated.append(case_id)
+        if unvalidated:
+            raise ExperimentError(
+                "Mode 'subject_validation' measures a pass rate, so every case "
+                "must declare at least one executable validation command. These "
+                f"do not: {', '.join(unvalidated)}. Without one the runs execute, "
+                "produce no verdict, and the experiment reports nothing — add a "
+                "command that exits non-zero when the subject fails."
+            )
+
     def create_experiment(self, data: ExperimentCreate) -> tuple[Experiment, list[str]]:
         experiment_id = data.experiment_id.strip()
         if not _SLUG.match(experiment_id):
@@ -454,6 +560,8 @@ class ExperimentService:
                 "An experiment needs a question. Without one it is a batch, and "
                 "calling it an experiment lends it authority it has not earned."
             )
+        if data.mode == ExperimentMode.subject_validation:
+            self._check_subject_validation(data)
         existing = self.session.exec(
             select(Experiment).where(Experiment.experiment_id == experiment_id)
         ).first()
@@ -491,6 +599,7 @@ class ExperimentService:
             name=data.name or experiment_id,
             question=data.question.strip(),
             mode=data.mode,
+            subject=data.subject.strip(),
             case_ids=list(data.case_ids),
             prompt_variants=list(data.prompt_variants),
             repetitions=data.repetitions,

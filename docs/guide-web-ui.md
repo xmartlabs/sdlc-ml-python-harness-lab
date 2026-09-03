@@ -29,23 +29,24 @@ state a question → declare the arms → launch N repetitions
    → record a finding → test it with another experiment
 ```
 
-## Three ways to use the lab
+## Four ways to use the lab
 
 The screens below document *what each one does*. This section is the other half:
 **which job you are doing**, and which screens that job touches.
 
-The lab distinguishes three modes ([ADR-0028](adr/0028-evaluation-modes.md)), and
-they are not labels — each one fixes a different set of factors and therefore
-licenses a different kind of conclusion. An experiment declares its mode, and the
-lab **refuses a design the mode cannot answer**.
+The lab distinguishes four modes ([ADR-0028](adr/0028-evaluation-modes.md),
+[ADR-0040](adr/0040-subject-validation-mode.md)), and they are not labels — each
+one fixes a different set of factors and therefore licenses a different kind of
+conclusion. An experiment declares its mode, and the lab **refuses a design the
+mode cannot answer**.
 
-| | **Mode A** — Harness evaluation | **Mode B** — Cross-repo | **Mode C** — Discovery |
-|---|---|---|---|
-| **Question** | Does this change to the harness cause a better outcome? | Does the harness work outside the repo it was designed in? | How does this team work with agents? |
-| **Held fixed** | repo, case, model | harness, model, task family | — |
-| **Varied** | the harness | the repository | — |
-| **Licenses** | a causal claim, with repetitions | where it holds and where it degrades | nothing — **exploratory evidence, not experimental evidence** |
-| **Never** | pool across repos | pool across repos | present as a measurement |
+| | **Mode A** — Harness evaluation | **Mode B** — Cross-repo | **Mode C** — Discovery | **Mode D** — Subject validation |
+|---|---|---|---|---|
+| **Question** | Does this change to the harness cause a better outcome? | Does the harness work outside the repo it was designed in? | How does this team work with agents? | Does the tool I built work reliably when an agent drives it? |
+| **Held fixed** | repo, case, model | harness, model, task family | — | the subject, the case, the repo |
+| **Varied** | the harness | the repository | — | harness and model |
+| **Licenses** | a causal claim, with repetitions | where it holds and where it degrades | nothing — **exploratory evidence, not experimental evidence** | a pass rate **per arm** |
+| **Never** | pool across repos | pool across repos | present as a measurement | pool across arms, or say anything about the harness |
 
 ### Mode A — did our change help?
 
@@ -75,6 +76,21 @@ whatever difference you measured could not be attributed to the harness.
 
 No control, no causal claim. You are looking, not proving. Outputs are **findings**,
 and everything they produce is labelled exploratory until an experiment tests it.
+
+### Mode D — does my tool work?
+
+The question most people arrive with, and the only one that needs nothing set up
+first. You built something — an agent behind an API, an MCP server, a service
+wrapper — and a skill that drives it. **Home → Validate your tool** walks it through
+five gated steps: stage the skill, declare the subject and **an executable
+validation command** (a hard block, because without one the runs execute and
+report nothing), pick harness/model arms with no control role, watch the runs and
+open a sandbox, and read **one pass rate per arm**.
+
+Nothing is ablated, so the result says nothing about the harness. The sentence it
+licenses is "this subject passed N of M under `<harness>`/`<model>`", and it never
+adds the arms together. Lane C of
+[guide-skill-validation.md](guide-skill-validation.md) is the walkthrough.
 
 ## Auditing someone else's repository — worked example
 
@@ -156,15 +172,25 @@ redirect.
 
 ### Home — what do you want to learn?
 
-The landing page asks one question and offers three answers, one per mode
-([ADR-0028](adr/0028-evaluation-modes.md)). Each card states the question it can
-answer, what it holds fixed, what it varies, and what it is **not** allowed to
-claim — so the choice of mode happens before any data is collected rather than
-after.
+The landing page asks one question and offers three answers. Each card states the
+question it can answer, what it holds fixed, what it varies, and what it is **not**
+allowed to claim — so the choice of mode happens before any data is collected
+rather than after.
 
+- **Validate your tool** → the five-step subject-validation wizard. First because
+  it is the only door that opens on a fresh instance — no repository needed — and
+  it leaves behind what the other two consume: a staged skill and a case with a
+  real validation command.
 - **Evaluate a harness change** → the wizard at **Evaluate → New evaluation**.
-- **Test across repositories** → the same wizard in cross-repo mode.
 - **Audit a repository** → the six-step guided audit.
+
+Cross-repo evaluation keeps its mode but not its card: it needs two registered
+repositories, so its entry point lives on **Evidence → Repositories** and appears
+exactly when the second repository does.
+
+The **Validated runs passing** figure lower down pools every case, model, harness
+and arm in the window. It is labelled as such because it is a sign of activity, not
+an experiment result — the composite the lab refuses everywhere else.
 
 Below the cards, **What needs attention?** lists only what someone can act on —
 regressed cases, suggested findings waiting for review, findings with nothing
@@ -788,6 +814,11 @@ typo'd branch is reported here rather than as a failed run.
 A target's **validation commands** replace the case's when a run has one — the repo
 knows how it is tested better than a portable case does. Full walkthrough:
 [Target repositories](guide-target-repositories.md).
+
+Once two active repositories are registered the page header offers **Test the
+harness across these repositories**, the entry to a `cross_repo` experiment. It
+lives here rather than on the home page because this is where the thing it needs
+is created; with fewer than two, the header says so instead.
 
 ### Skills
 Two tiers: the **governed catalog** (read-only, shipped with the harness) and
