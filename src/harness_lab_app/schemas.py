@@ -479,3 +479,17 @@ class ValidationRead(BaseModel):
     effort: dict = Field(default_factory=dict)
     subjective: dict = Field(default_factory=dict)
     composite: float | None = None
+
+
+class CaseDraftRequest(BaseModel):
+    description: str
+    model: str | None = None
+    selected_skills: list[str] = Field(default_factory=list)
+
+
+class CaseDraftResponse(BaseModel):
+    subject: str
+    instruction: str
+    validation_commands: list[str] = Field(default_factory=list)
+    max_steps: int = 10
+
