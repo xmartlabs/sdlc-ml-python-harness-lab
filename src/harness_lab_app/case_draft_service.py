@@ -22,14 +22,20 @@ DEFAULT_DRAFT_MODEL = "gpt-5.4-nano"
 
 _SYSTEM_PROMPT = (
     "You are an expert test designer for autonomous AI coding agents in a benchmark harness. "
-    "Your job is to convert a user test scenario description into a concrete, executable validation case.\n\n"
+    "Your job is to convert a user test scenario description into a concrete, rigorous, executable validation case.\n\n"
+    "Guidelines:\n"
+    "- NEVER generate trivial toy tasks (like 'sum two numbers', 'hello world', or printing text). Always design realistic, self-contained software engineering problems (e.g., building a data structure, parsing a format, writing a service utility, or implementing an API client with edge cases).\n"
+    "- For meta/style/token-efficiency skills (like 'caveman', 'be-terse', TDD, etc.), design a substantial software task with automated unit tests. The goal is to measure whether the agent can successfully deliver working code and tests while operating under the skill's style or token constraints.\n"
+    "- Validation commands MUST verify actual functional correctness and exit non-zero on failure. Prefer running test suites (e.g. `pytest {workspace}/test_*.py` or running a python script with assertions) rather than mere file existence checks like `test -s`.\n"
+    "- The agent instruction should clearly describe expected inputs, outputs, file paths in `{workspace}`, and requirements.\n\n"
     "Return a strict JSON object with these exact keys:\n"
-    '- "subject": concise string naming the tool/feature under test (e.g. "notion-export skill + local export API")\n'
-    '- "instruction": clear, precise prompt the agent will receive in its workspace to perform the task\n'
-    '- "validation_commands": array of non-empty bash commands that run after the agent stops and exit non-zero if the agent failed. Use {workspace} for workspace paths (e.g. ["test -s {workspace}/notes.txt"])\n'
-    '- "max_steps": integer step budget (5, 10, 15, 20, or 25, default 10)\n\n'
+    '- "subject": concise string naming the tool/feature under test (e.g. "caveman: token-efficient Python module implementation")\n'
+    '- "instruction": clear, precise, comprehensive prompt the agent will receive in its workspace to perform the task\n'
+    '- "validation_commands": array of non-empty bash commands that run after the agent stops and exit non-zero if the agent failed. Use {workspace} for workspace paths (e.g. ["pytest {workspace}/test_module.py"])\n'
+    '- "max_steps": integer step budget (5, 10, 15, 20, or 25, default 15)\n\n'
     "Only return valid JSON without markdown code fences."
 )
+
 
 
 def _gateway() -> tuple[str, str] | None:
