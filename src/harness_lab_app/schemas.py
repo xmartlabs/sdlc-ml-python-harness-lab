@@ -492,4 +492,3 @@ class CaseDraftResponse(BaseModel):
     instruction: str
     validation_commands: list[str] = Field(default_factory=list)
     max_steps: int = 10
-

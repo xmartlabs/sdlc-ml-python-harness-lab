@@ -31,6 +31,7 @@ from harness_lab_app.auth import (
     verify_password,
 )
 from harness_lab_app.case_derivation import derive_candidates
+from harness_lab_app.case_draft_service import generate_case_draft
 from harness_lab_app.case_service import CaseExistsError, CaseService
 from harness_lab_app.celery_app import (
     enqueue_audit,
@@ -70,7 +71,6 @@ from harness_lab_app.run_service import (
     RunService,
 )
 from harness_lab_app.sandbox_service import VALID_KINDS, SandboxService
-from harness_lab_app.case_draft_service import generate_case_draft
 from harness_lab_app.schemas import (
     AssessmentCreate,
     CaseCreate,
@@ -1531,7 +1531,6 @@ def create_app() -> FastAPI:
             return generate_case_draft(req)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
 
     @app.get("/api/runs")
     def list_runs(batch_id: str = "", session: Session = Depends(get_session)):
