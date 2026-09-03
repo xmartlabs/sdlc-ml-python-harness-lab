@@ -12,10 +12,12 @@ import { IconAlert, IconArrowRight, IconCheck, IconPlus, IconX } from "../compon
 import { HARNESS_NATIVE_MODELS, HARNESS_OPTIONS, HOST_HARNESSES } from "../harnesses";
 import type {
   ExperimentSummary,
+  HarnessSkill,
   ModelOption,
   RunRecord,
   StagedSkillRecord
 } from "../types";
+
 
 const STEPS = [
   { key: "subject", label: "Bring your tool" },
@@ -124,6 +126,10 @@ export function SubjectValidation() {
 
   // Step 1 — the subject.
   const [stagedSkills, setStagedSkills] = useState<StagedSkillRecord[]>([]);
+  const [governedSkills, setGovernedSkills] = useState<HarnessSkill[]>([]);
+  const [filterTab, setFilterTab] = useState<"all" | "staged" | "harness">("all");
+  const [searchSkill, setSearchSkill] = useState("");
+  const [isolateGoverned, setIsolateGoverned] = useState(false);
   const [skillsExtra, setSkillsExtra] = useState<string[]>([]);
   // The escape hatch for a skill that is already governed: it is in every run
   // by definition, so requiring it to be staged would lock out the case the
@@ -139,6 +145,12 @@ export function SubjectValidation() {
   const [commandText, setCommandText] = useState("");
   const [maxSteps, setMaxSteps] = useState(10);
   const [caseId, setCaseId] = useState("");
+
+  // Step 2 — AI Case Assistant.
+  const [aiDescription, setAiDescription] = useState("");
+  const [aiModel, setAiModel] = useState("");
+  const [aiNotice, setAiNotice] = useState("");
+  const [aiError, setAiError] = useState<string | null>(null);
 
   // Step 3 — the arms.
   const [arms, setArms] = useState<Arm[]>([{ harness: "opencode", executorModel: "" }]);
@@ -156,6 +168,36 @@ export function SubjectValidation() {
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [summary, setSummary] = useState<ExperimentSummary | null>(null);
 
+  const allSkills = useMemo(() => {
+    const staged = stagedSkills.map((s) => ({
+      name: s.name,
+      description: s.description || s.status,
+      source: "staged" as const
+    }));
+    const governed = governedSkills.map((s) => ({
+      name: s.name,
+      description: s.description,
+      source: "harness" as const
+    }));
+    return [...staged, ...governed];
+  }, [stagedSkills, governedSkills]);
+
+  const visibleSkills = useMemo(() => {
+    let list = allSkills;
+    if (filterTab === "staged") {
+      list = list.filter((s) => s.source === "staged");
+    } else if (filterTab === "harness") {
+      list = list.filter((s) => s.source === "harness");
+    }
+    const q = searchSkill.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [allSkills, filterTab, searchSkill]);
+
   const commands = useMemo(
     () => commandText.split("\n").map((line) => line.trim()).filter(Boolean),
     [commandText]
@@ -171,6 +213,11 @@ export function SubjectValidation() {
       .listStagedSkills()
       .then(setStagedSkills)
       .catch(() => setError("Unable to load staged skills."));
+    api
+      .listHarnessSkills()
+      .then(setGovernedSkills)
+      .catch(() => {});
+
     api
       .listModels(false)
       .then((catalog) => {
@@ -294,6 +341,35 @@ export function SubjectValidation() {
       setNotice(`Imported '${imported.name}' from ${preview.source_url}.`);
     });
 
+
+  const generateCaseWithAi = () =>
+    run("case-draft", async () => {
+      setAiError(null);
+      setAiNotice("");
+      try {
+        const draft = await api.generateCaseDraft({
+          description: aiDescription,
+          model: aiModel || gatewayDefault || undefined,
+          selected_skills: skillsExtra
+        });
+        if (draft.subject) {
+          setSubject(draft.subject);
+        }
+        if (draft.instruction) {
+          setPrompt(draft.instruction);
+        }
+        if (draft.validation_commands && draft.validation_commands.length > 0) {
+          setCommandText(draft.validation_commands.join("\n"));
+        }
+        if (draft.max_steps) {
+          setMaxSteps(draft.max_steps);
+        }
+        setAiNotice("✨ Caso completado con IA. Puedes revisar y editar los campos abajo.");
+      } catch (err) {
+        setAiError(err instanceof Error ? err.message : "Error al generar el caso con IA");
+      }
+    });
+
   /**
    * Create the case under the first free id derived from the subject — or,
    * when this step is revisited, update the case already created rather than
@@ -321,29 +397,22 @@ export function SubjectValidation() {
         setStep("arms");
         return;
       }
-      const base = slugify(subject);
-      let lastError: unknown = null;
       for (let attempt = 0; attempt < 5; attempt += 1) {
-        const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
+        const suffix = attempt === 0 ? "" : `-${attempt + 1}`;
+        const candidate = `${slugify(subject).slice(0, 48) || "subject"}${suffix}`;
         try {
           const created = await api.createCase(payload(candidate));
           setCaseId(created.case_id);
-          setNotice(
-            `Case '${created.case_id}' created. Its validation command is what turns ` +
-              `"most of the time" into a number.`
-          );
+          setNotice(`Case '${created.case_id}' created.`);
           setStep("arms");
           return;
         } catch (createError) {
           if (!isDuplicateId(createError)) {
             throw createError;
           }
-          lastError = createError;
         }
       }
-      throw lastError instanceof Error
-        ? lastError
-        : new Error("Unable to find a free case id.");
+      throw new Error("Unable to find a free case id for this subject.");
     });
 
   /**
@@ -394,8 +463,18 @@ export function SubjectValidation() {
         : new Error("Unable to find a free experiment id.");
     });
 
+
   const launch = () =>
     run("launch", async () => {
+      const stagedSelected = skillsExtra.filter((name) =>
+        stagedSkills.some((s) => s.name === name)
+      );
+      const unselectedGoverned = isolateGoverned
+        ? governedSkills
+            .map((s) => s.name)
+            .filter((name) => !skillsExtra.includes(name))
+        : [];
+
       const result = await api.launchExperiment(experimentId, {
         case_id: caseId,
         prompt_variant: "default",
@@ -408,7 +487,8 @@ export function SubjectValidation() {
         dry_run: false,
         // The subject travels with every arm: it is what is held constant while
         // the harness and the model vary around it.
-        skills_extra: skillsExtra
+        skills_extra: stagedSelected,
+        skills_disabled: unselectedGoverned
       });
       setNotice(`Queued ${result.count} run(s).`);
       setLaunched(true);
@@ -431,7 +511,7 @@ export function SubjectValidation() {
     };
     if (skillsExtra.length === 0 && !alreadyGoverned) {
       problems.subject.push(
-        "Choose the staged skill that drives your tool — or say it is already " +
+        "Choose at least one skill that drives your tool — or say it is already " +
           "part of the harness."
       );
     }
@@ -536,45 +616,97 @@ export function SubjectValidation() {
             </div>
             <p className="muted">
               The skill is what the agent reads to reach your tool. Staged skills are
-              added to every arm's run, so the subject is the one thing held constant
-              while the harness and the model vary.
+              added via extra skills, while harness skills are governed tools. Select
+              one or multiple skills under test.
             </p>
-            {stagedSkills.length === 0 ? (
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", marginBottom: "var(--space-4)" }}>
+              <div className="tab-bar">
+                <button
+                  className={`tab ${filterTab === "all" ? "tab--active" : ""}`}
+                  onClick={() => setFilterTab("all")}
+                  type="button"
+                >
+                  Todas ({allSkills.length})
+                </button>
+                <button
+                  className={`tab ${filterTab === "staged" ? "tab--active" : ""}`}
+                  onClick={() => setFilterTab("staged")}
+                  type="button"
+                >
+                  Staged ({stagedSkills.length})
+                </button>
+                <button
+                  className={`tab ${filterTab === "harness" ? "tab--active" : ""}`}
+                  onClick={() => setFilterTab("harness")}
+                  type="button"
+                >
+                  Harness ({governedSkills.length})
+                </button>
+              </div>
+
+              <input
+                onChange={(event) => setSearchSkill(event.target.value)}
+                placeholder="Filtrar skills por nombre o descripción…"
+                style={{ width: "100%" }}
+                value={searchSkill}
+              />
+            </div>
+
+            {visibleSkills.length === 0 ? (
               <EmptyState
-                description="Nothing is staged yet. Write one below, import one from a URL, or use the Skills workbench for a file upload."
-                title="No staged skills."
+                description="No matching skills found. Adjust your search or filter tab."
+                title="No skills found."
               />
             ) : (
               <ul className="pick-list">
-                {stagedSkills.map((skill) => (
-                  <li key={skill.name}>
+                {visibleSkills.map((skill) => (
+                  <li key={`${skill.source}-${skill.name}`}>
                     <button
                       className={skillsExtra.includes(skill.name) ? "primary" : "secondary"}
                       onClick={() => toggleSkill(skill.name)}
                       type="button"
                     >
-                      <strong>
+                      <strong style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
                         {skillsExtra.includes(skill.name) ? <IconCheck size={14} /> : null}{" "}
                         {skill.name}
+                        <span className="badge" style={{ fontSize: "0.7rem", textTransform: "uppercase" }}>
+                          {skill.source}
+                        </span>
                       </strong>
-                      <span className="muted">{skill.description || skill.status}</span>
+                      <span className="muted">{skill.description}</span>
                     </button>
                   </li>
                 ))}
               </ul>
             )}
-            <label className="checkbox">
-              <input
-                checked={alreadyGoverned}
-                onChange={(event) => setAlreadyGoverned(event.target.checked)}
-                type="checkbox"
-              />
-              <span>
-                My skill is already part of the governed harness — every run loads it
-                already.
-              </span>
-            </label>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", marginTop: "var(--space-4)" }}>
+              <label className="checkbox">
+                <input
+                  checked={isolateGoverned}
+                  onChange={(event) => setIsolateGoverned(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  Aislar ejecución: deshabilitar en el harness las demás skills no seleccionadas.
+                </span>
+              </label>
+
+              <label className="checkbox">
+                <input
+                  checked={alreadyGoverned}
+                  onChange={(event) => setAlreadyGoverned(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  My skill is already part of the governed harness — every run loads it
+                  already.
+                </span>
+              </label>
+            </div>
           </div>
+
 
           <div className="panel">
             <div className="panel-head">
@@ -648,6 +780,91 @@ export function SubjectValidation() {
           <div className="panel-head">
             <h2>What is being tested, and what counts as done?</h2>
           </div>
+
+          {/* AI Case Assistant Card */}
+          <div
+            style={{
+              background: "var(--card-bg, rgba(255, 255, 255, 0.03))",
+              border: "1px solid var(--accent)",
+              borderRadius: "var(--radius, 8px)",
+              padding: "var(--space-4)",
+              marginBottom: "var(--space-4)"
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "var(--space-2)"
+              }}
+            >
+              <strong style={{ color: "var(--accent)" }}>✨ Generar borrador con IA (Opcional)</strong>
+              {skillsExtra.length > 0 ? (
+                <span className="muted" style={{ fontSize: "0.8rem" }}>
+                  Contexto: {skillsExtra.join(", ")}
+                </span>
+              ) : (
+                <span className="muted" style={{ fontSize: "0.8rem" }}>
+                  Sin skills seleccionadas en Paso 1
+                </span>
+              )}
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+              <label>
+                <span style={{ fontSize: "0.8rem" }}>Describe qué quieres probar en lenguaje natural:</span>
+                <textarea
+                  onChange={(event) => setAiDescription(event.target.value)}
+                  placeholder="Ej: Probar que el agente use notion-export para descargar la página 123 en notes.txt y verificar que exista y no esté vacío."
+                  rows={2}
+                  value={aiDescription}
+                />
+              </label>
+
+              <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-end", flexWrap: "wrap" }}>
+                <label style={{ flex: 1, minWidth: "220px" }}>
+                  <span style={{ fontSize: "0.8rem" }}>Modelo LLM:</span>
+                  <select
+                    onChange={(event) => setAiModel(event.target.value)}
+                    value={aiModel || gatewayDefault}
+                  >
+                    {modelOptions.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label || opt.id} {opt.id === gatewayDefault ? "(Default)" : ""}
+                      </option>
+                    ))}
+                    {!modelOptions.some((opt) => opt.id === gatewayDefault) && gatewayDefault ? (
+                      <option value={gatewayDefault}>{gatewayDefault} (Default)</option>
+                    ) : null}
+                  </select>
+                </label>
+
+                <button
+                  className="primary"
+                  disabled={busy === "case-draft" || !aiDescription.trim()}
+                  onClick={() => void generateCaseWithAi()}
+                  type="button"
+                >
+                  {busy === "case-draft" ? (
+                    <Spinner label="Generando borrador…" />
+                  ) : (
+                    "✨ Generar caso con IA"
+                  )}
+                </button>
+
+              </div>
+
+              {aiNotice ? <p className="callout callout--ok" style={{ margin: 0 }}>{aiNotice}</p> : null}
+              {aiError ? (
+                <div className="callout callout--warning" style={{ margin: 0 }}>
+                  <IconAlert size={16} />
+                  <span>{aiError}</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
           <div className="form-grid">
             <label className="full">
               <span>Subject</span>
