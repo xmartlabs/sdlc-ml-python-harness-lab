@@ -217,7 +217,7 @@ def _apply_sqlite_compat_migrations() -> None:
                 text("PRAGMA table_info('runconfig')")
             ).fetchall()
         }
-        for column in ("skills_disabled", "skills_extra"):
+        for column in ("skills_disabled", "skills_extra", "skills_invoke"):
             if runconfig_columns and column not in runconfig_columns:
                 connection.execute(
                     text(

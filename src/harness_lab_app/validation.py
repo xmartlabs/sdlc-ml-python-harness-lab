@@ -239,6 +239,16 @@ _EXEC_HINTS = {
 }
 
 
+def is_executable_command(command: str) -> bool:
+    """Whether a validation entry would run, or be skipped as a prose note.
+
+    Public face of the heuristic ``build_validation_spec`` applies, so anything
+    that produces validation commands ahead of a run (the AI case assistant,
+    imports) can refuse an entry at the same line the runner would drop it.
+    """
+    return _looks_executable(command)
+
+
 def _looks_executable(command: str) -> bool:
     stripped = command.strip()
     if not stripped:

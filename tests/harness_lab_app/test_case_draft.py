@@ -1,8 +1,15 @@
+import json
 from unittest.mock import patch
 
 import pytest
 
-from harness_lab_app.case_draft_service import generate_case_draft
+from harness_lab_app.case_draft_service import (
+    _SYSTEM_PROMPT,
+    REASON_MULTILINE,
+    REASON_NOT_RUNNABLE,
+    generate_case_draft,
+    screen_commands,
+)
 from harness_lab_app.schemas import CaseDraftRequest, CaseDraftResponse
 
 
@@ -44,6 +51,108 @@ def test_generate_case_draft_markdown_fences():
         res = generate_case_draft(req)
         assert res.subject == "fenced case"
         assert res.max_steps == 5
+
+
+HEREDOC = (
+    "node - <<'NODE'\n"
+    "const assert = require('assert');\n"
+    "const mod = require('{workspace}/snake.js');\n"
+    "assert(typeof mod.createGame === 'function');\n"
+    "NODE"
+)
+
+
+def _draft(commands: list[str], subject: str = "s") -> str:
+    return json.dumps(
+        {
+            "subject": subject,
+            "instruction": "do the task",
+            "validation_commands": commands,
+            "max_steps": 5,
+        }
+    )
+
+
+def test_screen_commands_drops_multiline_and_prose_with_reasons():
+    accepted, dropped = screen_commands(
+        [HEREDOC, "Run the game and check it works", "pytest {workspace}/test_x.py -q"]
+    )
+    assert accepted == ["pytest {workspace}/test_x.py -q"]
+    assert [item.command for item in dropped] == [
+        HEREDOC,
+        "Run the game and check it works",
+    ]
+    assert dropped[0].reason == REASON_MULTILINE
+    assert dropped[1].reason == REASON_NOT_RUNNABLE
+
+
+def test_generate_case_draft_reports_dropped_commands_next_to_kept_ones():
+    with patch(
+        "harness_lab_app.case_draft_service._call_gateway_chat",
+        return_value=_draft([HEREDOC, "node -e \"require('{workspace}/snake.js')\""]),
+    ) as chat:
+        res = generate_case_draft(CaseDraftRequest(description="snake game"))
+    assert res.validation_commands == ["node -e \"require('{workspace}/snake.js')\""]
+    assert [item.command for item in res.dropped_commands] == [HEREDOC]
+    assert res.attempts == 1
+    assert chat.call_count == 1
+
+
+def test_generate_case_draft_retries_once_when_nothing_is_runnable():
+    calls: list[dict] = []
+
+    def fake_chat(payload: dict) -> str:
+        calls.append(payload)
+        if len(calls) == 1:
+            return _draft([HEREDOC], subject="first")
+        return _draft(["pytest {workspace}/test_snake.py -q"], subject="second")
+
+    with patch(
+        "harness_lab_app.case_draft_service._call_gateway_chat", side_effect=fake_chat
+    ):
+        res = generate_case_draft(CaseDraftRequest(description="snake game"))
+
+    assert res.subject == "second"
+    assert res.validation_commands == ["pytest {workspace}/test_snake.py -q"]
+    assert res.dropped_commands == []
+    assert res.attempts == 2
+    # The retry carries the model's own answer and the reasons it was refused.
+    roles = [m["role"] for m in calls[1]["messages"]]
+    assert roles == ["system", "user", "assistant", "user"]
+    assert REASON_MULTILINE in calls[1]["messages"][-1]["content"]
+    assert "ONE line" in calls[1]["messages"][-1]["content"]
+
+
+def test_generate_case_draft_gives_up_after_the_retry_but_says_why():
+    with patch(
+        "harness_lab_app.case_draft_service._call_gateway_chat",
+        return_value=_draft([HEREDOC]),
+    ) as chat:
+        res = generate_case_draft(CaseDraftRequest(description="snake game"))
+    assert res.validation_commands == []
+    assert [item.reason for item in res.dropped_commands] == [REASON_MULTILINE]
+    assert res.attempts == 2
+    assert chat.call_count == 2
+
+
+def test_generate_case_draft_string_commands_are_one_entry_not_split():
+    heredoc_as_string = json.dumps(
+        {"subject": "s", "instruction": "i", "validation_commands": HEREDOC}
+    )
+    with patch(
+        "harness_lab_app.case_draft_service._call_gateway_chat",
+        return_value=heredoc_as_string,
+    ):
+        res = generate_case_draft(CaseDraftRequest(description="snake game"))
+    # Splitting the string on newlines would have let `node - <<'NODE'` through
+    # on its own — a command that exits 0 with an empty stdin.
+    assert res.validation_commands == []
+    assert len(res.dropped_commands) == 1
+
+
+def test_system_prompt_states_the_one_line_rule():
+    assert "exactly ONE line" in _SYSTEM_PROMPT
+    assert "No heredocs" in _SYSTEM_PROMPT
 
 
 def test_generate_case_draft_empty_desc():

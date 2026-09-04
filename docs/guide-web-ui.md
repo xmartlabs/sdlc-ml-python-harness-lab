@@ -269,6 +269,17 @@ identical: same prompt with no governed skills to hide. "Add skills" offers the 
 "Remove skills" the *governed* one, because that is what `skills_extra` and
 `skills_disabled` each accept.
 
+**Enforce skill use** sits under the skill list for both factors. Off, the
+selected skills are only *available* to the arm that has them, and the agent
+opens them only when the case or the skill's own triggers call for it — the
+test of "does it reach for them unasked", the right one for a whole harness of
+skills. On, that arm is also told at the start of every step to invoke them and
+follow them (`skills_invoke`, ADR-0041) — the test of "does it help when asked
+for", the usual one for a single skill. It applies to the whole selection: a
+multi-selection is either all asked for or all left to the agent. Whichever you
+choose, every run records `skill_invoked` and `skill_invocations`, and an arm
+that never opened its skills gets that said at the top of its verdict.
+
 **How it runs** carries the classic run form's own controls — the three-tier
 model picker, the harness, the prompt variant (union of the selected cases'
 variants), the step budget, dry run — so the wizard is the whole journey.

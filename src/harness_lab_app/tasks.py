@@ -70,6 +70,7 @@ def _config_payload(session: Session, run: Run) -> RunConfigCreate:
         continuation_prompt=config.continuation_prompt,
         skills_disabled=list(config.skills_disabled),
         skills_extra=list(config.skills_extra),
+        skills_invoke=list(config.skills_invoke),
         target_repo_id=config.target_repo_id,
         target_ref=config.target_ref,
         harness_source=config.harness_source,

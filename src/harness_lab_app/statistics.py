@@ -361,6 +361,49 @@ def stop_reason_caveat(
     )
 
 
+def skill_usage_caveats(skill_usage: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    """What to say when an arm's skills were not actually opened (ADR-0041).
+
+    ``skill_usage`` maps an arm label to ``{"skills", "runs", "invoked",
+    "requested"}`` — the skills the arm is about, how many of its runs carry a
+    ``skill_invoked`` observation, how many of those opened at least one, and
+    whether the prompt asked for it. An arm with no observation says nothing.
+
+    A with-skills arm at zero is the whole point: its number compared the
+    skill's *availability*, and the reader must learn that before the delta.
+    """
+    caveats: list[str] = []
+    for label, usage in skill_usage.items():
+        skills = list(usage.get("skills") or [])
+        runs = int(usage.get("runs") or 0)
+        invoked = int(usage.get("invoked") or 0)
+        if not skills or runs == 0:
+            continue
+        names = ", ".join(f"'{name}'" for name in skills)
+        if invoked == 0:
+            caveats.append(
+                f"{label}: {names} was never invoked in its {runs} run(s)"
+                + (
+                    " although the prompt asked for it"
+                    if usage.get("requested")
+                    else ""
+                )
+                + " — this arm measured the skill's availability, not its use. "
+                + (
+                    "Check the skill's own instructions before reading the result."
+                    if usage.get("requested")
+                    else "Ask for it in the design ('Enforce skill use'), or make "
+                    "the skill's triggers match the task, before reading the result."
+                )
+            )
+        elif invoked < runs:
+            caveats.append(
+                f"{label}: {names} invoked in {invoked} of {runs} run(s) — the "
+                "arm mixes runs with and without the treatment."
+            )
+    return caveats
+
+
 def verdict(
     *,
     mode: str,
@@ -373,6 +416,7 @@ def verdict(
     stop_reasons: Mapping[str, Sequence[str]] | None = None,
     subject: str = "",
     arms: Sequence[ConditionSummary] | None = None,
+    skill_usage: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The answer an experiment page leads with, in words the design supports.
 
@@ -391,6 +435,7 @@ def verdict(
       points and broke two cases says both, in the headline block.
     """
     strength = evidence_strength(repetitions)
+    usage_caveats = skill_usage_caveats(skill_usage or {})
     # The "\u00d7" is deliberate: this string is rendered verbatim as the
     # evidence line of the experiment page.
     evidence = (
@@ -498,6 +543,7 @@ def verdict(
             "claim": claim,
             "highlights": highlights,
             "caveats": [
+                *usage_caveats,
                 *structural,
                 f"{repetitions} repetition(s) per arm — {strength}.",
             ],
@@ -526,7 +572,9 @@ def verdict(
             highlights.append(found)
 
     movements = base["movements"]
-    caveats: list[str] = []
+    # First, before any delta: a treatment that never happened is not a
+    # treatment, whatever the numbers underneath say.
+    caveats: list[str] = list(usage_caveats)
     confound = (
         stop_reason_caveat(
             control.label,

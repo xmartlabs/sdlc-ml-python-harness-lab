@@ -2849,6 +2849,17 @@ button.ghost {
   font-size: 0.86rem;
 }
 
+/* Commands the assistant wrote but the lab refused: the command in its own
+   voice, the reason in ours. */
+.dropped-list li {
+  margin-bottom: var(--space-1);
+  overflow-wrap: anywhere;
+}
+
+.dropped-list code {
+  color: var(--text);
+}
+
 /* --- selection lists shared by the wizard and the audit ------------------- */
 
 .pick-list {

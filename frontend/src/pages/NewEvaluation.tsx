@@ -185,6 +185,10 @@ export function NewEvaluation() {
   // source needs an external repository and would open the form blocked.
   const [factorKey, setFactorKey] = useState<FactorKey>("skills_extra");
   const [skillNames, setSkillNames] = useState<string[]>([]);
+  // Off answers "does the skill help unasked" (only available, the agent
+  // decides); on answers "does it help when asked for" (the agent is told to
+  // invoke it at the start of every step).
+  const [enforceSkills, setEnforceSkills] = useState(false);
   // The full-harness comparison's prompt pair: the bare and the governed
   // member of whichever prompt family the selected cases are from.
   const [bareVariant, setBareVariant] = useState("");
@@ -338,6 +342,7 @@ export function NewEvaluation() {
   // survive switching between them.
   useEffect(() => {
     setSkillNames([]);
+    setEnforceSkills(false);
   }, [factorKey]);
 
   // Pair the arms with the conventional members of the prompt family:
@@ -487,14 +492,35 @@ export function NewEvaluation() {
     const isAblation = factorKey === "skills_disabled";
     const chosen = [...skillNames].sort();
     const listed = chosen.map((name) => `'${name}'`).join(", ");
+    // The descriptions travel with the experiment and are what a reader sees
+    // next to each arm later, so they say what "baseline" actually is: the
+    // governed harness as it stands (CLAUDE.md plus every governed skill), not
+    // a bare model. A staged skill is *available* to the treatment arm, not
+    // forced — the agent invokes it only when the instruction or the skill's
+    // own triggers call for it.
+    const governedCount = skills.length;
+    const governed = governedCount
+      ? `the governed harness as it is today (CLAUDE.md + ${governedCount} governed skills)`
+      : "the governed harness as it is today";
+    // Enforcing changes which arm gets `skills_invoke`: it is always the arm
+    // that *has* the skill — the treatment when adding, the control when
+    // removing — since an invoked skill must also be available in that run.
+    const enforced = enforceSkills && chosen.length > 0;
+    const asked =
+      ", and the agent is asked at the start of every step to invoke it and follow it.";
     return [
       {
         label: "baseline",
         role: "control" as const,
         description: isAblation
-          ? "With the skills available."
-          : "Without the staged skills.",
-        overrides: isAblation ? { ...base } : { ...base, skills_extra: [] }
+          ? `${governed}, with ${listed || "the selected skills"} still available` +
+            (enforced ? asked : ".")
+          : `${governed}, without ${listed || "the staged skills"}.`,
+        overrides: isAblation
+          ? enforced
+            ? { ...base, skills_invoke: chosen }
+            : { ...base }
+          : { ...base, skills_extra: [] }
       },
       {
         // One treatment arm whatever the count: several skills are a *bundle*,
@@ -502,14 +528,24 @@ export function NewEvaluation() {
         label: isAblation ? "without-skills" : "with-skills",
         role: "treatment" as const,
         description: isAblation
-          ? `With ${listed || "the selected skills"} removed from the harness.`
-          : `With ${listed || "the selected skills"} added to the harness.`,
-        overrides: { ...base, [factorKey]: chosen }
+          ? `The same harness with ${listed || "the selected skills"} removed.`
+          : `The same harness with ${listed || "the selected skills"} added as an ` +
+            "available skill" +
+            (enforced
+              ? asked
+              : ". Available, not forced: the agent invokes it only if " +
+                "the case's instruction or the skill's own triggers call for it."),
+        overrides:
+          !isAblation && enforced
+            ? { ...base, skills_extra: chosen, skills_invoke: chosen }
+            : { ...base, [factorKey]: chosen }
       }
     ];
   }, [
+    enforceSkills,
     bareVariant,
     controlHarness,
+    skills,
     crossRepoIds,
     factorKey,
     harness,
@@ -1026,6 +1062,24 @@ export function NewEvaluation() {
                   ))}
                 </div>
               )}
+              <label className="checkbox">
+                <input
+                  checked={enforceSkills}
+                  disabled={skillNames.length === 0}
+                  onChange={(event) => setEnforceSkills(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  Enforce skill use{" "}
+                  <small className="muted">
+                    Tell the agent, at the start of every step, to invoke the
+                    selected skill(s) and follow them for the whole task. Off =
+                    the skill is only available and the agent decides. On = the
+                    test of &ldquo;does it help when asked for&rdquo;; Off =
+                    &ldquo;does it help unasked&rdquo;.
+                  </small>
+                </span>
+              </label>
               {skillNames.length > 1 ? (
                 <p className="muted small">
                   {skillNames.length} skills selected — the treatment is the{" "}

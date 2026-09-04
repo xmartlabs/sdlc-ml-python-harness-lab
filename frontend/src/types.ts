@@ -47,11 +47,19 @@ export interface CaseDraftRequest {
   selected_skills: string[];
 }
 
+export interface DroppedCommand {
+  command: string;
+  reason: string;
+}
+
 export interface CaseDraftResponse {
   subject: string;
   instruction: string;
   validation_commands: string[];
   max_steps: number;
+  /** Commands the model wrote that the lab would not run, with the reason. */
+  dropped_commands: DroppedCommand[];
+  attempts: number;
 }
 
 
@@ -464,6 +472,9 @@ export type LaunchConfigSummary = {
   prompt_variant: string;
   max_steps: number;
   score_mode: string;
+  skills_disabled?: string[];
+  skills_extra?: string[];
+  skills_invoke?: string[];
 };
 
 export type ConditionRecord = {
@@ -783,6 +794,8 @@ export type RunConfigPayload = {
   dry_run: boolean;
   skills_disabled?: string[];
   skills_extra?: string[];
+  /** Skills the agent is told to invoke at the start of every step; each must also be available. */
+  skills_invoke?: string[];
   target_repo_id?: string;
   target_ref?: string;
   harness_source?: HarnessSource;
@@ -817,6 +830,7 @@ export type RunBatchPayload = {
   dry_run: boolean;
   skills_disabled?: string[];
   skills_extra?: string[];
+  skills_invoke?: string[];
 };
 
 export type RunBatchResult = {

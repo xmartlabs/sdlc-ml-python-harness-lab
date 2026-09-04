@@ -214,6 +214,9 @@ class RunConfig(SQLModel, table=True):
     continuation_prompt: str = ""
     skills_disabled: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     skills_extra: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    # Skills the prompt tells the agent to invoke (ADR-0041). Part of the arm:
+    # "asked to use it" and "free to use it" are different conditions.
+    skills_invoke: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     # External target repository this run works against (ADR-0029). All three
     # are empty for a run with no external target — which is every run created
     # before targets existed, so absence is the historical default, not a gap.

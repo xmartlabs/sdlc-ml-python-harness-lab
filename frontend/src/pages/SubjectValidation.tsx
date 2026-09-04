@@ -19,6 +19,7 @@ import {
 import { HARNESS_NATIVE_MODELS, HARNESS_OPTIONS, HOST_HARNESSES } from "../harnesses";
 import type {
   CaseRecord,
+  DroppedCommand,
   ExperimentSummary,
   HarnessSkill,
   ModelOption,
@@ -144,6 +145,9 @@ export function SubjectValidation() {
   // by definition, so requiring it to be staged would lock out the case the
   // staging area exists to graduate.
   const [alreadyGoverned, setAlreadyGoverned] = useState(false);
+  // On by default: the wizard's question is "does my skill work", and a skill
+  // that is merely available may never be reached for in a short case.
+  const [invokeSelected, setInvokeSelected] = useState(true);
   const [newSkillName, setNewSkillName] = useState("");
   const [newSkillBody, setNewSkillBody] = useState("");
   const [importUrl, setImportUrl] = useState("");
@@ -164,6 +168,7 @@ export function SubjectValidation() {
   const [aiModel, setAiModel] = useState("");
   const [aiNotice, setAiNotice] = useState("");
   const [aiError, setAiError] = useState<string | null>(null);
+  const [aiDropped, setAiDropped] = useState<DroppedCommand[]>([]);
 
   // Step 3 — the arms.
   const [arms, setArms] = useState<Arm[]>([{ harness: "opencode", executorModel: "" }]);
@@ -406,6 +411,7 @@ export function SubjectValidation() {
     run("case-draft", async () => {
       setAiError(null);
       setAiNotice("");
+      setAiDropped([]);
       try {
         const draft = await api.generateCaseDraft({
           description: aiDescription,
@@ -418,13 +424,27 @@ export function SubjectValidation() {
         if (draft.instruction) {
           setPrompt(draft.instruction);
         }
-        if (draft.validation_commands && draft.validation_commands.length > 0) {
-          setCommandText(draft.validation_commands.join("\n"));
-        }
+        // The server already screened the commands: what is left is one shell
+        // command per line, which is the only shape this textarea preserves.
+        setCommandText((draft.validation_commands ?? []).join("\n"));
         if (draft.max_steps) {
           setMaxSteps(draft.max_steps);
         }
-        setAiNotice("Draft generated. Review and edit the fields below before saving.");
+        setAiDropped(draft.dropped_commands ?? []);
+        const kept = draft.validation_commands?.length ?? 0;
+        const retried = draft.attempts > 1 ? " (after one corrective retry)" : "";
+        if (kept === 0) {
+          setAiError(
+            "The draft has no runnable validation command" +
+              retried +
+              ". Write one below, or describe the check you want and generate again."
+          );
+        } else {
+          setAiNotice(
+            `Draft generated with ${kept} validation command(s)${retried}. ` +
+              "Review and edit the fields below before saving."
+          );
+        }
       } catch (err) {
         setAiError(err instanceof Error ? err.message : "Unable to generate the case draft.");
       }
@@ -548,7 +568,10 @@ export function SubjectValidation() {
         // The subject travels with every arm: it is what is held constant while
         // the harness and the model vary around it.
         skills_extra: stagedSelected,
-        skills_disabled: unselectedGoverned
+        skills_disabled: unselectedGoverned,
+        // Every selection, governed ones included: a governed skill is
+        // available too, and only staged ones need `skills_extra` to be.
+        skills_invoke: invokeSelected ? [...skillsExtra] : []
       });
       setNotice(`Queued ${result.count} run(s).`);
       setLaunched(true);
@@ -754,6 +777,24 @@ export function SubjectValidation() {
             )}
 
             <div className="checkbox-stack">
+              <label className="checkbox">
+                <input
+                  checked={invokeSelected}
+                  onChange={(event) => setInvokeSelected(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  Ask the agent to use the selected skill(s) at the start of every
+                  step.{" "}
+                  <small className="muted">
+                    On by default: a skill that is only available is invoked only
+                    when the case&rsquo;s instruction or the skill&rsquo;s own
+                    triggers call for it. Turn off to measure whether the agent
+                    reaches for it unasked.
+                  </small>
+                </span>
+              </label>
+
               <label className="checkbox">
                 <input
                   checked={isolateGoverned}
@@ -1021,6 +1062,25 @@ export function SubjectValidation() {
                   <div className="callout callout--warning">
                     <IconAlert size={16} />
                     <span>{aiError}</span>
+                  </div>
+                ) : null}
+                {aiDropped.length > 0 ? (
+                  <div className="callout callout--warning">
+                    <IconAlert size={16} />
+                    <div>
+                      <strong>
+                        Left out of the draft — the lab would not run these:
+                      </strong>
+                      <ul className="blocking-list dropped-list">
+                        {aiDropped.map((item) => (
+                          <li key={item.command}>
+                            <code>{item.command.split("\n")[0]}</code>
+                            {item.command.includes("\n") ? " …" : ""}
+                            <span className="muted small"> — {item.reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   </div>
                 ) : null}
               </div>

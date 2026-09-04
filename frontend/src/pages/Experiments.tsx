@@ -536,7 +536,12 @@ function LaunchPanel({
               score_mode: "manual",
               max_steps: locked.max_steps,
               resume: false,
-              dry_run: false
+              dry_run: false,
+              // Dropping these turns a subject-validation relaunch into a
+              // config mismatch the backend refuses.
+              skills_disabled: locked.skills_disabled ?? [],
+              skills_extra: locked.skills_extra ?? [],
+              skills_invoke: locked.skills_invoke ?? []
             }
           : buildConfig(caseIds[0] ?? "")
       );
@@ -585,6 +590,24 @@ function LaunchPanel({
             <span>Step budget</span>
             <strong>{locked.max_steps}</strong>
           </div>
+          {locked.skills_extra?.length ? (
+            <div>
+              <span>Skills added</span>
+              <strong>{locked.skills_extra.join(", ")}</strong>
+            </div>
+          ) : null}
+          {locked.skills_invoke?.length ? (
+            <div>
+              <span>Skills asked for</span>
+              <strong>{locked.skills_invoke.join(", ")}</strong>
+            </div>
+          ) : null}
+          {locked.skills_disabled?.length ? (
+            <div>
+              <span>Skills removed</span>
+              <strong>{locked.skills_disabled.join(", ")}</strong>
+            </div>
+          ) : null}
         </div>
         {error ? (
           <ErrorBanner message={error} onDismiss={() => setError(null)} />

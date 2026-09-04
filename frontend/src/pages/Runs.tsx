@@ -93,6 +93,8 @@ export function Runs({
   const [disabledSkills, setDisabledSkills] = useState<Set<string>>(new Set());
   const [stagedSkills, setStagedSkills] = useState<StagedSkillRecord[]>([]);
   const [extraSkills, setExtraSkills] = useState<Set<string>>(new Set());
+  // Off = available only; on = the agent is told to invoke them every step.
+  const [invokeExtra, setInvokeExtra] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [reloadingModels, setReloadingModels] = useState(false);
   // Target repository (ADR-0029). Empty = the run works in the lab's own
@@ -387,6 +389,7 @@ export function Runs({
     dryRun,
     disabledSkills,
     extraSkills,
+    invokeExtra,
     targetRepoId,
     targetRef,
     harnessSource
@@ -410,6 +413,7 @@ export function Runs({
     dry_run: dryRun,
     skills_disabled: [...disabledSkills].sort(),
     skills_extra: [...extraSkills].sort(),
+    skills_invoke: invokeExtra ? [...extraSkills].sort() : [],
     target_repo_id: targetRepoId,
     target_ref: targetRef.trim(),
     harness_source: harnessSource
@@ -493,6 +497,7 @@ export function Runs({
           dry_run: dryRun,
           skills_disabled: [...disabledSkills].sort(),
           skills_extra: [...extraSkills].sort(),
+          skills_invoke: invokeExtra ? [...extraSkills].sort() : [],
           target_repo_ids: batchTargetAxis,
           target_ref: targetRef.trim(),
           harness_sources: batchHarnessSourceAxis
@@ -1008,6 +1013,18 @@ export function Runs({
                         </label>
                       ))}
                     </div>
+                    <label className="checkbox">
+                      <input
+                        checked={invokeExtra}
+                        disabled={extraSkills.size === 0}
+                        onChange={(event) => setInvokeExtra(event.target.checked)}
+                        type="checkbox"
+                      />
+                      <span>
+                        Ask the agent to use them
+                        <small className="muted"> at the start of every step</small>
+                      </span>
+                    </label>
                   </>
                 ) : null}
               </>

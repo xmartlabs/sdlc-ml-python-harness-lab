@@ -189,6 +189,12 @@ class RunConfigCreate(BaseModel):
     # Staged/experimental skills (data/skills_staging/<name>/) to add for this
     # run only. Unchecked by default in the UI.
     skills_extra: list[str] = Field(default_factory=list)
+    # Skills the agent is told, at the start of every step, to invoke and
+    # follow (ADR-0041). Available is not invoked: a skill on the menu is
+    # opened only when the instruction or its own triggers call for it. Every
+    # name here must be available in this run — staged via `skills_extra`, or
+    # governed and not in `skills_disabled`.
+    skills_invoke: list[str] = Field(default_factory=list)
 
     # External target repository (ADR-0029). `target_repo_id` is what the run
     # form sends; `target_ref` defaults to the repository's own default_ref.
@@ -419,6 +425,7 @@ class RunBatchCreate(BaseModel):
     dry_run: bool = False
     skills_disabled: list[str] = Field(default_factory=list)
     skills_extra: list[str] = Field(default_factory=list)
+    skills_invoke: list[str] = Field(default_factory=list)
 
     @field_validator("case_ids", "prompt_variants", "harnesses")
     @classmethod
@@ -487,8 +494,19 @@ class CaseDraftRequest(BaseModel):
     selected_skills: list[str] = Field(default_factory=list)
 
 
+class DroppedCommand(BaseModel):
+    """A validation command the assistant produced but the lab would not run."""
+
+    command: str
+    reason: str
+
+
 class CaseDraftResponse(BaseModel):
     subject: str
     instruction: str
     validation_commands: list[str] = Field(default_factory=list)
     max_steps: int = 10
+    # What the model wrote that was screened out, so the person sees the gap
+    # here rather than after the runs have spent their budget.
+    dropped_commands: list[DroppedCommand] = Field(default_factory=list)
+    attempts: int = 1

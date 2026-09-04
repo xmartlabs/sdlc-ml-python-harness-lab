@@ -3,6 +3,75 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## "With skill" means available, not invoked — 2026-09-04
+
+First real Lane B comparison (`does-adding-caveman-improve-outcomes`, 5+5 runs,
+claude/haiku, one AI-drafted snake case): verdict "No difference observed",
+success 100% both arms, every secondary delta within run-to-run variance. The
+person read it as "slightly worse". Parsing the step events told the real
+story: in **0 of 5** treatment runs did the agent call the `Skill` tool or read
+`caveman/SKILL.md`. The final messages were the usual "Perfect! ✅ ALL
+MILESTONES COMPLETE" prose. The treatment never happened.
+
+Mechanism: `--extra-skill` projects the staged skill into the agent's native
+skill view (the run's init event lists it among 40 skills). That makes it
+*available*. `caveman`'s description triggers on "/caveman", "caveman mode",
+"be brief"; the case instruction says none of that, so the model had no reason
+to open it. The lab's number was correct and its caveats honest, but the
+number measured "skill on the menu", not "skill in use".
+
+Two other things learned reading the same data:
+- **Baseline is the governed harness, not a bare model.** `build_effective_skills`
+  = every governed skill under `.github/skills*` minus `--disable-skill` plus
+  `--extra-skill`. "Without the staged skills" therefore means CLAUDE.md +
+  ~25 governed skills. Arm descriptions now say so.
+- **`total_tokens` ≈ output tokens for Claude Code runs.** `usage.json`
+  reports `input_tokens` in the hundreds because cache reads are not counted;
+  a context-reduction skill's main effect (less input re-read per turn) is
+  invisible in that metric. Reading `cache_read_input_tokens` from the stream
+  events would be needed to see it.
+
+**Why it matters:** a comparison can be statistically clean and still answer
+the wrong question when the treatment is conditional on the agent's choice.
+Skills are exactly that kind of treatment.
+
+**How to apply:** decide which question the experiment asks. "Does it help
+when asked for" → tick *Enforce skill use* (`skills_invoke`, the arm's prompt
+asks for it at every step; the case stays identical across arms). "Does it
+help unasked" → leave it off and read which skills the agent opened. Either
+way read `skill_invoked` per arm before the delta; an arm at zero now carries
+the caveat at the top of the verdict. Implemented in ADR-0041.
+
+## A validation "command" the assistant writes can pass the gate and still measure nothing — 2026-09-03
+
+The AI case assistant returned heredocs (`node - <<'NODE' … NODE`,
+`python - <<'PY' … PY`) as validation commands. The case stores one shell
+command per line, the wizard's textarea joins the array with newlines and
+splits it again on save, so the script body became twenty separate entries.
+Most were refused by `_looks_executable` (`NODE`, `}`, `const …`). The
+dangerous part was what survived: `node - <<'NODE'` on its own passes the
+heuristic (first token `node`), and `sh -c` runs it with an empty stdin — exit
+0, a pass with no assertion behind it. The gate from ADR-0040 forces a command
+to exist; it cannot see that a fragment is meaningless.
+
+Fix (in `case_draft_service.py`): the system prompt states the one-line rule,
+every returned command is screened with the runner's own heuristic
+(`is_executable_command`) plus a multi-line refusal, the model gets one
+corrective turn if nothing runnable is left, and the response carries
+`dropped_commands` with reasons so the wizard shows the gap under the draft.
+
+**Why it matters:** an LLM will happily satisfy a schema ("array of bash
+commands") with something the executor cannot run as a unit. Screening at the
+same line the runner uses is the only place the refusal is both early and
+consistent; prompt wording alone is a suggestion.
+
+**How to apply:** whenever a model-generated artifact feeds an executor, run
+the executor's own acceptance check on it before handing it to the person, and
+return the rejects with reasons rather than silently narrowing the output.
+Also: run pytest here as the Makefile does, `PYTHONPATH=$PWD/src pytest …` —
+the venv's editable install points at an older checkout path, so a bare
+`pytest` collects against stale code and reports modules as missing.
+
 ## Two base CSS rules made the UI look inconsistent between pages — 2026-09-03
 
 After the Xmartlabs branding pass the wizard pages looked broken in two ways

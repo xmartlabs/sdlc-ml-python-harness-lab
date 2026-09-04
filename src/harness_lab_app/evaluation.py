@@ -73,6 +73,10 @@ class EvaluationContext:
     trajectory: dict[str, Any] | None = None
     files_expected: tuple[str, ...] = ()
     files_forbidden: tuple[str, ...] = ()
+    # The skills this run's experiment is about and this run could see:
+    # staged (`skills_extra`), asked for (`skills_invoke`), or removed in a
+    # sibling arm. Empty for a run no skill question is being asked of.
+    skills_under_test: tuple[str, ...] = ()
 
 
 def _fold(text: str) -> str:
@@ -268,6 +272,53 @@ class HarnessBehaviorEvaluator:
         return "unclear"
 
 
+class SkillUsageEvaluator:
+    """Level 4 — were the skills under test actually opened? (ADR-0041)
+
+    An **observation**, parsed from the step record: a ``Skill`` tool call
+    naming the skill, or any read of its ``SKILL.md``. It exists because a
+    with-skills arm whose agent never touched the skill compares a menu, not a
+    treatment — and nothing else in the pipeline can tell the two apart.
+
+    Emits nothing when the run is not about any skill, and nothing when no
+    trajectory was recorded: "not observed" must not be stored as "not used".
+    """
+
+    id = "skill_usage"
+
+    def evaluate(self, context: EvaluationContext) -> list[ScoreValue]:
+        under_test = list(context.skills_under_test)
+        if not under_test or context.trajectory is None:
+            return []
+        counts: dict[str, int] = dict(context.trajectory.get("skill_invocations") or {})
+        invoked = [name for name in under_test if counts.get(name, 0) > 0]
+        total = sum(counts.get(name, 0) for name in under_test)
+        detail = {
+            "skills_under_test": under_test,
+            "invoked": invoked,
+            "source": context.trajectory.get("source", ""),
+        }
+        return [
+            ScoreValue(
+                "skill_invoked",
+                len(invoked) / len(under_test),
+                reason=(
+                    f"{', '.join(invoked) if invoked else 'none'} of "
+                    f"{', '.join(under_test)} invoked (Skill call or SKILL.md "
+                    "read in the step record)"
+                ),
+                provenance_detail=detail,
+            ),
+            ScoreValue(
+                "skill_invocations",
+                float(total),
+                reason=", ".join(f"{name} x{counts[name]}" for name in invoked)
+                or "none",
+                provenance_detail=detail,
+            ),
+        ]
+
+
 class DeepEvalEvaluator:
     """Level 3 — trajectory metrics, computed by DeepEval when it is installed.
 
@@ -323,10 +374,25 @@ PROFILES: dict[str, tuple[str, ...]] = {
     # (no library, no judge, no trajectory → no score, never a zero), so a lab
     # without DeepEval scores exactly as it did before. Set DEEPEVAL_MODEL=off
     # to keep the default deterministic-plus-audit only.
-    "default": ("deterministic", "efficiency", "harness_audit", "deepeval"),
-    "with_trajectory": ("deterministic", "efficiency", "harness_audit", "deepeval"),
+    # `skill_usage` is an observation, so it rides in every profile that
+    # reads the record at all: a skill comparison without it cannot tell a
+    # treatment from a menu (ADR-0041).
+    "default": (
+        "deterministic",
+        "efficiency",
+        "skill_usage",
+        "harness_audit",
+        "deepeval",
+    ),
+    "with_trajectory": (
+        "deterministic",
+        "efficiency",
+        "skill_usage",
+        "harness_audit",
+        "deepeval",
+    ),
     "outcome_only": ("deterministic",),
-    "no_judgement": ("deterministic", "efficiency"),
+    "no_judgement": ("deterministic", "efficiency", "skill_usage"),
 }
 
 EVALUATORS = {
@@ -334,6 +400,7 @@ EVALUATORS = {
     for evaluator in (
         DeterministicEvaluator(),
         EfficiencyEvaluator(),
+        SkillUsageEvaluator(),
         HarnessBehaviorEvaluator(),
         DeepEvalEvaluator(),
     )

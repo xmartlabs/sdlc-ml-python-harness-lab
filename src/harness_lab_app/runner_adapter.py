@@ -41,6 +41,8 @@ class BenchRunAdapter:
             command.extend(["--disable-skill", skill])
         for skill in sorted(set(config.skills_extra)):
             command.extend(["--extra-skill", skill])
+        for skill in sorted(set(config.skills_invoke)):
+            command.extend(["--invoke-skill", skill])
         if config.dry_run:
             command.append("--dry-run")
         if config.resume:

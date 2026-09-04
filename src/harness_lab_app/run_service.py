@@ -179,6 +179,7 @@ def _expand_batch(
             resume=False,
             skills_disabled=list(data.skills_disabled),
             skills_extra=list(data.skills_extra),
+            skills_invoke=list(data.skills_invoke),
             target_repo_id=target_repo_id,
             target_ref=data.target_ref,
             harness_source=harness_source,
@@ -213,6 +214,7 @@ def _preflight_key(config: RunConfigCreate) -> tuple:
         config.executor_model,
         tuple(sorted(set(config.skills_disabled))),
         tuple(sorted(set(config.skills_extra))),
+        tuple(sorted(set(config.skills_invoke))),
         config.target_repo_id,
         config.harness_source,
     )
@@ -241,6 +243,7 @@ def _resume_config(config: RunConfig) -> RunConfigCreate:
         continuation_prompt=config.continuation_prompt,
         skills_disabled=list(config.skills_disabled),
         skills_extra=list(config.skills_extra),
+        skills_invoke=list(config.skills_invoke),
     )
 
 
@@ -421,6 +424,21 @@ class RunService:
                     f"Unknown/archived staged skills in skills_extra: "
                     f"{', '.join(unknown_extra)}. Create them on the Skills page "
                     "first."
+                )
+        if config.skills_invoke:
+            # Asking for a skill the agent cannot see would be a prompt about
+            # nothing, and the run would count it as "asked and not invoked".
+            from harness_lab_app.skills_catalog import known_skill_names
+
+            available = (known_skill_names() - set(config.skills_disabled)) | set(
+                config.skills_extra
+            )
+            unavailable = sorted(set(config.skills_invoke) - available)
+            if unavailable:
+                raise RunPreflightError(
+                    f"skills_invoke names skills this run cannot see: "
+                    f"{', '.join(unavailable)}. A skill to invoke must be staged "
+                    "via skills_extra, or governed and not in skills_disabled."
                 )
 
     def _probe_gateway_executor(self, executor: str, token: str) -> str | None:
@@ -941,6 +959,7 @@ class RunService:
             # that dropped it would quietly compare a different condition.
             skills_disabled=list(config.skills_disabled),
             skills_extra=list(config.skills_extra),
+            skills_invoke=list(config.skills_invoke),
             target_repo_id=config.target_repo_id,
             target_ref=config.target_ref,
             harness_source=config.harness_source,
@@ -1021,6 +1040,7 @@ class RunService:
             continuation_prompt=prompt_text,
             skills_disabled=list(config.skills_disabled),
             skills_extra=list(config.skills_extra),
+            skills_invoke=list(config.skills_invoke),
             target_repo_id=config.target_repo_id,
             target_ref=config.target_ref,
             harness_source=config.harness_source,

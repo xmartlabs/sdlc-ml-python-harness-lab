@@ -68,8 +68,43 @@ reasonable start) and compare distributions, not single runs.
    materialized at `data/skills_staging/<name>/` (git-ignored). The governed
    catalog is untouched. Multi-file skills keep their `scripts/`,
    `references/` and any other supporting files.
-3. In **Runs → New run → Skills → Experimental**, check the staged skill
-   (off by default) and launch. Launch the baseline without it.
+3. Compare it against the harness. **New evaluation → Evaluate a harness
+   change → factor "Add skills"**, tick the staged skill, pick the cases and the
+   repetitions. The design gets two arms with the same harness, model and case:
+   - **baseline** is *the governed harness as it stands*: `CLAUDE.md` plus every
+     governed skill under `.github/skills*` (about 25 today), with the staged
+     skill absent. It is not a bare model and not a skill-less agent.
+   - **with-skills** is the same harness with the staged skill projected into
+     the agent's native skill view, next to the governed ones.
+
+   **Available is not invoked.** Adding a skill puts it on the agent's menu; the
+   agent reads it only when the case's instruction or the skill's own trigger
+   phrases call for it. A skill whose `description` says "use for `/caveman`,
+   'be brief'" will sit unused on a case that never says so, and the experiment
+   will honestly report *no difference* — about a treatment that never
+   happened (ADR-0041). Two different questions hide here; pick one per
+   experiment:
+
+   - **Does it help when asked for?** Tick **Enforce skill use** under the
+     skill list. The arm that has the skills is then told, at the start of
+     every step, to invoke them and follow them; the case itself is not
+     touched, so both arms still run the same instruction. This is the
+     question for one specific skill, and the usual one.
+   - **Does the agent reach for it unasked?** Leave the box off. The skill is
+     only available, and the interesting observation is which skills the
+     agent opened, and why — the question for a whole harness of skills, where
+     forcing every one would be an unnecessary invocation.
+
+   Either way the run records it: `skill_invoked` (share of the skills under
+   test the agent actually opened — a `Skill` call or a read of `SKILL.md` in
+   the step record) and `skill_invocations` (how many times) appear in the
+   metric table, and an arm at zero puts a caveat at the top of the verdict:
+   *this arm measured the skill's availability, not its use.* Read that
+   before the delta. To make an unasked skill trigger on the task, rewrite
+   its `description`; every edit is a new `condition_hash`.
+
+   For a one-off, **Runs → New run → Skills → Experimental** launches a single
+   run with the staged skill; launch the baseline without it.
 4. Iterate: edit any file from **Skills → Edit** (file list on the left, editor
    on the right; add and delete files there too) and re-run. Every edit flips
    the `condition_hash` — the digest covers the **whole tree**, so changing a
@@ -98,7 +133,12 @@ cannot be read.
 1. **Bring your tool.** Stage the skill that drives your subject — import,
    upload, or write it in the browser (same staging as Lane B). If the skill is
    already promoted into the governed harness, say so explicitly instead of
-   staging a copy.
+   staging a copy. *Ask the agent to use the selected skill(s)* is on by
+   default here: this mode exists to check that one specific skill drives one
+   specific tool, and a skill that is merely available is opened only when the
+   instruction or its own triggers call for it (ADR-0041). Turn it off to see
+   whether the agent reaches for it unasked. The runs record `skill_invoked`
+   either way, and the verdict warns when the driver was never opened.
 2. **Declare what success is.** Name the subject, write the instruction the
    agent gets, and declare **at least one executable validation command**. This
    gate is a hard block, in the client and again in the API: a case whose only
@@ -108,6 +148,29 @@ cannot be read.
    **The gate can force a command to exist; it cannot force it to be able to
    fail.** A smoke check that the game starts cannot fail once the game starts.
    Write the command that would go red if the subject were broken.
+
+   **One shell command per line.** Each entry is run verbatim with `sh -c` in
+   the archived workspace, and the wizard's textarea is split on newlines when
+   the case is saved. A heredoc or a multi-line script therefore never survives
+   as a unit: its first line runs alone (`node - <<'EOF'` with an empty stdin
+   exits 0 — a pass that measures nothing) and the rest is dropped line by line.
+   Inline multi-statement checks instead:
+
+   ```sh
+   pytest {workspace}/test_snake.py -q
+   node -e "const m=require('{workspace}/snake.js'); if(typeof m.step!=='function') process.exit(1)"
+   python3 -c "import sys; h=open('{workspace}/index.html').read().lower(); sys.exit(0 if '<canvas' in h else 1)"
+   ```
+
+   **Draft it with AI (optional).** The assistant on this step turns a plain
+   description plus the selected skills' `SKILL.md` into a subject, an
+   instruction and validation commands. It is held to the same rule: the server
+   screens every command it returns with the runner's own executability check,
+   refuses multi-line entries, gives the model one corrective turn if nothing
+   runnable is left, and returns what it dropped and why. The wizard lists those
+   under the draft so the gap is visible before the case exists, not after the
+   runs have spent their budget. The assistant never weakens the gate: an empty
+   draft still blocks "Create the case".
 3. **Choose the arms.** One arm per harness/model cell, labelled
    `<harness>/<model>`. There is no control role — every arm is a peer. Set the
    repetitions and read the backend's repetition warning **before** launching,

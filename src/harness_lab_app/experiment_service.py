@@ -55,6 +55,7 @@ CONDITION_FIELDS = frozenset(
         "harness_source",
         "skills_disabled",
         "skills_extra",
+        "skills_invoke",
         "prompt_variant",
         "max_steps",
     }
@@ -175,6 +176,10 @@ def validate_design(
             "harness_source",
             "skills_disabled",
             "skills_extra",
+            # Being asked to use a skill is a harness lever too: the same
+            # skill, on the menu versus called for, is the "does it help when
+            # asked" comparison (ADR-0041).
+            "skills_invoke",
             "harness",
             # The governance-loaded prompt is a harness lever like any skill:
             # naive-vs-sdlc and swe_default-vs-swe_harness are the lab's
@@ -315,6 +320,13 @@ class ExperimentService:
         stop_reasons: dict[str, list[str]] = {
             condition.label: [] for condition in conditions
         }
+        # Whether the skills an arm is about were actually opened (ADR-0041).
+        # A comparison whose treatment arm never invoked its skill measured
+        # availability, and the verdict has to say so before the delta.
+        skill_usage: dict[str, dict[str, Any]] = {
+            condition.label: {"skills": [], "runs": 0, "invoked": 0, "requested": False}
+            for condition in conditions
+        }
         for run in runs:
             label = run.condition_label or ""
             if label not in per_condition:
@@ -327,7 +339,19 @@ class ExperimentService:
                     else score.value_num
                 )
             per_condition[label].append(values)
-            case_id = run_service.get_run_config(run.run_config_id).case_id
+            config = run_service.get_run_config(run.run_config_id)
+            case_id = config.case_id
+            invoked = values.get("skill_invoked")
+            if invoked is not None:
+                usage = skill_usage[label]
+                usage["runs"] += 1
+                usage["invoked"] += int(float(invoked) > 0)
+                usage["requested"] = usage["requested"] or bool(config.skills_invoke)
+                for name in sorted(
+                    set(config.skills_extra) | set(config.skills_invoke)
+                ):
+                    if name not in usage["skills"]:
+                        usage["skills"].append(name)
             passed = values.get("task_validation_pass")
             verdicts[label][case_id] = passed
             cell = case_counts[label].setdefault(
@@ -409,6 +433,7 @@ class ExperimentService:
             # pair, so it needs the arms themselves — there is no `first`.
             subject=experiment.subject,
             arms=list(summaries.values()),
+            skill_usage=skill_usage,
         )
 
         return {
@@ -637,6 +662,7 @@ class ExperimentService:
         "max_steps",
         "skills_disabled",
         "skills_extra",
+        "skills_invoke",
     )
 
     @staticmethod
@@ -698,6 +724,12 @@ class ExperimentService:
                 "prompt_variant": config.prompt_variant,
                 "max_steps": config.max_steps,
                 "score_mode": config.score_mode,
+                # The skill axes are part of what ran: a relaunch that dropped
+                # them would be refused by the lock, and a subject validation
+                # carries its skill in the shared config, not in an arm.
+                "skills_disabled": list(config.skills_disabled),
+                "skills_extra": list(config.skills_extra),
+                "skills_invoke": list(config.skills_invoke),
             }
         return None
 
@@ -756,6 +788,7 @@ class ExperimentService:
                 # time, inside one arm, which reads as a treatment effect.
                 tuple(sorted(config.skills_disabled)),
                 tuple(sorted(config.skills_extra)),
+                tuple(sorted(config.skills_invoke)),
             )
             if key in seen:
                 continue
