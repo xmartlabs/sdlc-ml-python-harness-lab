@@ -254,6 +254,8 @@ export function Audit() {
       );
     });
 
+  const stepIndex = STEPS.findIndex((item) => item.key === step);
+
   return (
     <section className="page audit">
       <header className="page-header">
@@ -269,7 +271,13 @@ export function Audit() {
       <ol className="stepper">
         {STEPS.map((item, index) => (
           <li
-            className={`stepper-item ${item.key === step ? "stepper-item--current" : ""}`}
+            className={[
+              "stepper-item",
+              item.key === step ? "stepper-item--current" : "",
+              index < stepIndex ? "stepper-item--done" : ""
+            ]
+              .filter(Boolean)
+              .join(" ")}
             key={item.key}
           >
             <button onClick={() => setStep(item.key)} type="button">

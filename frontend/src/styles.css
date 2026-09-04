@@ -200,6 +200,32 @@ textarea {
   resize: vertical;
 }
 
+/* The width/padding above is for text fields. A checkbox or radio that
+   inherits `width: 100%` swallows the row and pushes its label to the far
+   edge — the "separated" controls seen on the wizard pages. */
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  flex: 0 0 auto;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Links carry the brand accent everywhere; the browser default blue/purple
+   pair does not exist in the palette. Components that set their own colour
+   (nav items, button-links, mode CTAs) still win by specificity. */
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: var(--accent-hover);
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -289,10 +315,20 @@ label {
 }
 
 .sidebar-toggle {
-  padding: var(--space-1) var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1);
+  min-width: 28px;
+  min-height: 28px;
   background: transparent;
+  color: var(--muted);
   flex-shrink: 0;
   border-radius: var(--radius-sm);
+}
+
+.sidebar-toggle:hover {
+  color: var(--text);
 }
 
 .sidebar-toggle:hover {
@@ -308,7 +344,7 @@ label {
 }
 
 .collapsed-arrow {
-  font-size: 12px;
+  display: inline-flex;
   color: var(--muted);
 }
 
@@ -316,6 +352,10 @@ label {
   display: grid;
   gap: var(--space-3);
   flex: 1;
+  /* `flex: 1` gives the nav the sidebar's full height so the footer sits at
+     the bottom; without this the grid stretches its rows to fill it, and the
+     groups drift apart on long pages. */
+  align-content: start;
 }
 
 .nav-group {
@@ -582,6 +622,24 @@ label {
   }
 }
 
+/* Every button variant lays out the same way, so an icon next to a label sits
+   on the baseline instead of dangling below it. */
+.primary,
+.secondary,
+button.ghost,
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  line-height: 1.3;
+}
+
+button svg,
+.button-link svg {
+  flex-shrink: 0;
+}
+
 .primary {
   background: var(--accent);
   border-color: var(--accent);
@@ -589,6 +647,15 @@ label {
   font-weight: 600;
   box-shadow: 0 1px 3px var(--accent-glow);
   transition: all var(--transition-fast);
+}
+
+.primary:disabled,
+.secondary:disabled,
+button.ghost:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 
 .primary:hover {
@@ -1199,6 +1266,22 @@ label {
   padding: 14px 16px;
   font-weight: 600;
   text-align: left;
+}
+
+.help-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.help-toggle-chevron {
+  display: inline-flex;
+  color: var(--muted);
+  transition: transform var(--transition-fast);
+}
+
+.help-toggle[aria-expanded="true"] .help-toggle-chevron {
+  transform: rotate(90deg);
 }
 
 .help-body {
@@ -2040,18 +2123,21 @@ button.ghost {
 }
 
 .button-link {
-  display: inline-flex;
-  align-items: center;
   padding: 6px 12px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
   text-decoration: none;
   color: var(--text);
   font-size: 0.85rem;
+  font-weight: 500;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
 }
 
 .button-link:hover {
-  border-color: var(--line-strong);
+  border-color: var(--accent);
+  background: var(--panel-soft);
+  color: var(--text);
 }
 
 /* Login gate (ADR-0015): a single centered panel, shown instead of the app
@@ -2424,6 +2510,14 @@ button.ghost {
   font-weight: 600;
 }
 
+/* A tab-bar that sits inside a panel head, next to the title: it switches
+   the panel's content, so it has no rule of its own to underline. */
+.tab-bar--inline {
+  margin: 0;
+  border-bottom: none;
+  flex-shrink: 0;
+}
+
 /* --- navigation groups --------------------------------------------------- */
 
 .nav-group {
@@ -2638,16 +2732,37 @@ button.ghost {
 
 .stepper-item {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 0.82rem;
 }
 
-.stepper-item--current {
+/* The button is the whole pill — no border-in-a-border. Three states: done
+   (green index), current (accent), and locked (dimmed, not-allowed). */
+.stepper-item > button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 14px 6px 6px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.stepper-item > button:not(:disabled):hover {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--text);
+}
+
+.stepper-item > button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.stepper-item--current > button,
+.stepper-item--current > button:not(:disabled):hover {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--text);
@@ -2658,11 +2773,26 @@ button.ghost {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: var(--panel-soft);
+  border: 1px solid var(--line);
   font-size: 0.72rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.stepper-item--current .stepper-index {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.stepper-item--done .stepper-index {
+  background: var(--success-soft);
+  border-color: transparent;
+  color: var(--success);
 }
 
 /* Readiness checks: three states, because "not detected" and "could not be
@@ -2747,6 +2877,149 @@ button.ghost {
   background: var(--accent-soft);
 }
 
+/* Buttons inside a pick-list are rows, not CTAs: full width, stacked label
+   and description, and a selected state that tints rather than fills — a
+   solid accent fill makes the muted description unreadable. */
+.pick-list > li > button,
+.pick-list > li > button.primary,
+.pick-list > li > button.secondary {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 400;
+  box-shadow: none;
+  transform: none;
+}
+
+.pick-list > li > button:hover,
+.pick-list > li > button.secondary:hover {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.pick-list > li > button.primary,
+.pick-list > li > button.primary:hover,
+.pick-list > li > button.primary:active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.pick-list > li > button > strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pick-list > li > button.primary > strong {
+  color: var(--accent);
+}
+
+.pick-list > li > button .muted {
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.pick-list > li > button.primary .muted {
+  color: var(--text-dim);
+}
+
+.pick-tag {
+  padding: 2px 8px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pick-tag--soft {
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 500;
+}
+
+/* Filters that sit above a pick-list, and a stack of checkboxes below it. */
+.filter-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.checkbox-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+/* What was picked, and the one action it enables. */
+.selection-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.selection-summary strong {
+  display: block;
+}
+
+/* An optional assistant, framed in the accent so it reads as an offer
+   rather than a required field. */
+.assist-card {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.assist-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.assist-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.assist-card-row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.assist-card-row > label {
+  flex: 1;
+  min-width: 220px;
+}
+
 .checkbox-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -2757,7 +3030,20 @@ button.ghost {
 .checkbox {
   display: flex;
   gap: var(--space-2);
-  align-items: center;
+  align-items: flex-start;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 400;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.checkbox > input {
+  margin-top: 3px;
+}
+
+.checkbox > span {
+  min-width: 0;
 }
 
 .mode-switch {

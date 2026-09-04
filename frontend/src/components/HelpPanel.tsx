@@ -1,6 +1,8 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 
+import { IconChevronRight } from "./icons";
+
 type HelpPanelProps = {
   title: string;
   docHref?: string;
@@ -20,8 +22,11 @@ export function HelpPanel({ title, docHref, defaultOpen = false, children }: Hel
         onClick={() => setOpen((value) => !value)}
         type="button"
       >
-        <span>
-          {open ? "▾" : "▸"} {title}
+        <span className="help-toggle-label">
+          <span className="help-toggle-chevron">
+            <IconChevronRight size={14} />
+          </span>
+          {title}
         </span>
         {docHref ? <span className="muted">{docHref}</span> : null}
       </button>

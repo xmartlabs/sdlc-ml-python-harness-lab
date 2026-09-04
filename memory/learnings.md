@@ -3,6 +3,41 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## Two base CSS rules made the UI look inconsistent between pages — 2026-09-03
+
+After the Xmartlabs branding pass the wizard pages looked broken in two ways
+that the short pages did not show: the sidebar groups drifted apart, and every
+checkbox or radio sat in the middle of its row with the label pushed to the far
+right. Neither was page-specific. Both were base rules in `frontend/src/styles.css`
+interacting with layout that only appears on long pages:
+
+- `.nav` is a grid with `flex: 1` so the sidebar footer sticks to the bottom. A
+  grid's default `align-content: stretch` then spreads the rows over the whole
+  sidebar height, which is the page height — invisible on a short page,
+  obvious on a long one. `align-content: start` fixes it.
+- The base `input { width: 100%; padding: 10px 12px }` is meant for text fields
+  but also hits `type="checkbox"` and `type="radio"`; the control fills the flex
+  row and its `<span>` label is shoved to the edge. `.skill-checkbox` had a local
+  override for exactly this; the fix is one global rule for both input types.
+
+The third symptom — pick-list rows of different widths, and a selected row whose
+description was unreadable — came from reusing `.primary` / `.secondary` (CTA
+buttons, `inline-flex`, width-to-content) as row selection states. Rows now have
+their own rule under `.pick-list > li > button`, and "selected" tints instead of
+filling.
+
+**Why it matters:** a page-level symptom that reproduces on several pages is a
+base-rule defect; fixing it in the page (inline styles, per-page overrides) hides
+the next occurrence. The inline styles in `SubjectValidation.tsx` also referenced
+tokens that do not exist (`--surface-sunken`, `--card-bg`, `--radius`), so they
+silently fell back to hard-coded colours that ignored the theme.
+
+**How to apply:** when a control looks wrong on one page, screenshot two other
+pages that use the same class before touching the page. Chrome headless
+(`--headless=new --screenshot=… <url>`) against the running dev server is enough
+to verify a CSS change without a browser session. Keep JSX free of `style={{}}`
+in this codebase: every value it needs already exists as a token or a class.
+
 ## The mode is what licenses the conclusion, so a missing mode gets borrowed — 2026-09-03
 
 The most common thing an outside team brings to this lab is not a harness change.

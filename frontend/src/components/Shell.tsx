@@ -7,6 +7,8 @@ import type { IconProps } from "./icons";
 import { XmartlabsLogo } from "./XmartlabsLogo";
 import {
   IconBook,
+  IconChevronLeft,
+  IconChevronRight,
   IconCompare,
   IconFiles,
   IconFlask,
@@ -132,10 +134,12 @@ export function Shell({ children, authEnabled, onLogout }: ShellProps) {
               {collapsed ? (
                 <div className="collapsed-brand-toggle">
                   <XmartlabsLogo height={20} variant="icon-only" width={20} />
-                  <span className="collapsed-arrow">»</span>
+                  <span className="collapsed-arrow">
+                    <IconChevronRight size={14} />
+                  </span>
                 </div>
               ) : (
-                "«"
+                <IconChevronLeft size={16} />
               )}
             </button>
           </div>

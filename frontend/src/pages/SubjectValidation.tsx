@@ -8,7 +8,14 @@ import { HelpPanel } from "../components/HelpPanel";
 import { ModelPicker } from "../components/ModelPicker";
 import { Spinner } from "../components/Spinner";
 import { StateBadge } from "../components/StateBadge";
-import { IconAlert, IconArrowRight, IconCheck, IconPlus, IconX } from "../components/icons";
+import {
+  IconAlert,
+  IconArrowRight,
+  IconCheck,
+  IconPlus,
+  IconSparkles,
+  IconX
+} from "../components/icons";
 import { HARNESS_NATIVE_MODELS, HARNESS_OPTIONS, HOST_HARNESSES } from "../harnesses";
 import type {
   CaseRecord,
@@ -233,12 +240,12 @@ export function SubjectValidation() {
     if (c.max_steps) {
       setMaxSteps(c.max_steps);
     }
-    setNotice(`Caso '${c.case_id}' seleccionado.`);
+    setNotice(`Case '${c.case_id}' selected.`);
   };
 
   const advanceWithExistingCase = () => {
     if (!caseId) return;
-    setNotice(`Usando caso existente '${caseId}'.`);
+    setNotice(`Using existing case '${caseId}'.`);
     setStep("arms");
   };
 
@@ -417,9 +424,9 @@ export function SubjectValidation() {
         if (draft.max_steps) {
           setMaxSteps(draft.max_steps);
         }
-        setAiNotice("✨ Caso completado con IA. Puedes revisar y editar los campos abajo.");
+        setAiNotice("Draft generated. Review and edit the fields below before saving.");
       } catch (err) {
-        setAiError(err instanceof Error ? err.message : "Error al generar el caso con IA");
+        setAiError(err instanceof Error ? err.message : "Unable to generate the case draft.");
       }
     });
 
@@ -570,7 +577,7 @@ export function SubjectValidation() {
     }
     if (caseMode === "existing") {
       if (!caseId) {
-        problems.success.push("Selecciona un caso existente de la lista o crea uno nuevo.");
+        problems.success.push("Pick an existing case from the list, or create a new one.");
       }
     } else {
       if (!subject.trim()) {
@@ -641,7 +648,13 @@ export function SubjectValidation() {
       <ol className="stepper">
         {STEPS.map((item, index) => (
           <li
-            className={`stepper-item ${item.key === step ? "stepper-item--current" : ""}`}
+            className={[
+              "stepper-item",
+              item.key === step ? "stepper-item--current" : "",
+              index < stepIndex ? "stepper-item--done" : ""
+            ]
+              .filter(Boolean)
+              .join(" ")}
             key={item.key}
           >
             <button
@@ -680,14 +693,14 @@ export function SubjectValidation() {
               one or multiple skills under test.
             </p>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", marginBottom: "var(--space-4)" }}>
+            <div className="filter-stack">
               <div className="tab-bar">
                 <button
                   className={`tab ${filterTab === "all" ? "tab--active" : ""}`}
                   onClick={() => setFilterTab("all")}
                   type="button"
                 >
-                  Todas ({allSkills.length})
+                  All ({allSkills.length})
                 </button>
                 <button
                   className={`tab ${filterTab === "staged" ? "tab--active" : ""}`}
@@ -706,9 +719,10 @@ export function SubjectValidation() {
               </div>
 
               <input
+                aria-label="Filter skills"
                 onChange={(event) => setSearchSkill(event.target.value)}
-                placeholder="Filtrar skills por nombre o descripción…"
-                style={{ width: "100%" }}
+                placeholder="Filter skills by name or description…"
+                type="search"
                 value={searchSkill}
               />
             </div>
@@ -727,12 +741,10 @@ export function SubjectValidation() {
                       onClick={() => toggleSkill(skill.name)}
                       type="button"
                     >
-                      <strong style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
-                        {skillsExtra.includes(skill.name) ? <IconCheck size={14} /> : null}{" "}
+                      <strong>
+                        {skillsExtra.includes(skill.name) ? <IconCheck size={14} /> : null}
                         {skill.name}
-                        <span className="badge" style={{ fontSize: "0.7rem", textTransform: "uppercase" }}>
-                          {skill.source}
-                        </span>
+                        <span className="badge pick-tag">{skill.source}</span>
                       </strong>
                       <span className="muted">{skill.description}</span>
                     </button>
@@ -741,7 +753,7 @@ export function SubjectValidation() {
               </ul>
             )}
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", marginTop: "var(--space-4)" }}>
+            <div className="checkbox-stack">
               <label className="checkbox">
                 <input
                   checked={isolateGoverned}
@@ -749,7 +761,7 @@ export function SubjectValidation() {
                   type="checkbox"
                 />
                 <span>
-                  Aislar ejecución: deshabilitar en el harness las demás skills no seleccionadas.
+                  Isolate the run: disable every harness skill that is not selected above.
                 </span>
               </label>
 
@@ -840,45 +852,47 @@ export function SubjectValidation() {
           <div className="panel-head">
             <h2>What is being tested, and what counts as done?</h2>
             {existingCases.length > 0 ? (
-              <div className="tab-bar" style={{ margin: 0 }}>
+              <div className="tab-bar tab-bar--inline">
                 <button
                   className={`tab ${caseMode === "existing" ? "tab--active" : ""}`}
                   onClick={() => setCaseMode("existing")}
                   type="button"
                 >
-                  Elegir caso existente ({existingCases.length})
+                  Use an existing case ({existingCases.length})
                 </button>
                 <button
                   className={`tab ${caseMode === "new" ? "tab--active" : ""}`}
                   onClick={() => setCaseMode("new")}
                   type="button"
                 >
-                  Crear caso nuevo (Manual / IA)
+                  Create a new case
                 </button>
               </div>
             ) : null}
           </div>
 
           {caseMode === "existing" ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", marginTop: "var(--space-2)" }}>
+            <div className="filter-stack">
               <p className="muted">
-                Selecciona un caso de prueba ya existente en el laboratorio (SWE-bench, benchmarks o casos guardados) para validar tu tool o skill frente a un estándar conocido.
+                Pick a case the lab already holds — SWE-bench, a benchmark, or a saved
+                case — to validate your tool or skill against a known standard.
               </p>
 
               <input
+                aria-label="Filter cases"
                 onChange={(event) => setCaseSearch(event.target.value)}
-                placeholder="Buscar por ID, nombre o tags (ej: swe-bench, python, bugfix)…"
-                style={{ width: "100%" }}
+                placeholder="Search by id, name or tag (e.g. swe-bench, python, bugfix)…"
+                type="search"
                 value={caseSearch}
               />
 
               {filteredCases.length === 0 ? (
                 <EmptyState
-                  description="No se encontraron casos existentes que coincidan con la búsqueda."
+                  description="No existing case matches the search."
                   title="No cases found."
                 />
               ) : (
-                <ul className="pick-list" style={{ maxHeight: "380px", overflowY: "auto" }}>
+                <ul className="pick-list">
                   {filteredCases.map((c) => {
                     const isSelected = caseId === c.case_id;
                     return (
@@ -888,20 +902,18 @@ export function SubjectValidation() {
                           onClick={() => selectExistingCase(c)}
                           type="button"
                         >
-                          <strong style={{ display: "inline-flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-                            {isSelected ? <IconCheck size={14} /> : null}{" "}
+                          <strong>
+                            {isSelected ? <IconCheck size={14} /> : null}
                             {c.name || c.case_id}
-                            <span className="badge" style={{ fontSize: "0.7rem", textTransform: "uppercase" }}>
-                              {c.type}
-                            </span>
+                            <span className="badge pick-tag">{c.type}</span>
                             {(c.tags || []).map((tag) => (
-                              <span key={tag} className="badge" style={{ fontSize: "0.65rem", opacity: 0.85 }}>
+                              <span className="badge pick-tag pick-tag--soft" key={tag}>
                                 {tag}
                               </span>
                             ))}
                           </strong>
-                          <span className="muted" style={{ fontSize: "0.85rem", marginTop: "4px" }}>
-                            <code>{c.case_id}</code> — {c.description || "Sin descripción"}
+                          <span className="muted">
+                            <code>{c.case_id}</code> — {c.description || "No description"}
                           </span>
                         </button>
                       </li>
@@ -911,31 +923,23 @@ export function SubjectValidation() {
               )}
 
               {caseId ? (
-                <div
-                  style={{
-                    padding: "var(--space-3)",
-                    background: "var(--surface-sunken, rgba(0,0,0,0.2))",
-                    borderRadius: "var(--radius, 6px)",
-                    border: "1px solid var(--border-subtle, rgba(255,255,255,0.1))",
-                    marginTop: "var(--space-2)"
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--space-2)" }}>
-                    <div>
-                      <strong>Caso seleccionado: <code>{caseId}</code></strong>
-                      <div className="muted" style={{ fontSize: "0.85rem", marginTop: "2px" }}>
-                        {subject} | Max steps: {maxSteps} | Variante: <code>{promptVariant}</code>
-                      </div>
-                    </div>
-                    <button
-                      className="primary"
-                      disabled={launched}
-                      onClick={advanceWithExistingCase}
-                      type="button"
-                    >
-                      Usar este caso y continuar <IconArrowRight size={14} />
-                    </button>
+                <div className="panel subtle selection-summary">
+                  <div>
+                    <strong>
+                      Selected case: <code>{caseId}</code>
+                    </strong>
+                    <span className="muted small">
+                      {subject} · Max steps: {maxSteps} · Variant: <code>{promptVariant}</code>
+                    </span>
                   </div>
+                  <button
+                    className="primary"
+                    disabled={launched}
+                    onClick={advanceWithExistingCase}
+                    type="button"
+                  >
+                    Use this case and continue <IconArrowRight size={14} />
+                  </button>
                 </div>
               ) : null}
 
@@ -955,87 +959,70 @@ export function SubjectValidation() {
             </div>
           ) : (
             <>
-              {/* AI Case Assistant Card */}
-              <div
-                style={{
-                  background: "var(--card-bg, rgba(255, 255, 255, 0.03))",
-                  border: "1px solid var(--accent)",
-                  borderRadius: "var(--radius, 8px)",
-                  padding: "var(--space-4)",
-                  marginBottom: "var(--space-4)"
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: "var(--space-2)"
-                  }}
-                >
-                  <strong style={{ color: "var(--accent)" }}>✨ Generar borrador con IA (Opcional)</strong>
+              {/* AI case assistant: optional, fills the form below. */}
+              <div className="assist-card">
+                <div className="assist-card-head">
+                  <strong className="assist-card-title">
+                    <IconSparkles size={16} /> Draft it with AI (optional)
+                  </strong>
                   {skillsExtra.length > 0 ? (
-                    <span className="muted" style={{ fontSize: "0.8rem" }}>
-                      Contexto: {skillsExtra.join(", ")}
-                    </span>
+                    <span className="muted small">Context: {skillsExtra.join(", ")}</span>
                   ) : (
-                    <span className="muted" style={{ fontSize: "0.8rem" }}>
-                      Sin skills seleccionadas en Paso 1
-                    </span>
+                    <span className="muted small">No skills selected in step 1</span>
                   )}
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+                <label>
+                  <span>Describe what you want to test, in plain language</span>
+                  <textarea
+                    onChange={(event) => setAiDescription(event.target.value)}
+                    placeholder="e.g. Check that the agent uses notion-export to save page 123 to notes.txt, and that the file exists and is not empty."
+                    rows={2}
+                    value={aiDescription}
+                  />
+                </label>
+
+                <div className="assist-card-row">
                   <label>
-                    <span style={{ fontSize: "0.8rem" }}>Describe qué quieres probar en lenguaje natural:</span>
-                    <textarea
-                      onChange={(event) => setAiDescription(event.target.value)}
-                      placeholder="Ej: Probar que el agente use notion-export para descargar la página 123 en notes.txt y verificar que exista y no esté vacío."
-                      rows={2}
-                      value={aiDescription}
-                    />
+                    <span>Model</span>
+                    <select
+                      onChange={(event) => setAiModel(event.target.value)}
+                      value={aiModel || gatewayDefault}
+                    >
+                      {modelOptions.map((opt) => (
+                        <option key={opt.id} value={opt.id}>
+                          {opt.label || opt.id} {opt.id === gatewayDefault ? "(default)" : ""}
+                        </option>
+                      ))}
+                      {!modelOptions.some((opt) => opt.id === gatewayDefault) && gatewayDefault ? (
+                        <option value={gatewayDefault}>{gatewayDefault} (default)</option>
+                      ) : null}
+                    </select>
                   </label>
 
-                  <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-end", flexWrap: "wrap" }}>
-                    <label style={{ flex: 1, minWidth: "220px" }}>
-                      <span style={{ fontSize: "0.8rem" }}>Modelo LLM:</span>
-                      <select
-                        onChange={(event) => setAiModel(event.target.value)}
-                        value={aiModel || gatewayDefault}
-                      >
-                        {modelOptions.map((opt) => (
-                          <option key={opt.id} value={opt.id}>
-                            {opt.label || opt.id} {opt.id === gatewayDefault ? "(Default)" : ""}
-                          </option>
-                        ))}
-                        {!modelOptions.some((opt) => opt.id === gatewayDefault) && gatewayDefault ? (
-                          <option value={gatewayDefault}>{gatewayDefault} (Default)</option>
-                        ) : null}
-                      </select>
-                    </label>
-
-                    <button
-                      className="primary"
-                      disabled={busy === "case-draft" || !aiDescription.trim()}
-                      onClick={() => void generateCaseWithAi()}
-                      type="button"
-                    >
-                      {busy === "case-draft" ? (
-                        <Spinner label="Generando borrador…" />
-                      ) : (
-                        "✨ Generar caso con IA"
-                      )}
-                    </button>
-                  </div>
-
-                  {aiNotice ? <p className="callout callout--ok" style={{ margin: 0 }}>{aiNotice}</p> : null}
-                  {aiError ? (
-                    <div className="callout callout--warning" style={{ margin: 0 }}>
-                      <IconAlert size={16} />
-                      <span>{aiError}</span>
-                    </div>
-                  ) : null}
+                  <button
+                    className="primary"
+                    disabled={busy === "case-draft" || !aiDescription.trim()}
+                    onClick={() => void generateCaseWithAi()}
+                    type="button"
+                  >
+                    {busy === "case-draft" ? (
+                      <Spinner label="Drafting…" />
+                    ) : (
+                      <>
+                        <IconSparkles size={14} /> Generate the case
+                      </>
+                    )}
+                  </button>
                 </div>
+
+                {aiNotice ? <p className="callout callout--ok">{aiNotice}</p> : null}
+                {aiError ? (
+                  <div className="callout callout--warning">
+                    <IconAlert size={16} />
+                    <span>{aiError}</span>
+                  </div>
+                ) : null}
               </div>
 
               <div className="form-grid">

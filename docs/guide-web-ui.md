@@ -168,6 +168,34 @@ redirect.
 | **Advanced** | Runs, Compare, Benchmarks, Improvements | the operational machinery underneath |
 | **System** | Health, Guide, Settings | the lab itself |
 
+### Look and feel
+
+The UI follows the Xmartlabs brand (`xmartlabs-branding` skill): Outfit for
+text, Space Grotesk for headings, XL Pink as the single accent, and a dark
+theme grounded in XL Dark. Everything visual lives in `frontend/src/styles.css`
+as tokens and shared classes; pages do not carry `style={{}}` attributes. The
+classes that every wizard shares:
+
+| Class | What it is | Rule of thumb |
+|---|---|---|
+| `.stepper` | the numbered progress pills | `--done` (green index), `--current` (accent), disabled = not reached yet |
+| `.pick-list` | a list of selectable rows | rows are full-width; the selected row tints (`accent-soft`) rather than fills, so its description stays readable |
+| `.checkbox` | a checkbox or radio with its label | the control sits on the left; the base text-field sizing does not apply to it |
+| `.tab-bar` / `.tab` | content switches | `.tab-bar--inline` when it sits next to a panel title |
+| `.primary` / `.secondary` / `.ghost` / `.button-link` | actions, in descending weight | all lay out as `inline-flex`, so an icon aligns with the label |
+| `.callout` (`--ok`, `--warning`, `--danger`) | inline notices | keep the icon as the first child |
+| `.assist-card` | an optional AI helper inside a form | accent border, never a required field |
+
+Icons come from `frontend/src/components/icons.tsx` (inline Lucide geometry),
+never from emoji or text glyphs: emoji ignore the theme and render differently
+on every platform. To check a change without opening a browser, screenshot the
+dev server headlessly:
+
+```sh
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
+  --window-size=1440,1400 --screenshot=out.png http://localhost:5173/evaluate/subject
+```
+
 ## Screens
 
 ### Home — what do you want to learn?

@@ -168,6 +168,26 @@ export const IconX = (p: IconProps) => (
   </Svg>
 );
 
+export const IconChevronLeft = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m15 6-6 6 6 6" />
+  </Svg>
+);
+
+export const IconChevronRight = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m9 6 6 6-6 6" />
+  </Svg>
+);
+
+export const IconSparkles = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3.5 13.9 9l5.6 1.9-5.6 1.9L12 18.5l-1.9-5.7-5.6-1.9L10.1 9z" />
+    <path d="M19 2.5v3M17.5 4h3" />
+    <path d="M5 17.5v3M3.5 19h3" />
+  </Svg>
+);
+
 export const IconArrowRight = (p: IconProps) => (
   <Svg {...p}>
     <path d="M4 12h15M13 6l6 6-6 6" />
