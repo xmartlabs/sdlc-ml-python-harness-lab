@@ -369,3 +369,88 @@ def test_subject_validation_warns_when_the_driver_was_never_opened():
     )
     assert answer["headline"] == "Reliability per arm"
     assert "never invoked" in answer["caveats"][0]
+
+
+def test_staging_a_skill_and_asking_for_it_is_one_factor():
+    """The most common design in this lab must not warn about itself.
+
+    Adding a skill without asking is not a treatment for a mode skill
+    (ADR-0041), so "absent" versus "present and asked for" is one intervention —
+    even though it moves two fields.
+    """
+    from harness_lab_app.experiment_service import validate_design
+    from harness_lab_app.models import ExperimentMode
+
+    warnings = validate_design(
+        ExperimentMode.harness_evaluation,
+        [
+            {"label": "native", "role": "control", "overrides": {}},
+            {
+                "label": "native + skills",
+                "role": "treatment",
+                "overrides": {
+                    "skills_extra": ["caveman"],
+                    "skills_invoke": ["caveman"],
+                },
+            },
+        ],
+    )
+
+    assert not any("More than one harness factor" in text for text in warnings)
+
+
+def test_crossing_skill_sets_really_are_two_factors():
+    """One arm adding X unasked while another asks for a Y it already had."""
+    from harness_lab_app.experiment_service import validate_design
+    from harness_lab_app.models import ExperimentMode
+
+    warnings = validate_design(
+        ExperimentMode.harness_evaluation,
+        [
+            {
+                "label": "a",
+                "role": "control",
+                "overrides": {"skills_extra": ["x"], "skills_invoke": []},
+            },
+            {
+                "label": "b",
+                "role": "treatment",
+                "overrides": {"skills_extra": [], "skills_invoke": ["y"]},
+            },
+        ],
+    )
+
+    assert any("More than one harness factor" in text for text in warnings)
+
+
+def test_a_native_arm_gets_its_staged_skills_placed_in_the_workspace(tmp_path):
+    """Under `native` the agent's cwd is the clone, so a lab-side skill is invisible.
+
+    Without this the "their repo plus this skill" arm equals its own control and
+    measures nothing — the same failure as ADR-0041, one level down.
+    """
+    from ml_python_base.skills_sync.linker import add_skills
+    from ml_python_base.skills_sync.models import KIND_INTERNAL, Skill, ToolSpec
+
+    source = tmp_path / "skills"
+    source.mkdir()
+    (source / "caveman.md").write_text("# caveman\n")
+    skill = Skill(name="caveman", kind=KIND_INTERNAL, source_path=source / "caveman.md")
+
+    workspace = tmp_path / "workspace"
+    theirs = workspace / ".claude" / "skills" / "their-own-skill"
+    theirs.mkdir(parents=True)
+    (theirs / "SKILL.md").write_text("# theirs\n")
+
+    tool = ToolSpec(
+        id="claude",
+        display_name="Claude Code",
+        link_strategy="copy",
+        native_skills_dir=".claude/skills",
+    )
+    add_skills(workspace, tool, [skill])
+
+    assert (workspace / ".claude/skills/caveman/SKILL.md").read_text() == "# caveman\n"
+    # Their own skills survive: an arm that added one skill by deleting the rest
+    # would be measuring something else entirely.
+    assert (theirs / "SKILL.md").exists()

@@ -138,6 +138,11 @@ class Case(SQLModel, table=True):
     tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     subject_repo: str | None = None
     base_commit: str | None = None
+    # The target repository this case was authored against, when it was authored
+    # from one (ADR-0042). A tag would have done the same job loosely; a column
+    # is what lets a repository's page list "the cases we have for this repo"
+    # without string-matching, which is the whole point of a case library.
+    origin_target_id: str = Field(default="", index=True)
     prompt_variants: dict[str, str] = Field(
         default_factory=dict, sa_column=Column(JSON)
     )
@@ -193,6 +198,15 @@ class TargetRepository(SQLModel, table=True):
     language: str = ""
     team: str = ""
     tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    # The engineer's own clone of this repository, on the machine running the lab
+    # (ADR-0042). Set once the operator has cloned it with their own credentials
+    # and pinned it; empty means the lab still reads the repository over the
+    # network. `pinned_commit` is the commit that clone was at when it was
+    # pinned, and it is what runs and readiness read — a repository the lab keeps
+    # re-resolving is a repository whose findings cannot be compared week to week.
+    checkout_path: str = ""
+    pinned_commit: str = ""
+    pinned_at: datetime | None = None
     metadata_json: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -422,6 +436,29 @@ class Sandbox(SQLModel, table=True):
     container_name: str = ""
     host_port: int | None = None
     url: str = ""
+    error: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class GateCheck(SQLModel, table=True):
+    """Did this repository pass its own gate at the pinned commit, with no agent?
+
+    The control measurement of an audit (ADR-0042). Kept as rows rather than a
+    field on the target because it is a *result at a commit*: re-pinning a
+    month later and finding the gate red is itself the finding, and that is
+    only visible if the earlier green one is still on the record.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    gate_check_id: str = Field(index=True, unique=True)
+    target_id: str = Field(index=True)
+    commit: str = ""
+    status: str = "running"  # running | done | failed
+    passed: bool | None = None
+    failed_phase: str = ""
+    # Per-command results: [{phase, command, exit_code, passed, detail}].
+    checks_json: list = Field(default_factory=list, sa_column=Column(JSON))
     error: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

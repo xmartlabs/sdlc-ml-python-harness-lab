@@ -34,6 +34,7 @@ from harness_lab_app.schemas import RunBatchCreate, RunConfigCreate, RunCreate
 from harness_lab_app.target_service import (
     TargetError,
     TargetService,
+    clone_source,
     resolve_ref,
 )
 
@@ -799,9 +800,15 @@ class RunService:
         if pinned_commit:
             return pinned_commit
         target = TargetService(self.session).get_target(config.target_repo_id)
-        ref = (config.target_ref or target.default_ref or "").strip()
+        ref = (config.target_ref or "").strip()
+        if not ref and target.pinned_commit:
+            # A pinned target answers without asking the network at all: the
+            # operator already chose the commit their whole audit is about, and
+            # re-resolving `main` here would quietly move it (ADR-0042).
+            return target.pinned_commit
+        ref = ref or (target.default_ref or "").strip()
         try:
-            return resolve_ref(target.repository_url, ref)
+            return resolve_ref(clone_source(target), ref)
         except TargetError as exc:
             raise RunPreflightError(
                 f"Could not pin '{target.target_id}' at ref '{ref}': {exc}"

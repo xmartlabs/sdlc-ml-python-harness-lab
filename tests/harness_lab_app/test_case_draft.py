@@ -194,3 +194,83 @@ def test_api_generate_case_draft_route():
         )
         assert res.subject == "Test subject"
         assert res.max_steps == 5
+
+
+def test_repository_context_reaches_the_draft_prompt(monkeypatch, tmp_path):
+    """A case drafted blind names files the repository does not have.
+
+    So when the request carries a target, the assistant is shown the checkout
+    the run will actually use (ADR-0042).
+    """
+    from harness_lab_app import case_draft_service, checkout_service, config
+    from harness_lab_app.models import TargetRepository
+
+    settings = config.Settings(repo_root=tmp_path)
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    monkeypatch.setattr(checkout_service, "get_settings", lambda: settings)
+    checkout = tmp_path / "data" / "checkouts" / "payments"
+    checkout.mkdir(parents=True)
+    (checkout / ".git").mkdir()
+    (checkout / "README.md").write_text("# Payments\n")
+    (checkout / "src").mkdir()
+
+    target = TargetRepository(
+        target_id="payments",
+        name="Payments",
+        repository_url="https://example.invalid/payments.git",
+        checkout_path=str(checkout),
+        validation_commands=["make check"],
+    )
+    monkeypatch.setattr(
+        case_draft_service,
+        "_load_repo_context",
+        lambda _target_id: checkout_service.repo_context(target).as_prompt_block(),
+    )
+
+    seen: dict = {}
+
+    def _fake_call(payload):
+        seen.update(payload)
+        return json.dumps(
+            {
+                "subject": "payments: add a refund endpoint",
+                "instruction": "Add a refund endpoint.",
+                "validation_commands": ["make check"],
+                "max_steps": 10,
+            }
+        )
+
+    monkeypatch.setattr(case_draft_service, "_call_gateway_chat", _fake_call)
+
+    case_draft_service.generate_case_draft(
+        CaseDraftRequest(description="Add a refund endpoint", target_id="payments")
+    )
+
+    prompt = seen["messages"][1]["content"]
+    assert "Repository context" in prompt
+    assert "make check" in prompt
+    assert "# Payments" in prompt
+
+
+def test_a_draft_without_a_target_carries_no_repository_context(monkeypatch):
+    """The assistant still works for a repository nobody has cloned yet."""
+    from harness_lab_app import case_draft_service
+
+    seen: dict = {}
+
+    def _fake_call(payload):
+        seen.update(payload)
+        return json.dumps(
+            {
+                "subject": "s",
+                "instruction": "i",
+                "validation_commands": ["pytest {workspace}/test_x.py -q"],
+                "max_steps": 5,
+            }
+        )
+
+    monkeypatch.setattr(case_draft_service, "_call_gateway_chat", _fake_call)
+    case_draft_service.generate_case_draft(
+        CaseDraftRequest(description="Build a thing")
+    )
+    assert "Repository context" not in seen["messages"][1]["content"]

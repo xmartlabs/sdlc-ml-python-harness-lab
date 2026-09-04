@@ -375,6 +375,34 @@ def apply_skill_views(skills: list) -> None:
         render_tool(REPO_ROOT, registry, tool, skills=skills)
 
 
+def add_skills_to_native(workspace: Path, skills: list, tool_id: str) -> dict:
+    """Put named skills inside a `native` workspace, changing nothing else.
+
+    Under `native` the agent's cwd is the cloned repository, so a skill sitting
+    in the lab is invisible to it — which made "their repo, plus this skill" an
+    arm that measured nothing at all (the same failure ADR-0041 documents for
+    availability-versus-use, one level down). The skills a run stages therefore
+    have to be *placed* in the workspace.
+
+    Unlike `inject_harness` this is not the lab's harness: no adapter file, no
+    agents, no governance documents, and nothing already in the repository's own
+    skills directory is removed. The arm stays "their setup plus these skills",
+    which is the only reading under which the comparison means anything.
+    """
+    from ml_python_base.skills_sync.config import DEFAULT_REGISTRY_PATH, load_registry
+    from ml_python_base.skills_sync.linker import add_skills
+
+    registry = load_registry(REPO_ROOT / DEFAULT_REGISTRY_PATH)
+    placed: list[str] = []
+    for tool in registry.tools:
+        if tool.id != tool_id:
+            continue
+        placed = sorted(add_skills(workspace, tool, skills))
+    if placed:
+        print(f"  ✓ Skills added to the native workspace: {', '.join(placed)}")
+    return {"mode": "native_skills", "tool": tool_id, "skills": placed}
+
+
 def inject_harness(workspace: Path, skills: list, tool_id: str) -> dict:
     """Project the lab harness into a target workspace (ADR-0031).
 
@@ -2364,6 +2392,15 @@ def main(argv: list[str] | None = None) -> int:
             case_spec,
             _inject if harness_source == "injected" else None,
         )
+
+    # A `native` arm that stages skills has to have them placed in the
+    # workspace, or the agent — whose cwd is the clone — never sees them and the
+    # arm silently equals its own control.
+    if harness_source == "native" and provisions_repo:
+        wanted = set(args.extra_skill) | set(args.invoke_skill)
+        staged = [skill for skill in effective_skills if skill.name in wanted]
+        if staged:
+            harness_projection = add_skills_to_native(workspace, staged, args.harness)
 
     # Where the agent runs decides which harness it can see. Claude Code and
     # opencode auto-load their adapter file and native skills from the cwd, so

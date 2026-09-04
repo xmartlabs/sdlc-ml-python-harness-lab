@@ -40,6 +40,17 @@ def enqueue_validation(run_id: str) -> None:
     )
 
 
+def enqueue_gate_check(gate_check_id: str) -> None:
+    """Publish a repository gate check (runs in the worker, which owns the
+    docker socket); raises if the broker is unreachable."""
+    celery_app.send_task(
+        "harness_lab_app.tasks.gate_check_target",
+        args=[gate_check_id],
+        queue="runs",
+        retry=False,
+    )
+
+
 def enqueue_audit(run_id: str, auditor_model: str | None = None) -> None:
     """Publish a qualitative-audit task (LLM call, runs in the worker); raises if
     the broker is unreachable."""

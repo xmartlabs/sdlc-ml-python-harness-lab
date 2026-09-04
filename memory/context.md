@@ -163,6 +163,14 @@ versions + rolled `harness_hash`), `model_condition` (temp/context/alias),
 
 ## Open threads / next steps
 
+- **Deferred (plan written, not started):** Claude-native LLM transport so a
+  Claude subscription alone runs the lab end to end — today
+  `CLAUDE_CODE_OAUTH_TOKEN` buys the `claude` harness lane only, while the
+  audit, improvement synthesis, SWE-Pro judge, case summary and two DeepEval
+  metrics all require an OpenAI-shaped gateway. Plan:
+  `docs/plans/2026-09-claude-native-llm-transport.md`. Resume at Milestone 1
+  (extract the transport seam) after the in-flight `feat/lab-v3` work lands.
+
 - Pillar 4 (ablation/experiment runner) — NEXT: matrix case×arm varying ONE
   harness factor, N reps, compare distributions using `condition_hash`
   (ADR-0003) as the grouping key, with the multidimensional `Validation`

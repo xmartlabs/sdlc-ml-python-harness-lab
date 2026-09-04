@@ -495,6 +495,14 @@ export function Repositories() {
                         : "case default"}
                     </td>
                     <td className="row gap">
+                      {/* The workbench, where this repository's checkout, cases
+                          and experiments accumulate. */}
+                      <Link
+                        className="button-link"
+                        to={`/evidence/repositories/${target.target_id}`}
+                      >
+                        Open
+                      </Link>
                       <button
                         onClick={() => {
                           setEditingId(target.target_id);

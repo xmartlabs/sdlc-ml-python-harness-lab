@@ -36,12 +36,14 @@ from harness_lab_app.case_service import CaseExistsError, CaseService
 from harness_lab_app.celery_app import (
     enqueue_audit,
     enqueue_container_cleanup,
+    enqueue_gate_check,
     enqueue_improve,
     enqueue_run,
     enqueue_sandbox_start,
     enqueue_sandbox_stop,
     enqueue_validation,
 )
+from harness_lab_app.checkout_service import CheckoutError
 from harness_lab_app.config import get_settings, read_env_file_value
 from harness_lab_app.constants import EXAMPLE_LMSTUDIO_URL, EXAMPLE_OLLAMA_URL
 from harness_lab_app.db import get_engine, get_session, init_db
@@ -124,6 +126,8 @@ from harness_lab_app.target_service import (
     TargetError,
     TargetNotFoundError,
     TargetService,
+    clone_source,
+    pin_checkout,
     resolve_ref,
 )
 from harness_lab_app.validation_service import ValidationService
@@ -1319,6 +1323,100 @@ def create_app() -> FastAPI:
         except TargetError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @app.get("/api/targets/{target_id}/checkout")
+    def target_checkout(target_id: str, session: Session = Depends(get_session)):
+        """What the lab can see of the operator's own clone of this repository.
+
+        Polled by the onboarding while the operator runs the clone command in
+        their terminal. Everything it reports is observed from the directory —
+        "not cloned yet" is an ordinary answer, not an error.
+        """
+        from harness_lab_app.checkout_service import guided_command, inspect_checkout
+
+        try:
+            target = TargetService(session).get_target(target_id)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            state = inspect_checkout(target)
+            command = guided_command(target)
+        except CheckoutError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"command": command, **state.as_dict()}
+
+    @app.post("/api/targets/{target_id}/checkout/pin")
+    def pin_target_checkout(target_id: str, session: Session = Depends(get_session)):
+        """Freeze the repository at the commit the operator's clone is on.
+
+        From here the whole audit — readiness, derived cases, every run —
+        reads one commit, so two experiments a week apart compare agents rather
+        than a moving branch (ADR-0042).
+        """
+        from harness_lab_app.checkout_service import inspect_checkout
+
+        try:
+            target = pin_checkout(session, target_id)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (CheckoutError, TargetError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return inspect_checkout(target).as_dict()
+
+    @app.post("/api/targets/{target_id}/gate-check", status_code=202)
+    def start_gate_check(target_id: str, session: Session = Depends(get_session)):
+        """Measure the repository alone: its own gate, at the pin, with no agent.
+
+        Without it the first red run is ambiguous — the agent may have failed,
+        or the repository may simply not build in the runner image — and those
+        mean opposite things (ADR-0042).
+        """
+        import uuid
+
+        from harness_lab_app.gate_check_service import (
+            GateCheckError,
+            build_gate_check_spec,
+        )
+        from harness_lab_app.models import GateCheck
+
+        try:
+            target = TargetService(session).get_target(target_id)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            spec = build_gate_check_spec(target)
+        except (GateCheckError, CheckoutError, TargetError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        row = GateCheck(
+            gate_check_id=f"gate-{target.target_id}-{uuid.uuid4().hex[:8]}",
+            target_id=target.target_id,
+            commit=spec["commit"],
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        try:
+            enqueue_gate_check(row.gate_check_id)
+        except Exception as exc:
+            row.status = "failed"
+            row.error = f"Could not queue the gate check: {exc!r}"
+            session.add(row)
+            session.commit()
+            raise HTTPException(status_code=503, detail=row.error) from exc
+        return row
+
+    @app.get("/api/targets/{target_id}/gate-check")
+    def latest_gate_check(target_id: str, session: Session = Depends(get_session)):
+        """The most recent gate check for this repository, or nothing."""
+        from harness_lab_app.models import GateCheck
+
+        row = session.exec(
+            select(GateCheck)
+            .where(GateCheck.target_id == target_id)
+            .order_by(GateCheck.created_at.desc())  # type: ignore[attr-defined]
+        ).first()
+        return row
+
     @app.get("/api/targets/{target_id}/readiness")
     def target_readiness(target_id: str, session: Session = Depends(get_session)):
         """Step 2 of the guided audit: what this repository already has.
@@ -1375,7 +1473,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         ref = (data.ref or target.default_ref or "").strip()
         try:
-            commit = resolve_ref(target.repository_url, ref)
+            commit = resolve_ref(clone_source(target), ref)
         except TargetError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {"target_id": target.target_id, "ref": ref, "commit": commit}
@@ -1401,7 +1499,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         try:
             candidates = derive_candidates(
-                target.repository_url,
+                clone_source(target),
                 ref or target.default_ref,
                 get_settings().target_mirrors_dir,
                 target.target_id,
@@ -1418,8 +1516,14 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/cases")
-    def list_cases(session: Session = Depends(get_session)):
-        return CaseService(session).list_cases()
+    def list_cases(origin_target_id: str = "", session: Session = Depends(get_session)):
+        """Every case, or the library of one repository (ADR-0042)."""
+        cases = CaseService(session).list_cases()
+        if origin_target_id:
+            cases = [
+                case for case in cases if case.origin_target_id == origin_target_id
+            ]
+        return cases
 
     @app.get("/api/cases/{case_id}")
     def get_case(case_id: str, session: Session = Depends(get_session)):

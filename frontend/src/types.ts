@@ -24,6 +24,7 @@ export type CaseRecord = {
   constraints?: string[];
   validation_commands?: string[];
   max_steps?: number;
+  origin_target_id?: string;
 };
 
 export type CaseCreatePayload = {
@@ -39,12 +40,15 @@ export type CaseCreatePayload = {
   constraints: string[];
   validation_commands: string[];
   max_steps: number;
+  origin_target_id?: string;
 };
 
 export interface CaseDraftRequest {
   description: string;
   model?: string;
   selected_skills: string[];
+  /** Draft against this repository's checkout rather than in the abstract. */
+  target_id?: string;
 }
 
 export interface DroppedCommand {
@@ -742,6 +746,65 @@ export type TargetRecord = {
   language: string;
   team: string;
   tags: string[];
+  /** The operator's own clone, once they have made and pinned one. */
+  checkout_path?: string;
+  pinned_commit?: string;
+  pinned_at?: string | null;
+};
+
+/**
+ * What the lab can see of the engineer's own clone of a target repository.
+ *
+ * `exists: false` is an ordinary state, not an error: before they have run the
+ * clone command it is exactly what the page should say.
+ */
+export type CheckoutState = {
+  target_id: string;
+  /** The command to paste into their own terminal, with their credentials. */
+  command: string;
+  /** Where the lab reads it (its own view of the path). */
+  path: string;
+  /** The same location as their shell sees it. */
+  host_path: string;
+  exists: boolean;
+  is_repo: boolean;
+  head: string;
+  branch: string;
+  remote_url: string;
+  dirty: boolean;
+  dirty_files: number;
+  error: string;
+  pinned_commit: string;
+  pinned_at: string;
+  /** HEAD has moved since the pin — offer a re-pin, do not move it silently. */
+  pin_is_stale: boolean;
+};
+
+/** One command a gate check ran, and how it ended. */
+export type GateCheckStep = {
+  phase: "provision" | "setup" | "validate" | string;
+  command: string;
+  exit_code: number | null;
+  passed: boolean;
+  detail: string;
+};
+
+/**
+ * The repository measured alone: its own gate, at the pin, with no agent.
+ *
+ * What separates "the agent failed" from "this repository does not build here".
+ */
+export type GateCheckRecord = {
+  gate_check_id: string;
+  target_id: string;
+  commit: string;
+  status: "running" | "done" | "failed";
+  passed: boolean | null;
+  failed_phase: string;
+  checks_json: GateCheckStep[];
+  error: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 /** A case mined from a target's history — a proposal, nothing persisted. */

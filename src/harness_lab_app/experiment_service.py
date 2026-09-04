@@ -95,6 +95,41 @@ def _hashable(value: Any) -> Any:
     return value
 
 
+def _skills_move_together(conditions: list[dict[str, Any]]) -> bool:
+    """Is "stage the skill" and "ask for it" one intervention here, or two?
+
+    Adding a skill and asking the agent to use it is the most common thing an
+    engineer brings to this lab, and ADR-0041 is the reason: for a mode skill,
+    staging it without asking is not a treatment at all. But the two knobs are
+    separate fields, so the correct design lights up as "two harness factors
+    vary at once" — a confound warning fired at the one design that is not
+    confounded. A warning that cries wolf on the right answer teaches people to
+    ignore warnings.
+
+    They are one intervention when the arms can be put in a single order that
+    both fields agree with: every pair of arms is comparable on *both* sets at
+    once, so "more skills" always means "more skills asked for" and never the
+    reverse. Arms that disagree — one adding X unasked while another asks for a
+    Y it already had — are genuinely two factors and still warn.
+    """
+    pairs = []
+    for condition in conditions:
+        overrides = condition.get("overrides", {}) or {}
+        pairs.append(
+            (
+                {str(item) for item in overrides.get("skills_extra") or []},
+                {str(item) for item in overrides.get("skills_invoke") or []},
+            )
+        )
+    for index, (extra_a, invoke_a) in enumerate(pairs):
+        for extra_b, invoke_b in pairs[index + 1 :]:
+            forward = extra_a <= extra_b and invoke_a <= invoke_b
+            backward = extra_b <= extra_a and invoke_b <= invoke_a
+            if not (forward or backward):
+                return False
+    return True
+
+
 def validate_design(
     mode: ExperimentMode, conditions: list[dict[str, Any]]
 ) -> list[str]:
@@ -192,6 +227,13 @@ def validate_design(
                 "These conditions are identical on every harness axis, so there is "
                 "nothing to attribute a difference to."
             )
+        if {"skills_extra", "skills_invoke"} <= harness_axes and _skills_move_together(
+            conditions
+        ):
+            # One intervention wearing two field names (see above).
+            harness_axes = (harness_axes - {"skills_extra", "skills_invoke"}) | {
+                "skills_under_test"
+            }
         if len(harness_axes) > 1:
             warnings.append(
                 "More than one harness factor varies at once "

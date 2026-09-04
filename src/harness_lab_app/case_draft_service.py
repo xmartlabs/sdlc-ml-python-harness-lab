@@ -13,6 +13,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from sqlmodel import Session
+
 from harness_lab_app.config import get_settings, read_env_file_value
 from harness_lab_app.executors import rewrite_localhost
 from harness_lab_app.gateway_models import GATEWAY_USER_AGENT, normalize_model_name
@@ -58,6 +60,15 @@ _SYSTEM_PROMPT = (
     '- "instruction": clear, precise, comprehensive prompt the agent will receive in its workspace to perform the task\n'
     '- "validation_commands": array of single-line shell commands that run after the agent stops and exit non-zero if the agent failed (e.g. ["pytest {workspace}/test_module.py -q", "python3 -c "import json,sys; d=json.load(open(\'{workspace}/out.json\')); sys.exit(0 if d.get(\'ok\') else 1)""])\n'
     '- "max_steps": integer step budget (5, 10, 15, 20, or 25, default 15)\n\n'
+    "When a 'Repository context' section is present:\n"
+    "- The case runs INSIDE that repository: {workspace} is a clone of it at a fixed "
+    "commit, not an empty directory. Never ask the agent to create the project from "
+    "scratch, and name real paths from the layout you were shown.\n"
+    "- Design a task that repository plausibly gets asked for — a small feature, a bug "
+    "fix, a missing test — sized for the step budget.\n"
+    "- Prefer the repository's own validation commands verbatim: they are what its team "
+    "trusts, and a gate you invent measures your guess instead of their code. Add a "
+    "focused command only for the behaviour the task introduces.\n\n"
     "Only return valid JSON without markdown code fences."
 )
 
@@ -199,6 +210,28 @@ def _parse_draft(raw_response: str) -> dict:
     return parsed
 
 
+def _load_repo_context(target_id: str) -> str:
+    """Describe the target repository for the assistant, or say nothing.
+
+    Best-effort by design: a repository that has not been cloned yet still gets
+    a draft, it is simply a more generic one. Failing the draft because the
+    context could not be read would make the assistant less useful exactly when
+    the operator is still setting the repository up.
+    """
+    if not target_id.strip():
+        return ""
+    try:
+        from harness_lab_app.checkout_service import repo_context
+        from harness_lab_app.db import engine
+        from harness_lab_app.target_service import TargetService
+
+        with Session(engine) as session:
+            target = TargetService(session).get_target(target_id.strip())
+            return repo_context(target).as_prompt_block()
+    except Exception:
+        return ""
+
+
 def generate_case_draft(req: CaseDraftRequest) -> CaseDraftResponse:
     """Draft a case from a scenario, keeping only commands the lab would run.
 
@@ -221,6 +254,9 @@ def generate_case_draft(req: CaseDraftRequest) -> CaseDraftResponse:
     user_prompt = f"User Test Scenario Description:\n{req.description.strip()}"
     if skill_context:
         user_prompt += f"\n\n{skill_context}"
+    repo_block = _load_repo_context(req.target_id)
+    if repo_block:
+        user_prompt += f"\n\n{repo_block}"
 
     messages: list[dict[str, str]] = [
         {"role": "system", "content": _SYSTEM_PROMPT},

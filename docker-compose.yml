@@ -28,6 +28,11 @@ services:
       HARNESS_LAB_DATABASE_URL: sqlite:////app/data/app/harness_lab.db
       HARNESS_LAB_RUNNER_PYTHON: /opt/venv/bin/python
       HARNESS_LAB_REDIS_URL: redis://redis:6379/0
+      # Host path of the repo. The worker needs it for its sibling containers'
+      # bind mounts; the API needs it because it prints paths a human types into
+      # their own shell (the guided clone command), where this container's
+      # `/app` means nothing.
+      HARNESS_LAB_HOST_REPO_ROOT: ${PWD}
     volumes:
       - .:/app
     ports:

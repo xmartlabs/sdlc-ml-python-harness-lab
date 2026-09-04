@@ -32,12 +32,12 @@ from harness_lab_app.executors import (
     container_name_for_run,
     get_executor,
 )
-from harness_lab_app.models import Case, CaseType, Run, RunEvent, RunState
+from harness_lab_app.models import Case, CaseType, Run, RunEvent, RunState, utc_now
 from harness_lab_app.run_service import RunService, continuation_source_dir
 from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.sandbox_service import SandboxService
 from harness_lab_app.schemas import RunConfigCreate
-from harness_lab_app.target_service import TargetError, TargetService
+from harness_lab_app.target_service import TargetError, TargetService, clone_source
 
 logger = logging.getLogger(__name__)
 
@@ -99,9 +99,18 @@ def _target_spec(session: Session, run: Run) -> dict[str, Any] | None:
         raise RuntimeError(
             f"Run {run.run_id} targets unknown repository '{config.target_repo_id}'."
         ) from None
+    # The operator's own checkout when there is one (ADR-0042). Both the worker
+    # and the runner container mount the lab root at /app, so a path under
+    # data/checkouts resolves identically on both sides and the clone inside the
+    # container never touches the network — which is what makes a private
+    # repository runnable without putting a credential in a container.
+    source = clone_source(target)
     return {
         "target_id": target.target_id,
-        "repo_url": target.repository_url,
+        "repo_url": source,
+        # Kept alongside for provenance: which repository this was, independent
+        # of where its bytes were read from on the day of the run.
+        "remote_url": target.repository_url,
         "ref": config.target_ref or target.default_ref,
         "commit": config.target_commit,
         "setup": list(target.setup_commands),
@@ -1105,6 +1114,76 @@ def validate_run(run_id: str) -> None:
         # Re-export so the validation verdict and the new score reach the trace
         # too; deterministic ids mean this updates rather than duplicates.
         _export_langfuse_traces(session, run_id)
+
+
+@celery_app.task(name="harness_lab_app.tasks.gate_check_target", acks_late=True)
+def gate_check_target(gate_check_id: str) -> None:
+    """Run a repository's own gate at its pinned commit, with no agent.
+
+    The control measurement of an audit (ADR-0042): it separates "the agent
+    failed" from "this repository does not build in the runner image", which
+    are indistinguishable in a failed run and mean opposite things.
+
+    Stops at the first failing command on purpose — a test suite run in a
+    workspace whose setup failed measures the setup.
+    """
+    from harness_lab_app.gate_check_service import build_gate_check_spec, summarize
+    from harness_lab_app.models import GateCheck
+
+    init_db()
+    with Session(engine) as session:
+        row = session.exec(
+            select(GateCheck).where(GateCheck.gate_check_id == gate_check_id)
+        ).first()
+        if row is None:
+            return
+        try:
+            target = TargetService(session).get_target(row.target_id)
+            spec = build_gate_check_spec(target)
+        except Exception as exc:
+            row.status = "failed"
+            row.error = str(exc)
+            row.updated_at = utc_now()
+            session.add(row)
+            session.commit()
+            return
+
+        executor = get_executor()
+        results: list[dict[str, Any]] = []
+        for index, command in enumerate(spec["commands"]):
+            try:
+                handle = executor.start(f"{gate_check_id}-{index}", command["argv"])
+                output = "\n".join(message for _level, message in handle.iter_lines())
+                exit_code = handle.wait()
+            except Exception as exc:  # an executor failure is a result, not a crash
+                results.append(
+                    {
+                        "phase": command["phase"],
+                        "command": command["label"],
+                        "exit_code": -1,
+                        "output": f"executor error: {exc!r}",
+                    }
+                )
+                break
+            results.append(
+                {
+                    "phase": command["phase"],
+                    "command": command["label"],
+                    "exit_code": exit_code,
+                    "output": output,
+                }
+            )
+            if exit_code != 0:
+                break
+
+        verdict = summarize(results)
+        row.status = "done"
+        row.passed = verdict["passed"]
+        row.failed_phase = verdict["failed_phase"]
+        row.checks_json = verdict["checks"]
+        row.updated_at = utc_now()
+        session.add(row)
+        session.commit()
 
 
 @celery_app.task(name="harness_lab_app.tasks.audit_run", acks_late=True)

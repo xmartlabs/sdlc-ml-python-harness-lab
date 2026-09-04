@@ -10,6 +10,7 @@ import { Compare } from "./pages/Compare";
 import { Experiments } from "./pages/Experiments";
 import { Findings } from "./pages/Findings";
 import { Repositories } from "./pages/Repositories";
+import { RepositoryDetail } from "./pages/RepositoryDetail";
 import { Dashboard } from "./pages/Dashboard";
 import { Guide } from "./pages/Guide";
 import { Health } from "./pages/Health";
@@ -301,6 +302,7 @@ export default function App() {
         <Route element={<Experiments />} path="/evaluate/experiments" />
         <Route element={<Findings />} path="/evidence/findings" />
         <Route element={<Repositories />} path="/evidence/repositories" />
+        <Route element={<RepositoryDetail />} path="/evidence/repositories/:targetId" />
         <Route element={<Skills />} path="/evidence/skills" />
         <Route
           element={

@@ -276,6 +276,36 @@ def _apply_sqlite_compat_migrations() -> None:
                     )
                 )
 
+        if case_columns and "origin_target_id" not in case_columns:
+            connection.execute(
+                text(
+                    'ALTER TABLE "case" ADD COLUMN origin_target_id '
+                    "VARCHAR NOT NULL DEFAULT ''"
+                )
+            )
+
+        # The operator's own clone of a target repository (ADR-0042). Existing
+        # targets default to empty, which is the "read it over the network"
+        # behaviour they already had.
+        target_columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('targetrepository')")
+            ).fetchall()
+        }
+        for column in ("checkout_path", "pinned_commit"):
+            if target_columns and column not in target_columns:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE targetrepository ADD COLUMN {column} "
+                        "VARCHAR NOT NULL DEFAULT ''"
+                    )
+                )
+        if target_columns and "pinned_at" not in target_columns:
+            connection.execute(
+                text("ALTER TABLE targetrepository ADD COLUMN pinned_at DATETIME")
+            )
+
         saved_proposal_columns = {
             row[1]
             for row in connection.execute(

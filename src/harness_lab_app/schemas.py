@@ -57,6 +57,9 @@ class CaseCreate(BaseModel):
     files_forbidden: list[str] = Field(default_factory=list)
     metadata_json: dict[str, str] = Field(default_factory=dict)
     max_steps: int = 1
+    # The repository this case was written for, when it was written for one.
+    # What turns a pile of cases into a repository's own library (ADR-0042).
+    origin_target_id: str = ""
 
 
 class CaseRead(CaseCreate):
@@ -492,6 +495,11 @@ class CaseDraftRequest(BaseModel):
     description: str
     model: str | None = None
     selected_skills: list[str] = Field(default_factory=list)
+    # The repository the case is being written for, when there is one. A case
+    # drafted blind against someone else's codebase names files that do not
+    # exist and a gate that is not theirs; with it, the assistant reads the
+    # checkout the run will actually use (ADR-0042).
+    target_id: str = ""
 
 
 class DroppedCommand(BaseModel):

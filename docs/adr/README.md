@@ -70,6 +70,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0039 — Step traces carry per-call detail parsed from run artifacts](0039-step-traces-carry-per-call-detail.md)
 - [0040 — Validating a tool is its own mode, not a harness evaluation](0040-subject-validation-mode.md)
 - [0041 — A skill under test is invoked, not just available](0041-a-skill-under-test-is-invoked-not-just-available.md)
+- [0042 — The lab reads a repository through the engineer's own checkout](0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md)
 
 ## Why ADRs exist
 

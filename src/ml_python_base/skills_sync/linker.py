@@ -62,6 +62,26 @@ def link_tool(
     return hashes
 
 
+def add_skills(root: Path, tool: ToolSpec, skills: list[Skill]) -> dict[str, str]:
+    """Copy ``skills`` into ``tool``'s native view **without pruning** it.
+
+    ``link_tool`` owns the view it writes: anything not in the desired set is
+    removed, which is right for the lab's own directories and destructive in a
+    foreign one. A target repository's ``.claude/skills/`` is that team's work,
+    and an arm that added one skill by deleting the rest would be measuring
+    something else entirely.
+
+    Copies rather than symlinks, for the reason ``link_tool``'s copy strategy
+    exists: the workspace has to stand on its own once the run is archived and
+    the lab is out of reach.
+    """
+    if not tool.has_native_view:
+        return {}
+    dest_root = root / tool.native_skills_dir
+    dest_root.mkdir(parents=True, exist_ok=True)
+    return {skill.name: _link_copy(dest_root, skill) for skill in skills}
+
+
 def _remove_stale(dest_root: Path, desired: set[str]) -> None:
     for child in dest_root.iterdir():
         if child.name in _PROTECTED_NAMES:

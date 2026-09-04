@@ -3,6 +3,61 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## Under `native`, a lab-side skill is invisible to the agent — 2026-09-04
+
+`apply_skill_views()` writes into the LAB root; `inject_harness()` runs only for
+`harness_source == "injected"`. Under `native` the agent's cwd is the cloned
+target, so neither governed nor `--extra-skill` skills reach it. A
+`native` + `skills_extra` arm therefore equalled its own control while hashing
+as a distinct condition — the ADR-0041 failure one level down. Fixed by
+`add_skills_to_native()` in `bench_run.py` + `linker.add_skills()`, which copies
+only the named skills into the workspace's native skills dir and, unlike
+`link_tool`, **prunes nothing** (the target's own `.claude/skills/` is that
+team's work).
+
+Related: `validate_design` used to warn "more than one harness factor varies"
+on the most common correct design — staging a skill *and* asking for it. They
+now collapse to one axis when every pair of arms is comparable on both sets at
+once; crossing sets (one arm adds X unasked, another asks for a Y it already
+had) still warn.
+
+## A container cannot clone a private repo, and should not try — 2026-09-04
+
+Target repositories were cloned inside the run container, which runs with
+`GIT_TERMINAL_PROMPT=0`, no ssh agent and no tokens by design. Correct for a
+public repo, fatal for every private one — i.e. every client repository. The
+fix was not to teach the lab about credentials but to invert the direction:
+the engineer clones in their own terminal into `data/checkouts/<target_id>`,
+the lab detects and pins it, and `clone_source(target)` returns that path
+everywhere the repository URL used to be read (runner provisioning, readiness
+mirror, case derivation, ref resolution). Git takes a path anywhere it takes a
+URL, so no downstream code needed a second branch (ADR-0042).
+
+Three gotchas found doing it:
+- **`validate_repository_url` rejects local paths on purpose** (a URL starting
+  with `-` is remote command execution to git). Local sources needed their own
+  `validate_clone_source`, which accepts a path only under `data/checkouts/`.
+- **`target_id` becomes a directory name**, so it is a path boundary —
+  `../escape` would put a clone anywhere on the host. `validate_target_id`
+  refuses rather than sanitising, because a silently rewritten id would not
+  match the directory the operator was told to clone into.
+- **The API container and the operator's shell see different paths.** The
+  guided command must use `host_repo_root`, the same value the runner uses for
+  its bind mounts; printing the container's own `/app/...` view is useless in a
+  terminal.
+
+## A red run against an unfamiliar repo is ambiguous — 2026-09-04
+
+"The agent failed" and "this repository does not build in the runner image"
+look identical in a failed run and mean opposite things. The gate check
+(`gate_check_service` + the `gate_check_target` Celery task) provisions the
+pinned commit, runs setup and the repo's own validation commands with no agent
+and no model, and records **which phase** failed (provision / setup /
+validate). It runs through the same executor as objective validation, so it
+needed no new infrastructure. Refuses to run at all when the repository has no
+runnable validation command — a check that passes by running nothing reads as
+success and is worse than no check.
+
 ## "With skill" means available, not invoked — 2026-09-04
 
 First real Lane B comparison (`does-adding-caveman-improve-outcomes`, 5+5 runs,

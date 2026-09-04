@@ -2892,6 +2892,7 @@ button.ghost {
    and description, and a selected state that tints rather than fills — a
    solid accent fill makes the muted description unreadable. */
 .pick-list > li > button,
+.pick-list > li > a,
 .pick-list > li > button.primary,
 .pick-list > li > button.secondary {
   width: 100%;
@@ -2911,6 +2912,7 @@ button.ghost {
 }
 
 .pick-list > li > button:hover,
+.pick-list > li > a:hover,
 .pick-list > li > button.secondary:hover {
   border-color: var(--accent);
   background: var(--accent-subtle);
@@ -3462,4 +3464,109 @@ button.danger {
 button.danger:hover {
   background: var(--danger-soft);
   border-color: var(--danger);
+}
+
+/* --- guided repository setup (Audit) ------------------------------------- */
+
+/* The clone command belongs to the engineer's terminal, not to a form. It is
+   shown the way a terminal shows it — one unwrapped line — with the copy
+   button beside it, because retyping a clone URL by hand is how typos get in. */
+.command-block {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.command-block > pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  overflow-x: auto;
+  white-space: pre;
+  background: var(--console-bg);
+  color: var(--console-text);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.command-block > button {
+  flex-shrink: 0;
+}
+
+/* Short observed facts — HEAD, branch, the pinned commit — read across rather
+   than down, so the state of the clone is one glance instead of a table. */
+.fact-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin-top: var(--space-3);
+}
+
+.fact-row > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* One command the gate check ran. Only the failing step carries its output,
+   so the border is the fastest way to find it in a long list. */
+.gate-step-list {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.gate-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border-left: 3px solid var(--line);
+  padding-left: var(--space-3);
+}
+
+.gate-step--failed {
+  border-left-color: var(--danger);
+}
+
+.gate-step-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+}
+
+.gate-step-head code {
+  overflow-wrap: anywhere;
+}
+
+/* A generated document can be thousands of lines. Capping its height keeps the
+   actions under it reachable without scrolling past the whole report. */
+.pre--scroll {
+  max-height: 480px;
+  overflow: auto;
+}
+
+/* A short "do this, then this" list. Numbers matter here — the steps happen in
+   two different places (this page and a terminal), so an unordered list would
+   read as a set of options rather than a sequence. */
+.numbered-steps {
+  margin: var(--space-3) 0 0;
+  padding-left: 1.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.numbered-steps > li::marker {
+  color: var(--accent);
+  font-weight: 600;
 }

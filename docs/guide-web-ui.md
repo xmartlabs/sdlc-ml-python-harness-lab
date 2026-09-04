@@ -96,56 +96,95 @@ adds the arms together. Lane C of
 
 This is the flow that spans everything above: take a repository you did not write,
 find out how an agent behaves in it, and turn what you see into something testable.
+It has two halves — a **one-time setup** that ends when a case passes against the
+repository, and a **workbench** you come back to afterwards.
 
-**1. Register the repository.** Repositories → *Add a repository*: clone URL, default
-ref, setup commands (`uv sync`), and the repo's own validation commands (`make test`).
-Press **Check** to see the exact commit the ref points at right now. A private repo
-with no credentials or a typo'd branch fails here, not after a container is up.
+### Setup: Audit a repository (three steps, once)
 
-**2. Get a case that means something in that repo.** Press **Derive cases**. The lab
-mines the repository's history for commits that changed source **and** its tests
-together — tasks that team actually performs and already knows how to verify. Read the
-candidates, keep the ones the team would recognise as their work, and create them in
-**Cases** with provenance `organization`.
+**1. Clone it yourself.** Give the repository an id, a name and its URL. The lab shows
+the exact `git clone` command with the destination filled in — paste it into your own
+terminal, where your ssh keys and tokens already work. The lab watches for the clone,
+reports its HEAD, and you press **Pin this commit**.
+
+The lab never clones the repository itself and never asks for a credential (ADR-0042).
+Everything downstream reads your local checkout at the pinned commit, so no container
+ever contacts the remote. `git pull` moves nothing until you press **Re-pin to HEAD**:
+that is what lets two experiments a week apart compare agents rather than a moving
+branch.
+
+**2. Read what the repository already ships.** Rules files (`CLAUDE.md`, `AGENTS.md`),
+native skills, agents, CI workflows, ADRs, and the validation gate inferred from its
+own files — which you can **adopt** onto the repository in one press. Everything here
+is *detected*; what the lab could not observe says "Not detected" rather than being
+guessed at.
+
+Then press **Run gate check**. It provisions the pinned commit in the runner image,
+runs the repository's setup and its own validation commands, and stops — no agent, no
+prompt, no model. Without it a red run is ambiguous between "the agent failed" and
+"this repository does not build here", which look identical and mean opposite things.
+A green gate check is what makes every later failure a fact about the agent.
+
+**3. Get one case that passes.** Four ways to get one, all storing the case against
+this repository:
+
+| Source | When to use it |
+|---|---|
+| **AI draft** | Fastest. The assistant reads your checkout — README, layout, the repo's own rules file, its adopted gate — and drafts a task that repository plausibly gets asked for. |
+| **From history** | Mines commits that changed source **and** its tests together: tasks the team performs and already knows how to verify. |
+| **By hand** | You know exactly what you want measured. |
+| **Existing case** | Reuse a case already in the catalog against this repository. |
 
 > Running `build a Tetris clone` against a payments API measures nothing. This step is
 > what makes everything after it interpretable.
 
 **Freeze the case and its rubric before running anything.** A case edited after seeing
-results is not a measurement. Each candidate carries the commit it came from, which is
-what lets you show later that the case predates the results.
+results is not a measurement. A derived candidate carries the commit it came from,
+which is what lets you show later that the case predates the results.
 
-**3. See how an agent does in it, as it is.** Runs → New run → pick the case, pick the
-repository, and set **Harness** to `native`: the agent works *inside* their repo with
-only what that repo ships — their `CLAUDE.md`, their conventions, or nothing at all.
-This is their baseline, and it is the first honest answer to "how does an agent resolve
-this case here today?"
+Setup ends with a one-run validation against the repository (`native` harness) that
+proves the case actually runs there.
 
-**4. Read the run.** The **Scores** panel separates facts (a command exited) from
+### Workbench: the repository's own page
+
+**Repositories → the repository** now has everything in one place: its **Checkout**
+(re-pin, dirty-tree warnings), its **Readiness** and gate check, its **Cases** library,
+its **Experiments**, and its **Report**.
+
+The Experiments tab offers the two comparisons worth making, each with the checkout and
+commit already fixed so the only thing varying is the harness:
+
+- **Native vs native + skills** — same repository, same cases; the treatment arm gets
+  the skills you pick. Leave **Enforce skill use** on when you are evaluating one
+  specific skill: without it the arm measures the skill's *availability*, not its use
+  (ADR-0041). Turn it off when the question is which skills an agent reaches for
+  unasked.
+- **Native vs the lab harness** — `native` against `injected`. This answers the
+  question a client actually asks:
+
+  > What does your harness add over how we already work?
+
+  Injection copies the lab's skills, agents, adapter file and governance documents into
+  the clone before the baseline commit — so they never appear in the agent's own diff.
+  If their repo already ships a `CLAUDE.md`, it is displaced to `CLAUDE.md.native.bak`
+  and the collision is recorded in the run's manifest: replacing a team's governance
+  changes the thing being measured, so it is never silent.
+
+**Read the runs.** The **Scores** panel separates facts (a command exited) from
 observations (parsed from artifacts) from judgements (a model's opinion). The audit
-now reads **their** governance for a `native` run, not the lab's — so its
-rule-adherence findings are about the rules the agent was actually given.
+reads **their** governance for a `native` run, not the lab's — so its rule-adherence
+findings are about the rules the agent was actually given.
 
-**5. Compare against your harness.** Experiments → mode `harness_evaluation`, control
-`native`, treatment `injected`, same repository, same case, same model, N ≥ 5. That
-answers the question a client actually asks:
-
-> What does your harness add over how we already work?
-
-Injection copies the lab's skills, agents, adapter file and governance documents into
-the clone before the baseline commit — so they never appear in the agent's own diff —
-and it carries any skill ablation the run declares. If their repo already ships a
-`CLAUDE.md`, it is displaced to `CLAUDE.md.native.bak` and the collision is recorded
-in the run's manifest: replacing a team's governance changes the thing being measured,
-so it is never silent.
-
-**6. Turn what you saw into claims.** Findings → record what the runs showed, with the
-run ids as evidence, a recommendation, and the intervention that would implement it.
+**Turn what you saw into claims.** Findings → record what the runs showed, with the run
+ids as evidence, a recommendation, and the intervention that would implement it.
 **Draft experiment** turns a finding into a design to review. A finding citing no runs
 is labelled an observation; a finding an experiment **refuted** keeps its record.
 
+The **Report** tab assembles all of it — the pinned commit, the gate check, the case
+library, the experiments with their caveats, the accepted findings — as markdown you
+can download and hand over.
+
 ```
-Audit → Finding → Hypothesis → Experiment → Evidence → Recommendation
+Clone → Pin → Gate check → Case → Experiment → Finding → Report
 ```
 
 **What this does not do.** The lab observes how an agent behaves in a repository; it
@@ -210,7 +249,7 @@ rather than after.
   it leaves behind what the other two consume: a staged skill and a case with a
   real validation command.
 - **Evaluate a harness change** → the wizard at **Evaluate → New evaluation**.
-- **Audit a repository** → the six-step guided audit.
+- **Audit a repository** → the three-step setup, then the repository's own page.
 
 Cross-repo evaluation keeps its mode but not its card: it needs two registered
 repositories, so its entry point lives on **Evidence → Repositories** and appears
@@ -313,25 +352,33 @@ an ordinary harness-evaluation experiment, read through the same case matrix. Th
 is how a harness release is validated: previous version vs new, over the suite,
 producing **fixed / broken / unchanged**.
 
-### Repository audit — Mode C, in six steps
+### Repository audit — Mode C: setup, then a workbench
 
-1. **Select repository** — register it, or pick one already known.
+Setup runs once per repository, at **Evaluate → Audit a repository**:
+
+1. **Clone it yourself** — the lab shows the exact `git clone` command with the
+   destination filled in; you run it in your own terminal, where your credentials
+   already work. The lab watches for the clone and you **pin** its commit
+   ([ADR-0042](adr/0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md)).
+   Nothing after this reads the remote.
 2. **Repository readiness** — what the lab could actually read at the pinned
-   commit: reachability, validation gates, setup, and any AI governance already
-   there (rules files, skills, agents, commands, ADRs, CI). Anything it could not
-   observe says **Not detected** rather than being guessed at. "Ready" is a narrow
-   claim — a run would execute and be scored — and says nothing about how good
-   that governance is.
-3. **Derive cases** — proposed from the repository's own history
-   ([ADR-0032](adr/0032-cases-are-derived-from-a-targets-own-history.md)), reviewed
-   and accepted one at a time. An accepted candidate becomes a real case, validated
-   by the repository's own commands.
-4. **Run discovery** — an explicit `discovery` experiment with one `as-is` arm
-   against the repository's native governance.
-5. **Review findings** — strengths, gaps and unused resources arrive labelled
-   **suggested**. Nothing becomes a finding of record without a name on it.
-6. **Turn a finding into an experiment** — prefilled with the repository, the
-   cases and the hypothesis, and editable before it is created.
+   commit: validation gates, setup, and any AI governance already there (rules
+   files, skills, agents, commands, ADRs, CI). Anything it could not observe says
+   **Not detected** rather than being guessed at. "Ready" is a narrow claim — a run
+   would execute and be scored — and says nothing about how good that governance is.
+   The **gate check** here runs the repository's own commands at the pin with no
+   agent, which is what makes a later failed run readable.
+3. **One case that passes** — drafted by the assistant from your checkout, mined
+   from the repository's own history
+   ([ADR-0032](adr/0032-cases-are-derived-from-a-targets-own-history.md)), written by
+   hand, or reused from the catalog. Setup ends when the case validates against the
+   repository.
+
+Afterwards the repository has its own page under **Evidence → Repositories**, with
+its checkout, readiness, case library, experiments and report. Two experiment presets
+live there — `native` vs `native + skills`, and `native` vs the lab harness — both
+with the pinned commit fixed so the harness is the only thing that varies. Findings
+stay on **Evidence → Findings**, and the report links to them.
 
 ### Benchmarks (Advanced) — the leaderboard and the overview
 Leads with what the lab knows about itself, computed server-side

@@ -44,13 +44,50 @@ anything else — Go, Rust, a system dependency — needs that added to
 "not found" before any agent time is spent (by design: the run stops rather
 than measuring an agent against a half-built repository).
 
-### Credentials
+### Credentials — you clone it, the lab reads your clone
 
-The clone happens inside the run container. An `https://` URL to a public repo needs
-nothing. A private repo needs credentials reachable from that container: either a
-token embedded in the URL, or an SSH key mounted into the runner image. The lab does
-not manage repository credentials for you, and `GIT_TERMINAL_PROMPT=0` means a
-missing credential fails fast rather than hanging.
+The lab never authenticates to a git remote on your behalf, and it does not want your
+credentials (ADR-0042). Instead you clone the repository yourself:
+
+1. Open the repository under **Repositories** (or start the guided flow at
+   **Audit a repository**). It shows the exact command, with the destination already
+   filled in:
+
+   ```
+   git clone git@github.com:company/payments.git /path/to/lab/data/checkouts/company-payments
+   ```
+
+2. Paste it into your own terminal. Your ssh agent, your tokens, your VPN — whatever
+   already works for you works here, because it *is* your shell.
+3. The page detects the clone within a few seconds and shows its HEAD. Press **Pin this
+   commit**.
+
+From then on every run, readiness report and derived case reads that local checkout at
+that commit. No container ever contacts the remote, so a private repository needs no
+special setup at all.
+
+Two consequences worth knowing:
+
+- **Uncommitted changes are invisible to runs.** Provisioning clones git objects, so
+  your working-tree edits never reach an agent. The page warns you when the tree is
+  dirty rather than blocking — it is your working copy, not the lab's.
+- **The pin does not move on its own.** `git pull` in your terminal changes nothing
+  until you press **Re-pin to HEAD**. That is the point: two experiments a week apart
+  compare agents, not a moving branch.
+
+A repository registered before this existed keeps working over the network — the lab
+falls back to the remote URL whenever there is no local checkout.
+
+### Does the repository pass its own gate?
+
+Before spending model budget, press **Run gate check** on the readiness step. It
+provisions the pinned commit in the runner image, runs the repository's setup and its
+own validation commands, and stops — no agent, no prompt, no model.
+
+It exists because a failed run against an unfamiliar repository is ambiguous: the agent
+may have failed, or the repository may simply not build in the runner image, and those
+look identical in the output while meaning opposite things. The gate check answers that
+once, cheaply, and names the phase that failed (provision / setup / validate).
 
 ## 2. Point a case at it
 

@@ -103,6 +103,15 @@ class Settings(BaseSettings):
         return self.repo_root / "data" / "target-mirrors"
 
     @property
+    def checkouts_dir(self) -> Path:
+        # Where the operator clones a target repository with their own
+        # credentials (ADR-0042). Under the lab root on purpose: runner
+        # containers already bind-mount the root, so a clone here is visible to
+        # API, worker and runners without a new mount or a credential in a
+        # container.
+        return self.repo_root / "data" / "checkouts"
+
+    @property
     def workspace_dir(self) -> Path:
         # Live working directory the runner writes into, per run
         # (workspace/<run_id>/). Mirrors WORKSPACE_ROOT in scripts/bench_start.py
