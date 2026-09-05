@@ -20,7 +20,13 @@ The provisioning contract: [ADR-0030](adr/0030-one-workspace-source-interface.md
 
 ## 1. Register the repository
 
-**Repositories** in the sidebar → *Add a repository*.
+**Evaluate → Audit a repository** (the front page's third door) walks the three
+steps: register the repository, clone it yourself with the command the page shows
+(into `data/checkouts/<id>`, where your ssh agent and tokens already work), and
+pin a commit ([ADR-0042](adr/0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md)).
+**Evidence → Repositories** lists what is registered, offers *Add a repository*
+for the form alone, and **Open** leads to the repository's workbench
+(`/evidence/repositories/<id>`).
 
 | Field | What it is |
 |---|---|
@@ -91,17 +97,22 @@ once, cheaply, and names the phase that failed (provision / setup / validate).
 
 ## 2. Point a case at it
 
-In the run form, pick the repository under **Target repository** and optionally
-override the **Ref**. **Check commit** shows the exact SHA the run will be pinned to.
+In **Evaluate → New evaluation**, pick the repository under **Repository**; the run
+is provisioned from the commit pinned on your local checkout. In the single-run form
+(**Advanced → Runs**), pick it under **Target repository**, optionally override the
+**Ref**, and **Check commit** shows the exact SHA the run will be pinned to.
 
 The case supplies the task; the repository supplies the code. They are paired at the
 run, not baked into each other — which is what lets one case run against many
 repositories.
 
 > A case only means something in a repository where its task makes sense. Running
-> `build a Tetris clone` against a payments API measures nothing. Cases derived from
-> the target's own history are a separate piece of work — see the
-> [v2 roadmap](roadmap-lab-v2.md#phase-3--case-derivation-from-a-target).
+> `build a Tetris clone` against a payments API measures nothing. Cases can be
+> derived from the target's own history instead: the **From history** tab of the
+> Audit wizard, or **Derive cases** on the Repositories page (both call
+> `POST /api/targets/{id}/derive-cases`), mine the checkout's commits for
+> candidate tasks, which you review and save as cases
+> ([ADR-0032](adr/0032-cases-are-derived-from-a-targets-own-history.md)).
 
 ## 3. Choose which harness the agent sees
 
@@ -224,10 +235,11 @@ with no validation commands leaves the case in charge.
 
 ## Limitations
 
-- **The audit still reads the lab's rules**, not the target's. This matters most for
-  a `native` run, where the governance under evaluation is *theirs* — the auditor is
-  reading the wrong document. Tracked as
-  [Phase 5](roadmap-lab-v2.md#phase-5--evaluation-schema).
+- **The audit judges each run against the governance it actually received**: a
+  `native` run against the target's own rules, an `injected` run against the lab
+  harness ([ADR-0036](adr/0036-audit-judges-a-run-against-its-own-governance.md)).
+  Audits recorded before that change say so instead of showing a surface they
+  never had.
 - **Injection is backup-and-replace, not merge.** A merged `CLAUDE.md` would be a
   third artifact that is neither arm.
 - **A third-party harness repository is not supported.** The two sources are the

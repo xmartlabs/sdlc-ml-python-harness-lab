@@ -16,6 +16,11 @@ pick a Case → choose model + harness + prompt → Create run
    → Compare runs across models / conditions
 ```
 
+The LLM judge, the audit and the other in-process LLM calls go through one
+transport: the AI gateway when `GATEWAY_BASE_URL` + `GATEWAY_TOKEN` are set,
+otherwise the Claude Code CLI with a Claude credential
+([ADR-0043](adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)).
+
 Everything the web app runs also has a CLI equivalent (`make bench-run …`); the
 form shows the equivalent command as a reference. The web lane and the CLI are
 two front-ends over the same runner (`scripts/bench_run.py`).
@@ -442,13 +447,16 @@ proportional bar.
   instances.
 
 ### Runs
-Where you launch and track runs. The **New run** form:
+Under **Advanced → Runs**, where single runs are launched and tracked. The
+everyday entry is **Evaluate → New evaluation** (an experiment with a control
+and a treatment); the **New run** form is the one-run alternative:
 
 - **Case** — what the agent is asked to do (see Cases). Selecting a case sets the
   available **Prompt variants**.
 - **Harness** — the agent scaffold under test: `opencode` (containerized,
-  gateway models) or `codex` / `claude` (run on your host CLI with native auth).
-  To test claude/codex, follow the
+  gateway models), `claude` (containerized too, with `CLAUDE_CODE_OAUTH_TOKEN`
+  or `ANTHROPIC_API_KEY` in `.env`; host mode also works) or `codex` (host mode
+  only, `make app-host`, native OpenAI login). To test claude/codex, follow the
   [claude/codex runbook](runbook-claude-codex.md); design in
   [harness-adapters.md](harness-adapters.md).
 - **Planner / Executor model** — chosen in three tiers, **source → provider → model**:
@@ -509,7 +517,7 @@ Where you launch and track runs. The **New run** form:
 - **Skills** ablation — disable governed skills or enable experimental staged
   skills *for this run only*, to A/B the harness. A non-empty ablation makes the
   run a distinct arm (`condition_hash`). See [ADR-0011](adr/0011-per-run-skill-ablation-and-staging.md).
-- **Validate config** — runs the creation preflight (`POST /api/runs/validate`)
+- **Validate config** — runs the creation preflight (`POST /api/runs/preflight`)
   without creating anything: case and harness availability, `GATEWAY_TOKEN`,
   whether the executor is routable and reachable, and the context window the
   backend is *actually serving* (ADR-0020). A green verdict means Create run will
@@ -718,7 +726,7 @@ from this one's final state (`<parent>-C-001`). The parent is not modified,
 so its score and provenance keep describing what actually produced them.
 
 A continuation is a human intervention, so continued runs are hidden from
-the Dashboard by default — tick *include continuations* to see them. Full
+the **Benchmarks** page by default — tick *include continuations* to see them. Full
 walkthrough: [Continuing a run](guide-run-continuation.md),
 [ADR-0026](adr/0026-run-continuation-as-child-runs.md).
 
@@ -932,7 +940,7 @@ stay distinguishable.
 
 ### Improvements
 Cross-run worklist for the improvement cycle: after a run's proposals are
-synthesized, the **Guardar** button on the run detail snapshots them here (one
+synthesized, the **Save** button on the run detail snapshots them here (one
 row per proposal, with run date and template version for comparing iterations).
 
 Each row shows the **harness** that produced the run (claude, opencode, …), and
@@ -1087,7 +1095,7 @@ when you want the run's traces and costs in Langfuse.
    immediately; `opencode.json` is not touched. (Once it earns its keep, run
    `make sync-gateway-models` to curate it into the tracked map for the CLI lane —
    that is a promotion, not a prerequisite.)
-3. Runs → New run → pick a case (e.g. `pytest-dev__pytest-10051` or
+3. Advanced → Runs → New run → pick a case (e.g. `pytest-dev__pytest-10051` or
    `cli-textstats-v1`), set **Executor model** to the new model, Create run.
 4. Repeat with the previous model (same case + prompt).
 5. Compare → select both runs → read the objective/score/cost deltas.

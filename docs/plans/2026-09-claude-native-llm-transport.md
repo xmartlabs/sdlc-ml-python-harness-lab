@@ -28,9 +28,11 @@ exactly (a measurement that did not happen is still not a zero).
 Code CLI (`@anthropic-ai/claude-code`, already pinned in `Dockerfile.runner`),
 Docker Compose, pytest, Make.
 
-**Plan status:** approved for future implementation; **no implementation
-started**. Deliberately deferred until the in-flight code changes on
-`feat/lab-v3` land, to avoid colliding with them. Resume from Milestone 1.
+**Plan status:** **implemented** on `feat/lab-v3`, 2026-09-04. All six
+milestones landed (the case assistant, a fifth call site missed in the first
+pass, was moved onto the transport the same day); the decision is recorded in
+[ADR-0043](../adr/0043-one-llm-transport-gateway-first-claude-cli-second.md).
+Validation evidence is in the Milestone 6 section below.
 
 **Plan owner repository:** this repository.
 
@@ -57,6 +59,7 @@ OpenAI-shaped HTTP.** Each site independently builds
 | SWE-bench Pro judge | `src/harness_lab_app/tasks.py:955` (`_worker_gateway`), used at `:873`, `:931` | `RuntimeError("gateway not configured")`, falls back to manual scoring |
 | Case-summary polish on import | `src/harness_lab_app/case_summary.py:34` (`_gateway`) | returns `None`, raw issue text kept |
 | `task_completion`, `step_efficiency` | `src/harness_lab_app/deepeval_adapter.py:164,190` | metrics skipped with "No judge model is configured" |
+| AI case draft ("Draft it with AI" in the wizards) | `src/harness_lab_app/case_draft_service.py` (`_call_gateway_chat`) | `ValueError("Gateway not configured")` → HTTP 400 in the wizard |
 
 `tool_correctness` is unaffected — it is deterministic and needs no judge.
 
@@ -127,12 +130,12 @@ present in this repository. This plan exposes it to the judge/audit path.
 
 ## Overall progress
 
-- [ ] Milestone 1 — Extract the single LLM transport seam (no behaviour change)
-- [ ] Milestone 2 — Claude CLI transport behind that seam
-- [ ] Milestone 3 — Make the CLI reachable from the API/worker container
-- [ ] Milestone 4 — Transport-aware model defaults and resolution
-- [ ] Milestone 5 — Documentation, settings surface, and onboarding matrix
-- [ ] Milestone 6 — End-to-end validation on a subscription-only `.env`
+- [x] Milestone 1 — Extract the single LLM transport seam (no behaviour change)
+- [x] Milestone 2 — Claude CLI transport behind that seam
+- [x] Milestone 3 — Make the CLI reachable from the API/worker container
+- [x] Milestone 4 — Transport-aware model defaults and resolution
+- [x] Milestone 5 — Documentation, settings surface, and onboarding matrix
+- [x] Milestone 6 — End-to-end validation on a subscription-only `.env`
 
 ---
 
@@ -141,19 +144,19 @@ present in this repository. This plan exposes it to the judge/audit path.
 Pure refactor. No new capability, no behaviour change; the diff should be
 provably neutral.
 
-- [ ] Create `src/harness_lab_app/llm_transport.py`, stdlib-only for the same
+- [x] Create `src/harness_lab_app/llm_transport.py`, stdlib-only for the same
       reason `gateway_models.py` is (scripts and the FastAPI app both import it;
       `scripts/bench_audit.py:41,50` already imports from the package, so this
       works from `scripts/` unchanged).
-- [ ] Public surface: `chat(model, system, user, *, timeout, temperature) -> str`
+- [x] Public surface: `chat(model, system, user, *, timeout, temperature) -> str`
       and `available_transport() -> Literal["gateway", "claude_cli", "none"]`.
-- [ ] Move the gateway request into it, preserving the details that were
+- [x] Move the gateway request into it, preserving the details that were
       learned the hard way: the `GATEWAY_USER_AGENT` override (Cloudflare bans
       urllib's default UA — `gateway_models.py:37-41`), `normalize_model_name`,
       and the in-container `rewrite_localhost` → `docker_host_alias` rewrite.
-- [ ] Keep per-caller timeout and temperature as arguments; do not unify the
+- [x] Keep per-caller timeout and temperature as arguments; do not unify the
       values (180/120/60s and 0.2/0.0 are deliberate).
-- [ ] Repoint all four call sites at it: `bench_audit.call_gateway` becomes a
+- [x] Repoint all four call sites at it: `bench_audit.call_gateway` becomes a
       thin wrapper (keep the name — `lab_improve.py:41` imports it),
       `tasks._worker_gateway`, `case_summary._gateway`,
       `deepeval_adapter._gateway_chat`.
@@ -164,20 +167,20 @@ behavioural delta.
 
 ## Milestone 2 — Claude CLI transport behind the seam
 
-- [ ] Add `_claude_cli_chat()` to `llm_transport`: `claude -p
+- [x] Add `_claude_cli_chat()` to `llm_transport`: `claude -p
       --output-format json [--model <id>]`, prompt on stdin, system prompt
       via `--append-system-prompt` (verify the flag against the installed CLI
       version before relying on it; fall back to prepending the system text to
       the user message if unavailable).
-- [ ] Resolution order in `available_transport()`: gateway if
+- [x] Resolution order in `available_transport()`: gateway if
       `GATEWAY_BASE_URL` **and** `GATEWAY_TOKEN` are set → else `claude_cli` if
       `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` is set **and** the binary
       is on `PATH` → else `none`. The gateway keeps priority so no existing
       deployment changes behaviour.
-- [ ] Enforce a timeout and treat non-zero exit, empty stdout and unparseable
+- [x] Enforce a timeout and treat non-zero exit, empty stdout and unparseable
       JSON as transport failure — surfaced as the callers' existing failure
       modes (skip / fall back to manual / raise), never as a score.
-- [ ] Record the transport in provenance: `deepeval_adapter` already writes
+- [x] Record the transport in provenance: `deepeval_adapter` already writes
       `judge_transport` (`gateway` | `provider-default`); extend the vocabulary
       with `claude-cli` so a score always says how it was produced.
 
@@ -190,37 +193,38 @@ path still yields `skipped_reason` and no value.
 
 Two options; pick one and record the choice in an ADR.
 
-- [ ] **Option 3a (recommended):** install `@anthropic-ai/claude-code` in
+- [x] **Option 3a (recommended):** install `@anthropic-ai/claude-code` in
       `Dockerfile.api`, mirroring `Dockerfile.runner:72`. One line; costs image
       size and a Node toolchain in the API image.
-- [ ] **Option 3b:** spawn a short-lived runner container per judge call,
+- [ ] **Option 3b (not taken):** spawn a short-lived runner container per judge call,
       reusing the existing execution backend. Cleaner isolation, materially
       slower per call, and more moving parts in the worker.
-- [ ] Confirm the credential actually reaches the chosen process: the API and
+- [x] Confirm the credential actually reaches the chosen process: the API and
       worker containers do **not** export `.env` into their environment, which
       is why `deepeval_adapter._env_or_dotenv` falls back to
       `read_env_file_value` (`deepeval_adapter.py:84-99`). The CLI reads its
       token from the environment, so the transport must inject it explicitly
       into the subprocess env rather than assuming inheritance.
-- [ ] Write ADR `docs/adr/0010-claude-native-judge-transport.md` recording the
-      seam, the resolution order and the 3a/3b decision.
+- [x] Write the ADR recording the seam, the resolution order and the 3a/3b
+      decision. Landed as `0043-one-llm-transport-gateway-first-claude-cli-second.md`;
+      the number `0010` this plan proposed was already taken.
 
 **Validation:** `make app-up`, then a judge call executed inside the worker
 container with `GATEWAY_*` unset and only `CLAUDE_CODE_OAUTH_TOKEN` present.
 
 ## Milestone 4 — Transport-aware model defaults
 
-- [ ] Make the three defaults resolve per transport instead of being constants:
+- [x] Make the three defaults resolve per transport instead of being constants:
       keep `gpt-5.4-mini` / `gpt-5.4-nano` for the gateway, and use Claude ids
       (`claude-sonnet-5` for audit/judge, `claude-haiku-4-5` for summaries) when
       the transport is `claude_cli`. Explicit `AUDITOR_MODEL` / `IMPROVE_MODEL`
       / `CASE_SUMMARY_MODEL` / `DEEPEVAL_MODEL` always win.
-- [ ] Preserve `judge_model()`'s documented resolution order
+- [x] Preserve `judge_model()`'s documented resolution order
       (`deepeval_adapter.py:124-151`): `DEEPEVAL_MODEL` (with `off`/`none`
       disabling) → `AUDITOR_MODEL` → default *only when a transport exists* →
       `""`. The third step currently reads "when the gateway is configured";
       it becomes "when any transport is available".
-- [ ] Error messages must name the actual problem. A model id that cannot exist
+- [x] Error messages must name the actual problem. A model id that cannot exist
       on the active transport should say so, not surface a bare 404.
 
 **Validation:** unit tests pinning the resolved default per transport and the
@@ -229,40 +233,72 @@ the CLI transport.
 
 ## Milestone 5 — Documentation and settings surface
 
-- [ ] `docs/onboarding.md:29-53`: the Path A / Path B split currently presents
+- [x] `docs/onboarding.md:29-53`: the Path A / Path B split currently presents
       the two credential paths as mutually exclusive and concludes "with only
       Path B you can benchmark the `claude` harness, but the audit → improvement
       loop needs the gateway." Replace the matrix with three columns
       (gateway-only, Claude-only, both) and drop the TL;DR once this ships.
-- [ ] Document the third option that already works with **no** code change, for
+- [x] Document the third option that already works with **no** code change, for
       anyone who has an Anthropic console key: `GATEWAY_BASE_URL=https://api.anthropic.com/v1`
       with `GATEWAY_TOKEN=sk-ant-api…` and the `*_MODEL` overrides. Note
       Anthropic's own caveat that the compatibility layer is intended for
       testing rather than production, and that the lab never sends `max_tokens`
       (worth a smoke test on first use).
-- [ ] `docs/known-limitations.md:129-135`: the DeepEval paragraph says the judge
+- [x] `docs/known-limitations.md:129-135`: the DeepEval paragraph says the judge
       "resolves zero-config through the lab's own gateway" — update for the CLI
       transport.
-- [ ] Add `DEEPEVAL_MODEL` to `_SPECS` in `settings_service.py` (group
+- [x] Add `DEEPEVAL_MODEL` to `_SPECS` in `settings_service.py` (group
       `GROUP_MODELS`) so the documented cost lever is reachable from the web UI.
-- [ ] `.env.example`: add a commented subscription-only stanza.
+- [x] `.env.example`: add a commented subscription-only stanza.
 
 **Validation:** `make check-sync`; a fresh read of `docs/onboarding.md` by
 someone who has not seen this plan.
 
 ## Milestone 6 — End-to-end validation on a subscription-only `.env`
 
-- [ ] With **only** `CLAUDE_CODE_OAUTH_TOKEN` set (no `GATEWAY_*`, no
+- [x] With **only** `CLAUDE_CODE_OAUTH_TOKEN` set (no `GATEWAY_*`, no
       `OPENAI_API_KEY`, no `ANTHROPIC_API_KEY`): run a case on the `claude`
       harness, press **Run audit**, generate an improvement proposal, score a
       SWE-bench Pro run, and confirm `task_completion` and `step_efficiency`
       carry values with `judge_transport: claude-cli`.
-- [ ] Confirm no regression on the gateway path: same sequence with `GATEWAY_*`
+- [x] Confirm no regression on the gateway path: same sequence with `GATEWAY_*`
       set must still route through the gateway.
-- [ ] Record measured latency and plan-quota impact per judged run — the CLI
+- [x] Record measured latency and plan-quota impact per judged run — the CLI
       spawns a process per call and consumes the same subscription quota as the
       runs themselves.
-- [ ] `/retro` into `memory/learnings.md`.
+- [x] `/retro` into `memory/learnings.md`.
+
+### Measured, 2026-09-04 (macOS host, Claude CLI 2.1.261)
+
+Each row is a real call, not a mock. The subscription-only column ran against a
+`.env` holding `CLAUDE_CODE_OAUTH_TOKEN` and nothing else.
+
+| Call | Subscription-only (`claude_cli`) | Gateway |
+|---|---|---|
+| Transport resolved | `claude_cli`, judge model `claude-sonnet-5` | `gateway`, judge model `gpt-5.4-mini` |
+| Case-summary polish | 5.5 s | 1.7 s |
+| DeepEval trajectory set (3 metrics) | 20.6 s — `task_completion` 0.90, `step_efficiency` 1.00, `tool_correctness` 1.00 | 5.8 s — identical three scores |
+| Full auditor prompt (2.3 KB system + 86 KB user, a real run's log and diff) | 38.4 s, 7.5 KB audit body | — |
+
+Two things this exercise established that the unit tests could not:
+
+*The auditor prompt must travel on stdin.* The real prompt measured 86 KB; that
+is comfortably under the OS argv limit but close enough that a larger diff would
+not be, and there is no reason to gamble on it.
+
+*The gateway is roughly 3–4× faster per judged run.* The CLI pays a process
+spawn and the subscription's own scheduling on every call. It is a fallback that
+works, not a performance equal — which is another reason the gateway keeps
+priority when both are configured.
+
+**One bug this validation caught.** `_tool_correctness` constructed
+`ToolCorrectnessMetric()` outside its `try`, and DeepEval builds an OpenAI client
+in that constructor which raises on a missing `OPENAI_API_KEY`. On a
+subscription-only lab that killed all three trajectory metrics before any of them
+ran. The metric is deterministic and never calls a model, so it is now handed the
+lab's own judge purely to satisfy the constructor, and the construction moved
+inside the `try` so a future constructor failure is one skipped metric rather
+than three.
 
 ---
 

@@ -19,7 +19,7 @@ Already set up? Jump to [Operating the lab](#8-what-next--operating-the-lab).
 
 ```bash
 git clone https://github.com/xmartlabs/sdlc-ml-python-harness-lab.git
-cd ai-agentic-harness-lab
+cd sdlc-ml-python-harness-lab
 cp .env.example .env
 ```
 
@@ -28,29 +28,46 @@ committed) and starting the stack.
 
 ## 2. Choose your credential path
 
-The lab has **two independent credential surfaces**. You can start with either, but
-most features light up with both:
+The lab has **two independent credential surfaces**. Either one on its own is
+enough to use the lab end to end; together they let you compare models across
+providers.
 
 ```mermaid
 flowchart TD
     Q{"What do you have?"} -->|"A LiteLLM / AI-gateway endpoint"| A["Path A — AI gateway<br/>GATEWAY_BASE_URL + GATEWAY_TOKEN<br/>+ LITELLM_MASTER_KEY"]
     Q -->|"A Claude account (subscription or API key)"| B["Path B — Claude native<br/>CLAUDE_CODE_OAUTH_TOKEN<br/>or ANTHROPIC_API_KEY"]
-    Q -->|"Both"| AB["Do A + B — full functionality"]
-    A --> FA["Enables: opencode harness (gateway models),<br/>LLM audit, improvement synthesis,<br/>SWE auto-score judge, Langfuse attribution"]
-    B --> FB["Enables: claude harness<br/>(Claude Code CLI inside the runner container)"]
+    Q -->|"Both"| AB["Do A + B — every harness, every judge,<br/>full cost attribution"]
+    A --> FA["Enables: opencode harness (gateway models),<br/>every in-process LLM call,<br/>Langfuse attribution"]
+    B --> FB["Enables: claude harness, and every<br/>in-process LLM call through the<br/>Claude Code CLI (ADR-0043)"]
 ```
 
-| Feature | Needs Path A (gateway) | Needs Path B (Claude) |
+Everything the lab does with an LLM is one of two things: a **harness run** (an
+agent working in a container) or an **in-process call** (an audit, a judge, a
+summary). Harness lanes need their own credential. In-process calls go over one
+shared transport that prefers the gateway and falls back to the Claude CLI, so
+they work under either path:
+
+| Feature | Path A alone (gateway) | Path B alone (Claude) |
 |---|---|---|
 | `opencode` harness runs (gateway-routed models, incl. self-hosted) | ✅ | — |
 | `claude` harness runs | — | ✅ |
-| Behavioural **audit** ("Run audit" button) | ✅ | — |
-| **Improvement proposals** / sanitized issue synthesis | ✅ | — |
-| SWE-bench Pro **auto-scoring** (LLM judge) | ✅ | — |
+| Behavioural **audit** ("Run audit" button) | ✅ | ✅ |
+| **Improvement proposals** / sanitized issue synthesis | ✅ | ✅ |
+| SWE-bench Pro **auto-scoring** (LLM judge) | ✅ | ✅ |
+| DeepEval `task_completion` / `step_efficiency` | ✅ | ✅ |
+| Case summary polish on import | ✅ | ✅ |
+| **Draft it with AI** (case assistant in the wizards) | ✅ | ✅ |
 | Per-run cost/attribution in Langfuse | ✅ | — |
 
-> **TL;DR:** with only Path B you can benchmark the `claude` harness, but the
-> audit → improvement loop needs the gateway. Set up **Path A first** if you can.
+> **TL;DR:** a Claude subscription alone is enough to run the whole loop —
+> benchmark the `claude` harness, audit it, and synthesize improvements. Add the
+> gateway when you want to compare *models* (the `opencode` lane, self-hosted
+> models) or need per-run cost attribution.
+
+**If you have both, the gateway always wins.** The in-process transport checks
+it first and only falls back to the Claude CLI when no gateway is configured, so
+adding a Claude token to a gateway lab never changes which model judges your
+runs ([ADR-0043](adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)).
 
 ### Path A — AI gateway (LiteLLM) — recommended
 
@@ -69,10 +86,14 @@ GATEWAY_TOKEN=sk-...
 LITELLM_MASTER_KEY=sk-...
 ```
 
-Optional model overrides (LiteLLM model names, no `gateway/` prefix):
+Optional model overrides (LiteLLM model names, no `gateway/` prefix). The
+defaults are transport-specific: over the gateway the lab uses `gpt-5.4-mini`
+for audits/judges and `gpt-5.4-nano` for summaries; over the Claude CLI (Path B)
+it uses `claude-sonnet-5` and `claude-haiku-4-5`. An override must be a name the
+active transport understands.
 
 ```bash
-# AUDITOR_MODEL=gpt-5.4-mini       # behavioural audits (default gpt-5.5)
+# AUDITOR_MODEL=gpt-5.4-mini       # behavioural audits and LLM judges (gateway default)
 # IMPROVE_MODEL=gpt-5.4-mini       # improvement-issue synthesis (defaults to AUDITOR_MODEL)
 # CASE_SUMMARY_MODEL=gpt-5.4-nano  # SWE-bench Pro import polish (nano-tier is plenty)
 ```
@@ -138,9 +159,27 @@ CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-Restart the stack after editing `.env` (`make app-down && make app-up`) — the
-token flows into the runner container from there. No gateway involvement for the
-runs themselves. Design details: [harness-adapters.md](harness-adapters.md).
+No restart is needed after editing `.env`: it is bind-mounted and read when each
+run starts, and the token flows into the runner container from there. No gateway
+involvement for the runs themselves. Design details:
+[harness-adapters.md](harness-adapters.md).
+
+**The same credential also powers the lab's judges.** When no gateway is
+configured, the audit, the improvement synthesis, the SWE-bench Pro judge, the
+case-summary polish and DeepEval's trajectory metrics all reach a model by
+running `claude -p` headless with every tool disabled — a plain text completion,
+not an agent. You do not configure anything for this: it is what the transport
+does when there is no gateway, and each helper picks a Claude model by default
+(override with `AUDITOR_MODEL`, `DEEPEVAL_MODEL`, `CASE_SUMMARY_MODEL`, using
+names the CLI understands such as `claude-sonnet-5`). Rationale and trade-offs:
+[ADR-0043](adr/0043-one-llm-transport-gateway-first-claude-cli-second.md).
+
+**Prefer HTTP over a subprocess?** Anthropic serves an OpenAI-compatible
+endpoint, so you can also fill in Path A with an Anthropic API key —
+`GATEWAY_BASE_URL=https://api.anthropic.com/v1` and `GATEWAY_TOKEN=sk-ant-...`,
+no LiteLLM to run. That path needs a paid API key (a subscription token will not
+work there), and gives you no per-run virtual keys, so Langfuse attribution
+stays off.
 
 ### Path C — other harnesses and backends
 
@@ -216,16 +255,19 @@ origin on `:8080`; see below.)
 >
 > See [known-limitations.md](known-limitations.md#the-database-cannot-be-rewritten-from-the-host-while-the-stack-runs).
 
-> **Reaching the UI from another machine.** The API is published on `127.0.0.1`
-> by default. Authentication is only enforced once an admin password exists, so
-> binding to every interface before that leaves an unauthenticated
-> code-execution API on your network. Set the password first, then opt in:
+> **Network exposure in dev mode.** The API binds to `127.0.0.1:8009` by default
+> (`HARNESS_LAB_API_BIND_ADDR`), but the Vite dev frontend listens on
+> `0.0.0.0:5173` and proxies `/api` — so with `make app-up`, anyone on your LAN
+> who reaches `:5173` can drive the lab. Authentication is only enforced once an
+> admin password exists, and a run executes code, so set the password before
+> leaving the stack up on a shared network:
 >
 > ```bash
 > make set-password
-> HARNESS_LAB_API_BIND_ADDR=0.0.0.0 make app-up
 > ```
 >
+> Only if another machine must reach the API *directly* (not through the UI):
+> `HARNESS_LAB_API_BIND_ADDR=0.0.0.0 make app-up`, after the password is set.
 > See [SECURITY.md](../SECURITY.md) for what a run container can actually do.
 
 > **Host mode (alternative):** `make app-host` runs the worker/API on your host so
@@ -234,7 +276,8 @@ origin on `:8080`; see below.)
 
 ### Protect the UI if the lab is not on your laptop
 
-The app ships **open**: no password, and the ports publish on every interface. That
+The app ships **open**: no password, and in the dev stack the UI on `:5173` listens
+on every interface (the API itself stays on loopback, but the UI proxies it). That
 is fine while it runs on your machine and wrong the moment it lives on a box that
 stays on — the UI creates containers, edits `.env` and reads your credentials.
 
@@ -251,9 +294,9 @@ is **LAN-only** and assumes plain HTTP — see
 
 ### Leave it running — the always-on stack
 
-`make app-up` is the development stack: Vite with hot reload, the API published on
-every interface. For a box that stays on, use the production profile instead
-([ADR-0019](adr/0019-always-on-local-deployment.md)):
+`make app-up` is the development stack: Vite with hot reload on `0.0.0.0:5173`,
+proxying an API that stays on `127.0.0.1:8009`. For a box that stays on, use the
+production profile instead ([ADR-0019](adr/0019-always-on-local-deployment.md)):
 
 ```bash
 make app-up-prod    # SPA baked into nginx on :8080; API only on loopback
@@ -298,17 +341,21 @@ Runs, scoring and comparison are unaffected.
 
 ## 5. Smoke test — your first run
 
-1. Open **http://localhost:5173** → **Runs** → **New run**.
+1. Open **http://localhost:5173** → **Evaluate → New evaluation** (or
+   **Advanced → Runs → New run** for a single run).
 2. Pick a simple case (e.g. `tetris-v1`), a **harness** you configured
    (`claude` for Path B, `opencode` for Path A), a governance-loaded **prompt
    variant** (`sdlc_full` / `swe_harness`), and an **executor model**
    (gateway models come live from LiteLLM; if one is marked *not routable*,
    enable it in **Settings → Model catalog** first).
-3. Create the run and watch the logs stream. When it finishes:
-   - **SWE-bench (Pro)** cases auto-score; custom cases wait for your manual score
-     (state `awaiting_manual_score` — submit it in the run detail).
-4. In the run detail, click **Run audit** (needs Path A) — the LLM reads the run's
-   artifacts and reports skill usage, loops, and SDLC adherence.
+3. Create the run and watch the logs stream. When it finishes, it is scored
+   ([ADR-0038](adr/0038-every-run-leaves-with-a-score.md)): a case with executable
+   validation commands (SWE-bench, SWE-bench Pro, a target repository with a gate,
+   a custom case with `validation_commands`) scores itself; a case with a
+   `scoring_rubric` is LLM-judged; only rubric-less, non-objective cases stop in
+   `awaiting_manual_score` — submit the score in the run detail.
+4. In the run detail, click **Run audit** (works under either path) — the LLM
+   reads the run's artifacts and reports skill usage, loops, and SDLC adherence.
 
 If all of that worked, your machine is fully onboarded.
 
@@ -318,8 +365,8 @@ If all of that worked, your machine is fully onboarded.
 |---|---|
 | Model dropdown empty | Settings → **Test connection**; `GATEWAY_BASE_URL` ends in `/v1`; gateway reachable from Docker (use `host.docker.internal`, not `localhost`, when the gateway runs on your host) |
 | Run rejected with "not routable" | Settings → **Refresh from gateway**, then enable the model — the gateway serves it but nothing can route it yet |
-| `claude` run fails auth | `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) set in `.env` **before** `make app-up`; restart the stack after editing `.env` |
-| Audit button errors with gateway config | Set `GATEWAY_TOKEN` + `GATEWAY_BASE_URL` on the Settings page — they take effect on the next request, no restart |
+| `claude` run fails auth | `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) set in `.env` (or on Settings) — it is read when the run starts, no restart needed |
+| Audit / judge says no LLM transport | Set `GATEWAY_BASE_URL` + `GATEWAY_TOKEN` **or** a Claude credential (`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`) on the Settings page — they take effect on the next request. **Health → LLM transport** shows which one is active |
 | Runs stuck in `pending` | Open **Health** — it says whether a worker is replying at all; then worker logs: `docker compose logs -f worker` |
 | `git status` dirty after a run, or `make check-sync` failing | A run died mid-ablation. **Health → Re-sync skill views** restores the generated views ([ADR-0018](adr/0018-health-and-drift-panel.md)) |
 | Skill import refused with "non-public address" | The URL resolves to a private/loopback host. Imports are https-only and must reach a public address (ADR-0017) — download it and use **Upload** instead |
@@ -341,17 +388,18 @@ What "in place" means:
 - **The package.** The Docker images (`make app-up`) ship it. For host mode or
   local development: `uv sync --extra deepeval` (note a plain `uv sync` removes
   it again).
-- **A judge**, for the two `GEval` rubrics. Zero-config when your AI gateway is
-  set up: the judge defaults to the auditor's default model through
-  `GATEWAY_BASE_URL`/`GATEWAY_TOKEN` — the same endpoint and credentials the
-  audit already uses. Override with `DEEPEVAL_MODEL` (or `AUDITOR_MODEL`) in
-  `.env`.
+- **A judge**, for the two `GEval` rubrics. Zero-config under either credential
+  path: the judge goes over the same LLM transport as the audit
+  ([ADR-0043](adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)) —
+  `gpt-5.4-mini` through the gateway, `claude-sonnet-5` through the Claude CLI.
+  Override with `DEEPEVAL_MODEL` (or `AUDITOR_MODEL`) in `.env`.
 - `tool_correctness` is deterministic and needs no judge — but it only scores
   cases that declare `files_expected` or `validation_commands`, because an
   expectation nobody wrote down is not something to grade against.
 
 **Cost lever:** the two judged metrics are two small LLM calls per scored run.
-`DEEPEVAL_MODEL=off` in `.env` turns them off; the deterministic scores stay.
+`DEEPEVAL_MODEL=off` (or `none`) in `.env` turns them off; the deterministic
+scores stay.
 
 ## 7. Optional — develop the lab itself
 

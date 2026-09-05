@@ -929,7 +929,8 @@ export function NewEvaluation() {
               />
               <span>
                 <strong>An external repository</strong> — the agent works inside
-                someone else&apos;s codebase, cloned fresh per run.
+                someone else&apos;s codebase, provisioned from the pinned local
+                checkout for each run.
               </span>
             </label>
           </fieldset>

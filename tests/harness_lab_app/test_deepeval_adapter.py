@@ -17,6 +17,7 @@ import pytest
 
 from harness_lab_app import (
     deepeval_adapter,
+    llm_transport,
     models as _models,  # noqa: F401  (registers the tables for `session`)
 )
 from harness_lab_app.deepeval_adapter import ADAPTER_VERSION, measure, render_trajectory
@@ -163,9 +164,9 @@ def test_no_judge_model_skips_only_the_judged_metrics(monkeypatch):
     install_fake_deepeval(monkeypatch)
     monkeypatch.delenv("DEEPEVAL_MODEL", raising=False)
     monkeypatch.delenv("AUDITOR_MODEL", raising=False)
-    # No gateway either — with one configured, the auditor's default model
+    # No transport either — with one configured, the auditor's default model
     # legitimately becomes the judge, which is its own test below.
-    monkeypatch.setattr(deepeval_adapter, "_gateway_config", lambda: ("", ""))
+    monkeypatch.setattr(deepeval_adapter, "judge_transport", lambda: "none")
 
     by_name = {outcome.name: outcome for outcome in measure(trajectory())}
 
@@ -412,12 +413,36 @@ def test_deepeval_model_off_is_the_cost_lever(monkeypatch):
     assert deepeval_adapter.judge_model() == ""
 
 
-def test_without_gateway_credentials_the_bare_model_name_is_passed_through(
+def test_without_any_transport_the_bare_model_name_is_passed_through(
     monkeypatch,
 ):
-    monkeypatch.setattr(deepeval_adapter, "_gateway_config", lambda: ("", ""))
+    monkeypatch.setattr(deepeval_adapter, "judge_transport", lambda: "none")
 
-    assert deepeval_adapter._gateway_judge("some-model") == "some-model"
+    assert deepeval_adapter._judge_llm("some-model") == "some-model"
+
+
+def test_the_claude_cli_judges_only_when_there_is_no_gateway(monkeypatch):
+    """The gateway keeps priority: the CLI fills a gap, it never displaces one."""
+    monkeypatch.setattr(
+        deepeval_adapter, "_gateway_config", lambda: ("http://gw.invalid/v1", "tok")
+    )
+    monkeypatch.setattr(llm_transport, "claude_cli_ready", lambda: True)
+    assert deepeval_adapter.judge_transport() == "gateway"
+
+    monkeypatch.setattr(deepeval_adapter, "_gateway_config", lambda: ("", ""))
+    assert deepeval_adapter.judge_transport() == "claude_cli"
+
+    monkeypatch.setattr(llm_transport, "claude_cli_ready", lambda: False)
+    assert deepeval_adapter.judge_transport() == "none"
+
+
+def test_a_claude_only_lab_judges_with_a_claude_model(monkeypatch):
+    monkeypatch.delenv("DEEPEVAL_MODEL", raising=False)
+    monkeypatch.delenv("AUDITOR_MODEL", raising=False)
+    monkeypatch.setattr(deepeval_adapter, "_env_or_dotenv", lambda _name: "")
+    monkeypatch.setattr(deepeval_adapter, "judge_transport", lambda: "claude_cli")
+
+    assert deepeval_adapter.judge_model().startswith("claude-")
 
 
 def test_extract_json_strips_fences_and_prose():
@@ -428,6 +453,9 @@ def test_extract_json_strips_fences_and_prose():
 
 
 def test_gateway_chat_speaks_openai_compatible_json(monkeypatch):
+    monkeypatch.setattr(
+        deepeval_adapter, "_gateway_config", lambda: ("http://gw.invalid/v1", "tok")
+    )
     captured = {}
 
     class FakeResponse:
@@ -448,11 +476,9 @@ def test_gateway_chat_speaks_openai_compatible_json(monkeypatch):
         captured["auth"] = request.headers.get("Authorization")
         return FakeResponse()
 
-    monkeypatch.setattr(deepeval_adapter.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(llm_transport.urllib.request, "urlopen", fake_urlopen)
 
-    text = deepeval_adapter._gateway_chat(
-        "http://gw.invalid/v1", "tok", "gateway/gpt-5.4-mini", "Judge this."
-    )
+    text = deepeval_adapter._judge_chat("gateway/gpt-5.4-mini", "Judge this.")
 
     assert text == "judged text"
     assert captured["url"] == "http://gw.invalid/v1/chat/completions"

@@ -26,17 +26,17 @@ const GROUPS: { id: string; title: string; hint: string }[] = [
   {
     id: "models",
     title: "Model defaults",
-    hint: "Used when a run does not name a model"
+    hint: "Run models (OPENCODE_*) and the lab's own audit / judge / summary models"
   },
   {
     id: "runtimes",
     title: "Local runtimes",
-    hint: "Self-hosted backends behind the gateway"
+    hint: "Direct LM Studio / Ollama hosts the picker reads without a gateway"
   },
   {
     id: "credentials",
     title: "Harness credentials",
-    hint: "Native CLI lanes (claude, codex)"
+    hint: "Claude and codex harness lanes. A Claude credential is also the fallback LLM transport for audits and judges when no gateway is set."
   },
   { id: "tracing", title: "Tracing", hint: "Langfuse" }
 ];
@@ -334,10 +334,11 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
       <header className="page-header">
         <div>
           <p className="eyebrow">Settings</p>
-          <h1>Gateway, models and runtime</h1>
+          <h1>Transport, models and runtime</h1>
           <p className="lede">
-            Configure the LLM gateway, adopt models it serves, and edit the connection
-            settings in <code>.env</code> — no CLI, no commit.
+            Set up the AI gateway or a Claude credential, adopt the models it serves,
+            and edit the connection settings in <code>.env</code> — no shell, no
+            restart.
           </p>
         </div>
       </header>

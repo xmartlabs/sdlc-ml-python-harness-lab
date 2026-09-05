@@ -1,9 +1,10 @@
 # Lab sync workflow — installed state & candidate preview
 
 Phase 4 lets the lab consume the template as an **immutable release** (`vX.Y.Z` tag
-resolved to a full SHA) — never mutable `main`. This page covers the read-only half:
-knowing what is installed and previewing a candidate. The actual candidate worktree
-and adoption land in a later slice.
+resolved to a full SHA) — never mutable `main`. This page covers knowing what is
+installed, previewing a candidate, and preparing it in an isolated worktree
+(`make harness-sync-branch`). Adoption — reviewing the candidate diff, committing it
+and merging the branch — is manual.
 
 ## One-time setup
 
@@ -71,7 +72,8 @@ This is the only mutating command in this slice, and it never touches `main`:
 5. Writes a `.harness-candidate.yaml` record and prints the review command.
 
 Review the candidate with `git -C .worktrees/harness-candidate-<ref> diff HEAD`, then
-either validate/adopt it (later slice) or discard it:
+either adopt it by hand (run `make check` in the worktree, commit, merge the
+`harness-candidate/<ref>` branch) or discard it:
 
 ```bash
 make harness-sync-clean REF=vX.Y.Z

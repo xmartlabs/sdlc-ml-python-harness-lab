@@ -10,8 +10,8 @@ Each primary agent has its model pinned in `opencode.json`:
 
 ```jsonc
 "agent": {
-  "plan":  { "model": "{env:OPENCODE_MODEL_PLAN}" },   // big "thinking" model (default: Zen free Nemotron Ultra)
-  "build": { "model": "{env:OPENCODE_MODEL}" }          // self-hosted (e.g. LM Studio Qwen Coder)
+  "plan":  { "model": "{env:OPENCODE_MODEL_PLAN}" },   // big "thinking" model (default: gateway/gpt-5.5)
+  "build": { "model": "{env:OPENCODE_MODEL}" }          // self-hosted via the gateway (default: LM Studio Qwen 3.6 35B)
 }
 ```
 
@@ -63,13 +63,19 @@ edit — that failure is the signal "stop planning, `Tab` to Build".
 ## Quick reference (`.env`)
 
 ```bash
-OPENCODE_MODEL_PLAN=opencode/nemotron-3-ultra-free            # Plan agent (Zen, free)
-OPENCODE_MODEL=lmstudio/qwen/qwen3-coder-30b                  # Build agent (self-hosted)
-OPENCODE_SMALL_MODEL=ollama/qwen3:8b                          # lightweight (titles, etc.)
+OPENCODE_MODEL_PLAN=gateway/gpt-5.5                           # Plan agent (via the AI gateway)
+OPENCODE_MODEL=gateway/lmstudio-qwen3.6-35b-build             # Build agent (self-hosted, via the gateway)
+OPENCODE_SMALL_MODEL=openai/qwen/qwen3.5-9b                   # lightweight (titles, etc.)
 ```
 
-The default planner uses **OpenCode Zen** (free): run `opencode auth login` once, no
-extra key needed. Launch with `make opencode` (loads `.env`); check local endpoints
-with `make opencode-doctor`. Other free Zen planners: `opencode/deepseek-v4-flash-free`,
-`opencode/mimo-v2.5-free`, `opencode/north-mini-code-free`. To use NVIDIA NIM instead,
-set `OPENCODE_MODEL_PLAN=nvidia/nvidia/nemotron-3-super-120b-a12b` + `NVIDIA_API_KEY`.
+These are the `.env.example` defaults: both agents route through the LiteLLM gateway
+(`GATEWAY_BASE_URL` + `GATEWAY_TOKEN`), which gives Langfuse traces and one place to
+swap models. Launch with `make opencode` (loads `.env`); check local endpoints with
+`make opencode-doctor`.
+
+Alternatives, no gateway: **OpenCode Zen** (free, built-in — run `opencode auth login`
+once) for the planner, e.g. `OPENCODE_MODEL_PLAN=opencode/nemotron-3-ultra-free`
+(also `opencode/deepseek-v4-flash-free`, `opencode/mimo-v2.5-free`,
+`opencode/north-mini-code-free`), and a direct local server for the build agent,
+e.g. `OPENCODE_MODEL=lmstudio/qwen/qwen3-coder-30b`. To use NVIDIA NIM instead, set
+`OPENCODE_MODEL_PLAN=nvidia/nvidia/nemotron-3-super-120b-a12b` + `NVIDIA_API_KEY`.

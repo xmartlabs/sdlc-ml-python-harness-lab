@@ -18,9 +18,20 @@ RUN set -eux; \
     arch="$(uname -m)"; \
     curl -fsSL "https://download.docker.com/linux/static/stable/${arch}/docker-27.5.1.tgz" \
       | tar -xz --strip-components=1 -C /usr/local/bin docker/docker; \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; \
+    apt-get install -y --no-install-recommends nodejs; \
     apt-get purge -y curl; \
     apt-get autoremove -y; \
     rm -rf /var/lib/apt/lists/*
+
+# Claude Code CLI as an LLM transport, not as a harness. When the lab has no
+# OpenAI-compatible gateway configured, the in-process LLM callers that run in
+# this image — the DeepEval judge, the SWE judge, the case summariser — reach a
+# model by shelling out to `claude -p` with every tool disabled
+# (src/harness_lab_app/llm_transport.py). A subscription token is then the only
+# credential the whole lab needs. Auth comes from .env at runtime:
+# CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY. See ADR-0043.
+RUN npm install -g @anthropic-ai/claude-code && claude --version
 
 RUN pip install --no-cache-dir uv
 

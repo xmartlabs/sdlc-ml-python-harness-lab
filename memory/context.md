@@ -90,21 +90,29 @@ by pressing Re-validate once the worker restarts with this code.
 
 ## Constraints and decisions in force
 
-- `runs.yaml` is the authoritative run registry — do not modify between reps of a cell.
-- Per-run reports go to `data/runs/<run_id>/report.md`. Template: `templates/run-report-template.md`.
-- Scoring is always manual at this stage (pygame window, no automated runner).
-- `make bench-start RUN=<id>` / `make bench-close RUN=<id> SCORE=<n> INTERVENTIONS=<n>` are the gates.
-- `results.csv` accumulates only completed + scored runs (not pending).
-- `make bench-results` reads `runs.yaml` — it shows all runs including pending ones.
-  `results.csv` is the clean comparison artifact for scored runs only. These are different things.
-- `bench_start.py` currently injects `prompt_incremental.md` for all tetris-v1 runs.
-  For conductor/Nemotron cells (B–I), verify the correct prompt manually before running.
+- The database is the source of truth for cases and runs (ADR-0025). The CLI lane
+  (`runs.yaml`, `make bench-start/bench-close/bench-results`, `results.csv`) still
+  exists but is legacy; do not treat it as authoritative.
+- Scoring follows ADR-0038: web runs use `score_mode=manual`, but a case with
+  executable validation (SWE-bench, SWE-bench Pro, a target repo with a gate, a
+  custom case with `validation_commands`) scores itself; a case with a
+  `scoring_rubric` is LLM-judged; only rubric-less, non-objective cases stop in
+  `awaiting_manual_score`.
+- One LLM transport for every in-process call (ADR-0043,
+  `src/harness_lab_app/llm_transport.py`): gateway when `GATEWAY_BASE_URL` +
+  `GATEWAY_TOKEN` are set, else the Claude Code CLI when a Claude credential is set.
+  Gateway wins when both exist. Either credential path alone runs the lab end to end.
+- Runs can target a registered repository at a pinned commit (ADR-0029/0042): the
+  engineer clones into `data/checkouts/<target_id>` with the command the UI shows;
+  `harness_source` (`lab_root` | `native` | `injected`) is a per-run condition
+  (ADR-0031); the audit judges against the run's own governance surface (ADR-0036).
+- `.env` is bind-mounted and read per request / per run — editing it (or Settings)
+  needs no restart.
+- Per-run artifacts live under `data/runs/<run_id>/` (git-ignored).
 
 ## Current run state
 
-| Run | Status | Score | Interventions |
-|-----|--------|-------|---------------|
-| local-webapp-mvp | in progress | — | — |
+Tracked in the web UI; no CLI table maintained.
 
 ## Scientific-lab direction (agreed 2026-07-07)
 
@@ -163,13 +171,10 @@ versions + rolled `harness_hash`), `model_condition` (temp/context/alias),
 
 ## Open threads / next steps
 
-- **Deferred (plan written, not started):** Claude-native LLM transport so a
-  Claude subscription alone runs the lab end to end — today
-  `CLAUDE_CODE_OAUTH_TOKEN` buys the `claude` harness lane only, while the
-  audit, improvement synthesis, SWE-Pro judge, case summary and two DeepEval
-  metrics all require an OpenAI-shaped gateway. Plan:
-  `docs/plans/2026-09-claude-native-llm-transport.md`. Resume at Milestone 1
-  (extract the transport seam) after the in-flight `feat/lab-v3` work lands.
+- **Landed (ADR-0043):** Claude-native LLM transport — a Claude subscription alone
+  runs the lab end to end; the audit, improvement synthesis, SWE-Pro judge, case
+  summary and DeepEval metrics all go through `llm_transport.py` (gateway first,
+  Claude CLI second). Plan: `docs/plans/2026-09-claude-native-llm-transport.md`.
 
 - Pillar 4 (ablation/experiment runner) — NEXT: matrix case×arm varying ONE
   harness factor, N reps, compare distributions using `condition_hash`

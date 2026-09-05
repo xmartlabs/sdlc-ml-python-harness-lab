@@ -25,7 +25,9 @@ all from the web UI.
 
 - **Benchmark lanes** — custom cases, SWE-bench, and SWE-bench Pro, one Docker
   container per run (Celery + Redis), with cancel/retry and orphan reconciliation.
-- **Multiple harnesses** — Claude Code, OpenCode, Codex, and more, selectable per run.
+- **Multiple harnesses** — Claude Code and OpenCode in the runner container, Codex via
+  host mode, selectable per run; Antigravity through a manual flow
+  (`make bench-antigravity`).
 - **Rich provenance** — condition hash, harness fingerprint, prompt/case hashes, cost,
   tokens, steps, diff, and skills consulted, captured per run.
 - **Behavioural audit** — an LLM reads a run's artifacts and reports skill usage, loops,
@@ -46,30 +48,37 @@ all from the web UI.
   and re-measure (see the [harness improvement loop](docs/harness-lifecycle/README.md)).
 - Built on **`uv` + `ruff` + `pytest`** with a read-only CI gate (`make ci`).
 
-## ⚠️ Scope: this is the lab for *one* harness
+## ⚠️ Scope: which harness is under test
 
 Read this before cloning, so it is not a surprise afterwards.
 
-**The harness under test is the repository the lab runs from.** `repo_root` defaults
-to the working directory, and the governance surface a run sees — `.github/skills/`,
-the generated `CLAUDE.md` / `AGENTS.md` / `OPENCODE.md`, the agents, the hooks — is
-this repo's own, which is the [`ml-python-base`](https://github.com/xmartlabs/sdlc-ml-python-base)
-template. That is deliberate: it closes the improvement loop, because the harness you
-measure is the harness you then improve and re-measure.
+**By default, the harness under test is the repository the lab runs from.**
+`repo_root` defaults to the working directory, and the governance surface a run sees
+— `.github/skills/`, the generated `CLAUDE.md` / `AGENTS.md` / `OPENCODE.md`, the
+agents, the hooks — is this repo's own, which is the
+[`ml-python-base`](https://github.com/xmartlabs/sdlc-ml-python-base) template. That
+is deliberate: it closes the improvement loop, because the harness you measure is the
+harness you then improve and re-measure.
+
+**A run can also target another repository.** Register it under **Evidence →
+Repositories**, clone it into `data/checkouts/<target_id>` with the command the UI
+shows, and the lab pins the commit per run
+([ADR-0029](docs/adr/0029-target-repositories-pinned-per-run.md),
+[ADR-0042](docs/adr/0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md)).
+The governance a run sees is then a per-run condition, `harness_source`
+([ADR-0031](docs/adr/0031-harness-source-is-a-run-condition.md)): `lab_root` (this
+repo's), `native` (the target's own) or `injected` (this repo's, projected into the
+target). Guide: [Target repositories](docs/guide-target-repositories.md).
 
 What that means in practice:
 
 - The **Harness** selector picks *which CLI drives the run* (Claude Code, OpenCode,
-  Codex, Antigravity). It does not swap the governance content those CLIs read.
-- To benchmark a **different** harness, clone that repository and run the lab inside
-  it. There is no per-run "point at this other repo" yet.
+  Codex). Which governance the CLI reads is `harness_source`, not the CLI.
+- A harness sourced from a *third* repository (target A + harness B) is still out of
+  scope — see [Known limitations](docs/known-limitations.md#harness-coupling).
 - A run with a **skill ablation** rewrites the native skill views in the working tree
   and restores them afterwards. Do not run benchmarks against a tree with uncommitted
   governance changes.
-
-Making the harness a per-run input — materialised by git ref into the run's workspace
-instead of inherited from the working directory — is the main planned change. See
-[the open-source readiness plan](docs/plans/2026-08-open-source-readiness-and-batch-runs.md).
 
 Before running anything, read [SECURITY.md](SECURITY.md): runs execute untrusted model
 output with the repository mounted read-write and your `.env` in the container
@@ -82,12 +91,12 @@ flowchart TB
     subgraph stack["Lab stack — make app-up (Docker)"]
         UI["Web UI<br/>:5173"] --> API["FastAPI<br/>:8009"]
         API --> W["Celery worker<br/>(+ Redis)"]
-        W --> RUN["Runner container (one per run)<br/>harness: claude / opencode / codex<br/>model: cloud or gateway-routed (self-hosted)"]
+        W --> RUN["Runner container (one per run)<br/>harness: claude / opencode (codex via host mode)<br/>model: cloud or gateway-routed (self-hosted)"]
     end
 
     GW["AI gateway (LiteLLM)<br/>models + per-run keys + Langfuse"] -.-> RUN
-    GW -.-> AUD
-    GW -.-> IMP
+    LLM["LLM transport<br/>(gateway or Claude CLI)"] -.-> AUD
+    LLM -.-> IMP
 
     RUN --> ART["Run artifacts<br/>logs · diff · cost · attribution ·<br/>condition hash · harness fingerprint"]
     ART --> SCORE["Score<br/>SWE auto · manual · LLM judge"]
@@ -111,9 +120,9 @@ governance** — the skills, agents, and rules the agent is given. That version 
 you improve. The full loop, tied to it:
 
 1. **Run & observe.** Run a case in the UI (harness `claude`, a governance-loaded
-   prompt variant like `swe_harness` / `sdlc`), let it finish, and open the run. The
-   **Attribution** panel shows which skills were consulted; the **Audit** button
-   writes a behavioural diagnosis. `make harness-status` shows which template version
+   prompt variant like `sdlc_full` for Tetris or `swe_harness` for SWE-bench), let it
+   finish, and open the run. The **Attribution** panel shows which skills were
+   consulted; the **Run audit** button writes a behavioural diagnosis. `make harness-status` shows which template version
    the lab is currently running.
 2. **Generate the issue.** On the run, open the **Sanitised issue** panel. It shows
    a ready-to-paste, sanitized markdown issue (no private data). **Copy the whole block
@@ -175,16 +184,16 @@ suite with hard gates), see the
 | **Setting up for the first time** | [Onboarding guide](docs/onboarding.md) — prerequisites, credential paths (gateway / Claude), `.env`, first run, troubleshooting |
 | **Operating the lab day-to-day** | [Web UI guide](docs/guide-web-ui.md) — every screen; [Continuing a run](docs/guide-run-continuation.md) — push a stopped run further with a new prompt; [Improvement cycle](docs/improvement-cycle.md) — audit → proposals → GitHub issues; [Langfuse observability](docs/guide-langfuse-observability.md) — read a run turn by turn |
 | **Trialling a new skill** | [Skill validation guide](docs/guide-skill-validation.md) — import from a URL, A/B it, promote it; [Skills management](docs/skills-management.md) — the governed catalog and the sync engine |
-| **Diagnosing a lab that misbehaves** | The **Health** screen ([guide](docs/guide-web-ui.md#health)) — reachability, drift and the four repairs ([ADR-0018](docs/adr/0018-health-and-drift-panel.md)); [Onboarding troubleshooting](docs/onboarding.md#5-smoke-test--your-first-run) |
+| **Diagnosing a lab that misbehaves** | The **Health** screen ([guide](docs/guide-web-ui.md#health)) — reachability, drift and the five repairs ([ADR-0018](docs/adr/0018-health-and-drift-panel.md)); [Onboarding troubleshooting](docs/onboarding.md#5-smoke-test--your-first-run) |
 | **Improving the template** | [Improvement methodology](docs/harness-lifecycle/improvement-methodology.md) — when to trust a proposal; [Lab sync workflow](docs/harness-lifecycle/lab-sync-workflow.md) — adopt & validate a release; [Harness lifecycle](docs/harness-lifecycle/README.md) — the rigorous form |
 | **Auditing another team's repository** | [Auditing someone else's repository](docs/guide-web-ui.md#auditing-someone-elses-repository--worked-example) — the end-to-end walkthrough; [Target repositories](docs/guide-target-repositories.md) — the reference ([ADR-0029](docs/adr/0029-target-repositories-pinned-per-run.md)) |
 | **Designing a comparison** | [Web UI guide](docs/guide-web-ui.md#new-evaluation--the-wizard-for-modes-a-and-b) — the wizard, and why it will not let you build an unanswerable design; [Lab v2 roadmap](docs/roadmap-lab-v2.md) — experiments, modes and what each licenses ([ADR-0028](docs/adr/0028-evaluation-modes.md), [ADR-0033](docs/adr/0033-experiment-above-run.md)); [score registry](docs/adr/0034-score-registry.md) — facts, observations and judgements kept apart; [ADR-0036](docs/adr/0036-audit-judges-a-run-against-its-own-governance.md) — why a `native` control is never judged against the lab's rules |
-| **Comparing harnesses / models** | [Harness adapters](docs/harness-adapters.md) — claude/opencode/codex design; [claude & codex runbook](docs/runbook-claude-codex.md); [First-run benchmark runbook](docs/runbook-first-run.md) |
+| **Comparing harnesses / models** | [Harness adapters](docs/harness-adapters.md) — claude/opencode/codex design; [claude & codex runbook](docs/runbook-claude-codex.md); [First-run benchmark runbook](docs/runbook-first-run.md) (legacy CLI lane) |
 | **Using SWE-bench lanes** | [SWE-bench cases](docs/design-swe-bench-cases.md); [SWE-bench Pro lane](docs/design-swe-bench-pro-lane.md); [Curated set](docs/swebench-curated-set.md) |
 | **Running self-hosted models** | [Local model runtime config](docs/local-model-runtime-config.md); [Task sizing](docs/task-sizing.md); [OpenCode workflow](docs/opencode-workflow.md) |
 | **Developing the lab itself** | [Agentic workflow](docs/agentic-workflow.md) — the working loop; [ADRs](docs/adr/README.md) — why things are the way they are; [Skills management](docs/skills-management.md) |
 | **Where the lab is going** | [Lab v2 roadmap](docs/roadmap-lab-v2.md) — experiments over runs, target repositories, the four-level evaluation model; [Local web app roadmap](docs/roadmap-local-webapp.md) — how v1 was built |
-| **Adding trajectory scores** | [Onboarding § DeepEval](docs/onboarding.md#6-optional--trajectory-scores-deepeval) — the optional extra, the judge model it needs, and what happens without it |
+| **Adding trajectory scores** | [Onboarding § DeepEval](docs/onboarding.md#6-trajectory-scores-deepeval--on-by-default-in-docker) — on by default in Docker, the judge model it uses, and what happens without it |
 | **Knowing what it does *not* do** | [Known limitations](docs/known-limitations.md) — accepted debt, stated up front; [SECURITY.md](SECURITY.md) — what a run container can actually reach |
 
 ## 📋 Prerequisites
@@ -193,7 +202,8 @@ suite with hard gates), see the
 - **Make** and **git**.
 - [uv](https://github.com/astral-sh/uv) — Python 3.11+ package manager (only needed to
   develop the lab itself; the app stack runs in Docker).
-- An agent credential and an LLM gateway token (see **Setup** below).
+- One credential: an AI-gateway token (Path A) or a Claude account (Path B) — see
+  **Setup** below.
 
 ### Install uv
 
@@ -214,21 +224,30 @@ pip install uv
 
 ```bash
 git clone https://github.com/xmartlabs/sdlc-ml-python-harness-lab.git
-cd ai-agentic-harness-lab
+cd sdlc-ml-python-harness-lab
 cp .env.example .env
 ```
 
-Then edit `.env` — there are **two credential paths**, and most features light up
-with both:
+Then edit `.env` — there are **two credential paths**, and **either one alone is
+enough to run the lab end to end**:
 
 - **Path A — AI gateway (LiteLLM), recommended:** `GATEWAY_BASE_URL` +
   `GATEWAY_TOKEN` + `LITELLM_MASTER_KEY`. Powers the `opencode` harness
-  (gateway-routed models, incl. self-hosted), the behavioural **audit**, the
-  **improvement synthesis**, SWE-Pro auto-scoring, and Langfuse attribution. Then
-  `make sync-gateway-models` to populate the UI's model dropdowns.
+  (gateway-routed models, incl. self-hosted), every in-process LLM call
+  (**audit**, **improvement synthesis**, SWE-Pro auto-scoring, DeepEval's
+  trajectory judge), and Langfuse attribution. The UI reads the gateway's model
+  list live (**Settings → Refresh from gateway**); `make sync-gateway-models` is
+  only for promoting a model into the tracked `opencode.json`.
 - **Path B — Claude with your own account:** `CLAUDE_CODE_OAUTH_TOKEN` (from
-  `claude setup-token`) or `ANTHROPIC_API_KEY` — so the `claude` harness can
-  authenticate inside the runner container.
+  `claude setup-token`) or `ANTHROPIC_API_KEY`. Authenticates the `claude`
+  harness inside the runner container **and** every in-process LLM call above,
+  by driving the Claude Code CLI headless — so a subscription alone covers the
+  whole benchmark → audit → improve loop
+  ([ADR-0043](docs/adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)).
+  The gateway keeps priority whenever both are set.
+
+Add the gateway when you want to compare *models* across providers or need
+per-run cost attribution.
 
 Other tools (codex via host mode, direct LM Studio/Ollama, antigravity): see
 [Path C in the onboarding guide](docs/onboarding.md#path-c--other-harnesses-and-backends).
@@ -246,23 +265,28 @@ make app-up          # builds the runner image + starts api/worker/redis/fronten
 ```
 
 Open **http://localhost:5173**. New here? Read the
-**[Web UI guide](docs/guide-web-ui.md)**. Claude/OpenCode/Codex all run inside the
-runner container using the auth from `.env`; see
-[docs/harness-adapters.md](docs/harness-adapters.md).
+**[Web UI guide](docs/guide-web-ui.md)**. `claude` and `opencode` run inside the
+runner container using the auth from `.env`; `codex` needs host mode
+(`make app-host`) and `antigravity` is a manual flow (`make bench-antigravity`);
+see [docs/harness-adapters.md](docs/harness-adapters.md).
 
-Leaving the lab running on a server instead of a laptop? Protect it and switch to the
-always-on profile — one origin on `:8080`, restarts with the host, rotated logs
-([ADR-0019](docs/adr/0019-always-on-local-deployment.md)):
+**Network exposure.** The API binds to `127.0.0.1:8009` by default, but the dev
+frontend (Vite) listens on `0.0.0.0:5173` and proxies `/api`, so with `make app-up`
+anyone on your LAN who reaches `:5173` can drive the lab until you run
+`make set-password`. Leaving the lab running on a server instead of a laptop?
+Protect it and switch to the always-on profile — one origin on `:8080`, bound to
+loopback unless `HARNESS_LAB_BIND_ADDR` says otherwise, restarts with the host,
+rotated logs ([ADR-0019](docs/adr/0019-always-on-local-deployment.md)):
 
 ```bash
-make set-password    # single-user password; without it the UI is open to the LAN
-make app-up-prod     # nginx :8080; the API is no longer published to the network
+make set-password    # single-user password; set it before exposing anything
+make app-up-prod     # nginx :8080 on 127.0.0.1; API on loopback only
 ```
 
 | Mode | Web UI | API | Command |
 |---|---|---|---|
-| Dev (laptop) | `:5173` (Vite) | `:8009` | `make app-up` |
-| Always-on (server) | `:8080` (nginx) | loopback only | `make app-up-prod` |
+| Dev (laptop) | `:5173` (Vite, all interfaces) | `127.0.0.1:8009` | `make app-up` |
+| Always-on (server) | `:8080` (nginx, `HARNESS_LAB_BIND_ADDR`, default loopback) | loopback only | `make app-up-prod` |
 
 ### Develop the lab (optional — only to work on the lab itself)
 
@@ -330,7 +354,7 @@ make generate-requirements
 
 ## 🎯 Code Quality
 
-The project provides three main levels of code quality checks:
+The project provides four main levels of code quality checks:
 
 1. **`make fix` (Recommended)**: The "do it all" command. It auto-formats code, sorts imports, removes unused imports, fixes linting issues, and cleans Jupyter notebooks. Run this frequently!
 2. **`make fix-force`**: Same as `fix`, but applies "unsafe" fixes. Use with caution (e.g., it might remove imports used only in `try/except` blocks).
@@ -347,7 +371,7 @@ make fix-force
 # 3. Verify quality and security (Read-only check)
 make lint
 
-# 4. Run full CI pipeline (Fix + Lint + Test)
+# 4. Read-only gate: check + check-sync + check-frontend
 make ci
 ```
 
@@ -366,7 +390,8 @@ make ci
 ├── Makefile                # Commands
 ├── pyproject.toml          # Config & dependencies
 ├── uv.lock                 # Exact versions lockfile (DO NOT EDIT MANUALLY)
-└── .harness-version.yaml   # The adopted ml-python-base governance version (once set)
+└── .harness-version.yaml   # The adopted ml-python-base governance version (once set);
+                            # .template-version is the legacy mirror written by make template-sync
 ```
 
 ## 🧭 AI Rules Structure (Cross-Tool)
@@ -468,7 +493,8 @@ assessments of AI-assisted coding skill (and what a template can/can't influence
 | `make lint` | Run code quality checks |
 | `make fix` | Auto-fix linting issues |
 | `make test` | Run tests with coverage |
-| `make ci` | Run full CI pipeline |
+| `make check` | Read-only quality gate: ruff format --check, ruff check, bandit, mypy, pytest |
+| `make ci` | Read-only CI gate: `check` + `check-sync` + `check-frontend` |
 | `make setup-claude-skills` | Generate `.claude/skills` native symlinks from governed skills |
 | `make setup-antigravity-skills` | Generate `.agents/skills` native Antigravity mirror from governed skills |
 | `make sync-skills` | Sync external skills, refresh `skills-lock.json`, and refresh Claude and Antigravity native skill layouts |

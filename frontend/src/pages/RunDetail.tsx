@@ -689,7 +689,7 @@ export function RunDetail({
           <p className="muted run-lineage">
             {run.parent_run_id ? (
               <>
-                Continues <Link to={`/runs/${run.parent_run_id}`}>{run.parent_run_id}</Link>
+                Continues <Link to={`/advanced/runs/${run.parent_run_id}`}>{run.parent_run_id}</Link>
               </>
             ) : null}
             {run.parent_run_id && children.length > 0 ? " · " : null}
@@ -699,7 +699,7 @@ export function RunDetail({
                 {children.map((child, index) => (
                   <span key={child.run_id}>
                     {index > 0 ? ", " : ""}
-                    <Link to={`/runs/${child.run_id}`}>{child.run_id}</Link>
+                    <Link to={`/advanced/runs/${child.run_id}`}>{child.run_id}</Link>
                   </span>
                 ))}
               </>
@@ -977,9 +977,10 @@ export function RunDetail({
           </p>
         ) : (
           <p className="muted">
-            Objective validation runs a headless smoke of workspace/{run.run_id}/ in the
-            runner container (SDL dummy driver). The functional level below is the
-            subjective dimension; the composite gates it by the objective floor.
+            Objective validation runs the case&apos;s — or the target repository&apos;s —
+            validation commands against the archived workspace in a runner container.
+            The functional level is the subjective dimension; the composite is gated by
+            the objective floor.
           </p>
         )}
       </div>
@@ -1007,7 +1008,7 @@ export function RunDetail({
               (<code>permission=edit</code>, <code>read</code>, <code>bash</code>…) that
               opencode emits. Counts would all read 0 — not because the agent did
               nothing, but because the harness doesn't expose them. Only the step count
-              is observable; judge behavior from the LLM audit below.
+              is observable; judge behaviour from the LLM audit below.
             </p>
             <div className="detail-grid">
               <div>
@@ -1100,7 +1101,7 @@ export function RunDetail({
             <input
               className="audit-model-input"
               onChange={(event) => setAuditModel(event.target.value)}
-              placeholder="auditor model (optional)"
+              placeholder="auditor model — empty uses the transport default"
               type="text"
               value={auditModel}
             />
@@ -1200,7 +1201,7 @@ export function RunDetail({
               type="button"
             >
               {improving
-                ? "Synthesizing..."
+                ? "Synthesising..."
                 : improvements
                   ? "Re-synthesize"
                   : "Propose improvements"}

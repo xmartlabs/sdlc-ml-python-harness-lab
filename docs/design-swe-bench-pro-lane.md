@@ -1,6 +1,7 @@
 # Design: SWE-bench Pro lane (image-based hard cases)
 
-- **Status:** In progress (feature/swe-bench-pro-lane)
+- **Status:** Implemented — `POST /api/cases/import-swebench-pro`, `make swebench-pro-import`
+  and `make swebench-pro-selftest` exist. Kept as the design record.
 - **Date:** 2026-07-21
 - **Related:** ADR-0009 (SWE-bench case type — declared official images "future
   work"; this is that future), ADR-0002 (worker owns docker), ADR-0004
@@ -153,9 +154,9 @@ the Pro lane changes as a result — the branch is still selected by `case_type`
    end-to-end on ONE `ansible/ansible` instance with the golden patch
    (`resolved=True` with gold, `resolved=False` without — zero model tokens,
    same proof pattern as ADR-0009).
-2. **Lane completion:** bench_run/tasks wiring, web UI import, curated set doc
-   (`docs/swebench-pro-curated-set.md`, 5–10 Python instances across the 3
-   repos), ADR.
+2. **Lane completion:** bench_run/tasks wiring, web UI import, ADR. A Pro-specific
+   curated-set doc (5–10 Python instances across the 3 repos) is not yet written;
+   the Verified set is in `docs/swebench-curated-set.md`.
 3. **Later / optional:** Go & JS/TS subsets (need language toolchains in the
    sidecar flow only — the runner never builds the project), difficulty
    curation from `issue_categories`, blind mode toggle.

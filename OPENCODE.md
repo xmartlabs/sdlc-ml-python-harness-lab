@@ -86,7 +86,7 @@ Use explicit orchestration for complex tasks:
 ## Level 5 — Agents and SDLC
 
 - Governed, tool-agnostic agents live in `.github/agents/`; OpenCode native agents
-  are generated into `.opencode/agent/` (refresh with `make sync-agents`).
+  are generated into `.opencode/agents/` (refresh with `make sync-agents`).
 - The lifecycle (plan -> implement -> test -> document -> review) and its `make`
   exit gates are defined in `.github/sdlc.md`.
 - Runtime/model portability for self-hosted fallback (Ollama / LM Studio) and the

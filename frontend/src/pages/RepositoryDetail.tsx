@@ -963,10 +963,13 @@ export function RepositoryDetail() {
                     />
                   </label>
                   <label className="field">
-                    <span>Executor model — optional, harness default when empty</span>
+                    <span>
+                      Executor model — required for opencode; claude/codex fall back to
+                      their CLI default
+                    </span>
                     <input
                       onChange={(event) => setExecutorModel(event.target.value)}
-                      placeholder="anthropic/claude-sonnet-4-5"
+                      placeholder="gateway/<alias> · lmstudio/<id> · claude-sonnet-5"
                       value={executorModel}
                     />
                   </label>

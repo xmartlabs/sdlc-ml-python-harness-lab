@@ -91,7 +91,8 @@ behind the registry, which is what makes step 5 a reminder rather than a trap.
 ## Quality model
 
 - CI is **read-only**: `make ci` = `make check` (ruff format --check, ruff check,
-  bandit, mypy, pytest) + `make check-sync` (drift gate). Never relies on CI to
+  bandit, mypy, pytest) + `make check-sync` (drift gate) + `make check-frontend`
+  (tsc + vite build). Never relies on CI to
   format or fix.
 - Run `make format` / `make fix` locally before pushing.
 - Engine behavior is pinned by `tests/skills_sync/` — including a golden test that

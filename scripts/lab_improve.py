@@ -38,7 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from bench_audit import DEFAULT_AUDITOR_MODEL, call_gateway
+from bench_audit import call_gateway
 from create_run import DATA_DIR, _load_env
 
 # Target repos. Canonical names match the Settings fields the web app reads
@@ -469,12 +469,16 @@ def create(run_id: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Imported here, not at module scope: this script runs from inside the
+    # runner container, where the package is only importable via `bench_audit`.
+    from harness_lab_app import llm_transport
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", required=True, help="Run id, e.g. tetris-v1-K-004")
     parser.add_argument(
         "--model",
-        default=os.environ.get("IMPROVE_MODEL", DEFAULT_AUDITOR_MODEL),
-        help="Gateway model for the synthesis pass (default: the auditor model).",
+        default=os.environ.get("IMPROVE_MODEL") or llm_transport.default_audit_model(),
+        help="Model for the synthesis pass (default: the auditor model).",
     )
     parser.add_argument(
         "--create",

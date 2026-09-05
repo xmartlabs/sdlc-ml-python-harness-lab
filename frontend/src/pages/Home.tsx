@@ -66,7 +66,7 @@ const MODES = [
     to: "/evaluate/audit",
     holds: [],
     varies: "Nothing — this is exploratory",
-    note: "Produces cases, observations and suggested findings. It never produces a causal verdict."
+    note: "Registers the repository through your own clone, pins a commit, reads what it already ships, and ends when one case passes. Findings and the report accumulate on the repository's workbench. It never produces a causal verdict."
   }
 ] as const;
 
@@ -235,7 +235,7 @@ export function Home() {
           <div className="panel-head">
             <h2>What the lab holds</h2>
             <Link className="button-link" to="/advanced/benchmarks">
-              Full leaderboard
+              Open Benchmarks
             </Link>
           </div>
           <div className="metrics">

@@ -19,7 +19,8 @@ The command builders live in `scripts/bench_run.py`
 (`build_opencode_cmd` / `build_codex_cmd` / `build_claude_cmd`, dispatched by
 `build_harness_cmd`). The workspace path (`workspace/<run_id>/`) is carried in
 the **prompt**, so all three run with `cwd=REPO_ROOT` and produce the same
-artifact — only the CLI differs. Pick the harness in the New run form.
+artifact — only the CLI differs. Pick the harness in the New evaluation form (or
+the single-run form under Advanced → Runs).
 
 ## Run `claude` in Docker (whole lab in `make app-up`)
 
@@ -76,24 +77,26 @@ The preflight guard checks the credential is present before a Docker claude run,
 with an actionable message if it's missing. `codex` in Docker is not wired yet
 (its packaging/auth needs confirming) — run codex via host mode for now.
 
-## Why codex / claude run on the host
+## Why codex runs on the host
 
-`opencode` is installed in the runner image (`Dockerfile.runner`); `codex` and
-`claude` are the CLIs you already have installed and logged in on your machine.
-Rather than baking their auth into a container, the lab runs them where they
-already work — on the host, via the **subprocess** execution backend. The web
-run's Celery worker must therefore run on the host for these harnesses (the
-default `make app-up` worker is containerized and can't see them).
+`opencode` and `claude` are installed in the runner image (`Dockerfile.runner`);
+`codex` is not wired into it yet. Rather than baking its auth into a container,
+the lab runs codex where it already works — on the host, via the **subprocess**
+execution backend. The web run's Celery worker must therefore run on the host for
+codex (the default `make app-up` worker is containerized and can't see it).
+`claude` works in both: Docker with a token in `.env` (above), or host mode with
+your own login.
 
-A preflight guard (`RunService._preflight`) rejects a `codex`/`claude` run
-unless the backend is `subprocess`, with an actionable message — so you never
-get a silent "command not found" inside a container.
+A preflight guard (`RunService._preflight`) rejects a `codex` run unless the
+backend is `subprocess`, and a Docker `claude` run without a credential in `.env`,
+each with an actionable message — so you never get a silent "command not found"
+inside a container.
 
 ## Model selection
 
 The New-run executor menu is **harness-aware**: for `opencode` it's the live
 gateway list; for `codex`/`claude` it swaps to that CLI's **native models**
-(`HARNESS_NATIVE_MODELS` in `frontend/src/pages/Runs.tsx`) — e.g. Claude Sonnet 5
+(`HARNESS_NATIVE_MODELS` in `frontend/src/harnesses.ts`) — e.g. Claude Sonnet 5
 / Opus 4.8 / Haiku 4.5. The selected id is a bare (non-`gateway/`) name, which
 `bench_run.py` passes straight to the CLI's `--model` / `-m` (`_native_model`
 ignores any `gateway/`-prefixed value and lets the CLI default apply).
@@ -115,13 +118,14 @@ Or run the pieces in separate terminals for debugging: `make app-worker-host`,
 `make app-api-host`, then `cd frontend && VITE_API_TARGET=http://localhost:8009
 npm run dev`.
 
-Then open `http://localhost:5173/runs`, pick **Case** `tetris-v1`, set
+Then open `http://localhost:5173/advanced/runs`, pick **Case** `tetris-v1`, set
 **Harness** to `codex` or `claude`, and Create run. The run streams into the
-detail page like any other; score it manually (or against the smoke floor).
+detail page like any other; `tetris-v1` carries a rubric, so it is LLM-judged
+(overwritable by hand), and the smoke floor validates it objectively.
 
-`opencode` and SWE-bench runs keep using the containerized `make app-up` (they
-need the runner image and the gateway). The two modes don't run at once —
-choose per what you're testing.
+`opencode`, SWE-bench and Docker `claude` runs use the containerized `make app-up`
+(they need the runner image). The two modes don't run at once — choose per what
+you're testing.
 
 ## Verified vs. to-verify
 

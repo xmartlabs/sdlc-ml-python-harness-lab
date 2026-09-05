@@ -214,10 +214,10 @@ export function Cases({
       <section className="panel">
         <div className="panel-head">
           <h2>Import SWE-bench instance</h2>
-          <span className="muted">SWE-bench Lite (HuggingFace)</span>
+          <span className="muted">SWE-bench Lite / Verified (HuggingFace)</span>
         </div>
         <p className="muted">
-          Fetches one instance from SWE-bench Lite and stores it as a case (DB only, no
+          Fetches one instance from SWE-bench Lite / Verified and stores it as a case (DB only, no
           YAML on disk). Equivalent CLI: <code>make swebench-import INSTANCE=&lt;id&gt;</code>.
           Prove the harness first with <code>make swebench-selftest INSTANCE=&lt;id&gt;</code>.
         </p>

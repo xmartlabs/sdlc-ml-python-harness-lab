@@ -7,6 +7,7 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { ReadinessReportView } from "../components/ReadinessReportView";
 import { Spinner } from "../components/Spinner";
 import { IconAlert, IconArrowRight, IconCheck, IconSparkles } from "../components/icons";
+import { HARNESS_OPTIONS } from "../harnesses";
 import type {
   CaseCandidate,
   CaseCandidates,
@@ -111,6 +112,10 @@ export function Audit() {
   const [aiDropped, setAiDropped] = useState<DroppedCommand[]>([]);
   const [candidates, setCandidates] = useState<CaseCandidates | null>(null);
   const [existingCases, setExistingCases] = useState<CaseRecord[]>([]);
+  // claude runs on its CLI default, so it is the harness that needs the least
+  // configuration to answer "does this case pass here at all?".
+  const [harness, setHarness] = useState<(typeof HARNESS_OPTIONS)[number]>("claude");
+  const [executorModel, setExecutorModel] = useState("");
   const [experimentId, setExperimentId] = useState("");
 
   const target = useMemo(
@@ -419,6 +424,7 @@ export function Audit() {
   const validate = () =>
     run("validate", async () => {
       const base = slugify(`validate-${targetId}-${caseId}`).slice(0, 56);
+      const executor = executorModel.trim() === "" ? null : executorModel.trim();
       let lastError: unknown = null;
       for (let attempt = 0; attempt < 5; attempt += 1) {
         const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
@@ -440,8 +446,8 @@ export function Audit() {
                   target_repo_id: targetId,
                   target_ref: pinnedCommit,
                   harness_source: "native",
-                  harness: "claude",
-                  executor_model: null
+                  harness,
+                  executor_model: executor
                 }
               }
             ]
@@ -449,9 +455,9 @@ export function Audit() {
           await api.launchExperiment(created.experiment_id, {
             case_id: caseId,
             prompt_variant: "default",
-            harness: "claude",
+            harness,
             planner_model: null,
-            executor_model: null,
+            executor_model: executor,
             score_mode: "manual",
             max_steps: maxSteps,
             resume: false,
@@ -1177,13 +1183,51 @@ export function Audit() {
             <p className="muted">
               One run of <code>{caseId || "the case"}</code> against{" "}
               <strong>{target?.name ?? targetId}</strong> at{" "}
-              <code>{pinnedCommit.slice(0, 8) || "the pin"}</code>. There is no control
-              arm, so it answers one question: does the case pass here at all?
+              <code>{pinnedCommit.slice(0, 8) || "the pin"}</code>, under{" "}
+              <code>
+                {harness}/{executorModel.trim() || "CLI default"}
+              </code>
+              . No control arm — it answers one question: does the case pass here at
+              all? <code>claude</code> needs a Claude credential in <code>.env</code>;{" "}
+              <code>opencode</code> needs a gateway model.
             </p>
+            <div className="form-grid">
+              <label className="field">
+                <span>Harness</span>
+                <select
+                  onChange={(event) =>
+                    setHarness(event.target.value as (typeof HARNESS_OPTIONS)[number])
+                  }
+                  value={harness}
+                >
+                  {HARNESS_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>
+                  Executor model — required for opencode; claude/codex fall back to
+                  their CLI default
+                </span>
+                <input
+                  onChange={(event) => setExecutorModel(event.target.value)}
+                  placeholder="gateway/<alias> · lmstudio/<id> · claude-sonnet-5"
+                  value={executorModel}
+                />
+              </label>
+            </div>
             <div className="panel-actions">
               <button
                 className="primary"
-                disabled={busy !== "" || !caseId || !pinnedCommit}
+                disabled={
+                  busy !== "" ||
+                  !caseId ||
+                  !pinnedCommit ||
+                  (harness === "opencode" && executorModel.trim() === "")
+                }
                 onClick={() => void validate()}
                 type="button"
               >

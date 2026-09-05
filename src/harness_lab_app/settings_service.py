@@ -140,10 +140,31 @@ _SPECS: tuple[EnvKeySpec, ...] = (
         group=GROUP_MODELS,
         validator=_require_model_id,
     ),
-    EnvKeySpec(key="AUDITOR_MODEL", label="Audit model", group=GROUP_MODELS),
+    EnvKeySpec(
+        key="AUDITOR_MODEL",
+        label="Audit model",
+        group=GROUP_MODELS,
+        help_text=(
+            "Model for the behavioural audit and, unless DEEPEVAL_MODEL says "
+            "otherwise, the trajectory judge. Leave empty to use the default "
+            "for whichever transport is configured — a gateway alias, or a "
+            "Claude model when the lab runs on a subscription token alone."
+        ),
+    ),
     EnvKeySpec(key="IMPROVE_MODEL", label="Improvement model", group=GROUP_MODELS),
     EnvKeySpec(
         key="CASE_SUMMARY_MODEL", label="Case summary model", group=GROUP_MODELS
+    ),
+    EnvKeySpec(
+        key="DEEPEVAL_MODEL",
+        label="Trajectory judge model",
+        group=GROUP_MODELS,
+        help_text=(
+            "Judge for task_completion and step_efficiency. Defaults to "
+            "AUDITOR_MODEL so one run is not judged by two independently "
+            "configured models. Set it to 'none' to turn LLM-judged "
+            "trajectory metrics off and keep the deterministic scores only."
+        ),
     ),
     EnvKeySpec(
         key="LMSTUDIO_BASE_URL",
@@ -167,13 +188,21 @@ _SPECS: tuple[EnvKeySpec, ...] = (
         label="Claude Code OAuth token",
         group=GROUP_CREDENTIALS,
         is_secret=True,
-        help_text="Account-based credential for the claude harness lane.",
+        help_text=(
+            "Account credential for the claude harness lane and, when no gateway "
+            "is set, the transport for the lab's audits, judges and summaries "
+            "(ADR-0043)."
+        ),
     ),
     EnvKeySpec(
         key="ANTHROPIC_API_KEY",
         label="Anthropic API key",
         group=GROUP_CREDENTIALS,
         is_secret=True,
+        help_text=(
+            "Alternative to the OAuth token: the claude harness lane and the "
+            "fallback LLM transport when no gateway is set (ADR-0043)."
+        ),
     ),
     EnvKeySpec(
         key="NVIDIA_API_KEY",

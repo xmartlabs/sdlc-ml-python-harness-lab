@@ -21,7 +21,7 @@ def test_generate_case_draft_success():
         '"max_steps": 10}'
     )
     with patch(
-        "harness_lab_app.case_draft_service._call_gateway_chat",
+        "harness_lab_app.case_draft_service._call_model",
         return_value=fake_json_response,
     ):
         req = CaseDraftRequest(
@@ -44,7 +44,7 @@ def test_generate_case_draft_markdown_fences():
         "```"
     )
     with patch(
-        "harness_lab_app.case_draft_service._call_gateway_chat",
+        "harness_lab_app.case_draft_service._call_model",
         return_value=fenced_json,
     ):
         req = CaseDraftRequest(description="Test something")
@@ -88,7 +88,7 @@ def test_screen_commands_drops_multiline_and_prose_with_reasons():
 
 def test_generate_case_draft_reports_dropped_commands_next_to_kept_ones():
     with patch(
-        "harness_lab_app.case_draft_service._call_gateway_chat",
+        "harness_lab_app.case_draft_service._call_model",
         return_value=_draft([HEREDOC, "node -e \"require('{workspace}/snake.js')\""]),
     ) as chat:
         res = generate_case_draft(CaseDraftRequest(description="snake game"))
@@ -99,33 +99,34 @@ def test_generate_case_draft_reports_dropped_commands_next_to_kept_ones():
 
 
 def test_generate_case_draft_retries_once_when_nothing_is_runnable():
-    calls: list[dict] = []
+    calls: list[tuple[str, str, str]] = []
 
-    def fake_chat(payload: dict) -> str:
-        calls.append(payload)
+    def fake_chat(model: str, system: str, user: str) -> str:
+        calls.append((model, system, user))
         if len(calls) == 1:
             return _draft([HEREDOC], subject="first")
         return _draft(["pytest {workspace}/test_snake.py -q"], subject="second")
 
-    with patch(
-        "harness_lab_app.case_draft_service._call_gateway_chat", side_effect=fake_chat
-    ):
+    with patch("harness_lab_app.case_draft_service._call_model", side_effect=fake_chat):
         res = generate_case_draft(CaseDraftRequest(description="snake game"))
 
     assert res.subject == "second"
     assert res.validation_commands == ["pytest {workspace}/test_snake.py -q"]
     assert res.dropped_commands == []
     assert res.attempts == 2
-    # The retry carries the model's own answer and the reasons it was refused.
-    roles = [m["role"] for m in calls[1]["messages"]]
-    assert roles == ["system", "user", "assistant", "user"]
-    assert REASON_MULTILINE in calls[1]["messages"][-1]["content"]
-    assert "ONE line" in calls[1]["messages"][-1]["content"]
+    # The retry carries the model's own answer and the reasons it was refused,
+    # inside the one (system, user) pair the transport accepts.
+    _, system, user = calls[1]
+    assert system == _SYSTEM_PROMPT
+    assert "Your previous answer:" in user
+    assert '"subject": "first"' in user
+    assert REASON_MULTILINE in user
+    assert "ONE line" in user
 
 
 def test_generate_case_draft_gives_up_after_the_retry_but_says_why():
     with patch(
-        "harness_lab_app.case_draft_service._call_gateway_chat",
+        "harness_lab_app.case_draft_service._call_model",
         return_value=_draft([HEREDOC]),
     ) as chat:
         res = generate_case_draft(CaseDraftRequest(description="snake game"))
@@ -140,7 +141,7 @@ def test_generate_case_draft_string_commands_are_one_entry_not_split():
         {"subject": "s", "instruction": "i", "validation_commands": HEREDOC}
     )
     with patch(
-        "harness_lab_app.case_draft_service._call_gateway_chat",
+        "harness_lab_app.case_draft_service._call_model",
         return_value=heredoc_as_string,
     ):
         res = generate_case_draft(CaseDraftRequest(description="snake game"))
@@ -160,12 +161,55 @@ def test_generate_case_draft_empty_desc():
         generate_case_draft(CaseDraftRequest(description="   "))
 
 
-def test_generate_case_draft_missing_gateway():
+def test_generate_case_draft_refuses_without_any_llm_transport():
+    """No gateway and no Claude credential is a configuration error, not a draft."""
+    from harness_lab_app import llm_transport
+
     with (
-        patch("harness_lab_app.case_draft_service._gateway", return_value=None),
-        pytest.raises(ValueError, match="Gateway not configured"),
+        patch.object(
+            llm_transport,
+            "chat",
+            side_effect=llm_transport.TransportNotConfigured("none"),
+        ),
+        pytest.raises(ValueError, match="No LLM transport is configured"),
     ):
         generate_case_draft(CaseDraftRequest(description="valid desc"))
+
+
+def test_generate_case_draft_rides_the_shared_transport(monkeypatch):
+    """The assistant is a fifth caller of llm_transport, not a fifth HTTP client.
+
+    A subscription-only lab (ADR-0043) drafts cases the same way it audits
+    runs: whatever transport is active answers, with the summary-tier default
+    of that transport when the request names no model.
+    """
+    from harness_lab_app import case_draft_service, llm_transport
+
+    seen: dict = {}
+
+    def fake_chat(model, system, user, *, timeout, temperature):
+        seen.update(model=model, system=system, user=user, timeout=timeout)
+        return _draft(["pytest {workspace}/test_x.py -q"])
+
+    monkeypatch.delenv("CASE_DRAFT_MODEL", raising=False)
+    monkeypatch.delenv("GATEWAY_DEFAULT_MODEL", raising=False)
+    monkeypatch.setattr(case_draft_service, "read_env_file_value", lambda _key: None)
+    monkeypatch.setattr(llm_transport, "chat", fake_chat)
+    monkeypatch.setattr(
+        llm_transport,
+        "default_summary_model",
+        lambda _transport=None: "claude-haiku-4-5",
+    )
+
+    res = case_draft_service.generate_case_draft(
+        CaseDraftRequest(description="Build a thing")
+    )
+
+    assert res.validation_commands == ["pytest {workspace}/test_x.py -q"]
+    assert seen["model"] == "claude-haiku-4-5"
+    assert seen["system"] == _SYSTEM_PROMPT
+    assert "Build a thing" in seen["user"]
+    assert seen["timeout"] == case_draft_service.DRAFT_TIMEOUT_SECONDS
 
 
 def test_api_generate_case_draft_route():
@@ -229,8 +273,8 @@ def test_repository_context_reaches_the_draft_prompt(monkeypatch, tmp_path):
 
     seen: dict = {}
 
-    def _fake_call(payload):
-        seen.update(payload)
+    def _fake_call(model, system, user):
+        seen.update(model=model, system=system, user=user)
         return json.dumps(
             {
                 "subject": "payments: add a refund endpoint",
@@ -240,13 +284,13 @@ def test_repository_context_reaches_the_draft_prompt(monkeypatch, tmp_path):
             }
         )
 
-    monkeypatch.setattr(case_draft_service, "_call_gateway_chat", _fake_call)
+    monkeypatch.setattr(case_draft_service, "_call_model", _fake_call)
 
     case_draft_service.generate_case_draft(
         CaseDraftRequest(description="Add a refund endpoint", target_id="payments")
     )
 
-    prompt = seen["messages"][1]["content"]
+    prompt = seen["user"]
     assert "Repository context" in prompt
     assert "make check" in prompt
     assert "# Payments" in prompt
@@ -258,8 +302,8 @@ def test_a_draft_without_a_target_carries_no_repository_context(monkeypatch):
 
     seen: dict = {}
 
-    def _fake_call(payload):
-        seen.update(payload)
+    def _fake_call(model, system, user):
+        seen.update(model=model, system=system, user=user)
         return json.dumps(
             {
                 "subject": "s",
@@ -269,8 +313,8 @@ def test_a_draft_without_a_target_carries_no_repository_context(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(case_draft_service, "_call_gateway_chat", _fake_call)
+    monkeypatch.setattr(case_draft_service, "_call_model", _fake_call)
     case_draft_service.generate_case_draft(
         CaseDraftRequest(description="Build a thing")
     )
-    assert "Repository context" not in seen["messages"][1]["content"]
+    assert "Repository context" not in seen["user"]

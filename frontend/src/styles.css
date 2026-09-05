@@ -1255,11 +1255,26 @@ button.ghost:disabled {
   padding: 0;
 }
 
+.help-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.help-doc-link {
+  flex-shrink: 0;
+  padding-right: 16px;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
 .help-toggle {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+  flex: 1;
   width: 100%;
   border: 0;
   background: transparent;

@@ -21,7 +21,7 @@ from celery.signals import worker_ready
 from celery.worker.control import control_command
 from sqlmodel import Session, select
 
-from harness_lab_app import run_failures
+from harness_lab_app import llm_transport, run_failures
 from harness_lab_app.audit_service import AuditService
 from harness_lab_app.case_service import CaseService
 from harness_lab_app.celery_app import celery_app
@@ -879,7 +879,7 @@ def _llm_judge_swe_pro(
     # The sentinel "No objective validation defined" is noise, not a test summary.
     test_summary = objective_summary if "F2P" in objective_summary else ""
     gateway = gateway or _worker_gateway()
-    model = os.environ.get("AUDITOR_MODEL") or judge.DEFAULT_JUDGE_MODEL
+    model = os.environ.get("AUDITOR_MODEL") or llm_transport.default_audit_model()
     result = judge.judge_functional_score(
         problem_statement=problem,
         diff=diff,
@@ -937,7 +937,7 @@ def _llm_judge_rubric(
     if not diff and not report:
         return  # nothing to grade → manual fallback
     gateway = gateway or _worker_gateway()
-    model = os.environ.get("AUDITOR_MODEL") or judge.DEFAULT_JUDGE_MODEL
+    model = os.environ.get("AUDITOR_MODEL") or llm_transport.default_audit_model()
     result = judge.judge_rubric_score(
         task=task,
         rubric=rubric,
@@ -962,59 +962,17 @@ def _read_run_text(path: Path) -> str:
 
 
 def _worker_gateway() -> Callable[[str, str, str], str]:
-    """An in-process gateway caller for the worker (URLs host-alias-rewritten).
+    """An in-process LLM caller for the worker.
 
-    Mirrors ``case_summary._gateway``: read GATEWAY_* from env/.env and, inside a
-    container, rewrite ``localhost`` to the docker host alias. Raises on missing
-    config or a bad response so the best-effort caller falls back to manual.
+    Thin adapter over :mod:`harness_lab_app.llm_transport`: the judges take an
+    injectable ``(model, system, user) -> str`` callable so they stay testable
+    without a network call. Raising on a missing transport or a bad response is
+    the contract — the best-effort caller catches it and falls back to manual
+    scoring, because an ungraded run is not a run that scored zero.
     """
-    import urllib.error
-    import urllib.request
-
-    from harness_lab_app.config import read_env_file_value
-    from harness_lab_app.executors import rewrite_localhost
-    from harness_lab_app.gateway_models import (
-        GATEWAY_USER_AGENT,
-        normalize_model_name,
-    )
-
-    base = (
-        os.environ.get("GATEWAY_BASE_URL")
-        or read_env_file_value("GATEWAY_BASE_URL")
-        or ""
-    ).strip()
-    token = (
-        os.environ.get("GATEWAY_TOKEN") or read_env_file_value("GATEWAY_TOKEN") or ""
-    ).strip()
-    if not base or not token:
-        raise RuntimeError("gateway not configured (GATEWAY_BASE_URL/TOKEN)")
-    if Path("/.dockerenv").exists():
-        base = rewrite_localhost(base, get_settings().docker_host_alias)
-    base = base.rstrip("/")
 
     def _call(model: str, system: str, user: str) -> str:
-        payload = {
-            "model": normalize_model_name(model),
-            "temperature": 0.2,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
-        request = urllib.request.Request(
-            f"{base}/chat/completions",
-            data=json.dumps(payload).encode(),
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": GATEWAY_USER_AGENT,
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=120) as resp:  # nosec B310
-            data = json.loads(resp.read())
-        return data["choices"][0]["message"]["content"]
+        return llm_transport.chat(model, system, user, timeout=120, temperature=0.2)
 
     return _call
 

@@ -546,9 +546,10 @@ export function Runs({
         <ol className="skills-howto">
           <li>Pick a <strong>Case</strong> (the task), then a <strong>Prompt
             variant</strong> and a <strong>Harness</strong>.</li>
-          <li><strong>Executor / Planner model</strong> come live from your LiteLLM
-            gateway. Added a model there? Run <code>make sync-gateway-models</code>
-            and it shows up here.</li>
+          <li><strong>Executor / Planner model</strong> — Gateway models come live
+            from LiteLLM (press Reload here, or Refresh from gateway in Settings);
+            Direct models are read off your LM Studio / Ollama host; claude and codex
+            use their native ids.</li>
           <li>Optionally toggle <strong>Skills</strong> to A/B the harness for this
             run only (a distinct arm).</li>
           <li><strong>Create run</strong>, watch it stream, then score it (SWE-bench
@@ -838,7 +839,9 @@ export function Runs({
               <option value="manual">Manual</option>
             </select>
             <small className="muted">
-              Interactive is CLI-only; web runs finish in awaiting_manual_score and are scored from run detail.
+              Interactive scoring is CLI-only. A case with a validation command scores
+              itself, a case with a rubric is LLM-judged; otherwise the run stops in
+              awaiting_manual_score and you score it from the run page.
             </small>
           </label>
           <label>
@@ -878,7 +881,7 @@ export function Runs({
                 <small className="muted">
                   {batchMode
                     ? "Varied as a batch axis below."
-                    : "The repository the agent works in. Cloned fresh per run."}
+                    : "The repository the agent works in. Provisioned from the pinned local checkout for each run."}
                 </small>
               </label>
               {targetRepoId !== "" || batchTargets.size > 0 ? (
@@ -924,7 +927,7 @@ export function Runs({
               ) : null}
               {targetRepoId !== "" && !batchMode ? (
                 <label>
-                  <span>Harness</span>
+                  <span>Governance source</span>
                   <select
                     onChange={(event) =>
                       setHarnessSource(event.target.value as HarnessSource)
@@ -1127,8 +1130,9 @@ export function Runs({
             </p>
           ) : null}
           <p className="muted">
-            Web flow always uses manual scoring to avoid worker blocking; submit score in run detail when state is
-            awaiting_manual_score.
+            Interactive scoring is CLI-only. A case with a validation command scores
+            itself, a case with a rubric is LLM-judged; otherwise the run stops in
+            awaiting_manual_score and you score it from the run page.
           </p>
         </div>
       </section>

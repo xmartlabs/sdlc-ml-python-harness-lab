@@ -9,15 +9,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from sqlmodel import Session
 
-from harness_lab_app.config import get_settings, read_env_file_value
-from harness_lab_app.executors import rewrite_localhost
-from harness_lab_app.gateway_models import GATEWAY_USER_AGENT, normalize_model_name
+from harness_lab_app import llm_transport
+from harness_lab_app.config import read_env_file_value
 from harness_lab_app.schemas import (
     CaseDraftRequest,
     CaseDraftResponse,
@@ -25,7 +22,10 @@ from harness_lab_app.schemas import (
 )
 from harness_lab_app.validation import is_executable_command
 
-DEFAULT_DRAFT_MODEL = "gpt-5.4-nano"
+# Drafting a case is a bounded generation, not a judgement over long logs, so
+# it rides the summary tier of whichever transport is active (ADR-0043):
+# gpt-5.4-nano on a gateway, claude-haiku-4-5 on the Claude CLI.
+DRAFT_TIMEOUT_SECONDS = 60
 
 # One corrective round-trip when the first answer leaves nothing runnable. A
 # second retry rarely changes the outcome and doubles the wait.
@@ -73,22 +73,6 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _gateway() -> tuple[str, str] | None:
-    base = (
-        os.environ.get("GATEWAY_BASE_URL")
-        or read_env_file_value("GATEWAY_BASE_URL")
-        or ""
-    ).strip()
-    token = (
-        os.environ.get("GATEWAY_TOKEN") or read_env_file_value("GATEWAY_TOKEN") or ""
-    ).strip()
-    if not base or not token:
-        return None
-    if Path("/.dockerenv").exists():
-        base = rewrite_localhost(base, get_settings().docker_host_alias)
-    return base.rstrip("/"), token
-
-
 def _find_skill_content(name: str) -> str | None:
     """Attempt to find SKILL.md for a given skill in staging or governed paths."""
     candidates = [
@@ -120,27 +104,35 @@ def _load_skill_context(selected_skills: list[str]) -> str:
     return "\n\nAvailable Skills Context:\n" + "\n\n".join(sections)
 
 
-def _call_gateway_chat(payload: dict) -> str:
-    gateway = _gateway()
-    if gateway is None:
+def _call_model(model: str, system: str, user: str) -> str:
+    """One draft completion over the lab's LLM transport.
+
+    Gateway first, Claude CLI second (ADR-0043). A missing transport is a
+    configuration error the wizard can act on, so it surfaces as ``ValueError``
+    like every other refusal in this module — never as a silent empty draft.
+    """
+    try:
+        return llm_transport.chat(
+            model, system, user, timeout=DRAFT_TIMEOUT_SECONDS, temperature=0.2
+        ).strip()
+    except llm_transport.TransportNotConfigured as exc:
         raise ValueError(
-            "Gateway not configured (GATEWAY_BASE_URL and GATEWAY_TOKEN required)."
-        )
-    base, token = gateway
-    request = urllib.request.Request(
-        f"{base}/chat/completions",
-        data=json.dumps(payload).encode(),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": GATEWAY_USER_AGENT,
-        },
-        method="POST",
+            "No LLM transport is configured for the case assistant: set "
+            "GATEWAY_BASE_URL + GATEWAY_TOKEN, or CLAUDE_CODE_OAUTH_TOKEN / "
+            "ANTHROPIC_API_KEY (Health → LLM transport shows which is active)."
+        ) from exc
+    except llm_transport.TransportError as exc:
+        raise ValueError(f"Case draft request failed: {exc}") from exc
+
+
+def default_draft_model() -> str:
+    """The model the assistant uses when the request names none."""
+    return (
+        os.environ.get("CASE_DRAFT_MODEL")
+        or read_env_file_value("CASE_DRAFT_MODEL")
+        or os.environ.get("GATEWAY_DEFAULT_MODEL")
+        or llm_transport.default_summary_model()
     )
-    with urllib.request.urlopen(request, timeout=60) as resp:  # nosec B310
-        data = json.loads(resp.read())
-    return (data["choices"][0]["message"]["content"] or "").strip()
 
 
 def _sanitize_json(raw: str) -> str:
@@ -242,13 +234,7 @@ def generate_case_draft(req: CaseDraftRequest) -> CaseDraftResponse:
     if not req.description.strip():
         raise ValueError("Description cannot be empty.")
 
-    chosen_model = (
-        req.model
-        or os.environ.get("CASE_DRAFT_MODEL")
-        or read_env_file_value("CASE_DRAFT_MODEL")
-        or os.environ.get("GATEWAY_DEFAULT_MODEL")
-        or DEFAULT_DRAFT_MODEL
-    )
+    chosen_model = req.model or default_draft_model()
 
     skill_context = _load_skill_context(req.selected_skills)
     user_prompt = f"User Test Scenario Description:\n{req.description.strip()}"
@@ -258,32 +244,25 @@ def generate_case_draft(req: CaseDraftRequest) -> CaseDraftResponse:
     if repo_block:
         user_prompt += f"\n\n{repo_block}"
 
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ]
-    payload = {
-        "model": normalize_model_name(chosen_model),
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"},
-        "messages": messages,
-    }
-
     attempts = 0
     parsed: dict = {}
     commands: list[str] = []
     dropped: list[DroppedCommand] = []
+    prompt = user_prompt
     while attempts < MAX_ATTEMPTS:
         attempts += 1
-        raw_response = _call_gateway_chat(payload)
+        raw_response = _call_model(chosen_model, _SYSTEM_PROMPT, prompt)
         parsed = _parse_draft(raw_response)
         commands, dropped = screen_commands(_raw_commands(parsed))
         if commands or not dropped:
             break
         # Nothing runnable, but the model did try: show it exactly what died
-        # and let it rewrite, keeping its own answer in the transcript.
-        messages.append({"role": "assistant", "content": raw_response})
-        messages.append({"role": "user", "content": _correction_prompt(dropped)})
+        # and let it rewrite. The transport carries one (system, user) pair, so
+        # the model's own answer travels inside the corrective prompt.
+        prompt = (
+            f"{user_prompt}\n\nYour previous answer:\n{raw_response}\n\n"
+            f"{_correction_prompt(dropped)}"
+        )
 
     subject = str(parsed.get("subject") or "Validation case").strip()
     instruction = str(parsed.get("instruction") or req.description).strip()

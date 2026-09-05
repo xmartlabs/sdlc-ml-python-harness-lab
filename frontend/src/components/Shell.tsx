@@ -59,6 +59,8 @@ const NAV_GROUPS: NavGroup[] = [
     title: "Evaluate",
     items: [
       { to: "/evaluate/new", label: "New evaluation", icon: IconPlus },
+      { to: "/evaluate/subject", label: "Validate your tool", icon: IconPuzzle },
+      { to: "/evaluate/audit", label: "Audit a repository", icon: IconSearch },
       { to: "/evaluate/experiments", label: "Experiments", icon: IconFlask }
     ]
   },

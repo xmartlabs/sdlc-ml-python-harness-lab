@@ -130,7 +130,7 @@ export function Skills() {
         setNotice(
           editing
             ? `Saved ${saved.name}. Runs that include it will pick up the new content (and a new condition_hash).`
-            : `Created ${saved.name}. Enable it under "Experimental" in the New run form to test it.`
+            : `Created ${saved.name}. Test it from New evaluation (factor 'Add skills': baseline vs baseline + this skill) or from Validate your tool. Advanced → Runs also lists it under Experimental.`
         );
         resetForm();
         refresh();
@@ -281,7 +281,7 @@ export function Skills() {
     action
       .then(() => {
         setNotice(
-          `Imported ${preview.name} (${preview.files.length} file(s)). Enable it under "Experimental" in the New run form to A/B it.`
+          `Imported ${preview.name} (${preview.files.length} file(s)). Test it from New evaluation (factor 'Add skills': baseline vs baseline + this skill) or from Validate your tool. Advanced → Runs also lists it under Experimental.`
         );
         cancelPreview();
         setImportUrl("");
@@ -372,8 +372,9 @@ export function Skills() {
             (<code>scripts/</code>, <code>references/</code>) are supported.
           </li>
           <li>
-            In the New run form, check it under <strong>Experimental</strong> and launch a run;
-            launch a second, identical run without it as the baseline.
+            Test it from <strong>New evaluation</strong> (factor <strong>Add skills</strong>:
+            baseline vs baseline + this skill) or from <strong>Validate your tool</strong>.
+            Advanced → Runs also lists it under <strong>Experimental</strong>.
           </li>
           <li>
             Compare the two runs (validation score, attribution, LLM audit verdicts) — they have
@@ -654,7 +655,7 @@ export function Skills() {
         </div>
         {staged.length === 0 ? (
           <EmptyState
-            description="Import one above, then enable it as Experimental in a run to A/B it."
+            description="Import one above, then A/B it from New evaluation (factor 'Add skills') or Validate your tool."
             title="No staged skills yet."
           />
         ) : (

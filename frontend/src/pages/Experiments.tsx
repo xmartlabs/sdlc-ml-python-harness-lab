@@ -636,12 +636,9 @@ function LaunchPanel({
       <div className="card">
         <h3>Run this experiment</h3>
         <p className="callout callout--warning">
-          This experiment has no cases, so there is nothing to launch. It was
-          created before any case was attached — re-run the flow that created it
-          (for a repository audit: accept at least one derived case, then create
-          the discovery experiment again) or create a new experiment from{" "}
-          <Link to="/evaluate/new">New evaluation</Link>. Experiments are
-          immutable once declared, so this draft simply stays inert.
+          This experiment has no cases, so there is nothing to launch. Create a
+          new one from <Link to="/evaluate/new">New evaluation</Link> or from the
+          repository&apos;s workbench; experiments are immutable once declared.
         </p>
       </div>
     );
@@ -1057,7 +1054,8 @@ export function Experiments() {
       <HelpPanel title="What an experiment is, and what a batch is not">
         <p>
           An experiment states its <strong>question</strong> before anything runs, and
-          declares its arms up front — one control, the rest treatments. The lab
+          declares its arms up front — a control and its treatments, or, for subject
+          validation, peer arms with no control. The lab
           checks the design against the mode and refuses one that cannot answer the
           question it claims to: a comparison that varies both the harness and the
           repository produces a number that cannot be attributed to either.
@@ -1104,7 +1102,7 @@ export function Experiments() {
                 </Link>
               </div>
             }
-            description="Start by choosing what you want to learn. An experiment needs a question, a mode, cases and at least one control condition."
+            description="Start by choosing what you want to learn. An experiment needs a question, a mode, cases and at least one arm."
             title="No experiments yet."
           />
         ) : (

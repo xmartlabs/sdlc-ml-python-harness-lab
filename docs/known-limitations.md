@@ -128,8 +128,14 @@ confuse them.
 
 The metrics ride in the **default scoring profile** (the graceful skips are what
 make that safe), the Docker images ship the dependency, and the judge resolves
-zero-config through the lab's own gateway — `DEEPEVAL_MODEL` overrides it and
-`DEEPEVAL_MODEL=off` is the cost lever. Host-mode development still needs
+zero-config over whichever transport the lab has — the gateway when one is
+configured, otherwise the Claude Code CLI
+([ADR-0043](adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)).
+`DEEPEVAL_MODEL` overrides the model and `DEEPEVAL_MODEL=off` is the cost lever.
+Each judged score records which transport produced it, because two transports
+mean two judges: scores measured under different ones are comparable only in the
+loose sense that any two judges are, and nothing in the aggregate flags the
+difference for you. Host-mode development still needs
 `uv sync --extra deepeval`, and a plain `uv sync` removes it again — that
 remains the price of keeping it an optional extra.
 
@@ -138,7 +144,7 @@ remains the price of keeping it an optional extra.
 Every terminal run is now scored automatically, and re-validating rescores. Runs that
 finished before that landed carry none until someone opens them and presses **Score
 this run**; they are absent from the corpus aggregate and from any experiment summary
-until then. The Dashboard's "worth attention" panel counts them.
+until then. The Benchmarks page's "worth attention" panel counts them.
 
 ### The regression suite runs through experiments, with one caveat
 
@@ -206,6 +212,19 @@ or to stop sharing it between processes at all and have the worker reach the
 API over HTTP. Both are larger than the guard, and the guard removes the silent
 failure mode.
 
+### The dev stack's UI is reachable from the LAN before a password is set
+
+The API binds to `127.0.0.1:8009` by default (`HARNESS_LAB_API_BIND_ADDR`), but
+the Vite dev frontend (`frontend/vite.config.ts`) listens on `0.0.0.0:5173` and
+proxies `/api`. So under `make app-up`, anyone on the network who can reach `:5173`
+can drive the lab — create runs, edit `.env` through Settings — until
+`make set-password` is run. The always-on stack (`make app-up-prod`) is different:
+nginx on `:8080` binds to `HARNESS_LAB_BIND_ADDR` (default `127.0.0.1`) and the
+API stays on loopback. Not fixed at the root because the dev server's bind
+address is what lets the compose network reach it; the guard is the password
+([ADR-0015](adr/0015-single-user-session-auth.md)) and the banner the UI shows
+until it exists.
+
 ### `make stop-docker` does not stop the dev stack
 
 It stops a single container named `ml-python-base-server`, inherited from the
@@ -231,17 +250,18 @@ project. Splitting them would break the `template_sync` contract in
 
 ## Harness coupling
 
-`repo_root` defaults to `Path.cwd()`, so **the harness under test is the repository
-the lab runs from**. Selecting a harness in the UI picks which CLI is invoked, not
-which governance surface is loaded. Testing a different harness means cloning it
-and running the lab inside it.
+`repo_root` defaults to `Path.cwd()`, so **for a `lab_root` run the harness under
+test is the repository the lab runs from**. In that mode, selecting a harness in the
+UI picks which CLI is invoked, not which governance surface is loaded — every CLI
+reads this repo's own `.github/` governance.
 
-Partly lifted for runs against an external target
-([ADR-0031](adr/0031-harness-source-is-a-run-condition.md)): `harness_source` picks
-between the lab's harness projected into the target (`injected`) and the target's own
-conventions (`native`), which is enough for a harness A/B on someone else's
-repository. What remains true is the general statement: a harness sourced from a
-*third* repository is still not supported.
+Runs against a registered target repository are different
+([ADR-0029](adr/0029-target-repositories-pinned-per-run.md),
+[ADR-0031](adr/0031-harness-source-is-a-run-condition.md)): there `harness_source`
+is a per-run condition that picks between the lab's harness projected into the target
+(`injected`) and the target's own conventions (`native`), which is enough for a
+harness A/B on someone else's repository. What remains true in every mode: a harness
+sourced from a *third* repository (target A + harness B) is still not supported.
 
 The audit half of that gap is closed. Each run is now judged against the governance
 surface it actually had — the target's own for a `native` arm, the injected harness
@@ -251,10 +271,11 @@ persisted with the audit
 recorded before that carry no surface and say so rather than being backfilled.
 
 This is the deliberate narrowing described in
-[the readiness plan](plans/2026-08-open-source-readiness-and-batch-runs.md), and it
-is the prerequisite for most of the "out of scope" items there. The *target* side of
-that coupling — running a case against an arbitrary external repository — is
-planned in [the v2 roadmap](roadmap-lab-v2.md#phase-1--targetrepository); the
-harness side stays out of scope there too. It is stated in the
-README as well, because it is the limitation most likely to surprise someone who
+[the readiness plan](plans/2026-08-open-source-readiness-and-batch-runs.md). The
+*target* side of that coupling — running a case against an external repository — is
+implemented: the engineer clones the target into `data/checkouts/<target_id>` and the
+lab pins the commit per run ([ADR-0029](adr/0029-target-repositories-pinned-per-run.md),
+[ADR-0042](adr/0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md)).
+The harness side — a third-repository harness — stays out of scope. It is stated in
+the README as well, because it is the limitation most likely to surprise someone who
 expected a harness-agnostic platform.

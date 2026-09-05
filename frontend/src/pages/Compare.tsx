@@ -325,7 +325,7 @@ export function Compare({ runs }: CompareProps) {
           <li><strong>Objective</strong> comes from automatic validation; SWE-bench
             resolves to pass/fail, other cases show their check summary.</li>
           <li>The aggregated <strong>Leaderboard</strong> (% resolved per harness +
-            model + prompt + harness version) lives on the Dashboard.</li>
+            model + prompt + harness version) lives on Benchmarks.</li>
         </ol>
       </HelpPanel>
 

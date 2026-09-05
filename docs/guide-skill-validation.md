@@ -20,22 +20,25 @@ A run's `condition_hash` identifies its experimental arm (harness + model +
 prompt + case, ADR-0003). Disabling a skill — or adding a staged one — flips
 the hash, so "with" and "without" runs are distinct arms you can compare on the
 multidimensional score (ADR-0004), the attribution panel (ADR-0005), and the
-LLM audit's per-item verdicts (útil / redundante / a mejorar).
+LLM audit's per-item verdicts (useful / redundant / improve).
 
 Local models at temp>0 are statistical: run **N repetitions per arm** (3+ is a
 reasonable start) and compare distributions, not single runs.
 
 ## Lane A — ablate an existing skill
 
-1. Open **Runs → New run**, expand the **Skills** section.
-2. Uncheck the skill(s) under test; everything else stays identical to your
-   baseline configuration. Create the run.
-3. Create the baseline run with all skills checked (same case, model, prompt,
-   max steps).
-4. During an ablated run the runner regenerates `.opencode/skills/` and the
-   `OPENCODE.md` skills block without the skill, and restores them afterwards
-   (`git status` must be clean once the run ends).
-5. Compare the arms in run detail / Compare: objective validation, tokens,
+1. Open **Evaluate → New evaluation** and pick the **Remove skills** factor:
+   the control arm keeps the skill(s), the treatment arm runs without them, and
+   everything else stays identical. Launch it with repetitions. For a single
+   ablated run instead, **Advanced → Runs → New run**, expand the **Skills**
+   section, uncheck the skill(s) under test and create the run; create the
+   baseline with all skills checked (same case, model, prompt, max steps).
+2. During an ablated run the runner regenerates the native skill views
+   (`.claude/skills/` and the adapter-file skill blocks) without the skill and
+   restores them afterwards (`git status` must be clean once the run ends). A
+   run container sees exactly one catalog, `.claude/skills/`; the other native
+   catalogs are masked (see [harness-architecture.md](harness-architecture.md)).
+3. Compare the arms in the experiment detail or Compare: objective validation, tokens,
    steps, attribution ("consulted"), audit verdicts.
 
 ## Lane B — trial a new (staged) skill
@@ -103,7 +106,7 @@ reasonable start) and compare distributions, not single runs.
    before the delta. To make an unasked skill trigger on the task, rewrite
    its `description`; every edit is a new `condition_hash`.
 
-   For a one-off, **Runs → New run → Skills → Experimental** launches a single
+   For a one-off, **Advanced → Runs → New run → Skills → Experimental** launches a single
    run with the staged skill; launch the baseline without it.
 4. Iterate: edit any file from **Skills → Edit** (file list on the left, editor
    on the right; add and delete files there too) and re-run. Every edit flips

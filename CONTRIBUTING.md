@@ -10,7 +10,7 @@ the idea behind it.
 ```bash
 make install        # uv-managed venv + dev dependencies
 cp .env.example .env
-make app-up         # API + worker + frontend → http://localhost:5173
+make app-up         # api + worker + redis + frontend, plus the runner and sandbox images → http://localhost:5173
 ```
 
 [docs/onboarding.md](docs/onboarding.md) covers credentials, local model

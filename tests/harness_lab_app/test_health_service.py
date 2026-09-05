@@ -71,6 +71,7 @@ def test_every_check_reports_even_with_nothing_running(isolated):
     checks = _by_id(report)
     assert set(checks) == {
         "gateway",
+        "llm_transport",
         "redis",
         "worker",
         "docker",
@@ -239,6 +240,43 @@ def test_gateway_without_credentials_warns_instead_of_erroring(isolated):
     status, detail, _ = module._check_gateway()
     assert status == module.WARN
     assert "GATEWAY_BASE_URL" in detail
+
+
+# -- llm transport -----------------------------------------------------------
+
+
+def test_a_subscription_only_lab_is_healthy_on_the_transport_row(monkeypatch):
+    """No gateway is not the same as no judge: the CLI is a working answer."""
+    from harness_lab_app import llm_transport
+
+    monkeypatch.setattr(llm_transport, "available_transport", lambda: "claude_cli")
+    status, detail, _ = module._check_llm_transport()
+    assert status == module.OK
+    assert "claude-" in detail
+
+
+def test_a_credential_without_the_cli_installed_names_the_missing_piece(monkeypatch):
+    """The api image may predate the CLI; say that rather than "no transport"."""
+    from harness_lab_app import llm_transport
+
+    monkeypatch.setattr(llm_transport, "available_transport", lambda: "none")
+    monkeypatch.setattr(
+        llm_transport, "claude_cli_credential", lambda: ("ANTHROPIC_API_KEY", "sk-x")
+    )
+    monkeypatch.setattr(llm_transport, "claude_cli_path", lambda: "")
+    status, detail, _ = module._check_llm_transport()
+    assert status == module.WARN
+    assert "PATH" in detail
+
+
+def test_no_credentials_at_all_warns_that_judging_is_unavailable(monkeypatch):
+    from harness_lab_app import llm_transport
+
+    monkeypatch.setattr(llm_transport, "available_transport", lambda: "none")
+    monkeypatch.setattr(llm_transport, "claude_cli_credential", lambda: None)
+    status, detail, _ = module._check_llm_transport()
+    assert status == module.WARN
+    assert "CLAUDE_CODE_OAUTH_TOKEN" in detail
 
 
 # -- langfuse ----------------------------------------------------------------

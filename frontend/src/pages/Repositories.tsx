@@ -260,13 +260,15 @@ export function Repositories() {
 
       <HelpPanel title="How a repository is pinned">
         <p>
-          A run resolves the ref you pick to a <strong>commit SHA</strong> before it
-          starts, and records that commit. A run pinned to <code>main</code> stays on
-          the commit it actually used, so re-running it later — or cloning it — is the
-          same experiment, not whatever was pushed since.
+          You clone the repository yourself, with the command this page shows, into{" "}
+          <code>data/checkouts/&lt;target_id&gt;</code> — the lab never fetches a remote
+          on your behalf. The lab then <strong>pins the commit</strong> that checkout is
+          on, and every run, readiness read and derived case works from that pinned
+          commit until you re-pin it. Re-running later is the same experiment, not
+          whatever was pushed since.
         </p>
         <p className="muted">
-          <strong>Setup</strong> runs after checkout and before the agent (for example{" "}
+          <strong>Setup</strong> runs before the agent (for example{" "}
           <code>uv sync</code>). <strong>Validation</strong> are the repository's own
           gates, and they replace the case's when a run has a target — the repo knows
           how it is tested better than a portable case does.
@@ -641,9 +643,8 @@ export function Repositories() {
                         />
                       </label>
                       <p className="muted small">
-                        Create it from <strong>Cases</strong> with provenance{" "}
-                        <code>organization</code>, then pair it with this repository
-                        in the run form.
+                        Create it from this repository&apos;s workbench (Open →
+                        Cases), so it carries <code>origin_target_id</code>.
                       </p>
                     </div>
                   )}

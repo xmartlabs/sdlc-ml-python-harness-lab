@@ -3,6 +3,40 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## A transport migration is found by grepping the wire, not the helper names — 2026-09-04
+
+ADR-0043 collapsed "four" gateway call sites onto `llm_transport`. There were
+five: `case_draft_service.py` had its own `_call_gateway_chat`, so on a
+subscription-only lab every judged feature worked while **Draft it with AI** in
+the wizards still answered "Gateway not configured". The plan's inventory had
+been built from the helper names people remembered (`call_gateway`,
+`_worker_gateway`, `_gateway`), not from the request shape. The one string every
+copy shared was `chat/completions`.
+
+The same pass showed how documentation drifts in this repo: not by lying about
+a feature, but by describing a *previous* layout. The in-app Guide still walked
+"Cases → Runs → Score → Compare" after the nav had been regrouped around three
+questions; four guides said `claude` needs host mode a month after it moved into
+the runner image; two docs in the same directory disagreed on whether the API is
+on the LAN (it is not; the Vite dev UI on `0.0.0.0:5173` proxies it, so the
+answer is "yes until `make set-password`"). And `docs_catalog.py` is a
+whitelist: a new guide is invisible in the web Guide page until it is registered
+there, which is why the three newest workflows (target repositories, skill
+validation, run continuation) had docs nobody could reach from the UI.
+
+**Why it matters:** the UI, the docs served in-app and the markdown on disk are
+three copies of "how to use the lab". A change that lands in one place reads as
+a contradiction from the other two, and a reader cannot tell which copy is
+current.
+
+**How to apply:** when auditing docs against code, build the fact sheet from
+the code first (nav groups from `Shell.tsx`, routes from `api.py`, transports
+from `llm_transport.py`, harness rules from `run_service.preflight`) and check
+every document against that one sheet, so the fixes agree with each other.
+When migrating a duplicated call, grep for the wire format (`chat/completions`,
+`choices[0]`) rather than for function names. When adding a guide under
+`docs/`, register it in `docs_catalog._DOCS` or it does not exist in the app.
+
 ## Under `native`, a lab-side skill is invisible to the agent — 2026-09-04
 
 `apply_skill_views()` writes into the LAB root; `inject_harness()` runs only for
@@ -550,6 +584,48 @@ older `timing_source: interpolated`. Also: `run_id` is not globally unique
 across copies of a run directory, which is why OTEL ids are salted with
 `condition_hash`. See
 [ADR-0028](../docs/adr/0028-step-traces-carry-per-call-detail.md).
+
+## A subscription token is a whole LLM transport (2026-09-04)
+
+The lab made four independent `POST /chat/completions` calls — the auditor, the
+SWE judge, the DeepEval judge, the case summariser — each with its own copy of
+the same twelve lines. Collapsing them into `llm_transport` was worth doing on
+its own, but the reason it mattered is that **one seam is one place to add a
+second transport**: `claude -p --output-format json --tools "" --strict-mcp-config`
+is a text-completion endpoint, so a teammate whose only credential is a Claude
+subscription now gets audits, judges and summaries with no paid API key and no
+gateway. `--tools ""` is the load-bearing flag: it makes the CLI a completion
+rather than an agent, so no permission prompt can ever block a worker.
+
+Three things that were not obvious until the code ran:
+
+- **The CLI reports failure in-band.** A bad model name comes back as exit 1
+  *plus* `"is_error": true` *plus* the error text sitting in `result`, exactly
+  where an answer would be. A parser that reads `result` without checking the
+  other two returns an error message as if it were an audit.
+- **The audit prompt must go on stdin.** The real one measured 86 KB (clipped
+  diff plus harness log). Not over the argv limit, but close enough that a
+  larger diff would be.
+- **Model names are transport-specific**, so defaults have to be too.
+  `gpt-5.4-mini` means nothing to the CLI and `claude-sonnet-5` means nothing to
+  a gateway that does not proxy it; a name that is not a Claude id is dropped so
+  the CLI picks its own default instead of sending a guaranteed 404.
+
+**Why it matters:** the ordering is the entire compatibility promise. The gateway
+is checked first, always, so adding a Claude credential to a multi-model lab can
+never move a judge — a test asserts it. Two labs judging the same run over
+different transports produce numbers that are only loosely comparable, which is
+why each judged score records its transport in provenance.
+
+**How to apply:** when a capability is duplicated more than twice, the third
+copy is the signal to extract a seam — the payoff is usually the *next* feature,
+not the deduplication. And validate a fallback path end to end before believing
+it: this one uncovered `ToolCorrectnessMetric()` being constructed outside its
+`try`, where DeepEval eagerly builds an OpenAI client and raises on a missing
+`OPENAI_API_KEY`, killing all three trajectory metrics on any lab without that
+key. Unit tests never saw it; a real subscription-only run did. See
+[ADR-0043](../docs/adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)
+and [the plan](../docs/plans/2026-09-claude-native-llm-transport.md).
 
 <!-- Add new learnings above this line -->
 
@@ -1185,5 +1261,47 @@ older `timing_source: interpolated`. Also: `run_id` is not globally unique
 across copies of a run directory, which is why OTEL ids are salted with
 `condition_hash`. See
 [ADR-0028](../docs/adr/0028-step-traces-carry-per-call-detail.md).
+
+## A subscription token is a whole LLM transport (2026-09-04)
+
+The lab made four independent `POST /chat/completions` calls — the auditor, the
+SWE judge, the DeepEval judge, the case summariser — each with its own copy of
+the same twelve lines. Collapsing them into `llm_transport` was worth doing on
+its own, but the reason it mattered is that **one seam is one place to add a
+second transport**: `claude -p --output-format json --tools "" --strict-mcp-config`
+is a text-completion endpoint, so a teammate whose only credential is a Claude
+subscription now gets audits, judges and summaries with no paid API key and no
+gateway. `--tools ""` is the load-bearing flag: it makes the CLI a completion
+rather than an agent, so no permission prompt can ever block a worker.
+
+Three things that were not obvious until the code ran:
+
+- **The CLI reports failure in-band.** A bad model name comes back as exit 1
+  *plus* `"is_error": true` *plus* the error text sitting in `result`, exactly
+  where an answer would be. A parser that reads `result` without checking the
+  other two returns an error message as if it were an audit.
+- **The audit prompt must go on stdin.** The real one measured 86 KB (clipped
+  diff plus harness log). Not over the argv limit, but close enough that a
+  larger diff would be.
+- **Model names are transport-specific**, so defaults have to be too.
+  `gpt-5.4-mini` means nothing to the CLI and `claude-sonnet-5` means nothing to
+  a gateway that does not proxy it; a name that is not a Claude id is dropped so
+  the CLI picks its own default instead of sending a guaranteed 404.
+
+**Why it matters:** the ordering is the entire compatibility promise. The gateway
+is checked first, always, so adding a Claude credential to a multi-model lab can
+never move a judge — a test asserts it. Two labs judging the same run over
+different transports produce numbers that are only loosely comparable, which is
+why each judged score records its transport in provenance.
+
+**How to apply:** when a capability is duplicated more than twice, the third
+copy is the signal to extract a seam — the payoff is usually the *next* feature,
+not the deduplication. And validate a fallback path end to end before believing
+it: this one uncovered `ToolCorrectnessMetric()` being constructed outside its
+`try`, where DeepEval eagerly builds an OpenAI client and raises on a missing
+`OPENAI_API_KEY`, killing all three trajectory metrics on any lab without that
+key. Unit tests never saw it; a real subscription-only run did. See
+[ADR-0043](../docs/adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)
+and [the plan](../docs/plans/2026-09-claude-native-llm-transport.md).
 
 <!-- Add new learnings above this line -->
