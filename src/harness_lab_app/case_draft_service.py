@@ -15,6 +15,7 @@ from sqlmodel import Session
 
 from harness_lab_app import llm_transport
 from harness_lab_app.config import read_env_file_value
+from harness_lab_app.models import CaseType
 from harness_lab_app.schemas import (
     CaseDraftRequest,
     CaseDraftResponse,
@@ -26,6 +27,18 @@ from harness_lab_app.validation import is_executable_command
 # it rides the summary tier of whichever transport is active (ADR-0043):
 # gpt-5.4-nano on a gateway, claude-haiku-4-5 on the Claude CLI.
 DRAFT_TIMEOUT_SECONDS = 60
+
+#: Case types a person can author. The two SWE-bench types are imported from a
+#: dataset with their own test lists, so the assistant must never mint one.
+_AUTHORABLE_CASE_TYPES = frozenset(
+    {
+        CaseType.single_prompt,
+        CaseType.multi_step,
+        CaseType.build_from_scratch,
+        CaseType.bugfix,
+        CaseType.repo_task,
+    }
+)
 
 # One corrective round-trip when the first answer leaves nothing runnable. A
 # second retry rarely changes the outcome and doubles the wait.
@@ -59,7 +72,16 @@ _SYSTEM_PROMPT = (
     '- "subject": concise string naming the tool/feature under test (e.g. "caveman: token-efficient Python module implementation")\n'
     '- "instruction": clear, precise, comprehensive prompt the agent will receive in its workspace to perform the task\n'
     '- "validation_commands": array of single-line shell commands that run after the agent stops and exit non-zero if the agent failed (e.g. ["pytest {workspace}/test_module.py -q", "python3 -c "import json,sys; d=json.load(open(\'{workspace}/out.json\')); sys.exit(0 if d.get(\'ok\') else 1)""])\n'
-    '- "max_steps": integer step budget (5, 10, 15, 20, or 25, default 15)\n\n'
+    '- "max_steps": integer step budget (5, 10, 15, 20, or 25, default 15)\n'
+    '- "case_id": lowercase kebab-case identifier for this case, 3 to 40 characters, no spaces (e.g. "json-config-merger")\n'
+    '- "description": one or two sentences saying what the case measures, for a person browsing the catalog. Not the instruction.\n'
+    '- "case_type": one of "single_prompt" (one instruction, the agent works until done), "multi_step" (the work is driven turn by turn from a written plan), "build_from_scratch" (an empty workspace, the agent creates the project), "bugfix" (existing code is broken and must be repaired), "repo_task" (a change inside an existing repository)\n'
+    '- "step_prompts": ONLY for "multi_step" — the prompt for step 2 onward, one string per step, in order. "instruction" is step 1, so do not repeat it here. Use [] for every other case type.\n\n'
+    "Sizing rules that tie those together:\n"
+    "- Choose the case type from the work, not from the wording of the request: an empty workspace is build_from_scratch, repairing existing behaviour is bugfix, and a task inside a repository you were shown is repo_task.\n"
+    "- A multi_step case must have at least one entry in step_prompts, each a self-contained instruction for that turn, and max_steps must be at least 1 + len(step_prompts).\n"
+    "- Every other case type must leave step_prompts empty; its budget is how "
+    "many turns the agent may take, not a plan.\n\n"
     "When a 'Repository context' section is present:\n"
     "- The case runs INSIDE that repository: {workspace} is a clone of it at a fixed "
     "commit, not an empty directory. Never ask the agent to create the project from "
@@ -224,6 +246,56 @@ def _load_repo_context(target_id: str) -> str:
         return ""
 
 
+def _case_type(raw: object) -> str:
+    """The model's case type, or the safe default.
+
+    Only the hand-authored types are accepted. `swe_bench_instance` and
+    `swe_pro_instance` are imported from a dataset and carry test lists the
+    lab scores against; a drafted case wearing that type would claim an
+    objective verdict nothing computes.
+    """
+    value = str(raw or "").strip()
+    return value if value in _AUTHORABLE_CASE_TYPES else CaseType.single_prompt
+
+
+def _step_prompts(raw: object, case_type: str) -> list[str]:
+    """Per-step prompts, kept only where the runner reads them.
+
+    `step_prompts` drives step 2 onward of a `multi_step` case. On any other
+    type the runner never opens the list, so keeping it would show a plan in
+    the editor that nothing executes.
+    """
+    if case_type != CaseType.multi_step or not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _max_steps(raw: object) -> int:
+    return raw if isinstance(raw, int) and 1 <= raw <= 100 else 10
+
+
+def _case_id(raw: object, subject: str, taken: list[str]) -> str:
+    """A slug that is free in the catalog.
+
+    The person can still rename it, but they should not have to discover the
+    collision by pressing Create and reading a 409.
+    """
+    slug = _slugify(str(raw or "")) or _slugify(subject) or "drafted-case"
+    used = {item.strip() for item in taken if item.strip()}
+    if slug not in used:
+        return slug
+    for suffix in range(2, 100):
+        candidate = f"{slug}-{suffix}"
+        if candidate not in used:
+            return candidate
+    return slug
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    return slug[:40].strip("-")
+
+
 def generate_case_draft(req: CaseDraftRequest) -> CaseDraftResponse:
     """Draft a case from a scenario, keeping only commands the lab would run.
 
@@ -266,11 +338,11 @@ def generate_case_draft(req: CaseDraftRequest) -> CaseDraftResponse:
 
     subject = str(parsed.get("subject") or "Validation case").strip()
     instruction = str(parsed.get("instruction") or req.description).strip()
-
-    raw_steps = parsed.get("max_steps")
-    max_steps = 10
-    if isinstance(raw_steps, int) and 1 <= raw_steps <= 100:
-        max_steps = raw_steps
+    case_type = _case_type(parsed.get("case_type"))
+    step_prompts = _step_prompts(parsed.get("step_prompts"), case_type)
+    # The plan decides the floor: a budget below 1 + len(step_prompts) would
+    # stop the run before the last step it was given a prompt for.
+    max_steps = max(_max_steps(parsed.get("max_steps")), 1 + len(step_prompts))
 
     return CaseDraftResponse(
         subject=subject,
@@ -279,4 +351,8 @@ def generate_case_draft(req: CaseDraftRequest) -> CaseDraftResponse:
         max_steps=max_steps,
         dropped_commands=dropped,
         attempts=attempts,
+        case_id=_case_id(parsed.get("case_id"), subject, req.existing_case_ids),
+        description=str(parsed.get("description") or "").strip(),
+        case_type=case_type,
+        step_prompts=step_prompts,
     )

@@ -495,6 +495,10 @@ class CaseDraftRequest(BaseModel):
     description: str
     model: str | None = None
     selected_skills: list[str] = Field(default_factory=list)
+    # Ids already taken in the catalog. The assistant proposes a case id and
+    # the service keeps it free, so the wizard never opens with an id whose
+    # save is going to be refused.
+    existing_case_ids: list[str] = Field(default_factory=list)
     # The repository the case is being written for, when there is one. A case
     # drafted blind against someone else's codebase names files that do not
     # exist and a gate that is not theirs; with it, the assistant reads the
@@ -514,6 +518,14 @@ class CaseDraftResponse(BaseModel):
     instruction: str
     validation_commands: list[str] = Field(default_factory=list)
     max_steps: int = 10
+    # The rest of the case's shape. Optional because the subject-validation
+    # wizard only needs subject/instruction/commands and fills the remaining
+    # fields itself; the Cases form saves a whole case in one press and would
+    # otherwise leave a model that already decided these things unread.
+    case_id: str = ""
+    description: str = ""
+    case_type: str = CaseType.single_prompt
+    step_prompts: list[str] = Field(default_factory=list)
     # What the model wrote that was screened out, so the person sees the gap
     # here rather than after the runs have spent their budget.
     dropped_commands: list[DroppedCommand] = Field(default_factory=list)

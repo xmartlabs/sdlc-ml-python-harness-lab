@@ -49,6 +49,8 @@ export interface CaseDraftRequest {
   selected_skills: string[];
   /** Draft against this repository's checkout rather than in the abstract. */
   target_id?: string;
+  /** Ids already in the catalog, so the proposed one is free to save. */
+  existing_case_ids?: string[];
 }
 
 export interface DroppedCommand {
@@ -64,6 +66,11 @@ export interface CaseDraftResponse {
   /** Commands the model wrote that the lab would not run, with the reason. */
   dropped_commands: DroppedCommand[];
   attempts: number;
+  /** The rest of the case's shape — the Cases form saves all of it at once. */
+  case_id?: string;
+  description?: string;
+  case_type?: string;
+  step_prompts?: string[];
 }
 
 

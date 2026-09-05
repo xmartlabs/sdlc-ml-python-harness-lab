@@ -318,3 +318,93 @@ def test_a_draft_without_a_target_carries_no_repository_context(monkeypatch):
         CaseDraftRequest(description="Build a thing")
     )
     assert "Repository context" not in seen["user"]
+
+
+# --- The whole case shape, for the Cases form (one press saves everything) ---
+
+
+def _full_draft(**overrides) -> str:
+    payload = {
+        "subject": "JSON config merger",
+        "instruction": "Write {workspace}/merge.py that merges two config files.",
+        "validation_commands": ["pytest {workspace}/test_merge.py -q"],
+        "max_steps": 10,
+        "case_id": "json-config-merger",
+        "description": "Measures whether the agent can merge nested configs.",
+        "case_type": "single_prompt",
+        "step_prompts": [],
+    }
+    payload.update(overrides)
+    return json.dumps(payload)
+
+
+def test_a_draft_carries_the_whole_case_not_just_the_instruction():
+    """The Cases form saves a case in one press, so the model shapes all of it."""
+    with patch(
+        "harness_lab_app.case_draft_service._call_model", return_value=_full_draft()
+    ):
+        res = generate_case_draft(CaseDraftRequest(description="merge configs"))
+    assert res.case_id == "json-config-merger"
+    assert res.description == "Measures whether the agent can merge nested configs."
+    assert res.case_type == "single_prompt"
+    assert res.step_prompts == []
+
+
+def test_a_multi_step_draft_keeps_its_plan_and_a_budget_that_fits_it():
+    """A budget below 1 + len(step_prompts) stops the run mid-plan."""
+    with patch(
+        "harness_lab_app.case_draft_service._call_model",
+        return_value=_full_draft(
+            case_type="multi_step",
+            step_prompts=["Implement the merge.", "Write the tests.", "Run them."],
+            max_steps=2,
+        ),
+    ):
+        res = generate_case_draft(CaseDraftRequest(description="merge configs"))
+    assert res.case_type == "multi_step"
+    assert len(res.step_prompts) == 3
+    assert res.max_steps == 4
+
+
+def test_step_prompts_are_dropped_on_a_type_that_never_reads_them():
+    """The runner only opens step_prompts for multi_step cases."""
+    with patch(
+        "harness_lab_app.case_draft_service._call_model",
+        return_value=_full_draft(case_type="bugfix", step_prompts=["step two"]),
+    ):
+        res = generate_case_draft(CaseDraftRequest(description="fix the bug"))
+    assert res.case_type == "bugfix"
+    assert res.step_prompts == []
+
+
+def test_a_drafted_case_can_never_claim_a_swe_bench_type():
+    """Those types carry dataset test lists the lab scores against."""
+    with patch(
+        "harness_lab_app.case_draft_service._call_model",
+        return_value=_full_draft(case_type="swe_bench_instance"),
+    ):
+        res = generate_case_draft(CaseDraftRequest(description="fix flask"))
+    assert res.case_type == "single_prompt"
+
+
+def test_the_proposed_case_id_avoids_ids_the_catalog_already_has():
+    """Otherwise the person meets the collision by pressing Create."""
+    with patch(
+        "harness_lab_app.case_draft_service._call_model", return_value=_full_draft()
+    ):
+        res = generate_case_draft(
+            CaseDraftRequest(
+                description="merge configs",
+                existing_case_ids=["json-config-merger", "json-config-merger-2"],
+            )
+        )
+    assert res.case_id == "json-config-merger-3"
+
+
+def test_a_missing_case_id_is_derived_from_the_subject():
+    with patch(
+        "harness_lab_app.case_draft_service._call_model",
+        return_value=_full_draft(case_id="  ", subject="Retry Policy: HTTP client"),
+    ):
+        res = generate_case_draft(CaseDraftRequest(description="retry policy"))
+    assert res.case_id == "retry-policy-http-client"

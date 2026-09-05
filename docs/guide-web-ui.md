@@ -771,7 +771,18 @@ disabled with `0` (`HARNESS_LAB_RUN_STALL_SECONDS`,
 `run_model_wait_seconds` for a slow model.
 
 ### Cases
-The catalog of tasks. Three ways to get realistic cases:
+The catalog of tasks. Four ways to get realistic cases:
+
+- **Draft it with AI** — describe the case in one sentence and the assistant
+  shapes the whole thing: case type, a free id, name, description, the
+  instruction the agent receives, the per-step plan for a `multi_step` case, the
+  step budget, and the validation commands. Every field lands editable, so the
+  draft is a starting point rather than a decision, and any command the lab
+  could not run is listed with the reason instead of being dropped in silence.
+  It uses the same transport as every other LLM call — your gateway, or the
+  Claude Code CLI when that is all that is configured
+  ([ADR-0043](adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)).
+  Leave **Model** on *Transport default* unless you want a specific one.
 
 - **tetris-v1** — the seeded pilot (build a game; smoke floor + a 0-10
   rubric the LLM judge grades against, overwritable by hand).
@@ -783,6 +794,11 @@ The catalog of tasks. Three ways to get realistic cases:
   exit-code validation, e.g. `benchmarks/cli-textstats/`
   (`make case-import TASK=…`). Great for trying a new model on a self-contained
   task with an objective floor.
+
+**Write the validation commands, whichever way you got there.** The New case
+form takes them one per line, and a case without any cannot score itself: every
+run of it stops in `awaiting_manual_score` waiting for a person
+([ADR-0038](adr/0038-every-run-leaves-with-a-score.md)).
 
 #### Managing a case from the browser
 
