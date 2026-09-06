@@ -432,6 +432,10 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   getCase: (caseId: string) => request<CaseRecord>(`/api/cases/${caseId}`),
+  getCasePromptContent: (caseId: string, variant: string) =>
+    request<{ variant: string; content: string }>(
+      `/api/cases/${caseId}/prompt-content?variant=${encodeURIComponent(variant)}`
+    ),
   updateCase: (caseId: string, payload: CaseCreatePayload) =>
     request<CaseRecord>(`/api/cases/${caseId}`, {
       method: "PATCH",

@@ -10,6 +10,7 @@ import {
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
 import { ModelPicker } from "../components/ModelPicker";
+import { PromptPreview } from "../components/PromptPreview";
 import { IconAlert, IconArrowRight } from "../components/icons";
 import type {
   CaseRecord,
@@ -296,6 +297,16 @@ export function NewEvaluation() {
     }
     return [...names].sort();
   }, [selectedCases]);
+
+  // Cases feeding the "View prompt" toggle next to bare/harness selects — one
+  // entry per selected case that actually defines this variant, so a person
+  // can see what they picked without leaving the form. `prompt_variants`
+  // holds either the literal text or a `task.yaml`-style path, so the
+  // content itself is fetched from the API, which resolves either form.
+  const promptEntriesFor = (variant: string) =>
+    selectedCases
+      .filter((item) => typeof item.prompt_variants?.[variant] === "string")
+      .map((item) => ({ caseId: item.case_id, label: item.name }));
 
   const stepOptions = useMemo(() => {
     const budgets = new Set<number>([3, 6, 10, maxSteps]);
@@ -1003,6 +1014,7 @@ export function NewEvaluation() {
                     The plain task prompt — no governance instructions, and every
                     governed skill hidden for this arm.
                   </span>
+                  <PromptPreview entries={promptEntriesFor(bareVariant)} variant={bareVariant} />
                 </label>
                 <label className="field">
                   <span>Full-harness arm prompt</span>
@@ -1020,6 +1032,10 @@ export function NewEvaluation() {
                     The governance-loaded variant, with the whole skill catalog
                     ({skills.length}) available.
                   </span>
+                  <PromptPreview
+                    entries={promptEntriesFor(harnessVariant)}
+                    variant={harnessVariant}
+                  />
                 </label>
               </div>
             )

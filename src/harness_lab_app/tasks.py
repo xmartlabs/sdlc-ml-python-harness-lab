@@ -23,7 +23,7 @@ from sqlmodel import Session, select
 
 from harness_lab_app import llm_transport, run_failures
 from harness_lab_app.audit_service import AuditService
-from harness_lab_app.case_service import CaseService
+from harness_lab_app.case_service import CaseService, resolve_prompt_variant_text
 from harness_lab_app.celery_app import celery_app
 from harness_lab_app.config import get_settings
 from harness_lab_app.db import engine, init_db
@@ -124,23 +124,15 @@ def _target_spec(session: Session, run: Run) -> dict[str, Any] | None:
 def _case_prompt_text(case: Case, prompt_variant: str) -> str:
     """The prompt body for a variant, whatever form the case stores it in.
 
-    Cases created from the web (and every SWE-bench import) store the prompt
-    *text* in ``prompt_variants``. Cases imported from a ``benchmarks/<id>/
-    task.yaml`` store a repo-relative *path* instead, because that is what the
-    YAML says. The runner only ever wants text, so resolve the path here — on
-    the worker, which can read the repo — rather than teaching the container
-    about benchmark layout.
+    Delegates to :func:`case_service.resolve_prompt_variant_text`, which reads
+    a ``task.yaml``-style path off disk. The runner falls back to the raw
+    stored value (a path string, or "") when that resolution fails, so a
+    misconfigured variant degrades to an odd prompt rather than an error.
     """
-    raw = case.prompt_variants.get(prompt_variant, "")
-    if not raw or "\n" in raw:
-        return raw
-    candidate = get_settings().repo_root / raw
-    try:
-        if candidate.is_file():
-            return candidate.read_text()
-    except OSError:
-        return raw
-    return raw
+    resolved = resolve_prompt_variant_text(case, prompt_variant)
+    if resolved is not None:
+        return resolved
+    return case.prompt_variants.get(prompt_variant, "")
 
 
 def _write_case_spec(

@@ -5,6 +5,7 @@ import { api, ApiError } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
+import { InfoTooltip } from "../components/InfoTooltip";
 import { ModelPicker } from "../components/ModelPicker";
 import { Spinner } from "../components/Spinner";
 import { StateBadge } from "../components/StateBadge";
@@ -786,12 +787,7 @@ export function SubjectValidation() {
                 <span>
                   Ask the agent to use the selected skill(s) at the start of every
                   step.{" "}
-                  <small className="muted">
-                    On by default: a skill that is only available is invoked only
-                    when the case&rsquo;s instruction or the skill&rsquo;s own
-                    triggers call for it. Turn off to measure whether the agent
-                    reaches for it unasked.
-                  </small>
+                  <InfoTooltip text="On by default: a skill that is merely available is invoked only when the case's instruction or the skill's own triggers call for it, so the run may never exercise it. Turn this off to measure whether the agent reaches for the skill unasked." />
                 </span>
               </label>
 
@@ -802,7 +798,8 @@ export function SubjectValidation() {
                   type="checkbox"
                 />
                 <span>
-                  Isolate the run: disable every harness skill that is not selected above.
+                  Isolate the run: disable every harness skill that is not selected above.{" "}
+                  <InfoTooltip text="Every governed harness skill you did not select above is added to this run's disabled list, so only the skill(s) you picked can be reached. Leave this off to test your skill alongside the rest of the harness as usual; turn it on to isolate the measurement to just this skill." />
                 </span>
               </label>
 
@@ -814,7 +811,8 @@ export function SubjectValidation() {
                 />
                 <span>
                   My skill is already part of the governed harness — every run loads it
-                  already.
+                  already.{" "}
+                  <InfoTooltip text="Check this only if your skill ships as part of the governed harness itself, not as a staged extra skill, so every run loads it regardless of what you pick above. It only affects this form: it lets you continue past this step without selecting a skill from the list. It does not change what is sent to the run." />
                 </span>
               </label>
             </div>
