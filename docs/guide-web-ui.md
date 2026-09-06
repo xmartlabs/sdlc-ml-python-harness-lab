@@ -306,10 +306,29 @@ selected cases' own variants (`naive`→`sdlc`, `swe_default`→`swe_harness`), 
 Setting **both arms to the same prompt** is allowed, and is often the better
 design: the bare arm still hides the whole governed catalog, so the arms remain
 distinct conditions and the experiment varies one axis instead of two — which is
-what the backend's own confounding rule asks for. The wizard says so rather than
-refusing, since the result is then a claim about the skills, not about the
-harness as a unit. It is refused only when the arms would be genuinely
-identical: same prompt with no governed skills to hide. "Add skills" offers the *staged* catalog and
+what the backend's own confounding rule asks for. A case written in the Cases
+screen declares a single prompt (`default`), so the same-prompt pair is its only
+shape, and the honest one: such a prompt names no governance for the bare arm to
+lose. The wizard runs it and says what it measures rather than refusing. It is
+refused only when the arms would be genuinely identical: same prompt with no
+governed skills to hide.
+
+Read a same-prompt result as a claim about the **skill catalog**, not about the
+harness as a unit — and inside *This lab*, a narrower one still: the ablation
+rewrites only the generated skills region of `CLAUDE.md`, so the governance body
+survives in **both** arms. For a control side carrying nothing of the harness,
+use *Governance source* (`native` vs `injected`) against an external repository
+([ADR-0031](adr/0031-harness-source-is-a-run-condition.md)). The wizard prints
+both notes above the arm list.
+
+**Ask the agent to use the harness** appears under the prompt pair whenever the
+factor is *Full harness*. A prompt written in this UI says nothing about
+governance, so the full-harness arm may never open a skill and the pair would
+measure only what sat on disk. Ticking it names the skills you choose in an
+activation block at the start of every step of that arm (`skills_invoke`,
+[ADR-0041](adr/0041-a-skill-under-test-is-invoked-not-just-available.md)). The
+bare arm never receives it — it cannot see those skills at all, and a run told
+to invoke a skill it cannot see is refused at preflight. "Add skills" offers the *staged* catalog and
 "Remove skills" the *governed* one, because that is what `skills_extra` and
 `skills_disabled` each accept.
 

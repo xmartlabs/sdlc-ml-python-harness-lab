@@ -1,1 +1,0 @@
-../../../.github/skills/brainstorm_quick.md

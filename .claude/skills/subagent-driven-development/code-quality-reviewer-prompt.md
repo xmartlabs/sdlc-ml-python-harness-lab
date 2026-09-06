@@ -1,1 +1,0 @@
-../../../.github/skills-external/subagent-driven-development/code-quality-reviewer-prompt.md

@@ -1,1 +1,0 @@
-../../../.github/skills-external/writing-plans/plan-document-reviewer-prompt.md

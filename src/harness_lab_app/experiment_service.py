@@ -790,8 +790,24 @@ class ExperimentService:
             raise ExperimentError(f"Experiment '{experiment_id}' has no cases.")
 
         runs_service = RunService(self.session, enqueue=self.enqueue)
+        # Which prompts each case actually declares. A design may name a variant
+        # a case does not define — the shared axis crosses every case with every
+        # variant, and a condition may fix a ``prompt_variant`` of its own — and
+        # the run would then be handed an empty prompt, silently: the prompt
+        # lookup falls back to "" for an unknown variant. That failure lands
+        # inside one arm and reads as that arm losing. Batch mode resolves this
+        # per case before persisting anything (ADR-0023); an experiment owes the
+        # same guarantee.
+        defined = runs_service._defined_variants(experiment.case_ids)
+        undefined: list[str] = []
+
         configs: list[tuple[str, RunConfigCreate]] = []
         for case_id in experiment.case_ids:
+            available = defined.get(case_id)
+            if available is None:
+                raise ExperimentError(
+                    f"Unknown case '{case_id}'. Use GET /api/cases for the valid ids."
+                )
             for variant in experiment.prompt_variants or [base.prompt_variant]:
                 for condition in conditions:
                     payload = base.model_dump()
@@ -800,8 +816,25 @@ class ExperimentService:
                     )
                     payload.update(condition.overrides)
                     config = RunConfigCreate(**payload)
+                    if config.prompt_variant not in available:
+                        undefined.append(
+                            f"case '{case_id}' / arm '{condition.label}' asks for "
+                            f"prompt variant '{config.prompt_variant}'"
+                        )
+                        continue
                     for _ in range(experiment.repetitions_for(case_id)):
                         configs.append((condition.label, config))
+
+        if undefined:
+            raise ExperimentError(
+                "The design asks for prompt variants the cases do not define, so "
+                "those runs would carry an empty prompt: "
+                + "; ".join(sorted(set(undefined)))
+                + ". Add the variant to the case, or pick variants every selected "
+                "case declares."
+            )
+        if not configs:
+            raise ExperimentError(f"Experiment '{experiment_id}' expands to no runs.")
 
         # One experiment, one measurement configuration. A second launch with a
         # different shared setup (another model, another budget) would file two

@@ -1647,7 +1647,8 @@ def create_app() -> FastAPI:
         content = resolve_prompt_variant_text(case, variant)
         if content is None:
             raise HTTPException(
-                status_code=404, detail=f"Prompt variant {variant!r} has no readable content"
+                status_code=404,
+                detail=f"Prompt variant {variant!r} has no readable content",
             )
         return {"variant": variant, "content": content}
 

@@ -1,1 +1,0 @@
-../../../.github/skills-external/using-git-worktrees/SKILL.md

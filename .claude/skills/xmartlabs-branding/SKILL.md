@@ -1,1 +1,0 @@
-../../../.github/skills-external/xmartlabs-branding/SKILL.md

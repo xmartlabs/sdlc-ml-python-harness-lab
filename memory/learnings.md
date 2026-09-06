@@ -3,6 +3,42 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## A form gate that contradicts its own next branch is a bug (2026-09-06)
+
+The *Full harness* wizard refused any selection whose cases defined fewer than
+two prompt variants, and the branch immediately after it documented — in a
+comment — that equal prompts are perfectly sound, since the bare arm still hides
+the whole governed catalog. Two branches of one `if`, disagreeing. The gate had
+been written for `tetris-v1`, the only case in the lab with a prompt *family*;
+every case written in the Cases screen defines exactly one variant, `default`,
+so the lab's founding comparison was unavailable on the cases the lab is used
+on.
+
+**Why it matters:** the same-prompt design is not a degraded version of the
+prompt-family one — it is the *cleaner* one. A hand-written `sdlc` prompt tells
+the agent to read governance, so `naive` vs `sdlc` moves the instruction and the
+harness together. A plain `default` prompt says nothing about governance, so
+running it on both arms isolates the harness. The gate blocked the better
+experiment and permitted the more confounded one.
+
+**How to apply:** when a validation rule and the comment next to it disagree,
+believe the comment and delete the rule — and when a user says a refusal makes
+no sense, check whether the refusal is defensible before offering workarounds
+around it. Two related habits this turned up:
+
+- **Say what a design measures instead of refusing it.** The same-prompt pair
+  now runs and carries two advisories: the treatment is the skill catalog, not
+  the harness as a unit; and inside the lab both arms keep the governance body
+  of `CLAUDE.md`, because the sync engine rewrites only its generated skills
+  region. A truly bare control needs `harness_source` against an external repo.
+- **Every cross-product needs per-case resolution.** `ExperimentService.launch`
+  applied each arm's `prompt_variant` without checking the case declares it; the
+  prompt lookup falls back to `""`, so the run went out with no task, inside one
+  arm, reading as that arm losing. Batch mode had resolved this per case since
+  ADR-0023 and experiments had not — the second copy of a rule is where it goes
+  missing. See
+  [ADR-0044](../docs/adr/0044-a-single-prompt-case-can-carry-the-full-harness-pair.md).
+
 ## A transport migration is found by grepping the wire, not the helper names — 2026-09-04
 
 ADR-0043 collapsed "four" gateway call sites onto `llm_transport`. There were

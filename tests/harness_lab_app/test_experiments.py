@@ -591,7 +591,14 @@ def test_launch_preflights_every_arm_not_just_the_baseline(session):
     from harness_lab_app.run_service import RunPreflightError
     from harness_lab_app.schemas import RunConfigCreate
 
-    session.add(Case(case_id="tetris-v1", name="Tetris", type=CaseType.single_prompt))
+    session.add(
+        Case(
+            case_id="tetris-v1",
+            name="Tetris",
+            type=CaseType.single_prompt,
+            prompt_variants={"sdlc": "Build Tetris, following the harness."},
+        )
+    )
     session.commit()
     service = ExperimentService(session)
     service.create_experiment(
@@ -646,7 +653,17 @@ def test_full_harness_design_expands_per_arm_prompt_and_skills(session):
     from harness_lab_app.run_service import RunService
     from harness_lab_app.schemas import RunConfigCreate
 
-    session.add(Case(case_id="tetris-v1", name="Tetris", type=CaseType.single_prompt))
+    session.add(
+        Case(
+            case_id="tetris-v1",
+            name="Tetris",
+            type=CaseType.single_prompt,
+            prompt_variants={
+                "naive": "Build Tetris.",
+                "sdlc": "Build Tetris, following the harness.",
+            },
+        )
+    )
     session.commit()
     service = ExperimentService(session)
     service.create_experiment(
@@ -718,6 +735,149 @@ def test_prompt_variant_alone_is_a_valid_harness_axis():
     assert warnings == []
 
 
+def test_launch_refuses_a_prompt_variant_the_case_does_not_define(session):
+    """An undefined variant means an empty prompt, and an empty prompt is a loss.
+
+    The prompt lookup falls back to "" for a variant a case does not declare,
+    so the run went out with nothing to do — inside one arm, which then read as
+    that arm being bad. The refusal belongs at launch, before anything is
+    persisted, exactly as it does for a batch (ADR-0023).
+    """
+    from harness_lab_app.models import Case, CaseType
+    from harness_lab_app.schemas import RunConfigCreate
+
+    session.add(
+        Case(
+            case_id="pokemon-v1",
+            name="Pokemon",
+            type=CaseType.single_prompt,
+            prompt_variants={"default": "Build the game."},
+        )
+    )
+    session.commit()
+    service = ExperimentService(session)
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="mixed-families",
+            name="Mixed families",
+            question="Does the harness as a whole earn its keep?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["pokemon-v1"],
+            repetitions=1,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="bare",
+                    role=ConditionRole.control,
+                    overrides={"prompt_variant": "default", "skills_disabled": ["x"]},
+                ),
+                ExperimentConditionCreate(
+                    label="full-harness",
+                    role=ConditionRole.treatment,
+                    # A variant from another prompt family — this case has none.
+                    overrides={"prompt_variant": "sdlc", "skills_disabled": []},
+                ),
+            ],
+        )
+    )
+
+    with pytest.raises(ExperimentError, match="empty prompt"):
+        service.launch(
+            "mixed-families",
+            RunConfigCreate(
+                case_id="pokemon-v1",
+                prompt_variant="default",
+                executor_model="stub-executor",
+                score_mode="manual",
+                max_steps=5,
+                dry_run=True,
+            ),
+        )
+
+    # One intent: the arm that *was* runnable is not left half-launched either.
+    assert service.runs("mixed-families") == []
+
+
+def test_a_single_variant_case_can_still_carry_the_full_harness_pair(session):
+    """Same prompt on both arms is a design, not a mistake.
+
+    A case written in the UI declares one prompt, and that prompt names no
+    governance for the bare arm to lose. The treatment is then the skill
+    catalog — physically hidden on one side, available and asked for on the
+    other — and both arms must expand and run.
+    """
+    from harness_lab_app.models import Case, CaseType
+    from harness_lab_app.run_service import RunService
+    from harness_lab_app.schemas import RunConfigCreate
+
+    session.add(
+        Case(
+            case_id="pokemon-v1",
+            name="Pokemon",
+            type=CaseType.single_prompt,
+            prompt_variants={"default": "Build the game."},
+        )
+    )
+    session.commit()
+    service = ExperimentService(session)
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="one-prompt",
+            name="One prompt",
+            question="Is the governed catalog worth anything on a plain prompt?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["pokemon-v1"],
+            repetitions=1,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="bare",
+                    role=ConditionRole.control,
+                    overrides={
+                        "prompt_variant": "default",
+                        "skills_disabled": ["brainstorm_quick"],
+                    },
+                ),
+                ExperimentConditionCreate(
+                    label="full-harness",
+                    role=ConditionRole.treatment,
+                    overrides={
+                        "prompt_variant": "default",
+                        "skills_disabled": [],
+                        # The activation block only rides the arm that can see
+                        # the skill; preflight refuses it on the bare arm.
+                        "skills_invoke": ["brainstorm_quick"],
+                    },
+                ),
+            ],
+        )
+    )
+
+    runs = service.launch(
+        "one-prompt",
+        RunConfigCreate(
+            case_id="pokemon-v1",
+            prompt_variant="default",
+            executor_model="stub-executor",
+            score_mode="manual",
+            max_steps=5,
+            dry_run=True,
+        ),
+    )
+
+    run_service = RunService(session)
+    arms = {}
+    for run in runs:
+        config = run_service.get_run_config(run.run_config_id)
+        arms[run.condition_label] = config
+    assert set(arms) == {"bare", "full-harness"}
+    assert (
+        arms["bare"].prompt_variant == arms["full-harness"].prompt_variant == "default"
+    )
+    assert arms["bare"].skills_disabled == ["brainstorm_quick"]
+    assert arms["bare"].skills_invoke == []
+    assert arms["full-harness"].skills_disabled == []
+    assert arms["full-harness"].skills_invoke == ["brainstorm_quick"]
+
+
 def _skills_design(service, experiment_id="lockcheck"):
     from sqlmodel import select
 
@@ -726,7 +886,12 @@ def _skills_design(service, experiment_id="lockcheck"):
     session = service.session
     if not session.exec(select(Case).where(Case.case_id == "tetris-v1")).first():
         session.add(
-            Case(case_id="tetris-v1", name="Tetris", type=CaseType.single_prompt)
+            Case(
+                case_id="tetris-v1",
+                name="Tetris",
+                type=CaseType.single_prompt,
+                prompt_variants={"sdlc": "Build Tetris, following the harness."},
+            )
         )
         session.commit()
     service.create_experiment(
