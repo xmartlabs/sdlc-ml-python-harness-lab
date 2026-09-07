@@ -21,9 +21,11 @@ The provisioning contract: [ADR-0030](adr/0030-one-workspace-source-interface.md
 ## 1. Register the repository
 
 **Evaluate → Audit a repository** (the front page's third door) walks the three
-steps: register the repository, clone it yourself with the command the page shows
-(into `data/checkouts/<id>`, where your ssh agent and tokens already work), and
-pin a commit ([ADR-0042](adr/0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md)).
+steps: register the repository, put a checkout under `data/checkouts/` (clone it
+yourself where your ssh agent and tokens already work, attach one that is already
+there, or have the lab copy a folder you have on this machine), and pin a commit
+([ADR-0042](adr/0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md),
+[ADR-0045](adr/0045-a-checkout-the-lab-can-be-given-not-only-watched.md)).
 **Evidence → Repositories** lists what is registered, offers *Add a repository*
 for the form alone, and **Open** leads to the repository's workbench
 (`/evidence/repositories/<id>`).
@@ -50,10 +52,59 @@ anything else — Go, Rust, a system dependency — needs that added to
 "not found" before any agent time is spent (by design: the run stops rather
 than measuring an agent against a half-built repository).
 
-### Credentials — you clone it, the lab reads your clone
+### The repository is usually already on your machine — point at the folder
 
-The lab never authenticates to a git remote on your behalf, and it does not want your
-credentials (ADR-0042). Instead you clone the repository yourself:
+Step 1 of **Audit a repository** opens a folder picker on the directory the lab sits in,
+before it asks for anything else. Browse to the repository, press **Audit this folder**,
+and that one press registers it, copies it in and pins it.
+
+The picker reads as a file browser rather than a form:
+
+- **Where you are** — a breadcrumb from the shared root down to the current folder, every
+  ancestor clickable, plus **Up one level**. At the root it says *Top of the shared
+  folder* rather than showing a greyed-out button.
+- **What is in front of you** — one row per folder. A git repository is drawn differently
+  from a plain folder in icon, badge and wording, never in colour alone.
+- **What to press** — **Audit this folder** sits on each repository row, and again on the
+  folder you are standing in when that one is a repository. A folder that is not a
+  repository says so and tells you to open one of the folders below.
+
+You do not type a URL: the folder knows its own `origin` and its current branch, and the
+lab reads both off it. The repository id is the folder's name. The one folder that still
+needs a form is one that was never pushed anywhere — with no `origin` there is no URL to
+record, so use the second panel, *Or register one the lab has to clone*.
+
+- The copy is `git clone --no-hardlinks`: local, no network, no credentials, and your
+  working copy is only ever read. `--no-hardlinks` matters — without it git would link
+  the copy's objects into your own repository.
+- The mount the picker reads is **read-only**. The lab cannot write into your working
+  copy even if it wanted to.
+- **It is frozen at the commit it was on.** Commits you make afterwards do not reach the
+  lab. To move it, come back to step 1 and pick the folder again.
+- The copy exists because a run container mounts only the lab's own folder: a repository
+  living anywhere else is invisible to every run
+  ([ADR-0045](adr/0045-a-checkout-the-lab-can-be-given-not-only-watched.md)).
+
+The picker shows the directory it is browsing. If your repositories live elsewhere,
+point `HARNESS_LAB_LOCAL_SOURCES_DIR` at the directory that holds them and restart the
+lab (`make app-down && make app-up`):
+
+```
+HARNESS_LAB_LOCAL_SOURCES_DIR=/Users/you/code
+```
+
+Nothing outside that root is reachable, and symlinks pointing out of it are refused.
+
+**Keep that root a directory of repositories — never your home directory.** Docker
+Desktop injects filesystem events for every path it shares, and a home directory
+(`~/Library`, caches, synced folders) produces enough of them to time that service out
+and stop the engine: `service fs failed: injecting event blocked for 60s`.
+
+### Credentials — or clone it yourself, and the lab reads your clone
+
+For a repository that is *not* on this machine yet, the lab still never authenticates to
+a git remote on your behalf, and it does not want your credentials (ADR-0042). You clone
+it yourself:
 
 1. Open the repository under **Repositories** (or start the guided flow at
    **Audit a repository**). It shows the exact command, with the destination already
@@ -72,6 +123,17 @@ From then on every run, readiness report and derived case reads that local check
 that commit. No container ever contacts the remote, so a private repository needs no
 special setup at all.
 
+#### A clone that is already under data/checkouts
+
+The third tab, **A clone I already have**, lists every git repository already under
+`data/checkouts/`, whatever its directory is called, and attaches the one you pick.
+Costs nothing and copies nothing. One clone may serve several repositories — the list
+says which already use it — so auditing the same codebase twice needs one checkout, not
+two. Attaching does not pin: press **Pin this commit** as usual.
+
+The copy command is also always written out for your own terminal, whatever the picker
+can see, so nothing here depends on the mount.
+
 Two consequences worth knowing:
 
 - **Uncommitted changes are invisible to runs.** Provisioning clones git objects, so
@@ -81,8 +143,16 @@ Two consequences worth knowing:
   until you press **Re-pin to HEAD**. That is the point: two experiments a week apart
   compare agents, not a moving branch.
 
+- **Copied checkouts carry commits, not your desk.** `git clone` reads the committed
+  tree at the ref, so uncommitted files stay where they are.
+
 A repository registered before this existed keeps working over the network — the lab
 falls back to the remote URL whenever there is no local checkout.
+
+If step 1 waits without finding anything, it says so after about fifteen seconds: which
+path it is watching, whether that directory exists, whether it is a repository, and
+which other sources are available. It keeps watching — a large clone legitimately takes
+minutes.
 
 ### Does the repository pass its own gate?
 

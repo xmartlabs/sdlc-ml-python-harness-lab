@@ -781,10 +781,48 @@ export type CheckoutState = {
   dirty: boolean;
   dirty_files: number;
   error: string;
+  /**
+   * The clone lives in a directory not named after this target — somebody
+   * attached one that already existed. Say so, or the path reads as a typo.
+   */
+  attached: boolean;
+  /** Whether the operator mounted a directory of their own repositories. */
+  local_sources_enabled?: boolean;
   pinned_commit: string;
   pinned_at: string;
   /** HEAD has moved since the pin — offer a re-pin, do not move it silently. */
   pin_is_stale: boolean;
+};
+
+/** One clone sitting under data/checkouts, whoever put it there. */
+export type CheckoutSummary = {
+  name: string;
+  path: string;
+  head: string;
+  branch: string;
+  remote_url: string;
+  /** The targets already pointing at it, if any. Sharing one clone is fine. */
+  claimed_by: string[];
+};
+
+/** One level of the operator's own repositories, when they mounted them. */
+export type LocalSourceListing = {
+  enabled: boolean;
+  /** Why the picker is unavailable, when it is. */
+  reason?: string;
+  /** The mounted root, as their own shell sees it. */
+  root?: string;
+  /** Where we are, relative to the root. Empty is the root itself. */
+  path?: string;
+  host_path?: string;
+  /** Null at the root; "" is the root, so it cannot be conflated with it. */
+  parent?: string | null;
+  is_repo?: boolean;
+  /** `origin` of the folder we are in, when it is a repository. */
+  remote_url?: string;
+  /** Its current branch — the ref a target registered from here defaults to. */
+  branch?: string;
+  entries: { name: string; path: string; is_repo: boolean }[];
 };
 
 /** One command a gate check ran, and how it ended. */

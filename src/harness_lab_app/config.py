@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     # the sibling runner container is created by the HOST daemon, so bind
     # sources must be host paths, not this container's /app.
     host_repo_root: str = ""
+    # Opt-in: a directory of the operator's own repositories, bind-mounted
+    # read-only so the lab can offer a folder picker instead of asking them to
+    # type an absolute path they cannot browse (ADR-0045). Two values because
+    # the container and the host see it at different paths, exactly like
+    # `repo_root` / `host_repo_root`. Empty host value means "not configured",
+    # and the picker stays off — the lab lists nothing it was not pointed at.
+    local_sources_root: str = ""
+    host_local_sources_root: str = ""
     docker_host_alias: str = "host.docker.internal"
     run_timeout_seconds: int = 7200
     # Kill a run that has produced no output for this long, even though its

@@ -530,7 +530,8 @@ export function RepositoryDetail() {
           </div>
           <p className="muted">
             You clone this repository in your own terminal so your credentials
-            apply; the lab only reads the clone and never makes one itself.
+            apply, or hand the lab a clone you already have; either way the lab
+            only ever reads it.
           </p>
 
           {checkout === null ? (
@@ -541,6 +542,13 @@ export function RepositoryDetail() {
                 <div>
                   <span>Path</span>
                   <code className="mono small">{checkout.host_path || "—"}</code>
+                  {checkout.attached ? (
+                    // The directory is named after the clone, not after this
+                    // repository. Unsaid, the path on screen reads as a typo.
+                    <span className="muted small">
+                      an existing clone, attached to this repository
+                    </span>
+                  ) : null}
                 </div>
                 <div>
                   <span>HEAD</span>

@@ -33,8 +33,27 @@ services:
       # their own shell (the guided clone command), where this container's
       # `/app` means nothing.
       HARNESS_LAB_HOST_REPO_ROOT: ${PWD}
+      # The folder picker the audit onboarding leads with (ADR-0045): the
+      # operator points at a repository they already have and the lab copies it
+      # into data/checkouts/. Both values come from HARNESS_LAB_LOCAL_SOURCES_DIR
+      # — the container path is where the read-only mount lands, the host path is
+      # what the picker prints. The default is the directory the lab itself sits
+      # in, so the picker works with no configuration and finds the repositories
+      # kept beside it; point the variable somewhere else when they live
+      # elsewhere.
+      #
+      # Do NOT default this to $HOME. Docker Desktop injects filesystem events
+      # for every shared path, and a home directory — ~/Library, caches, synced
+      # folders — produces enough of them to time that service out and take the
+      # whole engine down (`service fs failed: injecting event blocked for 60s`).
+      # A shared root is a working set, not a search space.
+      HARNESS_LAB_LOCAL_SOURCES_ROOT: /host-sources
+      HARNESS_LAB_HOST_LOCAL_SOURCES_ROOT: ${HARNESS_LAB_LOCAL_SOURCES_DIR:-${PWD}/..}
     volumes:
       - .:/app
+      # Read-only on purpose: the lab copies repositories out of here and must
+      # never be able to write into somebody's working copy.
+      - ${HARNESS_LAB_LOCAL_SOURCES_DIR:-..}:/host-sources:ro
     ports:
       # Loopback by default. Authentication is only enforced once an admin
       # password exists (see session_middleware.auth_enabled), so publishing on

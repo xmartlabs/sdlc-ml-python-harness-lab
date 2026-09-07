@@ -106,14 +106,26 @@ repository, and a **workbench** you come back to afterwards.
 
 ### Setup: Audit a repository (three steps, once)
 
-**1. Clone it yourself.** Give the repository an id, a name and its URL. The lab shows
-the exact `git clone` command with the destination filled in — paste it into your own
-terminal, where your ssh keys and tokens already work. The lab watches for the clone,
-reports its HEAD, and you press **Pin this commit**.
+**1. Point at the repository.** The step opens a folder picker on the directory the lab
+sits in. Each row is one folder: click it to open it, and the folders that are git
+repositories say so — a branch icon, a `git` badge, and the **Audit this folder** button
+sitting on the row itself, so choosing one is a single click rather than "open it, then
+find the button". The breadcrumb above the list says where you are and every step in it
+is a jump back; **Up one level** goes back one, and at the top it says so instead of
+offering a dead button.
 
-The lab never clones the repository itself and never asks for a credential (ADR-0042).
-Everything downstream reads your local checkout at the pinned commit, so no container
-ever contacts the remote. `git pull` moves nothing until you press **Re-pin to HEAD**:
+That one press registers the repository — the folder's own `origin` and branch supply the
+URL and the ref — copies it into `data/checkouts/` and freezes it at the commit it is on.
+
+For a repository that is not on this machine yet, register it with the form below the
+picker and clone it yourself: the lab shows the exact `git clone` command with the
+destination filled in, you paste it into your own terminal where your ssh keys and tokens
+already work, and it watches for the clone, reports its HEAD, and you press **Pin this
+commit**.
+
+Either way the lab never contacts the remote and never asks for a credential (ADR-0042,
+[ADR-0045](adr/0045-a-checkout-the-lab-can-be-given-not-only-watched.md)). Everything
+downstream reads your local checkout at the pinned commit. `git pull` moves nothing until you press **Re-pin to HEAD**:
 that is what lets two experiments a week apart compare agents rather than a moving
 branch.
 
@@ -147,7 +159,13 @@ results is not a measurement. A derived candidate carries the commit it came fro
 which is what lets you show later that the case predates the results.
 
 Setup ends with a one-run validation against the repository (`native` harness) that
-proves the case actually runs there.
+proves the case actually runs there. Pick the **Harness** and its **Executor model**
+from the menus: `claude` and `codex` list their own CLI's model names and offer
+*CLI default*, which needs no configuration at all, while `opencode` opens the
+three-tier picker (source → provider → model) used everywhere else and starts on the
+gateway's default. Switching the harness clears the model, because the two menus name
+different things and a model carried across would name one the new harness cannot
+reach.
 
 ### Workbench: the repository's own page
 
@@ -380,10 +398,12 @@ producing **fixed / broken / unchanged**.
 
 Setup runs once per repository, at **Evaluate → Audit a repository**:
 
-1. **Clone it yourself** — the lab shows the exact `git clone` command with the
-   destination filled in; you run it in your own terminal, where your credentials
-   already work. The lab watches for the clone and you **pin** its commit
-   ([ADR-0042](adr/0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md)).
+1. **Point at the repository** — pick the folder you already have on this machine and
+   the lab registers, copies and freezes it in one press; or register a remote one and
+   run the `git clone` command it writes out in your own terminal, where your
+   credentials already work, and **pin** its commit
+   ([ADR-0042](adr/0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md),
+   [ADR-0045](adr/0045-a-checkout-the-lab-can-be-given-not-only-watched.md)).
    Nothing after this reads the remote.
 2. **Repository readiness** — what the lab could actually read at the pinned
    commit: validation gates, setup, and any AI governance already there (rules

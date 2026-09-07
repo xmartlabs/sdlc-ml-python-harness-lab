@@ -20,6 +20,7 @@ lab that pulled, checked out or cleaned it would be editing someone's desk.
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -96,6 +97,10 @@ class CheckoutState:
     dirty: bool = False
     dirty_files: int = 0
     error: str = ""
+    # True when the target points at a checkout whose directory is not named
+    # after it — an operator attached a clone that already existed. The UI says
+    # so, because otherwise the path on screen looks like a typo.
+    attached: bool = False
     # What the target row currently holds, so the UI can tell "cloned" from
     # "cloned and pinned" and offer a re-pin when HEAD has moved on.
     pinned_commit: str = ""
@@ -120,6 +125,7 @@ class CheckoutState:
             "dirty": self.dirty,
             "dirty_files": self.dirty_files,
             "error": self.error,
+            "attached": self.attached,
             "pinned_commit": self.pinned_commit,
             "pinned_at": self.pinned_at,
             "pin_is_stale": self.pin_is_stale,
@@ -176,17 +182,47 @@ def validate_target_id(target_id: str) -> str:
 
 
 def checkout_path_for(target_id: str) -> Path:
-    """Where the lab expects the operator's clone of this target."""
+    """Where the lab expects a *new* clone of this target to land."""
     return get_settings().checkouts_dir / validate_target_id(target_id)
 
 
-def host_checkout_path_for(target_id: str) -> str:
+def recorded_checkout_path(target: TargetRepository) -> Path | None:
+    """The checkout the target points at, when it points at a usable one.
+
+    A recorded path outside ``data/checkouts`` is ignored rather than honoured:
+    that directory is the fence the whole feature rests on (ADR-0042), and a row
+    edited by hand must not be able to reach past it. Falling back to the
+    convention makes such a target read as "not cloned yet", which is both true
+    and recoverable.
+    """
+    recorded = (target.checkout_path or "").strip()
+    if not recorded:
+        return None
+    root = get_settings().checkouts_dir
+    candidate = Path(recorded)
+    if not candidate.is_absolute() or root not in candidate.parents:
+        return None
+    return candidate
+
+
+def resolve_checkout_path(target: TargetRepository) -> Path:
+    """Where this target's checkout actually is.
+
+    The directory an operator attached when there is one, the conventional
+    ``data/checkouts/<target_id>`` otherwise. Every reader goes through here, so
+    a clone that already existed under a different name is as good as one made
+    by the guided command.
+    """
+    return recorded_checkout_path(target) or checkout_path_for(target.target_id)
+
+
+def host_view_of(path: Path) -> str:
     """The same location as the *host* sees it.
 
     The API runs in a container that mounts the lab root at /app, so the path it
     would print is meaningless in the operator's terminal. Runner containers
     already solve this with ``host_repo_root`` (see ``tasks.py``); the guided
-    command uses the same value.
+    commands use the same value.
     """
     settings = get_settings()
     root = settings.host_repo_root or str(settings.repo_root)
@@ -200,7 +236,17 @@ def host_checkout_path_for(target_id: str) -> str:
             "a clone command you could run. Set HARNESS_LAB_HOST_REPO_ROOT on "
             "the api service (docker-compose sets it to $PWD) and restart it."
         )
-    return str(Path(root) / "data" / "checkouts" / validate_target_id(target_id))
+    try:
+        relative = path.relative_to(settings.repo_root)
+    except ValueError:
+        # Already outside the lab root, so there is nothing to translate.
+        return str(path)
+    return str(Path(root) / relative)
+
+
+def host_checkout_path_for(target_id: str) -> str:
+    """Where a new clone of this target should land, as the host sees it."""
+    return host_view_of(checkout_path_for(target_id))
 
 
 def guided_command(target: TargetRepository) -> str:
@@ -211,6 +257,28 @@ def guided_command(target: TargetRepository) -> str:
     if ref and ref not in ("main", "master"):
         command += f" && git -C {destination} checkout {ref}"
     return command
+
+
+def local_copy_command(target_id: str, source: str) -> str:
+    """The command that copies a repository the operator already has.
+
+    ``--no-hardlinks`` on purpose: git would otherwise link the new checkout's
+    objects to the operator's own repository, which is exactly the coupling
+    ADR-0042 avoids — the lab must never be able to touch their working copy.
+    It costs a copy of the object store and no network at all.
+    """
+    cleaned = (source or "").strip()
+    if not cleaned:
+        raise CheckoutError("A path to the repository you already have is required.")
+    if not cleaned.startswith("/"):
+        raise CheckoutError(
+            f"Use the absolute path of the repository — got {cleaned!r}."
+        )
+    destination = host_checkout_path_for(target_id)
+    return (
+        f"git clone --no-hardlinks {shlex.quote(cleaned.rstrip('/'))} "
+        f"{shlex.quote(destination)}"
+    )
 
 
 def _git(args: list[str], cwd: Path, timeout: int = 30) -> tuple[int, str]:
@@ -236,11 +304,12 @@ def _git(args: list[str], cwd: Path, timeout: int = 30) -> tuple[int, str]:
 
 def inspect_checkout(target: TargetRepository) -> CheckoutState:
     """Read the operator's clone without touching it."""
-    path = checkout_path_for(target.target_id)
+    path = resolve_checkout_path(target)
     state = CheckoutState(
         target_id=target.target_id,
         path=str(path),
-        host_path=host_checkout_path_for(target.target_id),
+        host_path=host_view_of(path),
+        attached=path != checkout_path_for(target.target_id),
         pinned_commit=target.pinned_commit,
         pinned_at=target.pinned_at.isoformat() if target.pinned_at else "",
     )
@@ -269,14 +338,90 @@ def inspect_checkout(target: TargetRepository) -> CheckoutState:
     return state
 
 
-def resolve_local_ref(target_id: str, ref: str) -> str:
+def create_checkout_from(source: Path, target: TargetRepository) -> Path:
+    """Copy a repository the operator already has into the lab's own folder.
+
+    This is the one place the lab creates a checkout rather than watching for
+    one (ADR-0045). It never writes to ``source``: ``git clone`` reads it, and
+    ``--no-hardlinks`` keeps the new object store independent of theirs. The
+    copy exists because a run container mounts only the lab root, so a
+    repository living anywhere else on the host is invisible to every run.
+    """
+    if not (source / ".git").exists():
+        raise CheckoutError(f"{source} is not a git repository.")
+    destination = checkout_path_for(target.target_id)
+    if destination.exists():
+        raise CheckoutError(
+            f"{destination} already exists. Attach it instead, or remove it "
+            "first — the lab will not overwrite a checkout."
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    code, output = _git(
+        ["clone", "--no-hardlinks", str(source), str(destination)],
+        destination.parent,
+        timeout=600,
+    )
+    if code != 0:
+        raise CheckoutError(f"Could not copy {source}: {output}")
+    ref = (target.default_ref or "").strip()
+    if ref:
+        # Best effort: a clone lands on the source's default branch, which is
+        # usually but not always the target's ref. A failure here is not an
+        # error — the UI shows the branch and HEAD it actually got, and the pin
+        # records the commit the operator sees.
+        _git(["checkout", "--quiet", ref], destination)
+    if target.repository_url:
+        # The clone's origin would otherwise be the mount path the copy came
+        # through (/host-sources/...), which names nothing outside this
+        # container and stops existing the moment the mount changes. The
+        # repository of record is the URL the operator declared — the same
+        # origin the guided clone would have produced.
+        _git(["remote", "set-url", "origin", target.repository_url], destination)
+    return destination
+
+
+def list_checkouts() -> list[dict[str, object]]:
+    """Every clone sitting under ``data/checkouts``, whoever put it there.
+
+    The lab watches one directory per target by convention, so a clone made
+    under a different name — a typo, an older target id, a repository cloned
+    once and audited twice — is invisible until somebody attaches it. This is
+    what the UI offers instead of asking for a second copy.
+    """
+    root = get_settings().checkouts_dir
+    if not root.is_dir():
+        return []
+    rows: list[dict[str, object]] = []
+    for entry in sorted(root.iterdir(), key=lambda item: item.name):
+        if not entry.is_dir() or entry.name.startswith(".") or entry.is_symlink():
+            continue
+        if not (entry / ".git").exists():
+            continue
+        code, head = _git(["rev-parse", "HEAD"], entry)
+        if code != 0:
+            continue
+        _, branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], entry)
+        code, remote = _git(["remote", "get-url", "origin"], entry)
+        rows.append(
+            {
+                "name": entry.name,
+                "path": str(entry),
+                "head": head,
+                "branch": branch,
+                "remote_url": remote if code == 0 else "",
+            }
+        )
+    return rows
+
+
+def resolve_local_ref(target: TargetRepository, ref: str) -> str:
     """Resolve ``ref`` to a commit inside the operator's clone.
 
     Used instead of ``git ls-remote`` once a checkout exists: it needs no
     network and no credentials, and it resolves a local branch the operator
     created that the remote has never heard of.
     """
-    path = checkout_path_for(target_id)
+    path = resolve_checkout_path(target)
     wanted = (ref or "").strip()
     if not wanted:
         raise CheckoutError("A ref is required (branch, tag or commit SHA).")
@@ -351,7 +496,7 @@ def repo_context(target: TargetRepository) -> RepoContext:
         setup_commands=list(target.setup_commands),
         validation_commands=list(target.validation_commands),
     )
-    path = checkout_path_for(target.target_id)
+    path = resolve_checkout_path(target)
     if not path.is_dir():
         return context
     for name in _README_NAMES:

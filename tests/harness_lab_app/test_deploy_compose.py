@@ -132,3 +132,52 @@ def test_the_prod_frontend_serves_the_api_on_one_origin():
     assert "proxy_pass http://harness_lab_api" in nginx
     # SPA fallback: client-side routes are not files on disk.
     assert "try_files $uri $uri/ /index.html" in nginx
+
+
+def test_the_folder_picker_opens_beside_the_lab_by_default(services):
+    """ADR-0045: picking a local folder is the first path the audit offers.
+
+    It only works if the API can see the operator's repositories, so the mount
+    defaults to the directory the lab itself sits in — where sibling checkouts
+    usually are. The override moves that root; it must never be needed to turn
+    the picker on.
+    """
+    api = services["api"]
+    mounts = [volume for volume in api["volumes"] if "/host-sources" in volume]
+
+    assert mounts == ["${HARNESS_LAB_LOCAL_SOURCES_DIR:-..}:/host-sources:ro"]
+    # Read-only: the lab copies out of somebody's working copy and must never
+    # be able to write into it.
+    assert mounts[0].endswith(":ro")
+    assert (
+        api["environment"]["HARNESS_LAB_HOST_LOCAL_SOURCES_ROOT"]
+        == "${HARNESS_LAB_LOCAL_SOURCES_DIR:-${PWD}/..}"
+    )
+
+
+def test_the_shared_root_is_never_a_home_directory(services):
+    """Docker Desktop injects filesystem events for every shared path.
+
+    A home directory carries enough of them — ~/Library, caches, synced folders
+    — to time that service out and take the engine down with it
+    (`service fs failed: injecting event blocked for 60s`), which is exactly
+    what happened when this defaulted to $HOME. The default has to stay a
+    working set.
+    """
+    api = services["api"]
+    shared = [volume for volume in api["volumes"] if "/host-sources" in volume]
+
+    assert not any("HOME" in volume for volume in shared)
+    assert "HOME" not in api["environment"]["HARNESS_LAB_HOST_LOCAL_SOURCES_ROOT"]
+
+
+def test_only_the_api_can_see_the_operators_own_folders(services):
+    """The worker launches containers; a browsable home there widens the blast
+    radius for nothing — the copy is made by the API, in its own mount."""
+    holders = [
+        name
+        for name, service in services.items()
+        if any("/host-sources" in volume for volume in service.get("volumes", []))
+    ]
+
+    assert holders == ["api"]

@@ -10,8 +10,14 @@ type ModelPickerProps = {
   onChange: (modelId: string) => void;
   /** The whole mixed catalog; the picker does the filtering. */
   options: ModelOption[];
-  /** Planner only: keep an explicit "None" choice at the top of the list. */
+  /** Keep an explicit empty choice at the top of the list. */
   allowNone?: boolean;
+  /**
+   * What the empty choice means here. The planner's empty is "no planner at
+   * all"; a host-CLI harness's empty is "whatever the CLI picks by itself",
+   * which is a running model and not the absence of one.
+   */
+  noneLabel?: string;
   /**
    * Host-CLI harnesses (claude, codex) address their own models directly. When
    * this is set the tiers are meaningless, so the picker collapses to one flat
@@ -147,6 +153,7 @@ export function ModelPicker({
   onChange,
   options,
   allowNone = false,
+  noneLabel = "None",
   nativeOptions,
   directErrors,
   onReload,
@@ -251,7 +258,7 @@ export function ModelPicker({
       <label className="model-picker">
         <span>{label}</span>
         <select onChange={(event) => onChange(event.target.value)} value={value}>
-          {allowNone ? <option value="">None</option> : null}
+          {allowNone ? <option value="">{noneLabel}</option> : null}
           {nativeOptions.map((option) => (
             <option key={option.id} value={option.id}>
               {option.label}
@@ -310,7 +317,7 @@ export function ModelPicker({
           <small className="muted">
             Set the host URL under Settings → Local runtimes (it must end in{" "}
             <code>/v1</code>), then press Reload. Your current pick —{" "}
-            {selected?.label ?? value ?? "None"} — is unchanged.
+            {selected?.label ?? value ?? noneLabel} — is unchanged.
           </small>
         </div>
       ) : (
@@ -330,7 +337,7 @@ export function ModelPicker({
           </div>
 
           <select onChange={(event) => onChange(event.target.value)} value={value}>
-            {allowNone ? <option value="">None</option> : null}
+            {allowNone ? <option value="">{noneLabel}</option> : null}
             {visible.map((option) => (
               <option key={option.id} value={option.id}>
                 {`${option.label}${warningFor(option)}`}

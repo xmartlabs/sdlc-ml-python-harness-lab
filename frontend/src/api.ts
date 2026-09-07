@@ -37,6 +37,8 @@ import type {
   OfficialReferenceRow,
   ReadinessReport,
   CheckoutState,
+  CheckoutSummary,
+  LocalSourceListing,
   GateCheckRecord,
   GroupIssueResult,
   ProposalIssue,
@@ -388,6 +390,36 @@ export const api = {
   // Their terminal has their credentials; a run container does not.
   getCheckout: (targetId: string) =>
     request<CheckoutState>(`/api/targets/${targetId}/checkout`),
+  // Clones already sitting under data/checkouts, whoever made them. One repo
+  // is often cloned once and audited twice; this is what the page offers
+  // instead of asking for a second copy of a client's code.
+  listCheckouts: () => request<CheckoutSummary[]>("/api/checkouts"),
+  // Point a target at one of them. Attaching is not pinning.
+  attachCheckout: (targetId: string, name: string) =>
+    request<CheckoutState>(`/api/targets/${targetId}/checkout/attach`, {
+      method: "POST",
+      body: JSON.stringify({ name })
+    }),
+  // The command that copies a repository they already have, for their own
+  // terminal: local, so no network and no credentials — but the lab cannot see
+  // the path, so it can only hand over the command.
+  localCopyCommand: (targetId: string, source: string) =>
+    request<{ target_id: string; command: string }>(
+      `/api/targets/${targetId}/checkout/local-command`,
+      { method: "POST", body: JSON.stringify({ source }) }
+    ),
+  // The opt-in picker: one level of the directory they mounted read-only.
+  browseLocalSources: (path = "") =>
+    request<LocalSourceListing>(
+      `/api/local-sources?path=${encodeURIComponent(path)}`
+    ),
+  // Copy the chosen repository into data/checkouts/<target_id>. A run container
+  // mounts only the lab root, so a repository anywhere else is invisible to it.
+  cloneFromLocal: (targetId: string, source: string) =>
+    request<CheckoutState>(`/api/targets/${targetId}/checkout/from-local`, {
+      method: "POST",
+      body: JSON.stringify({ source })
+    }),
   // Freeze the repository at the commit their clone is on. Every run, report
   // and derived case reads that commit until somebody re-pins.
   pinCheckout: (targetId: string) =>

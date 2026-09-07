@@ -227,3 +227,27 @@ export const IconLayers = (p: IconProps) => (
     <path d="m4 12.5 8 4.3 8-4.3M4 17l8 4.3 8-4.3" />
   </Svg>
 );
+
+export const IconFolder = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h7A1.5 1.5 0 0 1 19 10v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 18z" />
+  </Svg>
+);
+
+export const IconGitBranch = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="7" cy="5.5" r="2.5" />
+    <circle cx="7" cy="18.5" r="2.5" />
+    <circle cx="17" cy="9.5" r="2.5" />
+    <path d="M7 8v8" />
+    <path d="M17 12v.5a4 4 0 0 1-4 4H9.5" />
+  </Svg>
+);
+
+/** Corner-left-up: out of this folder and back into the one above it. */
+export const IconLevelUp = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="m14 9-5-5-5 5" />
+    <path d="M20 20h-7a4 4 0 0 1-4-4V4.5" />
+  </Svg>
+);

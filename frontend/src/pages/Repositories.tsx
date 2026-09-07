@@ -260,12 +260,14 @@ export function Repositories() {
 
       <HelpPanel title="How a repository is pinned">
         <p>
-          You clone the repository yourself, with the command this page shows, into{" "}
-          <code>data/checkouts/&lt;target_id&gt;</code> — the lab never fetches a remote
-          on your behalf. The lab then <strong>pins the commit</strong> that checkout is
-          on, and every run, readiness read and derived case works from that pinned
-          commit until you re-pin it. Re-running later is the same experiment, not
-          whatever was pushed since.
+          The checkout lives under <code>data/checkouts/</code>, because that is the
+          only folder a run container can see. You put it there: clone it yourself with
+          the command this page shows, attach a clone that is already in that folder
+          under any name, or have the lab copy a repository you already have on this
+          machine. The lab never fetches a remote on your behalf. It then{" "}
+          <strong>pins the commit</strong> that checkout is on, and every run, readiness
+          read and derived case works from that pinned commit until you re-pin it.
+          Re-running later is the same experiment, not whatever was pushed since.
         </p>
         <p className="muted">
           <strong>Setup</strong> runs before the agent (for example{" "}

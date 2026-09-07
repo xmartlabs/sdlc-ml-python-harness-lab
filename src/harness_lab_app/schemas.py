@@ -107,6 +107,23 @@ class TargetResolveRequest(BaseModel):
     ref: str = ""
 
 
+class CheckoutAttachRequest(BaseModel):
+    """Point a target at a clone that already exists under data/checkouts."""
+
+    name: str
+
+
+class CheckoutFromLocalRequest(BaseModel):
+    """Copy a repository the operator already has on this machine.
+
+    ``source`` is relative to the configured local sources root for the
+    server-side copy, and an absolute host path when the caller only wants the
+    command to run in their own terminal.
+    """
+
+    source: str
+
+
 class TargetInspectRequest(BaseModel):
     """Inspect a repository before it is saved — the form's 'inspect' button.
 

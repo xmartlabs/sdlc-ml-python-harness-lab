@@ -214,6 +214,43 @@ def pin_checkout(session: Session, target_id: str) -> TargetRepository:
     return target
 
 
+def attach_checkout(session: Session, target_id: str, name: str) -> TargetRepository:
+    """Point a target at a clone that already exists under ``data/checkouts``.
+
+    The lab watches one directory per target by convention, which leaves an
+    already-cloned repository unusable the moment its directory is named
+    anything else — an older target id, a typo, or one clone two targets both
+    want to audit. Attaching records the directory on the target instead of
+    asking for a second copy of somebody's client code.
+
+    The fence of ADR-0042 is unchanged: only a directory *inside*
+    ``data/checkouts`` can be attached, so a target id still cannot name an
+    arbitrary git repository on the host. Attaching does not pin — the commit is
+    a separate, deliberate act.
+    """
+    from harness_lab_app.checkout_service import CheckoutError, validate_target_id
+    from harness_lab_app.config import get_settings
+
+    try:
+        directory = validate_target_id(name)
+    except CheckoutError as exc:
+        raise CheckoutError(
+            f"{name!r} is not a checkout directory name: it must be 1-100 "
+            "characters of letters, digits, '.', '_' or '-'."
+        ) from exc
+    service = TargetService(session)
+    target = service.get_target(target_id)
+    path = get_settings().checkouts_dir / directory
+    if not (path / ".git").exists():
+        raise CheckoutError(f"No git checkout at {path}.")
+    target.checkout_path = str(path)
+    target.updated_at = datetime.now(UTC)
+    session.add(target)
+    session.commit()
+    session.refresh(target)
+    return target
+
+
 class TargetService:
     """CRUD over target repositories."""
 

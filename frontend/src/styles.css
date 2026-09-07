@@ -3010,6 +3010,268 @@ button.ghost {
   font-weight: 500;
 }
 
+/* --- the folder picker (audit step 1) ------------------------------------ */
+
+/* A file browser has to answer "where am I", "what is here" and "what do I
+   press" without being read. Each of those is a band of its own below, in that
+   order, and none of them may overflow the panel: the first version printed an
+   absolute path in a flex row and it ran off the screen. */
+.folder-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.folder-picker[aria-busy="true"] {
+  opacity: 0.6;
+}
+
+.folder-picker__how {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.folder-picker__inline-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  vertical-align: 1px;
+}
+
+/* Where you are. The path wraps rather than truncating: every segment is a
+   jump, so hiding the middle of it would hide the way back. */
+.folder-picker__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-soft);
+}
+
+.folder-picker__up {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  flex: none;
+}
+
+.folder-picker__top {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.folder-picker__crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.crumb-step {
+  display: inline-flex;
+  align-items: center;
+}
+
+.crumb {
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.crumb--link {
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  box-shadow: none;
+  transform: none;
+}
+
+.crumb--link:hover {
+  background: var(--accent-subtle);
+  text-decoration: underline;
+}
+
+.crumb--here {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.crumb-sep {
+  color: var(--muted);
+  flex: none;
+}
+
+/* The folder you are standing in, and — when it is a repository — the action
+   for it. A repository has one primary button per screen; this is it. */
+.folder-picker__here {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+
+.folder-picker__here-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.folder-picker__here-text > strong {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.folder-picker__here-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+}
+
+.folder-picker__here-note svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* What is here. One row per folder; a repository carries the action itself, so
+   picking one is a single click rather than "open it, then find the button". */
+.folder-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.folder-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.folder-row__open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  min-height: 44px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 400;
+  box-shadow: none;
+  transform: none;
+}
+
+.folder-row__open:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.folder-row--repo .folder-row__open {
+  border-left: 3px solid var(--accent);
+}
+
+.folder-row__icon {
+  display: flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.folder-row--repo .folder-row__icon {
+  color: var(--accent);
+}
+
+.folder-row__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.folder-row__text > strong {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.folder-row__text .muted {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.folder-row__go {
+  margin-left: auto;
+  flex: none;
+  color: var(--muted);
+}
+
+.folder-row__use {
+  flex: none;
+  align-self: stretch;
+  white-space: nowrap;
+}
+
+.folder-picker__root {
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* Narrow panels: the row action drops under the folder it belongs to rather
+   than squeezing the name into two characters. */
+@media (max-width: 640px) {
+  .folder-row {
+    flex-direction: column;
+  }
+
+  .folder-row__use {
+    align-self: flex-start;
+  }
+}
+
 /* Filters that sit above a pick-list, and a stack of checkboxes below it. */
 .filter-stack {
   display: flex;

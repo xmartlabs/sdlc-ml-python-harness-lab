@@ -3,6 +3,113 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## A Docker bind mount is a watched tree, not a window (2026-09-07)
+
+Rooting the folder picker at `${HOME}` did not just widen what the API could read
+— it made Docker Desktop crash, twice, with the engine taking the whole lab with
+it:
+
+    service fs failed: injecting event blocked for 60s
+
+Docker Desktop injects filesystem events into the VM for **every path it shares**,
+so a shared home directory means it is watching `~/Library`, every cache and every
+synced folder. That volume of events blocks the `fs` service past its timeout and
+the engine dies. macOS confirms the diagnosis independently: sharing `$HOME` makes
+it pop the TCC prompt "Docker would like to access data from other apps".
+
+`:ro` does not help. Read-only limits writes, not the events the host generates.
+
+The rule: **a bind mount root is a working set, not a search space.** Size it by
+what the container needs to touch, not by what would be convenient to browse. The
+default is now the directory the lab itself sits in
+(`${HARNESS_LAB_LOCAL_SOURCES_DIR:-..}`), and the variable moves that root rather
+than narrowing it — one line of configuration is a much smaller cost than an
+engine that stops.
+
+The near-miss underneath it: this was chased for a while as "Docker being flaky",
+and I told Marcos there was no evidence in the logs pointing at the mount. There
+was — in the crash dialog, which I had not asked to see. A component named in an
+error message (`service fs`) is a hypothesis, and two crashes on the day one
+mount changed is not coincidence.
+
+Related: [[a-real-home-directory-is-not-a-fixture-path-is-dir-raises]],
+[[a-single-bind-mount-decides-what-use-my-local-repo-can-mean]].
+
+## A real home directory is not a fixture: `Path.is_dir` raises (2026-09-07)
+
+Turning the folder picker on by default meant rooting it at `${HOME}` instead of
+an explicitly configured directory. The listing worked in every test and then
+returned a 500 on the first real call:
+
+    OSError: [Errno 95] Operation not supported: '/host-sources/.obsidian-cli.sock'
+
+`Path.is_dir()` does not return False for things it cannot stat — it raises. A
+home directory is full of them: unix sockets seen through a shared mount, dead
+symlinks, and directories the container may list but not stat. One of them
+anywhere beside the repositories took down the whole picker, and no fixture built
+out of `tmp_path` and `mkdir` will ever contain one.
+
+Two consequences worth carrying:
+
+- Any code that walks a directory a *person* owns needs its stat calls guarded
+  and the entry skipped, not just its path checks. Same for `iterdir()` itself on
+  a directory that may be unreadable — answer with the service's own error so the
+  caller gets a message rather than a 500.
+- Reproduce that class of failure by monkeypatching `Path.is_dir` to raise for
+  one name. Building a real socket in `tmp_path` fails on macOS anyway:
+  `OSError: AF_UNIX path too long` — the 104-byte sun_path limit against pytest's
+  nested tmp directories.
+
+The wider lesson: a default that widens what the code sees (an opt-in root
+becoming `$HOME`) is not a config change. It is a new input domain, and the tests
+that passed were describing a directory nobody actually has.
+
+Related: [[a-single-bind-mount-decides-what-use-my-local-repo-can-mean]]
+
+## A single bind mount decides what "use my local repo" can mean (2026-09-07)
+
+The audit onboarding only knew one way to get source: the operator clones into
+`data/checkouts/<target_id>` and the lab watches that path. Two failures came
+out of it on a real machine — a repository already cloned under a different name
+was invisible, and the page waited forever without saying what it was watching.
+
+The design was not decided by preference. The API container mounts `.:/app` and
+nothing else, and the runner mounts the lab root the same way, so a repository
+anywhere else on the host is invisible to the API *and* to every run and gate
+check. That makes "point the lab at my folder" impossible and "copy my folder
+into `data/checkouts/`" the only shape that works. `git clone --no-hardlinks` is
+the copy: without `--no-hardlinks` git links the new object store into the
+operator's own repository, which is exactly the coupling ADR-0042 exists to
+avoid, and the flag costs nothing because the copy is local.
+
+Three things the tests only found once the endpoints were exercised:
+
+- **The endpoint shape is a silent failure mode.** `GET /api/checkouts` returned
+  `{"checkouts": [...]}` while the page rendered the response as an array. No
+  error, no list — an operator told to clone a repository they already had.
+  Service-level tests cannot see this; the API tests added alongside them can.
+- **A copy inherits the mount path as its origin.** The clone's `origin` came
+  out as `/host-sources/...`, a path that names nothing outside the container
+  and stops existing when the mount changes. It is now reset to the repository
+  URL the target declares — the same origin the guided clone leaves.
+- **Ordering, not validation, is what protects an attached checkout.**
+  `pin_checkout` writes back the path it inspected, so `inspect_checkout` had to
+  become path-aware *first*; otherwise pinning silently un-attaches the clone
+  the operator chose.
+
+**Why it matters:** the fence of ADR-0042 — a local source is accepted only
+under `data/checkouts/` — is what makes all of this safe, so it stayed untouched
+while everything around it changed. The picker is off unless
+`HARNESS_LAB_LOCAL_SOURCES_DIR` is set, mounted read-only, and resolves every
+path *before* checking containment, because a symlink would otherwise pass a
+textual check and read anything the container can see.
+
+**How to apply:** when a feature asks the lab to reach outside itself, look at
+the bind mounts before the API design — they usually decide the answer. And when
+a request is really a UI shape (a list, a wrapper), assert the shape at the
+endpoint: the service tests will pass either way. See
+[ADR-0045](../docs/adr/0045-a-checkout-the-lab-can-be-given-not-only-watched.md).
+
 ## A form gate that contradicts its own next branch is a bug (2026-09-06)
 
 The *Full harness* wizard refused any selection whose cases defined fewer than

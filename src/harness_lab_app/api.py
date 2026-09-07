@@ -82,6 +82,8 @@ from harness_lab_app.schemas import (
     CaseCreate,
     CaseDraftRequest,
     CaseDraftResponse,
+    CheckoutAttachRequest,
+    CheckoutFromLocalRequest,
     EnvUpdateRequest,
     ExperimentCreate,
     ExperimentLaunch,
@@ -1341,12 +1343,18 @@ def create_app() -> FastAPI:
             target = TargetService(session).get_target(target_id)
         except TargetNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        from harness_lab_app.local_sources_service import is_enabled
+
         try:
             state = inspect_checkout(target)
             command = guided_command(target)
         except CheckoutError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return {"command": command, **state.as_dict()}
+        return {
+            "command": command,
+            "local_sources_enabled": is_enabled(),
+            **state.as_dict(),
+        }
 
     @app.post("/api/targets/{target_id}/checkout/pin")
     def pin_target_checkout(target_id: str, session: Session = Depends(get_session)):
@@ -1363,6 +1371,115 @@ def create_app() -> FastAPI:
         except TargetNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (CheckoutError, TargetError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return inspect_checkout(target).as_dict()
+
+    @app.get("/api/checkouts")
+    def list_lab_checkouts(session: Session = Depends(get_session)):
+        """Every clone already sitting under data/checkouts, and who claims it.
+
+        A repository cloned once should be auditable twice. This is what the
+        onboarding offers instead of asking for a second copy when a clone
+        exists under a name that is not the target's id.
+        """
+        from harness_lab_app.checkout_service import (
+            list_checkouts,
+            recorded_checkout_path,
+        )
+
+        claimed: dict[str, list[str]] = {}
+        for target in TargetService(session).list_targets(include_archived=True):
+            path = recorded_checkout_path(target)
+            if path is not None:
+                claimed.setdefault(path.name, []).append(target.target_id)
+        rows = list_checkouts()
+        for row in rows:
+            row["claimed_by"] = claimed.get(str(row["name"]), [])
+        return rows
+
+    @app.post("/api/targets/{target_id}/checkout/attach")
+    def attach_target_checkout(
+        target_id: str,
+        data: CheckoutAttachRequest,
+        session: Session = Depends(get_session),
+    ):
+        """Point this target at a clone that already exists (ADR-0045)."""
+        from harness_lab_app.checkout_service import inspect_checkout
+        from harness_lab_app.target_service import attach_checkout
+
+        try:
+            target = attach_checkout(session, target_id, data.name)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (CheckoutError, TargetError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return inspect_checkout(target).as_dict()
+
+    @app.post("/api/targets/{target_id}/checkout/local-command")
+    def local_checkout_command(
+        target_id: str,
+        data: CheckoutFromLocalRequest,
+        session: Session = Depends(get_session),
+    ):
+        """The command that copies a repository the operator already has.
+
+        Built here rather than in the browser because the destination is a host
+        path only the server can work out, and because the source has to be
+        quoted for a shell.
+        """
+        from harness_lab_app.checkout_service import local_copy_command
+
+        try:
+            target = TargetService(session).get_target(target_id)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            command = local_copy_command(target.target_id, data.source)
+        except CheckoutError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"target_id": target.target_id, "command": command}
+
+    @app.get("/api/local-sources")
+    def browse_local_sources(path: str = ""):
+        """One level of the operator's own repositories, if they mounted any.
+
+        Off unless HARNESS_LAB_LOCAL_SOURCES_DIR is set: the lab lists nothing
+        it was not explicitly pointed at (ADR-0045).
+        """
+        from harness_lab_app.local_sources_service import (
+            LocalSourcesDisabled,
+            LocalSourcesError,
+            browse,
+        )
+
+        try:
+            return browse(path)
+        except LocalSourcesDisabled as exc:
+            return {"enabled": False, "reason": str(exc), "entries": []}
+        except LocalSourcesError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/api/targets/{target_id}/checkout/from-local")
+    def copy_local_checkout(
+        target_id: str,
+        data: CheckoutFromLocalRequest,
+        session: Session = Depends(get_session),
+    ):
+        """Copy a mounted local repository into the lab's own checkout folder."""
+        from harness_lab_app.checkout_service import (
+            create_checkout_from,
+            inspect_checkout,
+        )
+        from harness_lab_app.local_sources_service import LocalSourcesError, resolve
+
+        try:
+            target = TargetService(session).get_target(target_id)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            source = resolve(data.source)
+            create_checkout_from(source, target)
+        except (LocalSourcesError, CheckoutError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return inspect_checkout(target).as_dict()
 

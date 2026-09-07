@@ -4,23 +4,28 @@ import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { FolderPicker } from "../components/FolderPicker";
+import { ModelPicker } from "../components/ModelPicker";
 import { ReadinessReportView } from "../components/ReadinessReportView";
 import { Spinner } from "../components/Spinner";
 import { IconAlert, IconArrowRight, IconCheck, IconSparkles } from "../components/icons";
-import { HARNESS_OPTIONS } from "../harnesses";
+import { HARNESS_NATIVE_MODELS, HARNESS_OPTIONS, HOST_HARNESSES } from "../harnesses";
 import type {
   CaseCandidate,
   CaseCandidates,
   CaseRecord,
   CheckoutState,
+  CheckoutSummary,
   DroppedCommand,
   GateCheckRecord,
+  LocalSourceListing,
+  ModelOption,
   ReadinessReport,
   TargetRecord
 } from "../types";
 
 const STEPS = [
-  { key: "clone", label: "Clone it yourself" },
+  { key: "clone", label: "Point at the repository" },
   { key: "readiness", label: "What this repository already has" },
   { key: "case", label: "One case that passes" }
 ] as const;
@@ -28,6 +33,20 @@ const STEPS = [
 type StepKey = (typeof STEPS)[number]["key"];
 
 type CaseTab = "ai" | "history" | "manual" | "existing";
+
+/**
+ * Where step 1's checkout comes from.
+ *
+ * All three end in the same place — a git repository under the lab's own
+ * `data/checkouts/` — because a run container mounts only the lab root, so a
+ * repository anywhere else on the host is invisible to every run.
+ */
+type CloneSource = "remote" | "existing" | "local";
+
+// Ticks of the 3s poller before the wait explains itself. Long enough that a
+// clone in progress is not interrupted by a wall of text, short enough that
+// nobody watches a spinner wondering what it is watching.
+const WAIT_TICKS_BEFORE_DIAGNOSIS = 5;
 
 const MAX_STEP_OPTIONS = [5, 10, 20, 40];
 
@@ -94,6 +113,16 @@ export function Audit() {
   const [newRef, setNewRef] = useState("main");
   const [checkout, setCheckout] = useState<CheckoutState | null>(null);
   const [copied, setCopied] = useState(false);
+  // The folder picker leads: most repositories being audited are already on
+  // the machine, and the two clone-it-yourself paths are the fallback.
+  const [cloneSource, setCloneSource] = useState<CloneSource>("local");
+  const [checkouts, setCheckouts] = useState<CheckoutSummary[]>([]);
+  const [listing, setListing] = useState<LocalSourceListing | null>(null);
+  const [localPath, setLocalPath] = useState("");
+  const [localCommand, setLocalCommand] = useState("");
+  // How long the poller has watched without finding anything, so a wait that
+  // is going nowhere can say what it is looking at.
+  const [waitTicks, setWaitTicks] = useState(0);
 
   // Step 2 — what the repository brings on its own.
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
@@ -117,6 +146,10 @@ export function Audit() {
   const [harness, setHarness] = useState<(typeof HARNESS_OPTIONS)[number]>("claude");
   const [executorModel, setExecutorModel] = useState("");
   const [experimentId, setExperimentId] = useState("");
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [directErrors, setDirectErrors] = useState<Record<string, string>>({});
+  const [gatewayDefault, setGatewayDefault] = useState("");
+  const [reloadingModels, setReloadingModels] = useState(false);
 
   const target = useMemo(
     () => targets.find((item) => item.target_id === targetId) ?? null,
@@ -154,6 +187,60 @@ export function Audit() {
   }, []);
 
   /**
+   * The model catalog, so step 3 offers models instead of asking for an id.
+   *
+   * Loaded with the page rather than with the step: by the time somebody
+   * reaches "one case that passes" the list is already there, and a gateway
+   * that is slow to answer does not make the last step feel broken. A failure
+   * is not surfaced — the picker says for itself that it has nothing, and a
+   * host-CLI harness does not need the catalog at all.
+   */
+  const loadModels = (refresh: boolean) => {
+    setReloadingModels(refresh);
+    return api
+      .listModels(refresh)
+      .then((catalog) => {
+        setModelOptions(catalog.models);
+        setDirectErrors(catalog.direct_errors ?? {});
+        setGatewayDefault(catalog.default_executor ?? "");
+      })
+      .catch(() => {})
+      .finally(() => setReloadingModels(false));
+  };
+
+  useEffect(() => {
+    void loadModels(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Keep the model in step with the harness it has to run under.
+   *
+   * The two menus are not interchangeable: `opencode` addresses gateway and
+   * local ids, `claude` and `codex` address their own CLI's model names. A
+   * model carried across the switch would name something the new harness
+   * cannot reach, so the switch clears it and the rule below fills it back in.
+   */
+  const chooseHarness = (next: (typeof HARNESS_OPTIONS)[number]) => {
+    setHarness(next);
+    setExecutorModel("");
+  };
+
+  /**
+   * A gateway harness always names a model; a host-CLI harness may decline to.
+   *
+   * Empty is a real answer for `claude` and `codex` — run whatever the CLI
+   * picks — but for `opencode` it is a select showing an option the run would
+   * not use. Adopting the catalog's default covers both orders of events: the
+   * harness switched before the catalog arrived, or after.
+   */
+  useEffect(() => {
+    if (!HOST_HARNESSES.has(harness) && executorModel === "" && gatewayDefault) {
+      setExecutorModel(gatewayDefault);
+    }
+  }, [executorModel, gatewayDefault, harness]);
+
+  /**
    * Watch for the clone while this step is open and the clone is not there yet.
    *
    * The interval is torn down on every dependency change, not only on unmount:
@@ -164,6 +251,7 @@ export function Audit() {
       return;
     }
     let cancelled = false;
+    setWaitTicks(0);
     const load = () => {
       api
         .getCheckout(targetId)
@@ -177,12 +265,71 @@ export function Audit() {
         });
     };
     load();
-    const timer = window.setInterval(load, 3000);
+    const timer = window.setInterval(() => {
+      setWaitTicks((ticks) => ticks + 1);
+      load();
+    }, 3000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
   }, [cloneFound, step, targetId]);
+
+  /**
+   * Open the picker with the page, not on a click.
+   *
+   * The first thing this step asks for is the folder the repository is already
+   * in — before any repository has been named, which is the whole point: an
+   * operator should see their own directories, not a button promising them.
+   * Re-runs are cheap and guarded: once `listing` is set this returns.
+   */
+  useEffect(() => {
+    if (step !== "clone" || cloneFound || listing) {
+      return;
+    }
+    if (targetId && !checkout?.local_sources_enabled) {
+      return;
+    }
+    let cancelled = false;
+    api
+      .browseLocalSources("")
+      .then((result) => {
+        if (!cancelled) {
+          setListing(result);
+        }
+      })
+      .catch(() => {
+        // The picker's own button asks again.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [checkout?.local_sources_enabled, cloneFound, listing, step, targetId]);
+
+  /**
+   * Clones already sitting under data/checkouts, whoever made them.
+   *
+   * Loaded with the step rather than on demand: the whole point is that the
+   * operator sees the clone they already have without having to suspect it
+   * exists.
+   */
+  useEffect(() => {
+    if (step !== "clone" || !targetId) {
+      return;
+    }
+    let cancelled = false;
+    api
+      .listCheckouts()
+      .then((rows) => {
+        if (!cancelled) {
+          setCheckouts(rows);
+        }
+      })
+      .catch(() => setCheckouts([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [step, targetId]);
 
   // A gate check runs in a worker, so the record is polled until it settles.
   useEffect(() => {
@@ -243,14 +390,153 @@ export function Audit() {
       setCheckout(await api.getCheckout(created.target_id));
     });
 
-  const copyCommand = () => {
-    if (!checkout?.command) {
+  const copyText = (value: string) => {
+    if (!value) {
       return;
     }
-    void navigator.clipboard.writeText(checkout.command);
+    void navigator.clipboard.writeText(value);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2000);
   };
+
+  // Point this target at a clone that is already on disk. Attaching is not
+  // pinning: the commit stays a separate, deliberate act.
+  const attach = (name: string) =>
+    run("attach", async () => {
+      const state = await api.attachCheckout(targetId, name);
+      setCheckout(state);
+      setNotice(
+        `Using the clone in ${name}. Pin it to freeze the repository at a commit.`
+      );
+    });
+
+  // The lab cannot see the operator's own folders, so when the picker is off
+  // this is all it can offer: the exact command, for their own terminal.
+  const buildLocalCommand = () =>
+    run("local-command", async () => {
+      const result = await api.localCopyCommand(targetId, localPath.trim());
+      setLocalCommand(result.command);
+    });
+
+  const browseLocal = (path: string) =>
+    run("browse", async () => {
+      setListing(await api.browseLocalSources(path));
+    });
+
+  // The picker's single action. Two API calls because copying and pinning are
+  // two things the lab does, but one press because "use this folder" is one
+  // decision — and a copy nobody pinned is a repository the rest of the audit
+  // refuses to read.
+  const useThisFolder = (source: string) =>
+    run("from-local", async () => {
+      await api.cloneFromLocal(targetId, source);
+      const state = await api.pinCheckout(targetId);
+      setCheckout(state);
+      setNotice(
+        `Copied and frozen at ${state.pinned_commit.slice(0, 8)}. Your folder was ` +
+          "only read, and only committed work came across. Everything from here " +
+          "reads that commit until you pick the folder again."
+      );
+    });
+
+  /**
+   * Register the picked folder as a repository, copy it in, and freeze it.
+   *
+   * The form used to come first, which put a GitHub URL between the operator
+   * and a repository already sitting on their disk. The folder knows its own
+   * remote and branch, so picking it is the whole of step 1.
+   */
+  const adoptFolder = async (source: LocalSourceListing) => {
+    const path = source.path ?? "";
+    const folder = path.split("/").filter(Boolean).pop() ?? "";
+    const url = (source.remote_url ?? "").trim() || newUrl.trim();
+    if (!url) {
+      throw new Error(
+        "This folder has no `origin` remote, so the lab has no URL to record " +
+          "for it. Put one in the field below and pick the folder again."
+      );
+    }
+    const taken = new Set(targets.map((item) => item.target_id));
+    const base = slugify(folder) || "repository";
+    let id = base;
+    for (let suffix = 2; taken.has(id); suffix += 1) {
+      id = `${base}-${suffix}`;
+    }
+    const created = await api.createTarget({
+      target_id: id,
+      name: folder || id,
+      repository_url: url,
+      default_ref: (source.branch ?? "").trim() || "main"
+    });
+    setTargets((current) => [created, ...current]);
+    setTargetId(created.target_id);
+    await api.cloneFromLocal(created.target_id, path);
+    const state = await api.pinCheckout(created.target_id);
+    setCheckout(state);
+    setNotice(
+      `${created.name} is registered, copied and frozen at ` +
+        `${state.pinned_commit.slice(0, 8)}. Your folder was only read, and only ` +
+        "committed work came across. Everything from here reads that commit until " +
+        "you pick the folder again."
+    );
+  };
+
+  /**
+   * Adopt a folder named by the picker, whether or not we are standing in it.
+   *
+   * A repository row offers the action directly — no "open it first, then find
+   * the button" — so the folder's own remote and branch may not be loaded yet.
+   * One extra read of that directory is what makes the row a single click.
+   */
+  const auditFolderAt = (path: string) =>
+    run("adopt", async () => {
+      const source =
+        listing && (listing.path ?? "") === path
+          ? listing
+          : await api.browseLocalSources(path);
+      setListing(source);
+      await adoptFolder(source);
+    });
+
+  /**
+   * The folder browser, shared by the two places that offer it: before a
+   * repository exists (where picking one registers it) and after (where it
+   * fills a checkout the operator already named).
+   *
+   * When no directory is mounted there is nothing to browse, and the button is
+   * the only honest thing to show — pressing it produces the reason.
+   */
+  const folderPicker = (
+    onUse: (path: string) => void,
+    useLabel: string,
+    workingLabel: string,
+    useHint: string,
+    working: boolean
+  ) =>
+    listing?.enabled ? (
+      <FolderPicker
+        browsing={busy === "browse"}
+        disabled={busy !== ""}
+        listing={listing}
+        onBrowse={(path) => void browseLocal(path)}
+        onUse={onUse}
+        useHint={useHint}
+        useLabel={useLabel}
+        working={working}
+        workingLabel={workingLabel}
+      />
+    ) : (
+      <div className="panel-actions">
+        <button
+          className="secondary"
+          disabled={busy !== ""}
+          onClick={() => void browseLocal("")}
+          type="button"
+        >
+          {busy === "browse" ? "Opening…" : "Browse my repositories"}
+        </button>
+      </div>
+    );
 
   const refreshCheckout = () =>
     run("checkout", async () => {
@@ -536,9 +822,10 @@ export function Audit() {
         <div>
           <h1>Set up a repository for audit</h1>
           <p className="lede">
-            Three steps: you clone the repository and pin a commit, the lab reads what
-            the repository already brings, and then one case runs against it. It ends
-            when that case passes — not with a verdict about the repository.
+            Three steps: you point the lab at the repository and it freezes a commit,
+            the lab reads what the repository already brings, and then one case runs
+            against it. It ends when that case passes — not with a verdict about the
+            repository.
           </p>
         </div>
       </header>
@@ -574,11 +861,47 @@ export function Audit() {
         <>
           <div className="panel">
             <div className="panel-head">
-              <h2>Which repository?</h2>
+              <h2>Pick the folder you want audited</h2>
             </div>
             <p className="muted">
-              The lab records the repository so runs can name it. It never fetches the
-              code from here — that is the next step, and it happens in your terminal.
+              Browse to the repository you already have on this machine. The lab reads
+              its remote and branch off the folder, copies it into its own folder and
+              freezes it at the commit it is on — no URL to type, no credentials, no
+              network.
+            </p>
+            <div className="callout">
+              <IconAlert size={16} />
+              <div>
+                <p>
+                  The folder you pick is frozen at the commit it is on right now.
+                  Commits you make afterwards do not reach the lab — every run, report
+                  and case reads the frozen copy until you come back to this step and
+                  pick the folder again.
+                </p>
+                <p className="muted small">
+                  The copy is made with <code>git clone --no-hardlinks</code>: local, no
+                  network, no credentials, and your working copy is only read. Only
+                  committed work comes across — uncommitted files stay where they are.
+                </p>
+              </div>
+            </div>
+            {folderPicker(
+              (path) => void auditFolderAt(path),
+              "Audit this folder",
+              "Registering and freezing…",
+              "Registers it, copies it in, and freezes it at its current commit.",
+              busy === "adopt"
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="panel-head">
+              <h2>Or register one the lab has to clone</h2>
+            </div>
+            <p className="muted">
+              For a repository that is not on this machine yet. The lab records it so
+              runs can name it; fetching the code is the next step, and it happens in
+              your terminal.
             </p>
             <div className="form-grid">
               <label>
@@ -669,41 +992,210 @@ export function Audit() {
       {step === "clone" && targetId ? (
         <div className="panel">
           <div className="panel-head">
-            <h2>Clone it yourself</h2>
+            <h2>Point the lab at the repository</h2>
             <span className={`badge ${pinnedCommit ? "ok" : cloneFound ? "warn" : "neutral"}`}>
-              {pinnedCommit ? "Pinned" : cloneFound ? "Clone found" : "Waiting for the clone"}
+              {pinnedCommit ? "Pinned" : cloneFound ? "Clone found" : "Nothing picked yet"}
             </span>
           </div>
           <p className="muted">
-            The lab has no credentials for <strong>{target?.name ?? targetId}</strong>, and
-            a run container has none either. You clone it, on this machine, where your ssh
-            agent and tokens already work — then the lab reads your clone and never
-            contacts the remote again.
+            Find the folder where you already have{" "}
+            <strong>{target?.name ?? targetId}</strong> on this machine. The lab copies it
+            into its own folder and freezes it at the commit it is on: your working copy
+            is only read, never written to, and the remote is never contacted. If the
+            repository is not here yet, the other two tabs clone it.
           </p>
-          <ol className="numbered-steps">
-            <li>Open a terminal on this machine (the one running the lab).</li>
-            <li>Paste the command below and run it. It clones into the lab&apos;s own
-              folder, which is where the lab looks.</li>
-            <li>Leave this page open — it notices the clone within a few seconds.</li>
-          </ol>
+          {!checkout ? <Spinner label="Reading the checkout" /> : null}
 
-          {checkout ? (
+          {checkout && !cloneFound ? (
             <>
-              <div className="command-block">
-                <pre>{checkout.command}</pre>
-                <button className="secondary" onClick={copyCommand} type="button">
-                  {copied ? "Copied" : "Copy"}
+              <div className="tab-bar tab-bar--inline">
+                <button
+                  className={`tab ${cloneSource === "local" ? "tab--active" : ""}`}
+                  onClick={() => {
+                    setCloneSource("local");
+                    if (checkout.local_sources_enabled && !listing) {
+                      void browseLocal("");
+                    }
+                  }}
+                  type="button"
+                >
+                  Pick a folder on this machine
+                </button>
+                <button
+                  className={`tab ${cloneSource === "existing" ? "tab--active" : ""}`}
+                  onClick={() => setCloneSource("existing")}
+                  type="button"
+                >
+                  A clone I already have
+                  {checkouts.length ? (
+                    <span className="badge pick-tag">{checkouts.length}</span>
+                  ) : null}
+                </button>
+                <button
+                  className={`tab ${cloneSource === "remote" ? "tab--active" : ""}`}
+                  onClick={() => setCloneSource("remote")}
+                  type="button"
+                >
+                  Clone from the remote
                 </button>
               </div>
-              <p className="muted small">
-                It lands in <code>{checkout.host_path}</code>. Nothing else in the
-                command needs changing — the destination is already the path the lab
-                watches.
-              </p>
+
+              {cloneSource === "local" ? (
+                <>
+                  <div className="callout">
+                    <IconAlert size={16} />
+                    <div>
+                      <p>
+                        The folder you pick is copied and frozen at the commit it is on
+                        right now. Commits you make afterwards do not reach the lab —
+                        every run, report and case reads the frozen copy until you come
+                        back to this step and pick the folder again.
+                      </p>
+                      <p className="muted small">
+                        The copy is made with <code>git clone --no-hardlinks</code>:
+                        local, no network, no credentials, and your working copy is only
+                        read. Only committed work comes across — uncommitted files stay
+                        where they are. It exists because a run container mounts the
+                        lab&apos;s own folder and nothing else.
+                      </p>
+                    </div>
+                  </div>
+
+                  {checkout.local_sources_enabled ? (
+                    <>
+                      {folderPicker(
+                        (path) => void useThisFolder(path),
+                        "Use this folder",
+                        "Copying and freezing…",
+                        "Copies it in and freezes it at its current commit.",
+                        busy === "from-local"
+                      )}
+                      <p className="muted small">
+                        Or run it yourself, from any path on this machine:
+                      </p>
+                    </>
+                  ) : (
+                    <p className="muted small">
+                      The folder picker has no directory to browse. It normally opens on
+                      the directory the lab sits in; set{" "}
+                      <code>HARNESS_LAB_LOCAL_SOURCES_DIR</code> in <code>.env</code> to
+                      the directory that holds your repositories and restart the lab.
+                      Meanwhile this command does the same job from your own terminal:
+                    </p>
+                  )}
+
+                  <div className="field">
+                    <label htmlFor="local-source">
+                      Absolute path of the repository you already have
+                    </label>
+                    <input
+                      id="local-source"
+                      onChange={(event) => setLocalPath(event.target.value)}
+                      placeholder="/Users/you/code/payments"
+                      value={localPath}
+                    />
+                  </div>
+                  <div className="panel-actions">
+                    <button
+                      className="secondary"
+                      disabled={busy !== "" || !localPath.trim()}
+                      onClick={() => void buildLocalCommand()}
+                      type="button"
+                    >
+                      {busy === "local-command" ? "Writing…" : "Write the command"}
+                    </button>
+                  </div>
+                  {localCommand ? (
+                    <div className="command-block">
+                      <pre>{localCommand}</pre>
+                      <button
+                        className="secondary"
+                        onClick={() => copyText(localCommand)}
+                        type="button"
+                      >
+                        {copied ? "Copied" : "Copy"}
+                      </button>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+
+              {cloneSource === "existing" ? (
+                <>
+                  <p className="muted">
+                    Clones already in the lab&apos;s folder. A repository is often
+                    cloned once and audited twice, so attaching one is not a second
+                    copy of anybody&apos;s code — both targets read the same checkout.
+                  </p>
+                  {checkouts.length === 0 ? (
+                    <EmptyState
+                      description="Nothing under data/checkouts yet. Clone from the remote, or copy a folder you already have."
+                      title="No clones on disk."
+                    />
+                  ) : (
+                    <ul className="pick-list">
+                      {checkouts.map((item) => (
+                        <li key={item.name}>
+                          <button
+                            className="secondary"
+                            disabled={busy !== ""}
+                            onClick={() => void attach(item.name)}
+                            type="button"
+                          >
+                            <strong>
+                              {item.name}
+                              {item.claimed_by.length ? (
+                                <span className="badge pick-tag">
+                                  used by {item.claimed_by.join(", ")}
+                                </span>
+                              ) : null}
+                            </strong>
+                            <span className="muted">
+                              {item.remote_url || "no remote"} · {item.branch} ·{" "}
+                              {item.head.slice(0, 8)}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              ) : null}
+
+              {cloneSource === "remote" ? (
+                <>
+                  <p className="muted">
+                    The lab has no credentials for this repository, and a run container
+                    has none either. You clone it here, where your ssh agent and tokens
+                    already work; the lab then reads your clone and never contacts the
+                    remote again.
+                  </p>
+                  <ol className="numbered-steps">
+                    <li>Open a terminal on this machine (the one running the lab).</li>
+                    <li>Paste the command below and run it. It clones into the
+                      lab&apos;s own folder, which is where the lab looks.</li>
+                    <li>Leave this page open — it notices the clone within a few
+                      seconds.</li>
+                  </ol>
+                  <div className="command-block">
+                    <pre>{checkout.command}</pre>
+                    <button
+                      className="secondary"
+                      onClick={() => copyText(checkout.command)}
+                      type="button"
+                    >
+                      {copied ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                  <p className="muted small">
+                    It lands in <code>{checkout.host_path}</code>. Nothing else in the
+                    command needs changing — the destination is already the path the
+                    lab watches.
+                  </p>
+                </>
+              ) : null}
             </>
-          ) : (
-            <Spinner label="Reading the checkout" />
-          )}
+          ) : null}
 
           {checkout?.error ? (
             <div className="callout callout--warning">
@@ -726,6 +1218,29 @@ export function Audit() {
             </div>
           ) : null}
 
+          {checkout && !cloneFound && waitTicks >= WAIT_TICKS_BEFORE_DIAGNOSIS ? (
+            <div className="callout callout--warning">
+              <IconAlert size={16} />
+              <div>
+                <p>
+                  Still nothing at <code>{checkout.host_path}</code>. The lab watches
+                  that one directory, so a clone made anywhere else — or under another
+                  name — never shows up here.
+                </p>
+                <p className="muted small">
+                  {checkout.exists
+                    ? "The directory is there but it is not a git repository."
+                    : "The directory does not exist yet."}{" "}
+                  If the clone is still running, leave this open. Otherwise:{" "}
+                  {checkouts.length
+                    ? "attach one of the clones already on disk"
+                    : "copy a folder you already have"}{" "}
+                  from the tabs above. The page keeps watching either way.
+                </p>
+              </div>
+            </div>
+          ) : null}
+
           {checkout && cloneFound ? (
             <>
               <div className="fact-row">
@@ -744,6 +1259,14 @@ export function Audit() {
                   </div>
                 ) : null}
               </div>
+
+              {checkout.attached ? (
+                <p className="muted small">
+                  Reading <code>{checkout.host_path}</code> — a clone that was already
+                  there, not one named after this repository. That is deliberate; the
+                  pin and every run read this directory.
+                </p>
+              ) : null}
 
               {checkout.dirty ? (
                 <div className="callout callout--warning">
@@ -1196,7 +1719,9 @@ export function Audit() {
                 <span>Harness</span>
                 <select
                   onChange={(event) =>
-                    setHarness(event.target.value as (typeof HARNESS_OPTIONS)[number])
+                    chooseHarness(
+                      event.target.value as (typeof HARNESS_OPTIONS)[number]
+                    )
                   }
                   value={harness}
                 >
@@ -1206,18 +1731,37 @@ export function Audit() {
                     </option>
                   ))}
                 </select>
+                {HOST_HARNESSES.has(harness) ? (
+                  <span className="muted small">
+                    Runs the {harness} CLI with its native auth.{" "}
+                    {harness === "claude"
+                      ? "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host)."
+                      : "Needs host mode — run make app-host."}
+                  </span>
+                ) : null}
               </label>
-              <label className="field">
-                <span>
-                  Executor model — required for opencode; claude/codex fall back to
-                  their CLI default
-                </span>
-                <input
-                  onChange={(event) => setExecutorModel(event.target.value)}
-                  placeholder="gateway/<alias> · lmstudio/<id> · claude-sonnet-5"
+              <div className="field">
+                <ModelPicker
+                  allowNone={HOST_HARNESSES.has(harness)}
+                  directErrors={directErrors}
+                  label="Executor model"
+                  nativeOptions={HARNESS_NATIVE_MODELS[harness]}
+                  noneLabel="CLI default"
+                  onChange={setExecutorModel}
+                  onReload={
+                    HOST_HARNESSES.has(harness) ? undefined : () => void loadModels(true)
+                  }
+                  options={modelOptions}
+                  reloading={reloadingModels}
                   value={executorModel}
-                />
-              </label>
+                >
+                  <small className="muted">
+                    {HOST_HARNESSES.has(harness)
+                      ? `Pick a model the ${harness} CLI accepts, or leave it on its own default.`
+                      : "opencode has no default of its own — this run needs a model named here."}
+                  </small>
+                </ModelPicker>
+              </div>
             </div>
             <div className="panel-actions">
               <button
