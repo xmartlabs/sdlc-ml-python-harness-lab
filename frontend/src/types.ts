@@ -24,6 +24,7 @@ export type CaseRecord = {
   constraints?: string[];
   validation_commands?: string[];
   max_steps?: number;
+  origin_target_id?: string;
 };
 
 export type CaseCreatePayload = {
@@ -39,7 +40,39 @@ export type CaseCreatePayload = {
   constraints: string[];
   validation_commands: string[];
   max_steps: number;
+  origin_target_id?: string;
 };
+
+export interface CaseDraftRequest {
+  description: string;
+  model?: string;
+  selected_skills: string[];
+  /** Draft against this repository's checkout rather than in the abstract. */
+  target_id?: string;
+  /** Ids already in the catalog, so the proposed one is free to save. */
+  existing_case_ids?: string[];
+}
+
+export interface DroppedCommand {
+  command: string;
+  reason: string;
+}
+
+export interface CaseDraftResponse {
+  subject: string;
+  instruction: string;
+  validation_commands: string[];
+  max_steps: number;
+  /** Commands the model wrote that the lab would not run, with the reason. */
+  dropped_commands: DroppedCommand[];
+  attempts: number;
+  /** The rest of the case's shape — the Cases form saves all of it at once. */
+  case_id?: string;
+  description?: string;
+  case_type?: string;
+  step_prompts?: string[];
+}
+
 
 export type RunRecord = {
   run_id: string;
@@ -408,7 +441,16 @@ export type OverviewReport = {
   };
 };
 
-export type ExperimentMode = "harness_evaluation" | "cross_repo" | "discovery";
+export type ExperimentMode =
+  | "harness_evaluation"
+  | "cross_repo"
+  | "discovery"
+  /**
+   * Does the tool I built work reliably across harnesses and models? (ADR-0040)
+   * The harness is a setting here, not the subject — so this mode has no
+   * ablated arm and reports a pass rate per arm, never a delta.
+   */
+  | "subject_validation";
 export type ConditionRole = "control" | "treatment";
 
 export type ExperimentRecord = {
@@ -416,6 +458,8 @@ export type ExperimentRecord = {
   name: string;
   question: string;
   mode: ExperimentMode;
+  /** What is under test when it is not the harness. Empty under every other mode. */
+  subject: string;
   status: "draft" | "running" | "complete" | "abandoned";
   case_ids: string[];
   prompt_variants: string[];
@@ -439,6 +483,9 @@ export type LaunchConfigSummary = {
   prompt_variant: string;
   max_steps: number;
   score_mode: string;
+  skills_disabled?: string[];
+  skills_extra?: string[];
+  skills_invoke?: string[];
 };
 
 export type ConditionRecord = {
@@ -491,8 +538,16 @@ export type CaseMatrixRow = {
 export type VerdictHighlight = {
   label: string;
   metric: string;
-  control: number | null;
-  treatment: number | null;
+  /** A control/treatment pair — present for a mode that compares two arms. */
+  control?: number | null;
+  treatment?: number | null;
+  /**
+   * One arm on its own — present under `subject_validation`, where the label is
+   * the arm and there is nothing to compare it against.
+   */
+  successes?: number;
+  scored_runs?: number;
+  rate?: number | null;
 };
 
 /**
@@ -516,10 +571,19 @@ export type VerdictBlock = {
   caveats: string[];
 };
 
+/** One cell of the per-arm, per-case grid: a count, never a verdict. */
+export type CaseOutcomeCell = {
+  runs: number;
+  scored_runs: number;
+  successes: number;
+};
+
 export type ExperimentSummary = {
   experiment_id: string;
   question: string;
   mode: ExperimentMode;
+  /** The named subject under `subject_validation`; empty elsewhere. */
+  subject?: string;
   repetitions: number;
   case_repetitions?: Record<string, number>;
   suite_id?: string | null;
@@ -532,6 +596,13 @@ export type ExperimentSummary = {
     success: { control: number | null; treatment: number | null; points: number | null };
     case_matrix: CaseMatrixRow[];
   }[];
+  /**
+   * Per-arm, per-case counts: {arm label: {case_id: {runs, scored_runs,
+   * successes}}}. Raw grid with the repetitions kept — not a comparison:
+   * `comparisons[].case_matrix` pairs a control against a treatment, which a
+   * mode without a control never has.
+   */
+  case_outcomes?: Record<string, Record<string, CaseOutcomeCell>>;
 };
 
 export type FindingRecord = {
@@ -682,6 +753,65 @@ export type TargetRecord = {
   language: string;
   team: string;
   tags: string[];
+  /** The operator's own clone, once they have made and pinned one. */
+  checkout_path?: string;
+  pinned_commit?: string;
+  pinned_at?: string | null;
+};
+
+/**
+ * What the lab can see of the engineer's own clone of a target repository.
+ *
+ * `exists: false` is an ordinary state, not an error: before they have run the
+ * clone command it is exactly what the page should say.
+ */
+export type CheckoutState = {
+  target_id: string;
+  /** The command to paste into their own terminal, with their credentials. */
+  command: string;
+  /** Where the lab reads it (its own view of the path). */
+  path: string;
+  /** The same location as their shell sees it. */
+  host_path: string;
+  exists: boolean;
+  is_repo: boolean;
+  head: string;
+  branch: string;
+  remote_url: string;
+  dirty: boolean;
+  dirty_files: number;
+  error: string;
+  pinned_commit: string;
+  pinned_at: string;
+  /** HEAD has moved since the pin — offer a re-pin, do not move it silently. */
+  pin_is_stale: boolean;
+};
+
+/** One command a gate check ran, and how it ended. */
+export type GateCheckStep = {
+  phase: "provision" | "setup" | "validate" | string;
+  command: string;
+  exit_code: number | null;
+  passed: boolean;
+  detail: string;
+};
+
+/**
+ * The repository measured alone: its own gate, at the pin, with no agent.
+ *
+ * What separates "the agent failed" from "this repository does not build here".
+ */
+export type GateCheckRecord = {
+  gate_check_id: string;
+  target_id: string;
+  commit: string;
+  status: "running" | "done" | "failed";
+  passed: boolean | null;
+  failed_phase: string;
+  checks_json: GateCheckStep[];
+  error: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 /** A case mined from a target's history — a proposal, nothing persisted. */
@@ -734,6 +864,8 @@ export type RunConfigPayload = {
   dry_run: boolean;
   skills_disabled?: string[];
   skills_extra?: string[];
+  /** Skills the agent is told to invoke at the start of every step; each must also be available. */
+  skills_invoke?: string[];
   target_repo_id?: string;
   target_ref?: string;
   harness_source?: HarnessSource;
@@ -768,6 +900,7 @@ export type RunBatchPayload = {
   dry_run: boolean;
   skills_disabled?: string[];
   skills_extra?: string[];
+  skills_invoke?: string[];
 };
 
 export type RunBatchResult = {

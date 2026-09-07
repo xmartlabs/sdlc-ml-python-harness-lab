@@ -87,6 +87,8 @@ data/app/
 data/tmp/
 # Blobless mirrors of registered target repositories (rebuildable cache).
 data/target-mirrors/
+# Operator clones of target repositories, made with their own credentials.
+data/checkouts/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/

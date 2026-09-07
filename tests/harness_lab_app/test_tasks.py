@@ -8,7 +8,7 @@ import pytest
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
-from harness_lab_app import tasks
+from harness_lab_app import case_service, tasks
 from harness_lab_app.executors import SubprocessRunExecutor
 from harness_lab_app.models import RunState
 from harness_lab_app.run_failures import is_unmeasured
@@ -680,6 +680,11 @@ def test_a_prompt_stored_as_a_path_reaches_the_runner_as_text(
         "get_settings",
         lambda: SimpleNamespace(data_runs_dir=tmp_path / "runs", repo_root=tmp_path),
     )
+    # The actual path resolution runs in case_service (shared with the
+    # prompt-preview API), so it needs the same fake repo_root.
+    monkeypatch.setattr(
+        case_service, "get_settings", lambda: SimpleNamespace(repo_root=tmp_path)
+    )
     with Session(engine) as session:
         session.add(
             Case(
@@ -712,6 +717,9 @@ def test_an_unresolvable_prompt_path_is_passed_through_untouched(
         tasks,
         "get_settings",
         lambda: SimpleNamespace(data_runs_dir=tmp_path, repo_root=tmp_path),
+    )
+    monkeypatch.setattr(
+        case_service, "get_settings", lambda: SimpleNamespace(repo_root=tmp_path)
     )
     with Session(engine) as session:
         session.add(

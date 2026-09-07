@@ -10,6 +10,7 @@ import { Compare } from "./pages/Compare";
 import { Experiments } from "./pages/Experiments";
 import { Findings } from "./pages/Findings";
 import { Repositories } from "./pages/Repositories";
+import { RepositoryDetail } from "./pages/RepositoryDetail";
 import { Dashboard } from "./pages/Dashboard";
 import { Guide } from "./pages/Guide";
 import { Health } from "./pages/Health";
@@ -20,6 +21,7 @@ import { NewEvaluation } from "./pages/NewEvaluation";
 import { Runs } from "./pages/Runs";
 import { Settings } from "./pages/Settings";
 import { Skills } from "./pages/Skills";
+import { SubjectValidation } from "./pages/SubjectValidation";
 import { applyTheme, getStoredTheme } from "./theme";
 import type { ThemeMode } from "./theme";
 import type {
@@ -296,9 +298,11 @@ export default function App() {
         <Route element={<Home />} path="/" />
         <Route element={<NewEvaluation />} path="/evaluate/new" />
         <Route element={<Audit />} path="/evaluate/audit" />
+        <Route element={<SubjectValidation />} path="/evaluate/subject" />
         <Route element={<Experiments />} path="/evaluate/experiments" />
         <Route element={<Findings />} path="/evidence/findings" />
         <Route element={<Repositories />} path="/evidence/repositories" />
+        <Route element={<RepositoryDetail />} path="/evidence/repositories/:targetId" />
         <Route element={<Skills />} path="/evidence/skills" />
         <Route
           element={

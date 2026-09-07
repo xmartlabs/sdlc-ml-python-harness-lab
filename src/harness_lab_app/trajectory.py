@@ -48,6 +48,19 @@ _ACTION_TOOL = {
 
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
+# A skill is "invoked" when the agent calls the Skill tool with its name, or
+# opens its SKILL.md by any other means (Read, cat, a subagent). Either leaves
+# a path like `.../skills/<name>/SKILL.md` in the call's input.
+_SKILL_FILE_RE = re.compile(r"skills/([A-Za-z0-9_.-]+)/SKILL\.md")
+
+
+def _skill_mentions(name: str, payload: dict[str, Any]) -> list[str]:
+    """Skill names a single tool call invoked, in the order they appear."""
+    if name == "Skill":
+        skill = str(payload.get("skill") or "").strip()
+        return [skill] if skill else []
+    return _SKILL_FILE_RE.findall(json.dumps(payload))
+
 
 def _strip_app(path: str) -> str:
     return path.removeprefix("/app/").strip('"')
@@ -56,6 +69,7 @@ def _strip_app(path: str) -> str:
 def from_claude_events(lines: list[str]) -> dict[str, Any]:
     """Ordered tool calls and the closing message from stream-json events."""
     steps: list[dict[str, Any]] = []
+    skill_calls: list[str] = []
     final_output = ""
     for raw in lines:
         try:
@@ -77,14 +91,16 @@ def from_claude_events(lines: list[str]) -> dict[str, Any]:
                 name = str(block.get("name") or "")
                 if not name:
                     continue
+                payload = block.get("input") or {}
+                skill_calls.extend(_skill_mentions(name, payload))
                 steps.append(
                     {
                         "index": len(steps) + 1,
                         "tool": name,
-                        "input": _summarize_input(name, block.get("input") or {}),
+                        "input": _summarize_input(name, payload),
                     }
                 )
-    return {"steps": steps, "final_output": final_output}
+    return {"steps": steps, "final_output": final_output, "skill_calls": skill_calls}
 
 
 def _summarize_input(name: str, payload: dict[str, Any]) -> str:
@@ -111,6 +127,7 @@ def _summarize_input(name: str, payload: dict[str, Any]) -> str:
 def from_opencode_logs(log_text: str) -> dict[str, Any]:
     """Ordered tool calls from permission lines. Lower fidelity, same shape."""
     steps: list[dict[str, Any]] = []
+    skill_calls: list[str] = []
     for line in (log_text or "").splitlines():
         match = _PERMISSION_RE.search(line)
         if not match:
@@ -118,14 +135,16 @@ def from_opencode_logs(log_text: str) -> dict[str, Any]:
         tool = _ACTION_TOOL.get(match.group("action"))
         if tool is None:
             continue
+        target = _strip_app(match.group("target"))
+        skill_calls.extend(_SKILL_FILE_RE.findall(target))
         steps.append(
             {
                 "index": len(steps) + 1,
                 "tool": tool,
-                "input": _strip_app(match.group("target")),
+                "input": target,
             }
         )
-    return {"steps": steps, "final_output": ""}
+    return {"steps": steps, "final_output": "", "skill_calls": skill_calls}
 
 
 def _clip(steps: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
@@ -144,7 +163,7 @@ def build(
 ) -> dict[str, Any] | None:
     """Assemble a run's trajectory, or ``None`` when nothing was recorded."""
     source = ""
-    parsed: dict[str, Any] = {"steps": [], "final_output": ""}
+    parsed: dict[str, Any] = {"steps": [], "final_output": "", "skill_calls": []}
     if event_lines:
         parsed = from_claude_events(event_lines)
         source = "claude_events"
@@ -159,6 +178,11 @@ def build(
     for step in parsed["steps"]:
         if step["tool"] not in tools_called:
             tools_called.append(step["tool"])
+    # Counted over the full record, not the clipped steps: an invocation on
+    # step 130 of 200 is still an invocation.
+    skill_invocations: dict[str, int] = {}
+    for name in parsed.get("skill_calls") or []:
+        skill_invocations[name] = skill_invocations.get(name, 0) + 1
     return {
         "source": source,
         "task": task,
@@ -168,6 +192,7 @@ def build(
         "tools_called": tools_called,
         "expected_tools": list(expected_tools),
         "final_output": parsed["final_output"],
+        "skill_invocations": skill_invocations,
     }
 
 

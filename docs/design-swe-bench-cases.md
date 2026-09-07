@@ -1,10 +1,11 @@
 # Design note: SWE-bench cases in the run → test → audit cycle
 
-Status: **Phase 1 + 2 delivered** (ADR-0009). Import + generic provision + test-subset
-validation work end-to-end in the runner container, verified with zero model tokens
-(golden patch → resolved; no-agent run → `resolved=False F2P=0/1 P2P=18/18`). What
-remains is a real agent run with an open-source model (Phase 3). Flagship instance:
-`pallets__flask-4992`.
+Status: **implemented** (historical design note). Phase 1 + 2 delivered under
+ADR-0009: import + generic provision + test-subset validation work end-to-end in the
+runner container, verified with zero model tokens (golden patch → resolved; no-agent
+run → `resolved=False F2P=0/1 P2P=18/18`). Phase 3 — real agent runs — and the
+experiment runner above them shipped with
+[ADR-0033](adr/0033-experiment-above-run.md). Flagship instance: `pallets__flask-4992`.
 
 Quick start:
 ```

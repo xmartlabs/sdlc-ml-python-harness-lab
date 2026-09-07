@@ -3,6 +3,276 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## A form gate that contradicts its own next branch is a bug (2026-09-06)
+
+The *Full harness* wizard refused any selection whose cases defined fewer than
+two prompt variants, and the branch immediately after it documented — in a
+comment — that equal prompts are perfectly sound, since the bare arm still hides
+the whole governed catalog. Two branches of one `if`, disagreeing. The gate had
+been written for `tetris-v1`, the only case in the lab with a prompt *family*;
+every case written in the Cases screen defines exactly one variant, `default`,
+so the lab's founding comparison was unavailable on the cases the lab is used
+on.
+
+**Why it matters:** the same-prompt design is not a degraded version of the
+prompt-family one — it is the *cleaner* one. A hand-written `sdlc` prompt tells
+the agent to read governance, so `naive` vs `sdlc` moves the instruction and the
+harness together. A plain `default` prompt says nothing about governance, so
+running it on both arms isolates the harness. The gate blocked the better
+experiment and permitted the more confounded one.
+
+**How to apply:** when a validation rule and the comment next to it disagree,
+believe the comment and delete the rule — and when a user says a refusal makes
+no sense, check whether the refusal is defensible before offering workarounds
+around it. Two related habits this turned up:
+
+- **Say what a design measures instead of refusing it.** The same-prompt pair
+  now runs and carries two advisories: the treatment is the skill catalog, not
+  the harness as a unit; and inside the lab both arms keep the governance body
+  of `CLAUDE.md`, because the sync engine rewrites only its generated skills
+  region. A truly bare control needs `harness_source` against an external repo.
+- **Every cross-product needs per-case resolution.** `ExperimentService.launch`
+  applied each arm's `prompt_variant` without checking the case declares it; the
+  prompt lookup falls back to `""`, so the run went out with no task, inside one
+  arm, reading as that arm losing. Batch mode had resolved this per case since
+  ADR-0023 and experiments had not — the second copy of a rule is where it goes
+  missing. See
+  [ADR-0044](../docs/adr/0044-a-single-prompt-case-can-carry-the-full-harness-pair.md).
+
+## A transport migration is found by grepping the wire, not the helper names — 2026-09-04
+
+ADR-0043 collapsed "four" gateway call sites onto `llm_transport`. There were
+five: `case_draft_service.py` had its own `_call_gateway_chat`, so on a
+subscription-only lab every judged feature worked while **Draft it with AI** in
+the wizards still answered "Gateway not configured". The plan's inventory had
+been built from the helper names people remembered (`call_gateway`,
+`_worker_gateway`, `_gateway`), not from the request shape. The one string every
+copy shared was `chat/completions`.
+
+The same pass showed how documentation drifts in this repo: not by lying about
+a feature, but by describing a *previous* layout. The in-app Guide still walked
+"Cases → Runs → Score → Compare" after the nav had been regrouped around three
+questions; four guides said `claude` needs host mode a month after it moved into
+the runner image; two docs in the same directory disagreed on whether the API is
+on the LAN (it is not; the Vite dev UI on `0.0.0.0:5173` proxies it, so the
+answer is "yes until `make set-password`"). And `docs_catalog.py` is a
+whitelist: a new guide is invisible in the web Guide page until it is registered
+there, which is why the three newest workflows (target repositories, skill
+validation, run continuation) had docs nobody could reach from the UI.
+
+**Why it matters:** the UI, the docs served in-app and the markdown on disk are
+three copies of "how to use the lab". A change that lands in one place reads as
+a contradiction from the other two, and a reader cannot tell which copy is
+current.
+
+**How to apply:** when auditing docs against code, build the fact sheet from
+the code first (nav groups from `Shell.tsx`, routes from `api.py`, transports
+from `llm_transport.py`, harness rules from `run_service.preflight`) and check
+every document against that one sheet, so the fixes agree with each other.
+When migrating a duplicated call, grep for the wire format (`chat/completions`,
+`choices[0]`) rather than for function names. When adding a guide under
+`docs/`, register it in `docs_catalog._DOCS` or it does not exist in the app.
+
+## Under `native`, a lab-side skill is invisible to the agent — 2026-09-04
+
+`apply_skill_views()` writes into the LAB root; `inject_harness()` runs only for
+`harness_source == "injected"`. Under `native` the agent's cwd is the cloned
+target, so neither governed nor `--extra-skill` skills reach it. A
+`native` + `skills_extra` arm therefore equalled its own control while hashing
+as a distinct condition — the ADR-0041 failure one level down. Fixed by
+`add_skills_to_native()` in `bench_run.py` + `linker.add_skills()`, which copies
+only the named skills into the workspace's native skills dir and, unlike
+`link_tool`, **prunes nothing** (the target's own `.claude/skills/` is that
+team's work).
+
+Related: `validate_design` used to warn "more than one harness factor varies"
+on the most common correct design — staging a skill *and* asking for it. They
+now collapse to one axis when every pair of arms is comparable on both sets at
+once; crossing sets (one arm adds X unasked, another asks for a Y it already
+had) still warn.
+
+## A container cannot clone a private repo, and should not try — 2026-09-04
+
+Target repositories were cloned inside the run container, which runs with
+`GIT_TERMINAL_PROMPT=0`, no ssh agent and no tokens by design. Correct for a
+public repo, fatal for every private one — i.e. every client repository. The
+fix was not to teach the lab about credentials but to invert the direction:
+the engineer clones in their own terminal into `data/checkouts/<target_id>`,
+the lab detects and pins it, and `clone_source(target)` returns that path
+everywhere the repository URL used to be read (runner provisioning, readiness
+mirror, case derivation, ref resolution). Git takes a path anywhere it takes a
+URL, so no downstream code needed a second branch (ADR-0042).
+
+Three gotchas found doing it:
+- **`validate_repository_url` rejects local paths on purpose** (a URL starting
+  with `-` is remote command execution to git). Local sources needed their own
+  `validate_clone_source`, which accepts a path only under `data/checkouts/`.
+- **`target_id` becomes a directory name**, so it is a path boundary —
+  `../escape` would put a clone anywhere on the host. `validate_target_id`
+  refuses rather than sanitising, because a silently rewritten id would not
+  match the directory the operator was told to clone into.
+- **The API container and the operator's shell see different paths.** The
+  guided command must use `host_repo_root`, the same value the runner uses for
+  its bind mounts; printing the container's own `/app/...` view is useless in a
+  terminal.
+
+## A red run against an unfamiliar repo is ambiguous — 2026-09-04
+
+"The agent failed" and "this repository does not build in the runner image"
+look identical in a failed run and mean opposite things. The gate check
+(`gate_check_service` + the `gate_check_target` Celery task) provisions the
+pinned commit, runs setup and the repo's own validation commands with no agent
+and no model, and records **which phase** failed (provision / setup /
+validate). It runs through the same executor as objective validation, so it
+needed no new infrastructure. Refuses to run at all when the repository has no
+runnable validation command — a check that passes by running nothing reads as
+success and is worse than no check.
+
+## "With skill" means available, not invoked — 2026-09-04
+
+First real Lane B comparison (`does-adding-caveman-improve-outcomes`, 5+5 runs,
+claude/haiku, one AI-drafted snake case): verdict "No difference observed",
+success 100% both arms, every secondary delta within run-to-run variance. The
+person read it as "slightly worse". Parsing the step events told the real
+story: in **0 of 5** treatment runs did the agent call the `Skill` tool or read
+`caveman/SKILL.md`. The final messages were the usual "Perfect! ✅ ALL
+MILESTONES COMPLETE" prose. The treatment never happened.
+
+Mechanism: `--extra-skill` projects the staged skill into the agent's native
+skill view (the run's init event lists it among 40 skills). That makes it
+*available*. `caveman`'s description triggers on "/caveman", "caveman mode",
+"be brief"; the case instruction says none of that, so the model had no reason
+to open it. The lab's number was correct and its caveats honest, but the
+number measured "skill on the menu", not "skill in use".
+
+Two other things learned reading the same data:
+- **Baseline is the governed harness, not a bare model.** `build_effective_skills`
+  = every governed skill under `.github/skills*` minus `--disable-skill` plus
+  `--extra-skill`. "Without the staged skills" therefore means CLAUDE.md +
+  ~25 governed skills. Arm descriptions now say so.
+- **`total_tokens` ≈ output tokens for Claude Code runs.** `usage.json`
+  reports `input_tokens` in the hundreds because cache reads are not counted;
+  a context-reduction skill's main effect (less input re-read per turn) is
+  invisible in that metric. Reading `cache_read_input_tokens` from the stream
+  events would be needed to see it.
+
+**Why it matters:** a comparison can be statistically clean and still answer
+the wrong question when the treatment is conditional on the agent's choice.
+Skills are exactly that kind of treatment.
+
+**How to apply:** decide which question the experiment asks. "Does it help
+when asked for" → tick *Enforce skill use* (`skills_invoke`, the arm's prompt
+asks for it at every step; the case stays identical across arms). "Does it
+help unasked" → leave it off and read which skills the agent opened. Either
+way read `skill_invoked` per arm before the delta; an arm at zero now carries
+the caveat at the top of the verdict. Implemented in ADR-0041.
+
+## A validation "command" the assistant writes can pass the gate and still measure nothing — 2026-09-03
+
+The AI case assistant returned heredocs (`node - <<'NODE' … NODE`,
+`python - <<'PY' … PY`) as validation commands. The case stores one shell
+command per line, the wizard's textarea joins the array with newlines and
+splits it again on save, so the script body became twenty separate entries.
+Most were refused by `_looks_executable` (`NODE`, `}`, `const …`). The
+dangerous part was what survived: `node - <<'NODE'` on its own passes the
+heuristic (first token `node`), and `sh -c` runs it with an empty stdin — exit
+0, a pass with no assertion behind it. The gate from ADR-0040 forces a command
+to exist; it cannot see that a fragment is meaningless.
+
+Fix (in `case_draft_service.py`): the system prompt states the one-line rule,
+every returned command is screened with the runner's own heuristic
+(`is_executable_command`) plus a multi-line refusal, the model gets one
+corrective turn if nothing runnable is left, and the response carries
+`dropped_commands` with reasons so the wizard shows the gap under the draft.
+
+**Why it matters:** an LLM will happily satisfy a schema ("array of bash
+commands") with something the executor cannot run as a unit. Screening at the
+same line the runner uses is the only place the refusal is both early and
+consistent; prompt wording alone is a suggestion.
+
+**How to apply:** whenever a model-generated artifact feeds an executor, run
+the executor's own acceptance check on it before handing it to the person, and
+return the rejects with reasons rather than silently narrowing the output.
+Also: run pytest here as the Makefile does, `PYTHONPATH=$PWD/src pytest …` —
+the venv's editable install points at an older checkout path, so a bare
+`pytest` collects against stale code and reports modules as missing.
+
+## Two base CSS rules made the UI look inconsistent between pages — 2026-09-03
+
+After the Xmartlabs branding pass the wizard pages looked broken in two ways
+that the short pages did not show: the sidebar groups drifted apart, and every
+checkbox or radio sat in the middle of its row with the label pushed to the far
+right. Neither was page-specific. Both were base rules in `frontend/src/styles.css`
+interacting with layout that only appears on long pages:
+
+- `.nav` is a grid with `flex: 1` so the sidebar footer sticks to the bottom. A
+  grid's default `align-content: stretch` then spreads the rows over the whole
+  sidebar height, which is the page height — invisible on a short page,
+  obvious on a long one. `align-content: start` fixes it.
+- The base `input { width: 100%; padding: 10px 12px }` is meant for text fields
+  but also hits `type="checkbox"` and `type="radio"`; the control fills the flex
+  row and its `<span>` label is shoved to the edge. `.skill-checkbox` had a local
+  override for exactly this; the fix is one global rule for both input types.
+
+The third symptom — pick-list rows of different widths, and a selected row whose
+description was unreadable — came from reusing `.primary` / `.secondary` (CTA
+buttons, `inline-flex`, width-to-content) as row selection states. Rows now have
+their own rule under `.pick-list > li > button`, and "selected" tints instead of
+filling.
+
+**Why it matters:** a page-level symptom that reproduces on several pages is a
+base-rule defect; fixing it in the page (inline styles, per-page overrides) hides
+the next occurrence. The inline styles in `SubjectValidation.tsx` also referenced
+tokens that do not exist (`--surface-sunken`, `--card-bg`, `--radius`), so they
+silently fell back to hard-coded colours that ignored the theme.
+
+**How to apply:** when a control looks wrong on one page, screenshot two other
+pages that use the same class before touching the page. Chrome headless
+(`--headless=new --screenshot=… <url>`) against the running dev server is enough
+to verify a CSS change without a browser session. Keep JSX free of `style={{}}`
+in this codebase: every value it needs already exists as a token or a class.
+
+## The mode is what licenses the conclusion, so a missing mode gets borrowed — 2026-09-03
+
+The most common thing an outside team brings to this lab is not a harness change.
+It is a thing they built — an agent behind a local API, an MCP server, a service
+wrapper — plus a skill that drives it, and the question "does it work reliably?".
+The lab ran that fine: cases, arms, repetitions, `task_validation_pass`, the
+sandbox. Every number was already computable. What was missing was a **name** for
+the question, and the three declared modes of
+[ADR-0028](../docs/adr/0028-evaluation-modes.md) all asked about the harness.
+
+A missing mode does not stay missing. It gets borrowed from the nearest one, and
+`harness_evaluation` was the nearest one. That produces a correctly computed pass
+rate attached to a claim the design cannot support — "the tool passed 8 of 9" read
+as evidence about the harness, when no arm was ablated and there is no baseline to
+subtract. It is the exact defect ADR-0028 was written to prevent, reintroduced
+through the label instead of through the display.
+
+The second finding sits underneath it: the hard gate of the new mode is not
+statistical, it is **a case with at least one executable validation command**. It
+has to be a block, not a warning, because the failure is silent and downstream.
+`build_validation_spec` skips non-executable entries without complaining, so a case
+whose validation is prose yields zero commands → `parse_objective` returns
+`passed=None` → `task_validation_pass` is never emitted → `scored_runs == 0` → the
+pass rate is `None`. The experiment runs in full, costs real money, and answers
+nothing without saying so.
+
+**Why it matters:** the modes are the product. Adding a fourth is not feature
+creep — it is the only way to stop a fourth question from being answered with a
+third question's authority. And the honesty of the number depends on a gate placed
+*before* money is spent, not on a caveat rendered after.
+
+**How to apply:** when a new use of the lab appears, ask what sentence it licenses
+before asking what it computes. If no declared mode's sentence fits, the mode is
+missing — do not run it under the closest label. When adding a gate, trace the
+failure path to where it surfaces: if the bad input degrades into an empty result
+rather than an error, it must be refused at creation. Known limit accepted here:
+the gate can force a validation command to exist and to be executable; it cannot
+force it to be able to fail (a smoke check that the game starts cannot fail once
+the game starts). That judgement stays with whoever writes the case. See
+[ADR-0040](../docs/adr/0040-subject-validation-mode.md).
+
 ## Resetting the database under a live stack splits it in two — 2026-09-02
 
 `make app-reset-db` runs `scripts/reset_db.py` from the **host** while the `api`
@@ -350,6 +620,48 @@ older `timing_source: interpolated`. Also: `run_id` is not globally unique
 across copies of a run directory, which is why OTEL ids are salted with
 `condition_hash`. See
 [ADR-0028](../docs/adr/0028-step-traces-carry-per-call-detail.md).
+
+## A subscription token is a whole LLM transport (2026-09-04)
+
+The lab made four independent `POST /chat/completions` calls — the auditor, the
+SWE judge, the DeepEval judge, the case summariser — each with its own copy of
+the same twelve lines. Collapsing them into `llm_transport` was worth doing on
+its own, but the reason it mattered is that **one seam is one place to add a
+second transport**: `claude -p --output-format json --tools "" --strict-mcp-config`
+is a text-completion endpoint, so a teammate whose only credential is a Claude
+subscription now gets audits, judges and summaries with no paid API key and no
+gateway. `--tools ""` is the load-bearing flag: it makes the CLI a completion
+rather than an agent, so no permission prompt can ever block a worker.
+
+Three things that were not obvious until the code ran:
+
+- **The CLI reports failure in-band.** A bad model name comes back as exit 1
+  *plus* `"is_error": true` *plus* the error text sitting in `result`, exactly
+  where an answer would be. A parser that reads `result` without checking the
+  other two returns an error message as if it were an audit.
+- **The audit prompt must go on stdin.** The real one measured 86 KB (clipped
+  diff plus harness log). Not over the argv limit, but close enough that a
+  larger diff would be.
+- **Model names are transport-specific**, so defaults have to be too.
+  `gpt-5.4-mini` means nothing to the CLI and `claude-sonnet-5` means nothing to
+  a gateway that does not proxy it; a name that is not a Claude id is dropped so
+  the CLI picks its own default instead of sending a guaranteed 404.
+
+**Why it matters:** the ordering is the entire compatibility promise. The gateway
+is checked first, always, so adding a Claude credential to a multi-model lab can
+never move a judge — a test asserts it. Two labs judging the same run over
+different transports produce numbers that are only loosely comparable, which is
+why each judged score records its transport in provenance.
+
+**How to apply:** when a capability is duplicated more than twice, the third
+copy is the signal to extract a seam — the payoff is usually the *next* feature,
+not the deduplication. And validate a fallback path end to end before believing
+it: this one uncovered `ToolCorrectnessMetric()` being constructed outside its
+`try`, where DeepEval eagerly builds an OpenAI client and raises on a missing
+`OPENAI_API_KEY`, killing all three trajectory metrics on any lab without that
+key. Unit tests never saw it; a real subscription-only run did. See
+[ADR-0043](../docs/adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)
+and [the plan](../docs/plans/2026-09-claude-native-llm-transport.md).
 
 <!-- Add new learnings above this line -->
 
@@ -985,5 +1297,47 @@ older `timing_source: interpolated`. Also: `run_id` is not globally unique
 across copies of a run directory, which is why OTEL ids are salted with
 `condition_hash`. See
 [ADR-0028](../docs/adr/0028-step-traces-carry-per-call-detail.md).
+
+## A subscription token is a whole LLM transport (2026-09-04)
+
+The lab made four independent `POST /chat/completions` calls — the auditor, the
+SWE judge, the DeepEval judge, the case summariser — each with its own copy of
+the same twelve lines. Collapsing them into `llm_transport` was worth doing on
+its own, but the reason it mattered is that **one seam is one place to add a
+second transport**: `claude -p --output-format json --tools "" --strict-mcp-config`
+is a text-completion endpoint, so a teammate whose only credential is a Claude
+subscription now gets audits, judges and summaries with no paid API key and no
+gateway. `--tools ""` is the load-bearing flag: it makes the CLI a completion
+rather than an agent, so no permission prompt can ever block a worker.
+
+Three things that were not obvious until the code ran:
+
+- **The CLI reports failure in-band.** A bad model name comes back as exit 1
+  *plus* `"is_error": true` *plus* the error text sitting in `result`, exactly
+  where an answer would be. A parser that reads `result` without checking the
+  other two returns an error message as if it were an audit.
+- **The audit prompt must go on stdin.** The real one measured 86 KB (clipped
+  diff plus harness log). Not over the argv limit, but close enough that a
+  larger diff would be.
+- **Model names are transport-specific**, so defaults have to be too.
+  `gpt-5.4-mini` means nothing to the CLI and `claude-sonnet-5` means nothing to
+  a gateway that does not proxy it; a name that is not a Claude id is dropped so
+  the CLI picks its own default instead of sending a guaranteed 404.
+
+**Why it matters:** the ordering is the entire compatibility promise. The gateway
+is checked first, always, so adding a Claude credential to a multi-model lab can
+never move a judge — a test asserts it. Two labs judging the same run over
+different transports produce numbers that are only loosely comparable, which is
+why each judged score records its transport in provenance.
+
+**How to apply:** when a capability is duplicated more than twice, the third
+copy is the signal to extract a seam — the payoff is usually the *next* feature,
+not the deduplication. And validate a fallback path end to end before believing
+it: this one uncovered `ToolCorrectnessMetric()` being constructed outside its
+`try`, where DeepEval eagerly builds an OpenAI client and raises on a missing
+`OPENAI_API_KEY`, killing all three trajectory metrics on any lab without that
+key. Unit tests never saw it; a real subscription-only run did. See
+[ADR-0043](../docs/adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)
+and [the plan](../docs/plans/2026-09-claude-native-llm-transport.md).
 
 <!-- Add new learnings above this line -->

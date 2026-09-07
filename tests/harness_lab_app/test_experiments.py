@@ -178,6 +178,65 @@ def test_discovery_has_no_design_to_invalidate():
     )
 
 
+def test_subject_validation_needs_no_control():
+    """Every arm is a peer. There is nothing for the others to be measured against."""
+    assert (
+        validate_design(
+            ExperimentMode.subject_validation,
+            [
+                _condition("claude", harness="claude"),
+                _condition("opencode", harness="opencode"),
+            ],
+        )
+        == []
+    )
+
+
+def test_subject_validation_accepts_a_single_arm():
+    """ "Does it work under my setup?" is a legitimate question with one answer."""
+    assert (
+        validate_design(
+            ExperimentMode.subject_validation, [_condition("claude", harness="claude")]
+        )
+        == []
+    )
+
+
+def test_subject_validation_may_not_vary_the_repository():
+    with pytest.raises(ExperimentDesignError, match="holds the repository fixed"):
+        validate_design(
+            ExperimentMode.subject_validation,
+            [
+                _condition("here", target_repo_id="a"),
+                _condition("there", target_repo_id="b"),
+            ],
+        )
+
+
+def test_subject_validation_may_not_ablate():
+    """Ablation is the other mode's question; allowing it here smuggles it in."""
+    with pytest.raises(ExperimentDesignError, match="does not ablate"):
+        validate_design(
+            ExperimentMode.subject_validation,
+            [
+                _condition("full", skills_disabled=[]),
+                _condition("stripped", skills_disabled=["planning"]),
+            ],
+        )
+
+
+def test_subject_validation_warns_when_harness_and_model_both_vary():
+    """The cross product is the point — but each cell is its own population."""
+    warnings = validate_design(
+        ExperimentMode.subject_validation,
+        [
+            _condition("a", harness="claude", executor_model="x"),
+            _condition("b", harness="opencode", executor_model="y"),
+        ],
+    )
+    assert any("one <harness>/<model> arm at a time" in w for w in warnings)
+
+
 @pytest.mark.parametrize(
     ("reps", "expected"),
     [(1, "exploratory only"), (3, "exploratory comparison"), (5, None), (10, None)],
@@ -424,6 +483,101 @@ def test_the_summary_reports_per_case_repetitions_from_a_suite(lab):
     assert summary["verdict"]["strength"] == "exploratory"
 
 
+# --------------------------------------------------------------------------
+# Subject validation — the mode that tests a tool, not the harness (ADR-0040)
+# --------------------------------------------------------------------------
+
+
+def _subject_payload(**over) -> ExperimentCreate:
+    base = {
+        "experiment_id": "does-notion-work",
+        "question": "Does the Notion skill save the page reliably?",
+        "mode": ExperimentMode.subject_validation,
+        "subject": "notion-export skill",
+        "case_ids": ["save-to-txt"],
+        "prompt_variants": ["default"],
+        "repetitions": 3,
+        "conditions": [
+            ExperimentConditionCreate(label="claude", overrides={"harness": "claude"}),
+            ExperimentConditionCreate(
+                label="opencode", overrides={"harness": "opencode"}
+            ),
+        ],
+    }
+    base.update(over)
+    return ExperimentCreate(**base)
+
+
+@pytest.fixture
+def validated_case(lab):
+    """A case that declares what success is — the precondition of this mode."""
+    CaseService(lab.session).create_case(
+        CaseCreate(
+            case_id="save-to-txt",
+            name="Save the page to a txt",
+            type=CaseType.repo_task,
+            prompt_variants={"default": "Read the page and save it to notes.txt"},
+            validation_commands=["test -s {workspace}/notes.txt"],
+        )
+    )
+    return lab
+
+
+def test_subject_validation_needs_a_named_subject(validated_case):
+    with pytest.raises(ExperimentError, match="needs a subject"):
+        validated_case.create_experiment(_subject_payload(subject="  "))
+
+
+def test_subject_validation_refuses_a_case_that_never_says_what_success_is(lab):
+    """The gate that keeps this mode from running blind.
+
+    Without an executable command the runs still execute, produce no verdict,
+    and the pass rate this mode exists to report is simply absent — with no
+    error anywhere to explain why. Refusing at creation is the whole point.
+    """
+    CaseService(lab.session).create_case(
+        CaseCreate(
+            case_id="vibes-only",
+            name="Vibes",
+            type=CaseType.repo_task,
+            prompt_variants={"default": "Do the thing"},
+            # Prose, not a command: `build_validation_spec` drops it silently.
+            validation_commands=["the file should look right"],
+        )
+    )
+    with pytest.raises(ExperimentError, match="executable validation command"):
+        lab.create_experiment(_subject_payload(case_ids=["vibes-only"]))
+
+
+def test_subject_validation_creates_without_a_control(validated_case):
+    experiment, warnings = validated_case.create_experiment(_subject_payload())
+
+    assert experiment.subject == "notion-export skill"
+    assert [c.role for c in validated_case.conditions("does-notion-work")] == [
+        ConditionRole.treatment,
+        ConditionRole.treatment,
+    ]
+    assert any("exploratory comparison" in w for w in warnings)
+
+
+def test_subject_validation_summary_reports_per_arm_and_never_pools(validated_case):
+    validated_case.create_experiment(_subject_payload())
+
+    summary = validated_case.summarize("does-notion-work")
+
+    assert summary["subject"] == "notion-export skill"
+    # No control means no delta, whatever roles the rows carry.
+    assert summary["comparisons"] == []
+    assert summary["verdict"]["causal"] is False
+    assert [c["label"] for c in summary["conditions"]] == ["claude", "opencode"]
+    assert any(
+        "says nothing about the harness" in c for c in summary["verdict"]["caveats"]
+    )
+    assert any("not pooled" in c for c in summary["verdict"]["caveats"])
+    # The grid is counts per cell, so repetitions survive; nothing has run here.
+    assert summary["case_outcomes"] == {"claude": {}, "opencode": {}}
+
+
 def test_launch_preflights_every_arm_not_just_the_baseline(session):
     """A treatment differing only in skills must still be preflighted.
 
@@ -437,7 +591,14 @@ def test_launch_preflights_every_arm_not_just_the_baseline(session):
     from harness_lab_app.run_service import RunPreflightError
     from harness_lab_app.schemas import RunConfigCreate
 
-    session.add(Case(case_id="tetris-v1", name="Tetris", type=CaseType.single_prompt))
+    session.add(
+        Case(
+            case_id="tetris-v1",
+            name="Tetris",
+            type=CaseType.single_prompt,
+            prompt_variants={"sdlc": "Build Tetris, following the harness."},
+        )
+    )
     session.commit()
     service = ExperimentService(session)
     service.create_experiment(
@@ -492,7 +653,17 @@ def test_full_harness_design_expands_per_arm_prompt_and_skills(session):
     from harness_lab_app.run_service import RunService
     from harness_lab_app.schemas import RunConfigCreate
 
-    session.add(Case(case_id="tetris-v1", name="Tetris", type=CaseType.single_prompt))
+    session.add(
+        Case(
+            case_id="tetris-v1",
+            name="Tetris",
+            type=CaseType.single_prompt,
+            prompt_variants={
+                "naive": "Build Tetris.",
+                "sdlc": "Build Tetris, following the harness.",
+            },
+        )
+    )
     session.commit()
     service = ExperimentService(session)
     service.create_experiment(
@@ -564,6 +735,149 @@ def test_prompt_variant_alone_is_a_valid_harness_axis():
     assert warnings == []
 
 
+def test_launch_refuses_a_prompt_variant_the_case_does_not_define(session):
+    """An undefined variant means an empty prompt, and an empty prompt is a loss.
+
+    The prompt lookup falls back to "" for a variant a case does not declare,
+    so the run went out with nothing to do — inside one arm, which then read as
+    that arm being bad. The refusal belongs at launch, before anything is
+    persisted, exactly as it does for a batch (ADR-0023).
+    """
+    from harness_lab_app.models import Case, CaseType
+    from harness_lab_app.schemas import RunConfigCreate
+
+    session.add(
+        Case(
+            case_id="pokemon-v1",
+            name="Pokemon",
+            type=CaseType.single_prompt,
+            prompt_variants={"default": "Build the game."},
+        )
+    )
+    session.commit()
+    service = ExperimentService(session)
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="mixed-families",
+            name="Mixed families",
+            question="Does the harness as a whole earn its keep?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["pokemon-v1"],
+            repetitions=1,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="bare",
+                    role=ConditionRole.control,
+                    overrides={"prompt_variant": "default", "skills_disabled": ["x"]},
+                ),
+                ExperimentConditionCreate(
+                    label="full-harness",
+                    role=ConditionRole.treatment,
+                    # A variant from another prompt family — this case has none.
+                    overrides={"prompt_variant": "sdlc", "skills_disabled": []},
+                ),
+            ],
+        )
+    )
+
+    with pytest.raises(ExperimentError, match="empty prompt"):
+        service.launch(
+            "mixed-families",
+            RunConfigCreate(
+                case_id="pokemon-v1",
+                prompt_variant="default",
+                executor_model="stub-executor",
+                score_mode="manual",
+                max_steps=5,
+                dry_run=True,
+            ),
+        )
+
+    # One intent: the arm that *was* runnable is not left half-launched either.
+    assert service.runs("mixed-families") == []
+
+
+def test_a_single_variant_case_can_still_carry_the_full_harness_pair(session):
+    """Same prompt on both arms is a design, not a mistake.
+
+    A case written in the UI declares one prompt, and that prompt names no
+    governance for the bare arm to lose. The treatment is then the skill
+    catalog — physically hidden on one side, available and asked for on the
+    other — and both arms must expand and run.
+    """
+    from harness_lab_app.models import Case, CaseType
+    from harness_lab_app.run_service import RunService
+    from harness_lab_app.schemas import RunConfigCreate
+
+    session.add(
+        Case(
+            case_id="pokemon-v1",
+            name="Pokemon",
+            type=CaseType.single_prompt,
+            prompt_variants={"default": "Build the game."},
+        )
+    )
+    session.commit()
+    service = ExperimentService(session)
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="one-prompt",
+            name="One prompt",
+            question="Is the governed catalog worth anything on a plain prompt?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["pokemon-v1"],
+            repetitions=1,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="bare",
+                    role=ConditionRole.control,
+                    overrides={
+                        "prompt_variant": "default",
+                        "skills_disabled": ["brainstorm_quick"],
+                    },
+                ),
+                ExperimentConditionCreate(
+                    label="full-harness",
+                    role=ConditionRole.treatment,
+                    overrides={
+                        "prompt_variant": "default",
+                        "skills_disabled": [],
+                        # The activation block only rides the arm that can see
+                        # the skill; preflight refuses it on the bare arm.
+                        "skills_invoke": ["brainstorm_quick"],
+                    },
+                ),
+            ],
+        )
+    )
+
+    runs = service.launch(
+        "one-prompt",
+        RunConfigCreate(
+            case_id="pokemon-v1",
+            prompt_variant="default",
+            executor_model="stub-executor",
+            score_mode="manual",
+            max_steps=5,
+            dry_run=True,
+        ),
+    )
+
+    run_service = RunService(session)
+    arms = {}
+    for run in runs:
+        config = run_service.get_run_config(run.run_config_id)
+        arms[run.condition_label] = config
+    assert set(arms) == {"bare", "full-harness"}
+    assert (
+        arms["bare"].prompt_variant == arms["full-harness"].prompt_variant == "default"
+    )
+    assert arms["bare"].skills_disabled == ["brainstorm_quick"]
+    assert arms["bare"].skills_invoke == []
+    assert arms["full-harness"].skills_disabled == []
+    assert arms["full-harness"].skills_invoke == ["brainstorm_quick"]
+
+
 def _skills_design(service, experiment_id="lockcheck"):
     from sqlmodel import select
 
@@ -572,7 +886,12 @@ def _skills_design(service, experiment_id="lockcheck"):
     session = service.session
     if not session.exec(select(Case).where(Case.case_id == "tetris-v1")).first():
         session.add(
-            Case(case_id="tetris-v1", name="Tetris", type=CaseType.single_prompt)
+            Case(
+                case_id="tetris-v1",
+                name="Tetris",
+                type=CaseType.single_prompt,
+                prompt_variants={"sdlc": "Build Tetris, following the harness."},
+            )
         )
         session.commit()
     service.create_experiment(

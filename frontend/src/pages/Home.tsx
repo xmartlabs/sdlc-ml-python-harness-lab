@@ -10,7 +10,7 @@ import {
   IconCheck,
   IconFlask,
   IconInfo,
-  IconLayers,
+  IconPuzzle,
   IconSearch
 } from "../components/icons";
 import type { IconProps } from "../components/icons";
@@ -24,8 +24,27 @@ import type { ComponentType } from "react";
  * in the system?" — a question nobody arrives with. These are the questions
  * people actually arrive with, and each one maps to an evaluation mode whose
  * design constraints are enforced downstream (ADR-0028).
+ *
+ * Subject validation leads, and the order is not a matter of taste: the other
+ * two doors cannot be opened on a fresh instance (an audit needs a registered
+ * repository, a cross-repo comparison needs two), while this one needs nothing
+ * and *produces* what they consume — a staged skill and a case that declares
+ * what success is. `cross_repo` keeps its mode and its card; the card now lives
+ * on Repositories, where the repositories it needs are registered.
  */
 const MODES = [
+  {
+    key: "subject_validation",
+    icon: IconPuzzle,
+    title: "Validate your tool",
+    question:
+      "I built an agent, an MCP server or a service wrapper, and a skill that drives it. Does it work reliably?",
+    cta: "Start tool validation",
+    to: "/evaluate/subject",
+    holds: ["The subject", "Cases", "Where it runs"],
+    varies: "Harness and model",
+    note: "Nothing is ablated, so this says nothing about the harness — it reports one pass rate per harness/model arm, never a pooled one. The only mode that needs no repository registered first."
+  },
   {
     key: "harness_evaluation",
     icon: IconFlask,
@@ -39,17 +58,6 @@ const MODES = [
     note: "Works on this lab's own harness — the continuous-improvement loop — or on an external repository. The only mode that can support a causal claim, and only with enough repetitions per arm."
   },
   {
-    key: "cross_repo",
-    icon: IconLayers,
-    title: "Test across repositories",
-    question: "Does this harness generalize across different projects or teams?",
-    cta: "Start cross-repo evaluation",
-    to: "/evaluate/new?mode=cross_repo",
-    holds: ["Harness", "Model"],
-    varies: "Repository",
-    note: "Results stay per repository. Pooling them would treat different codebases as one condition."
-  },
-  {
     key: "discovery",
     icon: IconSearch,
     title: "Audit a repository",
@@ -58,7 +66,7 @@ const MODES = [
     to: "/evaluate/audit",
     holds: [],
     varies: "Nothing — this is exploratory",
-    note: "Produces cases, observations and suggested findings. It never produces a causal verdict."
+    note: "Registers the repository through your own clone, pins a commit, reads what it already ships, and ends when one case passes. Findings and the report accumulate on the repository's workbench. It never produces a causal verdict."
   }
 ] as const;
 
@@ -69,9 +77,9 @@ const SEVERITY_ICON: Record<string, ComponentType<IconProps>> = {
 };
 
 const ONBOARDING = [
-  "Add a repository to evaluate against.",
+  "Validate a tool you built — it needs nothing set up, and it leaves behind a staged skill and a case with real validation.",
+  "Add a repository once you want to evaluate the harness against real code.",
   "Create cases by hand, or derive them from the repository's own history.",
-  "Choose an evaluation mode above.",
   "Run the experiment and read the case matrix, not just the average."
 ];
 
@@ -227,7 +235,7 @@ export function Home() {
           <div className="panel-head">
             <h2>What the lab holds</h2>
             <Link className="button-link" to="/advanced/benchmarks">
-              Full leaderboard
+              Open Benchmarks
             </Link>
           </div>
           <div className="metrics">
@@ -243,14 +251,24 @@ export function Home() {
               <span>Cases</span>
               <strong>{summary.cases}</strong>
             </div>
+            {/*
+              Named for what it pools, not for what it sounds like. This mixes
+              every case, model, harness and arm in the window — the composite
+              the lab refuses everywhere else. Calling it a success rate on the
+              front page invited it to be read as a result; calling it what it
+              is leaves it useful as a sign of life and nothing more.
+            */}
             <div className="metric">
-              <span>Success rate ({summary.window_days}d)</span>
+              <span>Validated runs passing ({summary.window_days}d)</span>
               <strong>{formatPercent(summary.success.rate)}</strong>
               <small className="muted">
                 {summary.success.n === 0
                   ? "No validated runs yet"
-                  : `over ${summary.success.n} validated run(s)`}
+                  : `over ${summary.success.n} validated run(s), pooled across cases, models and harnesses — activity, not an experiment result`}
               </small>
+              {summary.success.note ? (
+                <small className="muted">{summary.success.note}</small>
+              ) : null}
             </div>
             <div className="metric">
               <span>Median run cost</span>

@@ -7,7 +7,8 @@ import type { ModelOption } from "./types";
  * batch form, the experiment wizard); a fourth in the experiment launch panel
  * was the point at which one source of truth became cheaper than the drift.
  */
-export const HARNESS_OPTIONS = ["opencode", "codex", "claude", "antigravity"] as const;
+// bench_run.py accepts opencode | codex | claude; antigravity is the manual `make bench-antigravity` flow.
+export const HARNESS_OPTIONS = ["opencode", "codex", "claude"] as const;
 
 // Harnesses that run via the host CLI (native auth) instead of the runner
 // container — they need the host worker (subprocess backend).

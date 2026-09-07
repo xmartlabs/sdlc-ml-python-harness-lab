@@ -4,8 +4,11 @@ import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 
 import type { IconProps } from "./icons";
+import { XmartlabsLogo } from "./XmartlabsLogo";
 import {
   IconBook,
+  IconChevronLeft,
+  IconChevronRight,
   IconCompare,
   IconFiles,
   IconFlask,
@@ -56,6 +59,8 @@ const NAV_GROUPS: NavGroup[] = [
     title: "Evaluate",
     items: [
       { to: "/evaluate/new", label: "New evaluation", icon: IconPlus },
+      { to: "/evaluate/subject", label: "Validate your tool", icon: IconPuzzle },
+      { to: "/evaluate/audit", label: "Audit a repository", icon: IconSearch },
       { to: "/evaluate/experiments", label: "Experiments", icon: IconFlask }
     ]
   },
@@ -111,9 +116,14 @@ export function Shell({ children, authEnabled, onLogout }: ShellProps) {
         <div className="brand">
           <div className="brand-row">
             {collapsed ? null : (
-              <div>
-                <span className="brand-kicker">Local web app</span>
-                <strong>Agentic Harness Lab</strong>
+              <div className="brand-heading">
+                <div className="brand-logo-container">
+                  <XmartlabsLogo width={120} />
+                </div>
+                <div className="brand-meta">
+                  <span className="brand-kicker">AI Lab Platform</span>
+                  <strong className="brand-title">Harness Lab</strong>
+                </div>
               </div>
             )}
             <button
@@ -123,7 +133,16 @@ export function Shell({ children, authEnabled, onLogout }: ShellProps) {
               onClick={() => setCollapsed((current) => !current)}
               type="button"
             >
-              {collapsed ? "»" : "«"}
+              {collapsed ? (
+                <div className="collapsed-brand-toggle">
+                  <XmartlabsLogo height={20} variant="icon-only" width={20} />
+                  <span className="collapsed-arrow">
+                    <IconChevronRight size={14} />
+                  </span>
+                </div>
+              ) : (
+                <IconChevronLeft size={16} />
+              )}
             </button>
           </div>
         </div>
@@ -159,8 +178,10 @@ export function Shell({ children, authEnabled, onLogout }: ShellProps) {
         </nav>
         {collapsed ? null : (
           <div className="sidebar-foot">
-            <p className="sidebar-label">Mode</p>
-            <p className="sidebar-value">Operational shell</p>
+            <div className="sidebar-foot-brand">
+              <span className="sidebar-foot-badge">XMARTLABS</span>
+              <span className="sidebar-foot-edition">Agentic Harness Lab</span>
+            </div>
             {authEnabled ? (
               <button className="button-link" onClick={onLogout} type="button">
                 Sign out

@@ -559,8 +559,8 @@ export function Findings() {
               <p className="muted">
                 A starting point, not a created experiment: the design still needs the
                 harness axis the intervention changes, and a design that varies nothing
-                about the harness is refused. Review it, then{" "}
-                <code>POST /api/experiments</code>.
+                about the harness is refused. Review it, then build the experiment in{" "}
+                <Link to="/evaluate/new">New evaluation</Link>.
               </p>
               <pre className="mono small">{JSON.stringify(draft, null, 2)}</pre>
               <div className="button-row">

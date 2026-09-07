@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 
 from harness_lab_app.config import get_settings
 from harness_lab_app.models import Case, CaseStatus, CaseSyncState, CaseType, utc_now
+from harness_lab_app.skill_import import safe_relpath
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -74,6 +75,42 @@ _CONDUCTOR_PREAMBLE = (
 
 class CaseExistsError(ValueError):
     """A case with that id is already in the catalog."""
+
+
+def resolve_prompt_variant_text(case: Case, variant: str) -> str | None:
+    """The literal prompt text for a variant, whatever form the case stores it in.
+
+    Cases created from the web (and every SWE-bench import) store the prompt
+    *text* in ``prompt_variants``. Cases imported from a ``benchmarks/<id>/
+    task.yaml`` store a repo-relative *path* instead, because that is what the
+    YAML says (mirrored by the runner in ``tasks._case_prompt_text``, which
+    falls back to the raw path string on failure — this function instead
+    returns ``None`` so a caller like the API can 404 rather than display a
+    path as if it were content).
+
+    ``case.prompt_variants`` is editable via the case editor, so the stored
+    value is treated as untrusted input: ``safe_relpath`` rejects traversal
+    and absolute paths, and the resolved path must still land inside
+    ``repo_root``.
+    """
+    raw = case.prompt_variants.get(variant)
+    if raw is None:
+        return None
+    if "\n" in raw:
+        return raw
+    relpath = safe_relpath(raw)
+    if relpath is None:
+        return None
+    repo_root = get_settings().repo_root.resolve()
+    candidate = (repo_root / relpath).resolve()
+    if candidate != repo_root and repo_root not in candidate.parents:
+        return None
+    try:
+        if candidate.is_file():
+            return candidate.read_text()
+    except OSError:
+        return None
+    return None
 
 
 class CaseService:

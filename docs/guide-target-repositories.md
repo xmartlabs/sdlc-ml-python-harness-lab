@@ -20,7 +20,13 @@ The provisioning contract: [ADR-0030](adr/0030-one-workspace-source-interface.md
 
 ## 1. Register the repository
 
-**Repositories** in the sidebar → *Add a repository*.
+**Evaluate → Audit a repository** (the front page's third door) walks the three
+steps: register the repository, clone it yourself with the command the page shows
+(into `data/checkouts/<id>`, where your ssh agent and tokens already work), and
+pin a commit ([ADR-0042](adr/0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md)).
+**Evidence → Repositories** lists what is registered, offers *Add a repository*
+for the form alone, and **Open** leads to the repository's workbench
+(`/evidence/repositories/<id>`).
 
 | Field | What it is |
 |---|---|
@@ -44,27 +50,69 @@ anything else — Go, Rust, a system dependency — needs that added to
 "not found" before any agent time is spent (by design: the run stops rather
 than measuring an agent against a half-built repository).
 
-### Credentials
+### Credentials — you clone it, the lab reads your clone
 
-The clone happens inside the run container. An `https://` URL to a public repo needs
-nothing. A private repo needs credentials reachable from that container: either a
-token embedded in the URL, or an SSH key mounted into the runner image. The lab does
-not manage repository credentials for you, and `GIT_TERMINAL_PROMPT=0` means a
-missing credential fails fast rather than hanging.
+The lab never authenticates to a git remote on your behalf, and it does not want your
+credentials (ADR-0042). Instead you clone the repository yourself:
+
+1. Open the repository under **Repositories** (or start the guided flow at
+   **Audit a repository**). It shows the exact command, with the destination already
+   filled in:
+
+   ```
+   git clone git@github.com:company/payments.git /path/to/lab/data/checkouts/company-payments
+   ```
+
+2. Paste it into your own terminal. Your ssh agent, your tokens, your VPN — whatever
+   already works for you works here, because it *is* your shell.
+3. The page detects the clone within a few seconds and shows its HEAD. Press **Pin this
+   commit**.
+
+From then on every run, readiness report and derived case reads that local checkout at
+that commit. No container ever contacts the remote, so a private repository needs no
+special setup at all.
+
+Two consequences worth knowing:
+
+- **Uncommitted changes are invisible to runs.** Provisioning clones git objects, so
+  your working-tree edits never reach an agent. The page warns you when the tree is
+  dirty rather than blocking — it is your working copy, not the lab's.
+- **The pin does not move on its own.** `git pull` in your terminal changes nothing
+  until you press **Re-pin to HEAD**. That is the point: two experiments a week apart
+  compare agents, not a moving branch.
+
+A repository registered before this existed keeps working over the network — the lab
+falls back to the remote URL whenever there is no local checkout.
+
+### Does the repository pass its own gate?
+
+Before spending model budget, press **Run gate check** on the readiness step. It
+provisions the pinned commit in the runner image, runs the repository's setup and its
+own validation commands, and stops — no agent, no prompt, no model.
+
+It exists because a failed run against an unfamiliar repository is ambiguous: the agent
+may have failed, or the repository may simply not build in the runner image, and those
+look identical in the output while meaning opposite things. The gate check answers that
+once, cheaply, and names the phase that failed (provision / setup / validate).
 
 ## 2. Point a case at it
 
-In the run form, pick the repository under **Target repository** and optionally
-override the **Ref**. **Check commit** shows the exact SHA the run will be pinned to.
+In **Evaluate → New evaluation**, pick the repository under **Repository**; the run
+is provisioned from the commit pinned on your local checkout. In the single-run form
+(**Advanced → Runs**), pick it under **Target repository**, optionally override the
+**Ref**, and **Check commit** shows the exact SHA the run will be pinned to.
 
 The case supplies the task; the repository supplies the code. They are paired at the
 run, not baked into each other — which is what lets one case run against many
 repositories.
 
 > A case only means something in a repository where its task makes sense. Running
-> `build a Tetris clone` against a payments API measures nothing. Cases derived from
-> the target's own history are a separate piece of work — see the
-> [v2 roadmap](roadmap-lab-v2.md#phase-3--case-derivation-from-a-target).
+> `build a Tetris clone` against a payments API measures nothing. Cases can be
+> derived from the target's own history instead: the **From history** tab of the
+> Audit wizard, or **Derive cases** on the Repositories page (both call
+> `POST /api/targets/{id}/derive-cases`), mine the checkout's commits for
+> candidate tasks, which you review and save as cases
+> ([ADR-0032](adr/0032-cases-are-derived-from-a-targets-own-history.md)).
 
 ## 3. Choose which harness the agent sees
 
@@ -187,10 +235,11 @@ with no validation commands leaves the case in charge.
 
 ## Limitations
 
-- **The audit still reads the lab's rules**, not the target's. This matters most for
-  a `native` run, where the governance under evaluation is *theirs* — the auditor is
-  reading the wrong document. Tracked as
-  [Phase 5](roadmap-lab-v2.md#phase-5--evaluation-schema).
+- **The audit judges each run against the governance it actually received**: a
+  `native` run against the target's own rules, an `injected` run against the lab
+  harness ([ADR-0036](adr/0036-audit-judges-a-run-against-its-own-governance.md)).
+  Audits recorded before that change say so instead of showing a surface they
+  never had.
 - **Injection is backup-and-replace, not merge.** A merged `CLAUDE.md` would be a
   third artifact that is neither arm.
 - **A third-party harness repository is not supported.** The two sources are the

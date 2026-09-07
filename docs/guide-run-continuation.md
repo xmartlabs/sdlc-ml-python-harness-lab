@@ -59,7 +59,7 @@ The lab records this rather than hiding it:
 
 - Every leaderboard row carries `chain_depth` (0 for an original run, 1 for its
   continuation, and so on) and `parent_run_id`.
-- The Dashboard **hides continuations by default**. Tick *include
+- The **Benchmarks** page **hides continuations by default**. Tick *include
   continuations* to see them; when you do, read the ranking as "how far can this
   harness get with help", not "how good is this harness".
 - The run's `effort` dimension records `continuations` alongside `steps` and

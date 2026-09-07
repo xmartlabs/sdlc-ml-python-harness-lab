@@ -34,7 +34,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from bench_audit import (
-    DEFAULT_AUDITOR_MODEL,
     DIFF_CLIP_CHARS,
     RULES_CLIP_CHARS,
     call_gateway,
@@ -43,6 +42,8 @@ from bench_audit import (
     resolve_runs_path,
 )
 from create_run import DATA_DIR, REPO_ROOT, _load_env, find_run
+
+from harness_lab_app import llm_transport
 
 GEMINI_RULES = REPO_ROOT / ".agents" / "rules" / "GEMINI.md"
 AGENTS_SKILLS_DIR = REPO_ROOT / ".agents" / "skills"
@@ -173,7 +174,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--auditor-model",
         default=None,
-        help=f"Gateway model alias for the auditor (default: {DEFAULT_AUDITOR_MODEL})",
+        help="Model alias for the auditor (default: chosen for the active transport).",
     )
     p.add_argument(
         "--dry-run",
@@ -189,7 +190,9 @@ def main(argv: list[str] | None = None) -> int:
     _load_env()
 
     auditor_model = (
-        args.auditor_model or os.environ.get("AUDITOR_MODEL") or DEFAULT_AUDITOR_MODEL
+        args.auditor_model
+        or os.environ.get("AUDITOR_MODEL")
+        or llm_transport.default_audit_model()
     )
 
     runs_path = resolve_runs_path(args.run)

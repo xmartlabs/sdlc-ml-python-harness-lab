@@ -428,7 +428,7 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
     <section className="page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Overview</p>
+          <p className="eyebrow">Benchmarks</p>
           <h1>Harness quality</h1>
           <p className="lede">
             Is the harness getting better, is anything regressing, and what does a

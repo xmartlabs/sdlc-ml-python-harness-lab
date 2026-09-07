@@ -159,34 +159,6 @@ test-unit:
 	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD}/src pytest tests/ -v
 
 # =============================================================================
-# APPLICATION EXECUTION
-# =============================================================================
-
-# Start LangGraph development server
-run-dev:
-	@echo "🚀 Starting development server..."
-	@if [ ! -d .venv ]; then make install; fi
-	@. $(VENV_DIR)/bin/activate && langgraph dev
-
-# Start FastAPI server
-run-api:
-	@echo "🚀 Starting API server..."
-	@if [ ! -d .venv ]; then make install; fi
-	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD} uvicorn api:app --reload --host 0.0.0.0 --port 8009 --log-level debug
-
-# Run CLI with a predefined question
-run-question:
-	@echo "🚀 Running a single question"
-	@if [ ! -d .venv ]; then make install; fi
-	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD}/src python main.py --question "What can you help me with?"
-
-# Start interactive CLI mode
-run-interactive:
-	@echo "🚀 Starting interactive CLI mode"
-	@if [ ! -d .venv ]; then make install; fi
-	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD}/src python main.py --interactive
-
-# =============================================================================
 # OPENCODE RUNTIME (self-hosted / cloud, configured via .env)
 # =============================================================================
 
@@ -209,7 +181,7 @@ bench-start:
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	uv run python scripts/bench_start.py --run $(RUN) $(if $(KEY),--key $(KEY),)
 
-# Close a benchmark run: save artifacts, update runs.yaml, commit, clean workspace.
+# Close a benchmark run (legacy CLI lane): save artifacts, update runs.yaml, commit, clean workspace.
 # Usage: make bench-close RUN=tetris-v1-A-002 SCORE=5 INTERVENTIONS=0 [NOTES="texto"]
 bench-close:
 	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: make bench-close RUN=tetris-v1-A-002 SCORE=5 INTERVENTIONS=0"; exit 1; }
@@ -219,7 +191,7 @@ bench-close:
 	uv run python scripts/bench_close.py --run $(RUN) --score $(SCORE) \
 	  --interventions $(INTERVENTIONS) $(if $(NOTES),--notes "$(NOTES)",)
 
-# Print a live comparison table from runs.yaml. Shows scores, status, and cell averages.
+# Print a live comparison table from runs.yaml (legacy CLI lane). Shows scores, status, and cell averages.
 bench-results:
 	@uv run python scripts/show_results.py
 
@@ -898,7 +870,7 @@ purge-external-skills:
 
 # Show help information about available commands
 help:
-	@echo "🧰 ML Python Base Template - Available Commands:"
+	@echo "🧰 Agentic Harness Lab - Available Commands:"
 	@echo ""
 	@echo "Development Setup:"
 	@echo "  make init NAME=my_project Bootstrap a fresh clone as a new project (rename + env + gates)"
@@ -913,19 +885,13 @@ help:
 	@echo "  make fix                  Automatically fix issues (ruff check + format)"
 	@echo "  make check                Read-only quality gate (CI-safe: format+lint+bandit+mypy+tests)"
 	@echo "  make typecheck            Static type checking with mypy"
-	@echo "  make ci                   Full read-only pipeline: check + check-sync"
+	@echo "  make ci                   Full read-only pipeline: check + check-sync + check-frontend"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test                 Run all tests with coverage"
 	@echo "  make test-unit            Run unit tests only"
-	@echo "  make run-batch-test       Run batch tests against API (dataset v1)"
-	@echo "  make run-batch-test-custom Run batch tests with custom parameters"
 	@echo ""
 	@echo "Application Execution (Local):"
-	@echo "  make run-dev             Start LangGraph development server"
-	@echo "  make run-api             Start FastAPI server"
-	@echo "  make run-question        Test with a predefined question"
-	@echo "  make run-interactive     Start interactive CLI mode"
 	@echo "  make app-up              Start the local web app (api + celery worker + redis + frontend)"
 	@echo "  make app-down            Stop the local web app (required before make app-reset-db)"
 	@echo "  make app-up-prod         Start the always-on stack (nginx :8080, API not on the LAN)"
@@ -950,7 +916,6 @@ help:
 	@echo "Service URLs:"
 	@echo "  🚀 FastAPI: http://localhost:8009"
 	@echo "  📖 API Documentation: http://localhost:8009/docs"
-	@echo "  🔍 Agent Discovery: http://localhost:8009/.well-known/agent.json"
 	@echo ""
 	@echo "Utilities:"
 	@echo "  make help                Show this help message"
@@ -960,7 +925,7 @@ help:
 	@echo "  make template-sync-rebase Rebase current branch onto template branch"
 	@echo "  make setup-claude-skills Generate .claude/skills native symlinks from governed skills"
 	@echo "  make setup-antigravity-skills Generate .agents/skills native mirror from governed skills"
-	@echo "  make setup-opencode-skills Generate .opencode/skills native symlinks from governed skills"
+	@echo "  make setup-opencode-skills No-op (opencode reads .claude/skills/)"
 	@echo "  make render-adapters     Regenerate the managed skill region in every adapter file"
 	@echo "  make sync-skills         Sync external skills to .github/skills-external and refresh native adapters"
 	@echo "  make check-sync          Fail if generated skill artifacts are stale (CI drift gate)"
@@ -984,4 +949,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks run-dev run-api run-question run-interactive opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test clean help generate-requirements run-batch-test run-batch-test-custom test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models set-password case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill
+.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models set-password case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill

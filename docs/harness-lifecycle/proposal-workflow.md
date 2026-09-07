@@ -53,9 +53,13 @@ authenticated `gh` and only runs with `CREATE=1`.
   hashes), then scanned for tokens, key material, home paths, internal endpoints,
   `.env` assignments, and private-repository links. Any hit blocks publication.
 
-## Relationship to `make improve` (legacy)
+## Relationship to `make improve`
 
-The pre-existing `make improve` (`scripts/lab_improve.py`) writes an unversioned
-`improvements.json` per run and files ad-hoc issues. It is retained for one release
-as a fallback. New work should use `make harness-proposal`, which supersedes it with
-stable IDs, schema validation, evidence checksums, lifecycle, and sanitization.
+Both paths are supported; they answer different needs. `make improve RUN=<id>`
+(`scripts/lab_improve.py`, and the **Propose improvements** → **Save** flow on the
+run detail) is the light, everyday path: it synthesizes proposals into
+`improvements.json`, feeds the cross-run **Improvements** worklist, and files issues
+only when you pass `CREATE=1` — see [improvement-cycle.md](../improvement-cycle.md).
+`make harness-proposal` is the rigorous HEP form for a proposal that will cross into
+the template: stable IDs, schema validation, evidence checksums, lifecycle, and
+sanitization.

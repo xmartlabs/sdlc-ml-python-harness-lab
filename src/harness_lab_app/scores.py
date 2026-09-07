@@ -224,6 +224,38 @@ _EFFICIENCY = [
 # --- Level 4: harness behaviour (the LLM audit, made structural) ----------
 _BEHAVIORAL = [
     _d(
+        name="skill_invoked",
+        category=BEHAVIORAL,
+        kind=NUMERIC,
+        provenance=OBSERVATION,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="skill_usage",
+        minimum=0.0,
+        maximum=1.0,
+        description=(
+            "Share of the skills this run is about (staged, asked for, or "
+            "ablated elsewhere in the experiment) that the agent actually "
+            "opened — a Skill call or a read of their SKILL.md in the step "
+            "record. Available is not invoked: a with-skills arm at 0 measured "
+            "the menu, not the skill."
+        ),
+    ),
+    _d(
+        name="skill_invocations",
+        category=BEHAVIORAL,
+        kind=NUMERIC,
+        provenance=OBSERVATION,
+        direction=NEUTRAL,
+        version="v1",
+        source="skill_usage",
+        minimum=0.0,
+        description=(
+            "How many times the skills under test were invoked in this run. "
+            "Neutral: once is enough, many may mean the agent kept re-reading."
+        ),
+    ),
+    _d(
         name="skill_adherence",
         category=BEHAVIORAL,
         kind=NUMERIC,

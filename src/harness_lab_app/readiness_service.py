@@ -554,23 +554,32 @@ class ReadinessService:
     def _report_for(self, target: TargetRepository) -> dict[str, Any]:
         from harness_lab_app.case_derivation import sync_mirror
         from harness_lab_app.config import get_settings
-        from harness_lab_app.target_service import resolve_ref
+        from harness_lab_app.target_service import clone_source, resolve_ref
+
+        source = clone_source(target)
 
         commit: str | None = None
         ref_error = ""
-        try:
-            commit = resolve_ref(target.repository_url, target.default_ref)
-        except Exception as error:
-            # Unreachable is a finding about the repository, not a crash: the
-            # page still has to render the rest of what it knows.
-            ref_error = str(error)
+        if target.pinned_commit:
+            # A pinned target is read at its pin, not at whatever its default
+            # branch points to now: the readiness report and the runs have to
+            # describe the same tree, or the report is about a repository nobody
+            # evaluated.
+            commit = target.pinned_commit
+        else:
+            try:
+                commit = resolve_ref(source, target.default_ref)
+            except Exception as error:
+                # Unreachable is a finding about the repository, not a crash: the
+                # page still has to render the rest of what it knows.
+                ref_error = str(error)
 
         paths: list[str] | None = None
         read_error = ""
         suggested: dict[str, list[str]] | None = None
         try:
             mirror = sync_mirror(
-                target.repository_url,
+                source,
                 get_settings().target_mirrors_dir,
                 target.target_id,
             )

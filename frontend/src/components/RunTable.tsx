@@ -489,7 +489,7 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
                   className={isActive ? "table-row runs-row active" : "table-row runs-row"}
                   key={run.run_id}
                 >
-                  <NavLink className="runs-row-link" to={`/runs/${run.run_id}`}>
+                  <NavLink className="runs-row-link" to={`/advanced/runs/${run.run_id}`}>
                     <span className="run-cell" title={row.tooltip}>
                       <strong className="run-title">{row.title}</strong>
                       <small className="run-meta">

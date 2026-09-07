@@ -1,5 +1,8 @@
 # Gateway changes (to apply in the `ai-gateway` repo)
 
+> Historical: written for the legacy CLI lane (`runs.yaml` virtual keys); the web
+> lane mints keys per run via `LITELLM_MASTER_KEY`.
+
 The gateway **observes, never directs** — do **not** put benchmark logic inside it. These are
 the minimal changes that make benchmark runs attributable, in priority order. Apply them in the
 `ai-gateway` repo (LiteLLM), not here.

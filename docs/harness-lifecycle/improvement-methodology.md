@@ -33,7 +33,7 @@ debugging churned hypotheses and re-read the same file every step"* →
 
 Generate a **sanitized** issue for `ml-python-base` and open it there:
 
-- **UI (recommended):** on the run, click **"Generar issue sanitizado"** → copy the
+- **UI (recommended):** on the run, click **"Generate sanitised issue"** in the *Sanitised issue* panel → copy the
   whole markdown block → open a new issue at `xmartlabs/sdlc-ml-python-base`. The first
   line (the `# …` heading) is the issue title; the rest is the body. No `gh`, no
   private data (run IDs, local paths, and secrets are stripped; only aggregate

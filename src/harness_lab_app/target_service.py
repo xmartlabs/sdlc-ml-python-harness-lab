@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from sqlmodel import Session, select
@@ -77,6 +78,33 @@ def validate_repository_url(url: str) -> str:
     )
 
 
+def validate_clone_source(source: str) -> str:
+    """Accept either a repository URL or the lab's own checkout of one.
+
+    Git takes a local path anywhere it takes a URL, which is what lets every
+    downstream reader (``ls-remote``, the bare mirror, the runner's clone) work
+    unchanged once a target has a local checkout (ADR-0042). The path is only
+    accepted when it sits inside the lab's checkouts directory, so this stays as
+    narrow as ``validate_repository_url``: an arbitrary host path here would let
+    a target id name any git repository on the machine.
+    """
+    from harness_lab_app.config import get_settings
+
+    cleaned = (source or "").strip()
+    if cleaned.startswith("/"):
+        root = get_settings().checkouts_dir.resolve()
+        try:
+            candidate = Path(cleaned).resolve()
+        except OSError as exc:  # pragma: no cover - resolve on a live path
+            raise TargetError(f"Unusable checkout path: {cleaned!r}") from exc
+        if candidate == root or root not in candidate.parents:
+            raise TargetError(
+                f"A local source must live under {root} — got {cleaned!r}."
+            )
+        return str(candidate)
+    return validate_repository_url(cleaned)
+
+
 def _git_ls_remote(url: str, ref: str, timeout: int) -> list[tuple[str, str]]:
     try:
         # List form, and the URL was validated above, so nothing here can
@@ -118,7 +146,7 @@ def resolve_ref(repository_url: str, ref: str, *, timeout: int = 30) -> str:
     to a release tag would record the tag object and the checkout would differ
     from what was recorded.
     """
-    url = validate_repository_url(repository_url)
+    url = validate_clone_source(repository_url)
     wanted = (ref or "").strip()
     if not wanted:
         raise TargetError("A ref is required (branch, tag or commit SHA).")
@@ -143,6 +171,47 @@ def resolve_ref(repository_url: str, ref: str, *, timeout: int = 30) -> str:
         if candidate in by_name:
             return by_name[candidate]
     return rows[0][0]
+
+
+def clone_source(target: TargetRepository) -> str:
+    """Where the lab should read this repository's source from.
+
+    The operator's own clone when there is one, the remote URL otherwise
+    (ADR-0042). Callers do not branch on it: `git clone`, `git ls-remote` and
+    the mirror all take a local path exactly where they take a URL, so a target
+    registered before checkouts existed keeps working unchanged.
+    """
+    path = (target.checkout_path or "").strip()
+    if path and Path(path, ".git").exists():
+        return path
+    return target.repository_url
+
+
+def pin_checkout(session: Session, target_id: str) -> TargetRepository:
+    """Freeze the target at whatever commit the operator's clone is on.
+
+    The pin is the reproducibility boundary: from here every run, readiness
+    report and derived case reads the same commit until somebody re-pins, so two
+    experiments a week apart are comparing agents rather than a moving `main`.
+    """
+    from harness_lab_app.checkout_service import CheckoutError, inspect_checkout
+
+    service = TargetService(session)
+    target = service.get_target(target_id)
+    state = inspect_checkout(target)
+    if not state.is_repo:
+        raise CheckoutError(
+            state.error
+            or f"No git checkout at {state.host_path}. Run the clone command first."
+        )
+    target.checkout_path = state.path
+    target.pinned_commit = state.head
+    target.pinned_at = datetime.now(UTC)
+    target.updated_at = target.pinned_at
+    session.add(target)
+    session.commit()
+    session.refresh(target)
+    return target
 
 
 class TargetService:

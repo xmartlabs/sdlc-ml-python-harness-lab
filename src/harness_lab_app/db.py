@@ -179,6 +179,16 @@ def _apply_sqlite_compat_migrations() -> None:
                     "NOT NULL DEFAULT ''"
                 )
             )
+        # What is under test when it is not the harness (ADR-0040). Backfills
+        # empty, which is accurate: every experiment that predates the mode was
+        # interrogating the harness, and had no separate subject to name.
+        if experiment_columns and "subject" not in experiment_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE experiment ADD COLUMN subject VARCHAR "
+                    "NOT NULL DEFAULT ''"
+                )
+            )
 
         finding_columns = {
             row[1]
@@ -207,7 +217,7 @@ def _apply_sqlite_compat_migrations() -> None:
                 text("PRAGMA table_info('runconfig')")
             ).fetchall()
         }
-        for column in ("skills_disabled", "skills_extra"):
+        for column in ("skills_disabled", "skills_extra", "skills_invoke"):
             if runconfig_columns and column not in runconfig_columns:
                 connection.execute(
                     text(
@@ -265,6 +275,36 @@ def _apply_sqlite_compat_migrations() -> None:
                         "JSON NOT NULL DEFAULT '[]'"
                     )
                 )
+
+        if case_columns and "origin_target_id" not in case_columns:
+            connection.execute(
+                text(
+                    'ALTER TABLE "case" ADD COLUMN origin_target_id '
+                    "VARCHAR NOT NULL DEFAULT ''"
+                )
+            )
+
+        # The operator's own clone of a target repository (ADR-0042). Existing
+        # targets default to empty, which is the "read it over the network"
+        # behaviour they already had.
+        target_columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('targetrepository')")
+            ).fetchall()
+        }
+        for column in ("checkout_path", "pinned_commit"):
+            if target_columns and column not in target_columns:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE targetrepository ADD COLUMN {column} "
+                        "VARCHAR NOT NULL DEFAULT ''"
+                    )
+                )
+        if target_columns and "pinned_at" not in target_columns:
+            connection.execute(
+                text("ALTER TABLE targetrepository ADD COLUMN pinned_at DATETIME")
+            )
 
         saved_proposal_columns = {
             row[1]

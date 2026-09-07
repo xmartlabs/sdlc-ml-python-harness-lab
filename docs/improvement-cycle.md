@@ -6,7 +6,8 @@ subagents served the run, then turn the "needs improvement" signals into
 **GitHub issues** in the repos that own the harness. You stay in control — issues
 are only filed when you run the create step.
 
-Targets (override with `IMPROVE_REPO_TEMPLATE` / `IMPROVE_REPO_HARNESS`):
+Targets (override with `HARNESS_LAB_TEMPLATE_REPOSITORY` / `HARNESS_LAB_GUIDE_REPOSITORY`;
+the legacy `IMPROVE_REPO_TEMPLATE` / `IMPROVE_REPO_HARNESS` names are still honoured):
 
 - **`ml-python-base`** — skills, governance docs, subagents, hooks (the template).
 - **`harness-engineering-guide`** — methodology / process / cross-cutting docs.
@@ -87,8 +88,8 @@ loop honest — a clean run's legitimate output is **zero proposals**:
   proposals, balanced (default) = 4, lenient = 6.
 
 **Recurrence over single runs.** The real anti-bias filter is repetition: the
-Improvements worklist badges a proposal **recurrente ×N** when the same
-kind+target was proposed from ≥ 2 distinct runs, with a "solo recurrentes"
+Improvements worklist badges a proposal **recurrent ×N** when the same
+kind+target was proposed from ≥ 2 distinct runs, with a "recurrent only"
 filter. Prefer turning recurrent themes into issues; treat one-off proposals
 from a single run with suspicion.
 
@@ -99,7 +100,7 @@ iterate the same case across template versions, the **Improvements** page in the
 web UI lets you group evidence from several runs into a single issue:
 
 ```
-run detail  →  "Propose improvements"  →  "Guardar"        # snapshot to the DB
+run detail  →  "Propose improvements"  →  "Save"           # snapshot to the DB
 Improvements page  →  select N proposals (any runs/cases)  →
 "Generate combined issue (N)"  →  ONE sanitized ml-python-base issue
 ```
@@ -140,18 +141,21 @@ embeds them verbatim. Four layers guard the output:
    still echoes a selected run id. With input masking in place this is a rare
    safety net rather than the routine blocker it used to be.
 
-The per-run "Issue sanitizado" card on the run detail is unchanged; the
+The per-run "Sanitised issue" card on the run detail is unchanged; the
 worklist is an additive path for multi-run grouping.
 
 ## Notes
 
 - **Approval is the create step.** Dry-run generates and previews only; nothing
   is filed until you run `CREATE=1`. Edit the JSON first.
-- **Requirements:** `gh` authenticated (`gh auth status`), the gateway reachable
-  (`GATEWAY_*` in `.env`) for the synthesis pass. Runs on the host — pair it with
-  the host or docker mode you're already using.
-- **Model:** the synthesis uses the auditor model by default (`gpt-5.4-mini`);
-  override with `IMPROVE_MODEL=<litellm model name>` (e.g. `gpt-5.5` for a
-  stronger pass).
+- **Requirements:** `gh` authenticated (`gh auth status`) and an LLM transport
+  for the synthesis pass: the gateway (`GATEWAY_BASE_URL` + `GATEWAY_TOKEN` in
+  `.env`) or, without one, the Claude Code CLI with a Claude credential
+  ([ADR-0043](adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)).
+  Runs on the host — pair it with the host or docker mode you're already using.
+- **Model:** the synthesis uses the auditor model by default (`gpt-5.4-mini` on
+  the gateway, `claude-sonnet-5` on the Claude CLI); override with
+  `IMPROVE_MODEL=<model name the active transport understands>` (e.g. `gpt-5.5`
+  for a stronger gateway pass).
 - **Any harness:** works for opencode, codex, and claude runs — whatever produced
   the audit.

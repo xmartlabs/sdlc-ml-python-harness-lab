@@ -57,6 +57,9 @@ class CaseCreate(BaseModel):
     files_forbidden: list[str] = Field(default_factory=list)
     metadata_json: dict[str, str] = Field(default_factory=dict)
     max_steps: int = 1
+    # The repository this case was written for, when it was written for one.
+    # What turns a pile of cases into a repository's own library (ADR-0042).
+    origin_target_id: str = ""
 
 
 class CaseRead(CaseCreate):
@@ -132,6 +135,9 @@ class ExperimentCreate(BaseModel):
     name: str = ""
     question: str
     mode: ExperimentMode
+    # What is under test, for a mode where that is not the harness (ADR-0040).
+    # Required for `subject_validation`, ignored otherwise.
+    subject: str = ""
     case_ids: list[str] = Field(default_factory=list)
     prompt_variants: list[str] = Field(default_factory=list)
     conditions: list[ExperimentConditionCreate] = Field(default_factory=list)
@@ -186,6 +192,12 @@ class RunConfigCreate(BaseModel):
     # Staged/experimental skills (data/skills_staging/<name>/) to add for this
     # run only. Unchecked by default in the UI.
     skills_extra: list[str] = Field(default_factory=list)
+    # Skills the agent is told, at the start of every step, to invoke and
+    # follow (ADR-0041). Available is not invoked: a skill on the menu is
+    # opened only when the instruction or its own triggers call for it. Every
+    # name here must be available in this run — staged via `skills_extra`, or
+    # governed and not in `skills_disabled`.
+    skills_invoke: list[str] = Field(default_factory=list)
 
     # External target repository (ADR-0029). `target_repo_id` is what the run
     # form sends; `target_ref` defaults to the repository's own default_ref.
@@ -416,6 +428,7 @@ class RunBatchCreate(BaseModel):
     dry_run: bool = False
     skills_disabled: list[str] = Field(default_factory=list)
     skills_extra: list[str] = Field(default_factory=list)
+    skills_invoke: list[str] = Field(default_factory=list)
 
     @field_validator("case_ids", "prompt_variants", "harnesses")
     @classmethod
@@ -476,3 +489,44 @@ class ValidationRead(BaseModel):
     effort: dict = Field(default_factory=dict)
     subjective: dict = Field(default_factory=dict)
     composite: float | None = None
+
+
+class CaseDraftRequest(BaseModel):
+    description: str
+    model: str | None = None
+    selected_skills: list[str] = Field(default_factory=list)
+    # Ids already taken in the catalog. The assistant proposes a case id and
+    # the service keeps it free, so the wizard never opens with an id whose
+    # save is going to be refused.
+    existing_case_ids: list[str] = Field(default_factory=list)
+    # The repository the case is being written for, when there is one. A case
+    # drafted blind against someone else's codebase names files that do not
+    # exist and a gate that is not theirs; with it, the assistant reads the
+    # checkout the run will actually use (ADR-0042).
+    target_id: str = ""
+
+
+class DroppedCommand(BaseModel):
+    """A validation command the assistant produced but the lab would not run."""
+
+    command: str
+    reason: str
+
+
+class CaseDraftResponse(BaseModel):
+    subject: str
+    instruction: str
+    validation_commands: list[str] = Field(default_factory=list)
+    max_steps: int = 10
+    # The rest of the case's shape. Optional because the subject-validation
+    # wizard only needs subject/instruction/commands and fills the remaining
+    # fields itself; the Cases form saves a whole case in one press and would
+    # otherwise leave a model that already decided these things unread.
+    case_id: str = ""
+    description: str = ""
+    case_type: str = CaseType.single_prompt
+    step_prompts: list[str] = Field(default_factory=list)
+    # What the model wrote that was screened out, so the person sees the gap
+    # here rather than after the runs have spent their budget.
+    dropped_commands: list[DroppedCommand] = Field(default_factory=list)
+    attempts: int = 1

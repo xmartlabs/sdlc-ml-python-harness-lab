@@ -1,5 +1,8 @@
 # Roadmap: Local Web App for Agentic Harness Lab
 
+> **Superseded** by [roadmap-lab-v2.md](roadmap-lab-v2.md). Kept as the history of
+> how v1 was built; the checkboxes below were not maintained after 2026-07.
+
 ## Purpose
 
 Build a local web app for configuring, running, inspecting, scoring, and auditing

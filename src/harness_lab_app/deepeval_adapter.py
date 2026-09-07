@@ -28,12 +28,11 @@ are.
 from __future__ import annotations
 
 import json
-import os
 import re
-import urllib.request
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
+
+from harness_lab_app import llm_transport
 
 #: Bumped when a rubric, a mapping or a metric choice changes. It travels with
 #: every score this adapter produces, because a rubric edit makes the old and
@@ -88,32 +87,26 @@ def _env_or_dotenv(name: str) -> str:
     every other in-process LLM caller (the auditor, the SWE judge) reads it
     through `read_env_file_value`, so the DeepEval judge does the same.
     """
-    value = (os.environ.get(name) or "").strip()
-    if value:
-        return value
-    try:
-        from harness_lab_app.config import read_env_file_value
-
-        return (read_env_file_value(name) or "").strip()
-    except Exception:
-        return ""
+    return llm_transport.setting(name)
 
 
 def _gateway_config() -> tuple[str, str]:
     """(base_url, token) for the OpenAI-compatible gateway, or ("", "")."""
-    base = _env_or_dotenv("GATEWAY_BASE_URL")
-    token = _env_or_dotenv("GATEWAY_TOKEN")
-    if not base or not token:
-        return ("", "")
-    if Path("/.dockerenv").exists():
-        try:
-            from harness_lab_app.config import get_settings
-            from harness_lab_app.executors import rewrite_localhost
+    return llm_transport.gateway_config() or ("", "")
 
-            base = rewrite_localhost(base, get_settings().docker_host_alias)
-        except Exception:
-            pass
-    return (base.rstrip("/"), token)
+
+def judge_transport() -> str:
+    """How the judge would reach a model: "gateway", "claude_cli" or "none".
+
+    The gateway is checked first, and through this module's own
+    ``_gateway_config`` rather than the transport's, so a lab that judges
+    through LiteLLM keeps judging through LiteLLM: the CLI is the answer when
+    there is no gateway, never a substitute for one that exists.
+    """
+    base, token = _gateway_config()
+    if base and token:
+        return "gateway"
+    return "claude_cli" if llm_transport.claude_cli_ready() else "none"
 
 
 #: Setting DEEPEVAL_MODEL to one of these turns the judged metrics off — the
@@ -130,9 +123,9 @@ def judge_model() -> str:
     2. ``AUDITOR_MODEL`` — reuse the auditor's model rather than introducing a
        second judge: two LLM judges on one run, configured independently, is a
        way to produce two incomparable answers to one question.
-    3. The auditor's *default* model, when the gateway is configured — so a lab
-       that already audits through its gateway gets trajectory judging with no
-       extra configuration at all.
+    3. The auditor's *default* model for whichever transport is available — so
+       a lab that can already reach a model at all gets trajectory judging with
+       no extra configuration.
     """
     explicit = _env_or_dotenv("DEEPEVAL_MODEL")
     if explicit:
@@ -140,14 +133,9 @@ def judge_model() -> str:
     auditor = _env_or_dotenv("AUDITOR_MODEL")
     if auditor:
         return auditor
-    base, token = _gateway_config()
-    if base and token:
-        try:
-            from harness_lab_app.harness_lifecycle.judge import DEFAULT_JUDGE_MODEL
-
-            return DEFAULT_JUDGE_MODEL
-        except Exception:
-            return "gpt-5.4-mini"
+    transport = judge_transport()
+    if transport != "none":
+        return llm_transport.default_audit_model(transport)
     return ""
 
 
@@ -161,50 +149,34 @@ def _extract_json(text: str) -> str:
     return text[start : end + 1] if start != -1 and end > start else text
 
 
-def _gateway_chat(base: str, token: str, model: str, prompt: str) -> str:
-    """One OpenAI-compatible chat call against the lab's gateway."""
-    from harness_lab_app.gateway_models import GATEWAY_USER_AGENT, normalize_model_name
-
-    payload = {
-        "model": normalize_model_name(model),
-        "temperature": 0.0,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    request = urllib.request.Request(
-        f"{base}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            # Cloudflare bans the default urllib user-agent (error 1010).
-            "User-Agent": GATEWAY_USER_AGENT,
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=180) as response:  # nosec B310
-        data = json.loads(response.read())
-    return str(data["choices"][0]["message"]["content"])
+def _judge_chat(model: str, prompt: str) -> str:
+    """One chat call for the judge, over whichever transport it resolved to."""
+    base, token = _gateway_config()
+    if base and token:
+        return llm_transport.gateway_chat(
+            base, token, model, "", prompt, timeout=180, temperature=0.0
+        )
+    return llm_transport.chat(model, "", prompt, timeout=180, temperature=0.0)
 
 
-def _gateway_judge(model: str) -> Any:
-    """A DeepEval judge that speaks to the lab's gateway, or the bare name.
+def _judge_llm(model: str) -> Any:
+    """A DeepEval judge that speaks over the lab's transport, or the bare name.
 
     DeepEval's default judge path goes straight to OpenAI with OPENAI_API_KEY.
-    This lab's judge models are served by its own gateway — the same endpoint
-    and credentials the auditor uses — so the judge has to be a custom model.
-    When the gateway is not configured the bare model name is returned and
-    DeepEval routes it however it normally would.
+    This lab's judge models are reached through its own gateway or its own
+    Claude CLI — the same endpoint and credentials the auditor uses — so the
+    judge has to be a custom model. When the lab has no transport at all the
+    bare model name is returned and DeepEval routes it however it normally
+    would.
     """
-    base, token = _gateway_config()
-    if not base or not token:
+    if judge_transport() == "none":
         return model
     try:
         from deepeval.models.base_model import DeepEvalBaseLLM
     except ImportError:
         return model
 
-    class _GatewayJudge(DeepEvalBaseLLM):
+    class _LabJudge(DeepEvalBaseLLM):
         def __init__(self) -> None:
             self._name = model
             super().__init__(model)
@@ -216,7 +188,7 @@ def _gateway_judge(model: str) -> Any:
             return self._name
 
         def generate(self, prompt: str, schema: Any = None, **_: Any) -> Any:
-            text = _gateway_chat(base, token, self._name, prompt)
+            text = _judge_chat(self._name, prompt)
             if schema is None:
                 return text
             cleaned = _extract_json(text)
@@ -228,7 +200,7 @@ def _gateway_judge(model: str) -> Any:
         async def a_generate(self, prompt: str, schema: Any = None, **kw: Any) -> Any:
             return self.generate(prompt, schema=schema, **kw)
 
-    return _GatewayJudge()
+    return _LabJudge()
 
 
 def _import_deepeval() -> Any | None:
@@ -315,8 +287,16 @@ def _tool_correctness(metrics: Any, case: Any, trajectory: dict[str, Any]):
                 "judge correctness against."
             ),
         )
-    metric = metrics.ToolCorrectnessMetric()
+    # ToolCorrectnessMetric compares two tool lists and never calls a model, but
+    # DeepEval still builds one in its constructor, and the default is an
+    # OpenAI client that raises on a missing OPENAI_API_KEY. On a lab that
+    # reaches models through the gateway or the Claude CLI that key does not
+    # exist, so the metric is handed the lab's own judge: it is never called,
+    # it just has to be there. The construction sits inside the try because a
+    # constructor that raises would otherwise take the other two metrics down
+    # with it.
     try:
+        metric = metrics.ToolCorrectnessMetric(model=_judge_llm(judge_model()))
         metric.measure(case)
     # A judge that fails has not scored zero; it has not scored.
     except Exception as error:
@@ -367,7 +347,7 @@ def _judged(metrics: Any, test_case: Any, case: Any, rendered: str):
         expected_tools=case.expected_tools,
     )
 
-    judge = _gateway_judge(model)
+    judge = _judge_llm(model)
     outcomes = []
     for name, rubric in _GEVAL:
         metric = metrics.GEval(
@@ -401,7 +381,9 @@ def _judged(metrics: Any, test_case: Any, case: Any, rendered: str):
                         "model": model,
                         "rubric": rubric,
                         "judge_transport": (
-                            "gateway" if judge is not model else "provider-default"
+                            judge_transport()
+                            if judge is not model
+                            else "provider-default"
                         ),
                     }
                 ),

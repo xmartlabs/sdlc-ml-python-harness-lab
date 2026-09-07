@@ -1,23 +1,55 @@
 :root {
   color-scheme: light;
-  --bg: #f4f7fb;
-  --panel: #ffffff;
-  --panel-soft: #f8fafc;
-  --line: #d9e2ec;
-  --line-strong: #b7c3d0;
-  --text: #17212b;
-  --muted: #5f6b7a;
-  --accent: #2457d6;
-  --accent-soft: #e8efff;
-  --success: #116530;
-  --success-soft: #e7f6ec;
-  --danger: #b91c1c;
-  --danger-soft: #fee2e2;
-  --warning: #92400e;
-  --warning-soft: #fef3c7;
-  --console-bg: #0f172a;
-  --console-text: #dbeafe;
 
+  /* --- Xmartlabs Official Brand Palette (xmartlabs-branding) --- */
+  --xl-pink: #EE1A64;
+  --xl-pink-dark: #B5174E;
+  --xl-pink-light: #F4508A;
+  --xl-pink-pale: #FFB1CC;
+  --xl-pink-blush: #FFBDD4;
+  --xl-dark: #222831;
+  --xl-slate: #4D596B;
+  --xl-gray: #85888F;
+  --xl-light-gray: #989898;
+  --xl-off-white: #F0F0F0;
+  --xl-purple: #5D5FEE;
+  --xl-green: #407359;
+
+  /* Typography (Google Fonts: Outfit & Space Grotesk) */
+  --font-primary: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: 'Space Grotesk', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "Roboto Mono", Menlo, Monaco, Consolas, monospace;
+
+  /* Surface & Semantic Tokens (Light Mode) */
+  --bg: #F4F6F9;
+  --panel: #FFFFFF;
+  --panel-soft: #F8FAFC;
+  --line: #E2E8F0;
+  --line-strong: #CBD5E1;
+  --text: #222831;
+  --text-dim: #3F4A59;
+  --muted: #4D596B;
+
+  /* Primary Brand Accent */
+  --accent: #EE1A64;
+  --accent-hover: #B5174E;
+  --accent-soft: rgba(238, 26, 100, 0.09);
+  --accent-subtle: rgba(238, 26, 100, 0.04);
+  --accent-glow: rgba(238, 26, 100, 0.28);
+  --accent-contrast: #FFFFFF;
+
+  /* Functional Status Colors */
+  --success: #288053;
+  --success-soft: #EAF6EE;
+  --danger: #D92546;
+  --danger-soft: #FDF0F2;
+  --warning: #B45309;
+  --warning-soft: #FEF3C7;
+
+  --console-bg: #1B2028;
+  --console-text: #E6ECF5;
+
+  /* Spacing Scale */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -25,39 +57,55 @@
   --space-5: 20px;
   --space-6: 24px;
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
+  /* Radii & Elevation (ui-ux-pro-max) */
+  --radius-sm: 8px;
+  --radius-md: 12px;
   --radius-lg: 999px;
 
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --shadow-sm: 0 1px 3px rgba(34, 40, 49, 0.05), 0 1px 2px rgba(34, 40, 49, 0.03);
+  --shadow-md: 0 4px 16px rgba(34, 40, 49, 0.08), 0 2px 6px rgba(34, 40, 49, 0.04);
+  --shadow-lg: 0 12px 32px rgba(34, 40, 49, 0.12), 0 4px 12px rgba(34, 40, 49, 0.06);
 
-  --sidebar-width: 240px;
-  --sidebar-width-collapsed: 60px;
+  --sidebar-width: 250px;
+  --sidebar-width-collapsed: 64px;
   --inspector-width: 320px;
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.22s ease;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0b1220;
-  --panel: #121a2b;
-  --panel-soft: #0f1728;
-  --line: #263244;
-  --line-strong: #37455c;
-  --text: #e6ecf5;
-  --muted: #93a1b8;
-  --accent: #6c93ff;
-  --accent-soft: #1c2b4d;
-  --success: #4ade80;
-  --success-soft: #10331f;
-  --danger: #f87171;
-  --danger-soft: #3f1414;
-  --warning: #facc15;
-  --warning-soft: #3f2f0c;
-  --console-bg: #060b16;
-  --console-text: #cfe0ff;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  /* Dark Theme grounded in XL Dark (#222831) */
+  --bg: #1A1F26;
+  --panel: #222831;
+  --panel-soft: #1E232B;
+  --line: #2E3744;
+  --line-strong: #3F4B5C;
+  --text: #FCFCFF;
+  --text-dim: #D5DBE4;
+  --muted: #919CAE;
+
+  --accent: #F4508A;
+  --accent-hover: #EE1A64;
+  --accent-soft: rgba(244, 80, 138, 0.16);
+  --accent-subtle: rgba(244, 80, 138, 0.08);
+  --accent-glow: rgba(244, 80, 138, 0.35);
+  --accent-contrast: #FFFFFF;
+
+  --success: #34D399;
+  --success-soft: rgba(52, 211, 153, 0.14);
+  --danger: #FB7185;
+  --danger-soft: rgba(251, 113, 133, 0.14);
+  --warning: #FBBF24;
+  --warning-soft: rgba(251, 191, 36, 0.14);
+
+  --console-bg: #13171E;
+  --console-text: #E2E8F0;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.7);
 }
 
 * {
@@ -74,34 +122,57 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-  letter-spacing: 0;
+  font-family: var(--font-primary);
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.page-header h1,
+.panel-head h2,
+.panel-head h3,
+.metric strong,
+.leaderboard-rank,
+.brand-title {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
 }
 
 button,
 input,
 textarea,
 select {
-  font: inherit;
+  font-family: var(--font-primary);
 }
 
 button {
   border: 1px solid var(--line);
   background: var(--panel);
   color: var(--text);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
+  font-weight: 500;
+  transition: background var(--transition-fast),
+              border-color var(--transition-fast),
+              box-shadow var(--transition-fast),
+              transform var(--transition-fast);
 }
 
 button:hover {
   border-color: var(--line-strong);
+  background: var(--panel-soft);
+}
+
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  border-color: var(--accent);
 }
 
 input,
@@ -109,10 +180,19 @@ textarea,
 select {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 10px 12px;
   background: var(--panel);
   color: var(--text);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 textarea {
@@ -120,18 +200,45 @@ textarea {
   resize: vertical;
 }
 
+/* The width/padding above is for text fields. A checkbox or radio that
+   inherits `width: 100%` swallows the row and pushes its label to the far
+   edge — the "separated" controls seen on the wizard pages. */
+input[type="checkbox"],
+input[type="radio"] {
+  width: auto;
+  flex: 0 0 auto;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Links carry the brand accent everywhere; the browser default blue/purple
+   pair does not exist in the palette. Components that set their own colour
+   (nav items, button-links, mode CTAs) still win by specificity. */
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: var(--accent-hover);
+}
+
 label {
   display: grid;
   gap: 6px;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 500;
 }
 
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   min-height: 100vh;
-  transition: grid-template-columns 0.15s ease;
+  transition: grid-template-columns var(--transition-fast);
 }
 
 .app-shell--nav-collapsed {
@@ -142,12 +249,16 @@ label {
   background: var(--panel);
   border-right: 1px solid var(--line);
   padding: var(--space-5) var(--space-4);
+  display: flex;
+  flex-direction: column;
 }
 
 .brand {
   display: grid;
-  gap: var(--space-1);
+  gap: var(--space-2);
   margin-bottom: var(--space-5);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--line);
 }
 
 .brand-row {
@@ -157,57 +268,155 @@ label {
   gap: var(--space-2);
 }
 
+.brand-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.brand-logo-container {
+  display: flex;
+  align-items: center;
+  padding-top: 2px;
+}
+
+.brand-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.brand-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
 .brand-kicker,
 .sidebar-label,
 .eyebrow {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0;
+  letter-spacing: 0.06em;
+}
+
+.brand-kicker {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
 .sidebar strong {
-  font-size: 18px;
+  font-size: 17px;
 }
 
 .sidebar-toggle {
-  padding: var(--space-1) var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1);
+  min-width: 28px;
+  min-height: 28px;
   background: transparent;
+  color: var(--muted);
   flex-shrink: 0;
+  border-radius: var(--radius-sm);
+}
+
+.sidebar-toggle:hover {
+  color: var(--text);
+}
+
+.sidebar-toggle:hover {
+  background: var(--panel-soft);
+  border-color: var(--line);
+}
+
+.collapsed-brand-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.collapsed-arrow {
+  display: inline-flex;
+  color: var(--muted);
 }
 
 .nav {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  flex: 1;
+  /* `flex: 1` gives the nav the sidebar's full height so the footer sits at
+     the bottom; without this the grid stretches its rows to fill it, and the
+     groups drift apart on long pages. */
+  align-content: start;
+}
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 8px 0 4px 10px;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
   text-align: left;
-  padding: 10px 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
   background: transparent;
   text-decoration: none;
+  color: var(--text-dim);
+  font-size: 13.5px;
+  font-weight: 500;
+  border-left: 3px solid transparent;
+  transition: all var(--transition-fast);
+}
+
+.nav-item:hover {
+  background: var(--panel-soft);
   color: var(--text);
+}
+
+.nav-item.active {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .nav-item-icon {
   display: inline-flex;
-  width: 20px;
+  width: 18px;
   justify-content: center;
   flex-shrink: 0;
-}
-
-.nav-item.active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
 }
 
 .app-shell--nav-collapsed .nav-item {
   justify-content: center;
   padding: 10px;
+  border-left: none;
+  border-bottom: 2px solid transparent;
+}
+
+.app-shell--nav-collapsed .nav-item.active {
+  border-bottom-color: var(--accent);
 }
 
 .app-shell--nav-collapsed .sidebar {
@@ -215,9 +424,35 @@ label {
 }
 
 .sidebar-foot {
-  margin-top: var(--space-6);
+  margin-top: auto;
   padding-top: var(--space-4);
   border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sidebar-foot-brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar-foot-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.sidebar-foot-edition {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .sidebar-value {
@@ -226,7 +461,7 @@ label {
 }
 
 .workbench {
-  padding: 20px;
+  padding: 24px;
   overflow: auto;
 }
 
@@ -259,6 +494,25 @@ label {
 .panel-head h2,
 .panel-head h3 {
   margin: 0;
+}
+
+/* Right-hand side of a page header: one action, or the reason there is none. */
+.page-header-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+  text-align: right;
+}
+
+.page-header-action p {
+  margin: 0;
+}
+
+/* One declared arm of a subject validation, stacked rather than side by side:
+   each carries a harness, a model picker and its own label. */
+.arm-list > li {
+  display: block;
 }
 
 .lede,
@@ -368,45 +622,99 @@ label {
   }
 }
 
+/* Every button variant lays out the same way, so an icon next to a label sits
+   on the baseline instead of dangling below it. */
+.primary,
+.secondary,
+button.ghost,
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  line-height: 1.3;
+}
+
+button svg,
+.button-link svg {
+  flex-shrink: 0;
+}
+
 .primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--accent-contrast);
+  font-weight: 600;
+  box-shadow: 0 1px 3px var(--accent-glow);
+  transition: all var(--transition-fast);
+}
+
+.primary:disabled,
+.secondary:disabled,
+button.ghost:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 
 .primary:hover {
-  filter: brightness(0.95);
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  box-shadow: 0 4px 12px var(--accent-glow);
+  filter: none;
+}
+
+.primary:active {
+  background: var(--xl-pink-dark);
+  border-color: var(--xl-pink-dark);
+  transform: translateY(1px);
 }
 
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 14px;
 }
 
 .metric {
-  padding: 14px;
+  padding: 18px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--panel);
   display: grid;
   gap: 6px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+
+.metric:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-md);
 }
 
 .metric span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .metric strong {
-  font-size: 22px;
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
 }
 
 .panel {
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--panel);
-  padding: 16px;
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
 }
 
 .panel.subtle {
@@ -947,11 +1255,26 @@ label {
   padding: 0;
 }
 
+.help-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.help-doc-link {
+  flex-shrink: 0;
+  padding-right: 16px;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
 .help-toggle {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+  flex: 1;
   width: 100%;
   border: 0;
   background: transparent;
@@ -960,12 +1283,60 @@ label {
   text-align: left;
 }
 
+.help-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.help-toggle-chevron {
+  display: inline-flex;
+  color: var(--muted);
+  transition: transform var(--transition-fast);
+}
+
+.help-toggle[aria-expanded="true"] .help-toggle-chevron {
+  transform: rotate(90deg);
+}
+
 .help-body {
   padding: 0 16px 12px;
 }
 
 .help-body .skills-howto {
   margin: 0;
+}
+
+.prompt-preview {
+  margin-top: 6px;
+}
+
+.prompt-preview-toggle {
+  padding: 4px 8px;
+  font-size: 0.78rem;
+}
+
+.prompt-preview-chevron {
+  display: inline-flex;
+  color: var(--muted);
+  transition: transform var(--transition-fast);
+}
+
+.prompt-preview-toggle[aria-expanded="true"] .prompt-preview-chevron {
+  transform: rotate(90deg);
+}
+
+.prompt-preview-body {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prompt-preview-pre {
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 0.8rem;
 }
 
 .compare-picker {
@@ -1400,31 +1771,34 @@ button.ghost {
 .pct-bar {
   position: relative;
   display: block;
-  height: 20px;
-  border-radius: 6px;
-  background: var(--accent-soft);
+  height: 22px;
+  border-radius: var(--radius-sm);
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
   overflow: hidden;
 }
 
 .pct-bar-fill {
   position: absolute;
   inset: 0 auto 0 0;
-  background: var(--success);
-  opacity: 0.55;
-  border-radius: 6px;
+  background: linear-gradient(90deg, var(--xl-pink), var(--xl-pink-light));
+  opacity: 0.85;
+  border-radius: 4px;
 }
 
 .pct-bar-fill.official {
-  background: var(--accent);
+  background: linear-gradient(90deg, var(--xl-purple), var(--xl-pink));
 }
 
 .pct-bar-label {
   position: relative;
   display: block;
   padding: 0 8px;
+  font-family: var(--font-display);
   font-size: 12px;
-  font-weight: 600;
-  line-height: 20px;
+  font-weight: 700;
+  line-height: 22px;
+  letter-spacing: -0.01em;
 }
 
 .cell-truncate {
@@ -1796,18 +2170,21 @@ button.ghost {
 }
 
 .button-link {
-  display: inline-flex;
-  align-items: center;
   padding: 6px 12px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
   text-decoration: none;
   color: var(--text);
   font-size: 0.85rem;
+  font-weight: 500;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
 }
 
 .button-link:hover {
-  border-color: var(--line-strong);
+  border-color: var(--accent);
+  background: var(--panel-soft);
+  color: var(--text);
 }
 
 /* Login gate (ADR-0015): a single centered panel, shown instead of the app
@@ -1817,12 +2194,38 @@ button.ghost {
   place-items: center;
   min-height: 100vh;
   padding: 24px;
+  background: radial-gradient(circle at 50% 30%, var(--panel-soft) 0%, var(--bg) 100%);
 }
 
 .login-panel {
   display: grid;
-  gap: 12px;
-  width: min(360px, 100%);
+  gap: 16px;
+  width: min(400px, 100%);
+  padding: 32px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.login-logo-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 6px;
+}
+
+.login-panel-head {
+  display: flex;
+  justify-content: center;
+  text-align: center;
+}
+
+.login-panel-head h2 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.02em;
 }
 
 /* Open mode: no password configured, so anyone who can reach the port is in. */
@@ -2154,6 +2557,14 @@ button.ghost {
   font-weight: 600;
 }
 
+/* A tab-bar that sits inside a panel head, next to the title: it switches
+   the panel's content, so it has no rule of its own to underline. */
+.tab-bar--inline {
+  margin: 0;
+  border-bottom: none;
+  flex-shrink: 0;
+}
+
 /* --- navigation groups --------------------------------------------------- */
 
 .nav-group {
@@ -2193,12 +2604,15 @@ button.ghost {
   border-radius: var(--radius-md);
   background: var(--panel);
   box-shadow: var(--shadow-sm);
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color var(--transition-fast),
+              box-shadow var(--transition-fast),
+              transform var(--transition-fast);
 }
 
 .mode-card:hover {
   border-color: var(--accent);
   box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
 }
 
 .mode-card-icon {
@@ -2365,16 +2779,37 @@ button.ghost {
 
 .stepper-item {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 0.82rem;
 }
 
-.stepper-item--current {
+/* The button is the whole pill — no border-in-a-border. Three states: done
+   (green index), current (accent), and locked (dimmed, not-allowed). */
+.stepper-item > button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 14px 6px 6px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.stepper-item > button:not(:disabled):hover {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--text);
+}
+
+.stepper-item > button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.stepper-item--current > button,
+.stepper-item--current > button:not(:disabled):hover {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--text);
@@ -2385,11 +2820,26 @@ button.ghost {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: var(--panel-soft);
+  border: 1px solid var(--line);
   font-size: 0.72rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.stepper-item--current .stepper-index {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.stepper-item--done .stepper-index {
+  background: var(--success-soft);
+  border-color: transparent;
+  color: var(--success);
 }
 
 /* Readiness checks: three states, because "not detected" and "could not be
@@ -2446,6 +2896,17 @@ button.ghost {
   font-size: 0.86rem;
 }
 
+/* Commands the assistant wrote but the lab refused: the command in its own
+   voice, the reason in ours. */
+.dropped-list li {
+  margin-bottom: var(--space-1);
+  overflow-wrap: anywhere;
+}
+
+.dropped-list code {
+  color: var(--text);
+}
+
 /* --- selection lists shared by the wizard and the audit ------------------- */
 
 .pick-list {
@@ -2474,6 +2935,151 @@ button.ghost {
   background: var(--accent-soft);
 }
 
+/* Buttons inside a pick-list are rows, not CTAs: full width, stacked label
+   and description, and a selected state that tints rather than fills — a
+   solid accent fill makes the muted description unreadable. */
+.pick-list > li > button,
+.pick-list > li > a,
+.pick-list > li > button.primary,
+.pick-list > li > button.secondary {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 400;
+  box-shadow: none;
+  transform: none;
+}
+
+.pick-list > li > button:hover,
+.pick-list > li > a:hover,
+.pick-list > li > button.secondary:hover {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.pick-list > li > button.primary,
+.pick-list > li > button.primary:hover,
+.pick-list > li > button.primary:active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.pick-list > li > button > strong {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pick-list > li > button.primary > strong {
+  color: var(--accent);
+}
+
+.pick-list > li > button .muted {
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.pick-list > li > button.primary .muted {
+  color: var(--text-dim);
+}
+
+.pick-tag {
+  padding: 2px 8px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pick-tag--soft {
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 500;
+}
+
+/* Filters that sit above a pick-list, and a stack of checkboxes below it. */
+.filter-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.checkbox-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+/* What was picked, and the one action it enables. */
+.selection-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.selection-summary strong {
+  display: block;
+}
+
+/* An optional assistant, framed in the accent so it reads as an offer
+   rather than a required field. */
+.assist-card {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.assist-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.assist-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.assist-card-row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.assist-card-row > label {
+  flex: 1;
+  min-width: 220px;
+}
+
 .checkbox-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -2484,7 +3090,66 @@ button.ghost {
 .checkbox {
   display: flex;
   gap: var(--space-2);
+  align-items: flex-start;
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 400;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.checkbox > input {
+  margin-top: 3px;
+}
+
+.checkbox > span {
+  min-width: 0;
+}
+
+.tooltip-anchor {
+  position: relative;
+  display: inline-flex;
+  vertical-align: -3px;
+}
+
+.tooltip-trigger {
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
+  padding: 3px;
+  margin: -3px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: none;
+  color: var(--muted);
+  cursor: help;
+}
+
+.tooltip-trigger:hover,
+.tooltip-trigger:focus-visible {
+  color: var(--accent);
+}
+
+.tooltip-bubble {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  width: max-content;
+  max-width: 340px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
 }
 
 .mode-switch {
@@ -2892,4 +3557,109 @@ button.danger {
 button.danger:hover {
   background: var(--danger-soft);
   border-color: var(--danger);
+}
+
+/* --- guided repository setup (Audit) ------------------------------------- */
+
+/* The clone command belongs to the engineer's terminal, not to a form. It is
+   shown the way a terminal shows it — one unwrapped line — with the copy
+   button beside it, because retyping a clone URL by hand is how typos get in. */
+.command-block {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.command-block > pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  overflow-x: auto;
+  white-space: pre;
+  background: var(--console-bg);
+  color: var(--console-text);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.command-block > button {
+  flex-shrink: 0;
+}
+
+/* Short observed facts — HEAD, branch, the pinned commit — read across rather
+   than down, so the state of the clone is one glance instead of a table. */
+.fact-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin-top: var(--space-3);
+}
+
+.fact-row > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* One command the gate check ran. Only the failing step carries its output,
+   so the border is the fastest way to find it in a long list. */
+.gate-step-list {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.gate-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border-left: 3px solid var(--line);
+  padding-left: var(--space-3);
+}
+
+.gate-step--failed {
+  border-left-color: var(--danger);
+}
+
+.gate-step-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+}
+
+.gate-step-head code {
+  overflow-wrap: anywhere;
+}
+
+/* A generated document can be thousands of lines. Capping its height keeps the
+   actions under it reachable without scrolling past the whole report. */
+.pre--scroll {
+  max-height: 480px;
+  overflow: auto;
+}
+
+/* A short "do this, then this" list. Numbers matter here — the steps happen in
+   two different places (this page and a terminal), so an unordered list would
+   read as a set of options rather than a sequence. */
+.numbered-steps {
+  margin: var(--space-3) 0 0;
+  padding-left: 1.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.numbered-steps > li::marker {
+  color: var(--accent);
+  font-weight: 600;
 }

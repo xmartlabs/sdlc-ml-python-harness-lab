@@ -32,6 +32,6 @@ The full initiative (release contract, regression suite, adoption/rollback) live
 ## The two edges the lab touches
 
 - **Out:** a sanitized improvement issue for `ml-python-base` — from the run's
-  **"Generar issue sanitizado"** button in the web UI, or `make harness-proposal RUN=<id>`.
+  **"Generate sanitised issue"** button (the *Sanitised issue* panel) in the web UI, or `make harness-proposal RUN=<id>`.
 - **In:** re-measuring the same case after you've improved the skill — by hand in the
   UI, or rigorously via the regression suite (`benchmarks/harness-regression-v1/`).

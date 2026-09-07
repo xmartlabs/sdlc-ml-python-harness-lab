@@ -32,8 +32,6 @@ import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import yaml
@@ -47,11 +45,8 @@ from create_run import (
     _load_env,
 )
 
-from harness_lab_app.gateway_models import (
-    GATEWAY_USER_AGENT,
-    list_gateway_models,
-    normalize_model_name,
-)
+from harness_lab_app import llm_transport
+from harness_lab_app.gateway_models import list_gateway_models
 from harness_lab_app.governance import (
     HARNESS_RULES_FILE,
     resolve_surface,
@@ -62,7 +57,9 @@ from harness_lab_app.governance import (
 LOG_CLIP_CHARS = 60_000
 DIFF_CLIP_CHARS = 40_000
 RULES_CLIP_CHARS = 20_000
-# LiteLLM model name (no opencode "gateway/" prefix — that's opencode-only).
+# The gateway's default auditor. Kept as a name other scripts can import; the
+# model actually used comes from `llm_transport.default_audit_model()`, which
+# answers with a Claude id when the lab's only transport is the Claude CLI.
 # gpt-5.4-mini: current mini tier — ~6.7x cheaper than gpt-5.5 (~$0.04/audit
 # vs ~$0.29) with enough judgment for log audits. Override per-run via the UI
 # field or AUDITOR_MODEL; escalate to gpt-5.5 if audit depth feels shallow.
@@ -471,53 +468,31 @@ def build_user_message(run_id: str, inp: dict) -> str:
 
 
 def call_gateway(model: str, system: str, user: str) -> str:
-    base = os.environ.get("GATEWAY_BASE_URL", "").rstrip("/")
-    token = os.environ.get("GATEWAY_TOKEN", "")
-    if not base or not token:
-        sys.exit(
-            "❌ GATEWAY_BASE_URL or GATEWAY_TOKEN not set. "
-            "Add them to .env or run with --dry-run."
-        )
-    url = f"{base}/chat/completions"
-    payload = {
-        "model": normalize_model_name(model),
-        "temperature": 0.2,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            # The gateway sits behind Cloudflare, which bans the default
-            # "Python-urllib/x.y" user-agent (error 1010). Send a normal UA.
-            "User-Agent": GATEWAY_USER_AGENT,
-        },
-        method="POST",
-    )
+    """One audit-sized chat call over whichever LLM transport is configured.
+
+    The transport itself lives in :mod:`harness_lab_app.llm_transport`; this
+    wrapper stays because it is the auditor's error UX (a script exits with a
+    readable message, and a rejected model name lists the ones that exist) and
+    because ``lab_improve`` imports it by name.
+    """
     try:
-        with urllib.request.urlopen(req, timeout=180) as resp:  # nosec B310
-            data = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        msg = f"❌ Gateway HTTP {e.code}: {body}"
-        if e.code == 400 and "model" in body.lower():
+        return llm_transport.chat(model, system, user, timeout=180, temperature=0.2)
+    except llm_transport.TransportNotConfigured:
+        sys.exit(
+            "❌ No LLM transport configured. Set GATEWAY_BASE_URL and GATEWAY_TOKEN, "
+            "or install the Claude Code CLI and set CLAUDE_CODE_OAUTH_TOKEN — "
+            "add them to .env, or run with --dry-run."
+        )
+    except llm_transport.GatewayHTTPError as error:
+        msg = f"❌ {error}"
+        if error.code == 400 and "model" in error.body.lower():
             available = list_gateway_models()
             if available:
                 msg += "\n\nAvailable models (use the name without 'gateway/'):\n"
                 msg += "\n".join(f"  {m}" for m in available)
         sys.exit(msg)
-    except Exception as e:
-        sys.exit(f"❌ Gateway request failed: {e}")
-    try:
-        return data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError):
-        sys.exit(f"❌ Unexpected gateway response: {json.dumps(data)[:500]}")
+    except llm_transport.TransportError as error:
+        sys.exit(f"❌ {error}")
 
 
 def render_audit(run_id: str, inp: dict, auditor_model: str, body: str) -> str:
@@ -550,7 +525,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--auditor-model",
         default=None,
-        help=f"Gateway model alias for the auditor (default: {DEFAULT_AUDITOR_MODEL})",
+        help="Model alias for the auditor (default: chosen for the active transport).",
     )
     p.add_argument(
         "--dry-run",
@@ -595,7 +570,9 @@ def main(argv: list[str] | None = None) -> int:
     _load_env()
 
     auditor_model = (
-        args.auditor_model or os.environ.get("AUDITOR_MODEL") or DEFAULT_AUDITOR_MODEL
+        args.auditor_model
+        or os.environ.get("AUDITOR_MODEL")
+        or llm_transport.default_audit_model()
     )
 
     runs_path = resolve_runs_path(args.run)

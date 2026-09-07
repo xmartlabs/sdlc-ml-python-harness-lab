@@ -6,12 +6,13 @@ import type { DocContent, DocEntry } from "../types";
 
 // The core loop shown at the top so the web is self-explanatory at a glance.
 const CORE_LOOP = `
-1. **Cases** — pick or import a task (tetris, SWE-bench, an agentic case).
-2. **Runs** — choose case + harness + model, **Create run**, watch it stream.
-3. **Score** — SWE-bench auto-scores; others finish in \`awaiting_manual_score\`
-   and you score them from the run detail.
-4. **Compare** — line runs up across models/harnesses.
-5. **Improve** — turn a run's audit into GitHub issues (\`make improve\`).
+1. **Start from a question** on Home — validate a tool you built, evaluate a harness change, or audit a repository you have never seen.
+2. **Declare the design** — cases, arms, repetitions. The lab refuses a design its mode cannot answer.
+3. **Runs execute in containers.** A case with a validation command scores itself; a case with a rubric is LLM-judged; anything else you score from the run page.
+4. **Read the experiment** — one rate per arm, the case matrix, and the verdict's caveats. Then record a finding.
+5. **Feed it back** — a run's audit becomes a sanitised issue for the governance template (\`make improve RUN=<id>\`).
+
+Audits, judges and summaries use your AI gateway, or the Claude Code CLI when only a Claude credential is configured (Health → LLM transport).
 `;
 
 export function Guide() {

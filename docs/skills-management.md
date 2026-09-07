@@ -55,6 +55,9 @@ Default internal skills bundled by template:
 - `generate_migration_plan`
 - `plan_and_execute_feature`
 - `research_current_info`
+- `retrospective`
+- `systematic_debugging`
+- `verify_changes`
 
 ## Ideation routing: `brainstorm_quick` vs external `brainstorming`
 

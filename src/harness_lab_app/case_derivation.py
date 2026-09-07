@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 from harness_lab_app.target_service import (
     _GIT_ENV,
     TargetError,
-    validate_repository_url,
+    validate_clone_source,
 )
 
 if TYPE_CHECKING:
@@ -138,7 +138,7 @@ def sync_mirror(
     and file *names*, never contents — fetching every blob of a large repository
     to list paths would make this unusable on the repositories that matter most.
     """
-    url = validate_repository_url(repository_url)
+    url = validate_clone_source(repository_url)
     path = mirror_path(cache_root, target_id)
     if (path / "HEAD").exists():
         result = _git(

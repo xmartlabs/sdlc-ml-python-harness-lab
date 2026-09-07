@@ -1,5 +1,11 @@
 # Runbook: benchmark experiments
 
+> **Legacy CLI lane.** This runbook describes the pre-web workflow (`runs.yaml`,
+> `make bench-start/close`). The web app (`make app-up`, [onboarding.md](onboarding.md),
+> [guide-web-ui.md](guide-web-ui.md)) is the supported path; these targets still exist
+> but the database, not `runs.yaml`, is the source of truth
+> ([ADR-0025](adr/0025-db-is-the-source-of-truth-for-every-case.md)).
+
 Two commands per run. One model at a time.
 
 ---

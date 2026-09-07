@@ -21,9 +21,9 @@ from celery.signals import worker_ready
 from celery.worker.control import control_command
 from sqlmodel import Session, select
 
-from harness_lab_app import run_failures
+from harness_lab_app import llm_transport, run_failures
 from harness_lab_app.audit_service import AuditService
-from harness_lab_app.case_service import CaseService
+from harness_lab_app.case_service import CaseService, resolve_prompt_variant_text
 from harness_lab_app.celery_app import celery_app
 from harness_lab_app.config import get_settings
 from harness_lab_app.db import engine, init_db
@@ -32,12 +32,12 @@ from harness_lab_app.executors import (
     container_name_for_run,
     get_executor,
 )
-from harness_lab_app.models import Case, CaseType, Run, RunEvent, RunState
+from harness_lab_app.models import Case, CaseType, Run, RunEvent, RunState, utc_now
 from harness_lab_app.run_service import RunService, continuation_source_dir
 from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.sandbox_service import SandboxService
 from harness_lab_app.schemas import RunConfigCreate
-from harness_lab_app.target_service import TargetError, TargetService
+from harness_lab_app.target_service import TargetError, TargetService, clone_source
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,7 @@ def _config_payload(session: Session, run: Run) -> RunConfigCreate:
         continuation_prompt=config.continuation_prompt,
         skills_disabled=list(config.skills_disabled),
         skills_extra=list(config.skills_extra),
+        skills_invoke=list(config.skills_invoke),
         target_repo_id=config.target_repo_id,
         target_ref=config.target_ref,
         harness_source=config.harness_source,
@@ -98,9 +99,18 @@ def _target_spec(session: Session, run: Run) -> dict[str, Any] | None:
         raise RuntimeError(
             f"Run {run.run_id} targets unknown repository '{config.target_repo_id}'."
         ) from None
+    # The operator's own checkout when there is one (ADR-0042). Both the worker
+    # and the runner container mount the lab root at /app, so a path under
+    # data/checkouts resolves identically on both sides and the clone inside the
+    # container never touches the network — which is what makes a private
+    # repository runnable without putting a credential in a container.
+    source = clone_source(target)
     return {
         "target_id": target.target_id,
-        "repo_url": target.repository_url,
+        "repo_url": source,
+        # Kept alongside for provenance: which repository this was, independent
+        # of where its bytes were read from on the day of the run.
+        "remote_url": target.repository_url,
         "ref": config.target_ref or target.default_ref,
         "commit": config.target_commit,
         "setup": list(target.setup_commands),
@@ -114,23 +124,15 @@ def _target_spec(session: Session, run: Run) -> dict[str, Any] | None:
 def _case_prompt_text(case: Case, prompt_variant: str) -> str:
     """The prompt body for a variant, whatever form the case stores it in.
 
-    Cases created from the web (and every SWE-bench import) store the prompt
-    *text* in ``prompt_variants``. Cases imported from a ``benchmarks/<id>/
-    task.yaml`` store a repo-relative *path* instead, because that is what the
-    YAML says. The runner only ever wants text, so resolve the path here — on
-    the worker, which can read the repo — rather than teaching the container
-    about benchmark layout.
+    Delegates to :func:`case_service.resolve_prompt_variant_text`, which reads
+    a ``task.yaml``-style path off disk. The runner falls back to the raw
+    stored value (a path string, or "") when that resolution fails, so a
+    misconfigured variant degrades to an odd prompt rather than an error.
     """
-    raw = case.prompt_variants.get(prompt_variant, "")
-    if not raw or "\n" in raw:
-        return raw
-    candidate = get_settings().repo_root / raw
-    try:
-        if candidate.is_file():
-            return candidate.read_text()
-    except OSError:
-        return raw
-    return raw
+    resolved = resolve_prompt_variant_text(case, prompt_variant)
+    if resolved is not None:
+        return resolved
+    return case.prompt_variants.get(prompt_variant, "")
 
 
 def _write_case_spec(
@@ -869,7 +871,7 @@ def _llm_judge_swe_pro(
     # The sentinel "No objective validation defined" is noise, not a test summary.
     test_summary = objective_summary if "F2P" in objective_summary else ""
     gateway = gateway or _worker_gateway()
-    model = os.environ.get("AUDITOR_MODEL") or judge.DEFAULT_JUDGE_MODEL
+    model = os.environ.get("AUDITOR_MODEL") or llm_transport.default_audit_model()
     result = judge.judge_functional_score(
         problem_statement=problem,
         diff=diff,
@@ -927,7 +929,7 @@ def _llm_judge_rubric(
     if not diff and not report:
         return  # nothing to grade → manual fallback
     gateway = gateway or _worker_gateway()
-    model = os.environ.get("AUDITOR_MODEL") or judge.DEFAULT_JUDGE_MODEL
+    model = os.environ.get("AUDITOR_MODEL") or llm_transport.default_audit_model()
     result = judge.judge_rubric_score(
         task=task,
         rubric=rubric,
@@ -952,59 +954,17 @@ def _read_run_text(path: Path) -> str:
 
 
 def _worker_gateway() -> Callable[[str, str, str], str]:
-    """An in-process gateway caller for the worker (URLs host-alias-rewritten).
+    """An in-process LLM caller for the worker.
 
-    Mirrors ``case_summary._gateway``: read GATEWAY_* from env/.env and, inside a
-    container, rewrite ``localhost`` to the docker host alias. Raises on missing
-    config or a bad response so the best-effort caller falls back to manual.
+    Thin adapter over :mod:`harness_lab_app.llm_transport`: the judges take an
+    injectable ``(model, system, user) -> str`` callable so they stay testable
+    without a network call. Raising on a missing transport or a bad response is
+    the contract — the best-effort caller catches it and falls back to manual
+    scoring, because an ungraded run is not a run that scored zero.
     """
-    import urllib.error
-    import urllib.request
-
-    from harness_lab_app.config import read_env_file_value
-    from harness_lab_app.executors import rewrite_localhost
-    from harness_lab_app.gateway_models import (
-        GATEWAY_USER_AGENT,
-        normalize_model_name,
-    )
-
-    base = (
-        os.environ.get("GATEWAY_BASE_URL")
-        or read_env_file_value("GATEWAY_BASE_URL")
-        or ""
-    ).strip()
-    token = (
-        os.environ.get("GATEWAY_TOKEN") or read_env_file_value("GATEWAY_TOKEN") or ""
-    ).strip()
-    if not base or not token:
-        raise RuntimeError("gateway not configured (GATEWAY_BASE_URL/TOKEN)")
-    if Path("/.dockerenv").exists():
-        base = rewrite_localhost(base, get_settings().docker_host_alias)
-    base = base.rstrip("/")
 
     def _call(model: str, system: str, user: str) -> str:
-        payload = {
-            "model": normalize_model_name(model),
-            "temperature": 0.2,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        }
-        request = urllib.request.Request(
-            f"{base}/chat/completions",
-            data=json.dumps(payload).encode(),
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "User-Agent": GATEWAY_USER_AGENT,
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=120) as resp:  # nosec B310
-            data = json.loads(resp.read())
-        return data["choices"][0]["message"]["content"]
+        return llm_transport.chat(model, system, user, timeout=120, temperature=0.2)
 
     return _call
 
@@ -1104,6 +1064,76 @@ def validate_run(run_id: str) -> None:
         # Re-export so the validation verdict and the new score reach the trace
         # too; deterministic ids mean this updates rather than duplicates.
         _export_langfuse_traces(session, run_id)
+
+
+@celery_app.task(name="harness_lab_app.tasks.gate_check_target", acks_late=True)
+def gate_check_target(gate_check_id: str) -> None:
+    """Run a repository's own gate at its pinned commit, with no agent.
+
+    The control measurement of an audit (ADR-0042): it separates "the agent
+    failed" from "this repository does not build in the runner image", which
+    are indistinguishable in a failed run and mean opposite things.
+
+    Stops at the first failing command on purpose — a test suite run in a
+    workspace whose setup failed measures the setup.
+    """
+    from harness_lab_app.gate_check_service import build_gate_check_spec, summarize
+    from harness_lab_app.models import GateCheck
+
+    init_db()
+    with Session(engine) as session:
+        row = session.exec(
+            select(GateCheck).where(GateCheck.gate_check_id == gate_check_id)
+        ).first()
+        if row is None:
+            return
+        try:
+            target = TargetService(session).get_target(row.target_id)
+            spec = build_gate_check_spec(target)
+        except Exception as exc:
+            row.status = "failed"
+            row.error = str(exc)
+            row.updated_at = utc_now()
+            session.add(row)
+            session.commit()
+            return
+
+        executor = get_executor()
+        results: list[dict[str, Any]] = []
+        for index, command in enumerate(spec["commands"]):
+            try:
+                handle = executor.start(f"{gate_check_id}-{index}", command["argv"])
+                output = "\n".join(message for _level, message in handle.iter_lines())
+                exit_code = handle.wait()
+            except Exception as exc:  # an executor failure is a result, not a crash
+                results.append(
+                    {
+                        "phase": command["phase"],
+                        "command": command["label"],
+                        "exit_code": -1,
+                        "output": f"executor error: {exc!r}",
+                    }
+                )
+                break
+            results.append(
+                {
+                    "phase": command["phase"],
+                    "command": command["label"],
+                    "exit_code": exit_code,
+                    "output": output,
+                }
+            )
+            if exit_code != 0:
+                break
+
+        verdict = summarize(results)
+        row.status = "done"
+        row.passed = verdict["passed"]
+        row.failed_phase = verdict["failed_phase"]
+        row.checks_json = verdict["checks"]
+        row.updated_at = utc_now()
+        session.add(row)
+        session.commit()
 
 
 @celery_app.task(name="harness_lab_app.tasks.audit_run", acks_late=True)

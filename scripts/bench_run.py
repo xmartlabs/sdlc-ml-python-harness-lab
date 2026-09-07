@@ -38,6 +38,10 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -217,6 +221,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "only (repeatable). Restored after the run.",
     )
     p.add_argument(
+        "--invoke-skill",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Tell the agent, at the start of every step, to invoke this skill "
+        "and follow it (repeatable). The skill must be available to the run: "
+        "governed and not disabled, or added with --extra-skill. Available is "
+        "not invoked (ADR-0041).",
+    )
+    p.add_argument(
         "--create-litellm-key",
         action="store_true",
         help="Attempt to create a LiteLLM virtual key for this run",
@@ -359,6 +373,34 @@ def apply_skill_views(skills: list) -> None:
         if tool.needs_manifest and tool.manifest_path:
             write_manifest(REPO_ROOT / tool.manifest_path, hashes)
         render_tool(REPO_ROOT, registry, tool, skills=skills)
+
+
+def add_skills_to_native(workspace: Path, skills: list, tool_id: str) -> dict:
+    """Put named skills inside a `native` workspace, changing nothing else.
+
+    Under `native` the agent's cwd is the cloned repository, so a skill sitting
+    in the lab is invisible to it — which made "their repo, plus this skill" an
+    arm that measured nothing at all (the same failure ADR-0041 documents for
+    availability-versus-use, one level down). The skills a run stages therefore
+    have to be *placed* in the workspace.
+
+    Unlike `inject_harness` this is not the lab's harness: no adapter file, no
+    agents, no governance documents, and nothing already in the repository's own
+    skills directory is removed. The arm stays "their setup plus these skills",
+    which is the only reading under which the comparison means anything.
+    """
+    from ml_python_base.skills_sync.config import DEFAULT_REGISTRY_PATH, load_registry
+    from ml_python_base.skills_sync.linker import add_skills
+
+    registry = load_registry(REPO_ROOT / DEFAULT_REGISTRY_PATH)
+    placed: list[str] = []
+    for tool in registry.tools:
+        if tool.id != tool_id:
+            continue
+        placed = sorted(add_skills(workspace, tool, skills))
+    if placed:
+        print(f"  ✓ Skills added to the native workspace: {', '.join(placed)}")
+    return {"mode": "native_skills", "tool": tool_id, "skills": placed}
 
 
 def inject_harness(workspace: Path, skills: list, tool_id: str) -> dict:
@@ -525,6 +567,27 @@ def render_prompt_body(text: str, run_id: str) -> str:
     )
 
 
+def skill_activation_block(invoke_skills: Sequence[str]) -> str:
+    """The lines that turn an available skill into an invoked one (ADR-0041).
+
+    Every step gets it, not just the first: each step is a fresh agent session
+    with no memory of having been asked. The wording names the mechanism
+    ("invoke", "read its SKILL.md") because "use caveman" alone reads as a
+    style hint, and the whole point is a Skill call that leaves a trace.
+    """
+    names = sorted({name for name in invoke_skills if name})
+    if not names:
+        return ""
+    listed = ", ".join(f"`{name}`" for name in names)
+    plural = "s" if len(names) > 1 else ""
+    return (
+        f"> **Skill activation (required):** before doing anything else, invoke "
+        f"the {listed} skill{plural} — read its SKILL.md and follow it for the "
+        f"whole task, in this step and every later one. This is part of the "
+        f"task, not a suggestion.\n\n"
+    )
+
+
 def generate_prompt(
     run_id: str,
     prompt_short: str,
@@ -534,6 +597,7 @@ def generate_prompt(
     session_id: str,
     out_dir: Path,
     repo_note: str | None = None,
+    invoke_skills: Sequence[str] = (),
 ) -> Path:
     """Write the final prompt: metadata header + location constraint + body.
 
@@ -559,6 +623,7 @@ def generate_prompt(
         f"EXECUTOR_MODEL: {executor_model or ''}\n"
         f"-->\n\n"
         f"{constraint}\n"
+        f"{skill_activation_block(invoke_skills)}"
         f"---\n\n"
     )
     prompt_path = out_dir / "prompt.md"
@@ -569,7 +634,11 @@ def generate_prompt(
 
 
 def generate_continuation_prompt(
-    run_id: str, step_n: int, steps_dir: Path, workspace_dir: Path | None = None
+    run_id: str,
+    step_n: int,
+    steps_dir: Path,
+    workspace_dir: Path | None = None,
+    invoke_skills: Sequence[str] = (),
 ) -> Path:
     """Write a continuation prompt for step N (step > 1).
 
@@ -626,12 +695,16 @@ def generate_continuation_prompt(
             f"6. If and ONLY if the game is fully complete, end with: ALL MILESTONES COMPLETE\n"
         )
     path = steps_dir / f"step-{step_n}-prompt.md"
-    path.write_text(text)
+    path.write_text(skill_activation_block(invoke_skills) + text)
     return path
 
 
 def generate_case_step_prompt(
-    run_id: str, step_n: int, steps_dir: Path, step_text: str
+    run_id: str,
+    step_n: int,
+    steps_dir: Path,
+    step_text: str,
+    invoke_skills: Sequence[str] = (),
 ) -> Path:
     """Write step N's prompt from the case's own ``step_prompts`` list.
 
@@ -652,7 +725,7 @@ def generate_case_step_prompt(
         f"complete, end with: ALL MILESTONES COMPLETE\n"
     )
     path = steps_dir / f"step-{step_n}-prompt.md"
-    path.write_text(text)
+    path.write_text(skill_activation_block(invoke_skills) + text)
     return path
 
 
@@ -688,7 +761,7 @@ def render_continuation_prompt_body(
 
 
 def generate_generic_continuation_prompt(
-    run_id: str, step_n: int, steps_dir: Path
+    run_id: str, step_n: int, steps_dir: Path, invoke_skills: Sequence[str] = ()
 ) -> Path:
     """Continuation prompt for step N of a case with no framing of its own.
 
@@ -717,7 +790,7 @@ def generate_generic_continuation_prompt(
         f"ALL MILESTONES COMPLETE\n"
     )
     path = steps_dir / f"step-{step_n}-prompt.md"
-    path.write_text(text)
+    path.write_text(skill_activation_block(invoke_skills) + text)
     return path
 
 
@@ -728,6 +801,7 @@ def generate_swe_continuation_prompt(
     spec: dict,
     last_eval: dict | None,
     in_repo_cwd: bool = False,
+    invoke_skills: Sequence[str] = (),
 ) -> Path:
     """Continuation prompt for a SWE-bench step (no Tetris/game framing).
 
@@ -789,7 +863,7 @@ def generate_swe_continuation_prompt(
         )
     )
     path = steps_dir / f"step-{step_n}-prompt.md"
-    path.write_text(text)
+    path.write_text(skill_activation_block(invoke_skills) + text)
     return path
 
 
@@ -904,6 +978,9 @@ def write_metadata(
         "skills_bundle": discover_skills(),
         "skills_disabled": sorted(set(getattr(args, "disable_skill", []) or [])),
         "skills_experimental": sorted(set(getattr(args, "extra_skill", []) or [])),
+        # Skills the prompt told the agent to invoke (ADR-0041). Part of the
+        # arm, so it also enters the condition hash below.
+        "skills_invoke": sorted(set(getattr(args, "invoke_skill", []) or [])),
         "subagents": discover_subagents(),
         "base_commit": task.get("base_commit", ""),
         "workspace": f"workspace/{args.run}",
@@ -942,6 +1019,7 @@ def write_metadata(
         ),
         skills_extra_hash_algo=STAGED_SKILL_HASH_ALGO,
         gateway_overlay_hash=apply_gateway_overlay(direct_models(args)),
+        skills_invoke=tuple(meta["skills_invoke"]),
     )
     path = out_dir / "metadata.json"
     path.write_text(json.dumps(meta, indent=2))
@@ -2244,6 +2322,16 @@ def main(argv: list[str] | None = None) -> int:
     # this exact set into the target, so a run with no ablation still needs to
     # know what "the harness" currently is.
     effective_skills = build_effective_skills(args.disable_skill, args.extra_skill)
+    # A skill the prompt asks for must be one the agent can see, or the run
+    # records "asked and not invoked" about a skill that was never there.
+    invisible = sorted(
+        set(args.invoke_skill) - {skill.name for skill in effective_skills}
+    )
+    if invisible:
+        sys.exit(
+            f"❌ --invoke-skill: not available to this run: {', '.join(invisible)} "
+            "(stage it with --extra-skill, or do not disable it)"
+        )
     if skills_ablation:
         apply_skill_views(effective_skills)
         import atexit
@@ -2305,6 +2393,15 @@ def main(argv: list[str] | None = None) -> int:
             _inject if harness_source == "injected" else None,
         )
 
+    # A `native` arm that stages skills has to have them placed in the
+    # workspace, or the agent — whose cwd is the clone — never sees them and the
+    # arm silently equals its own control.
+    if harness_source == "native" and provisions_repo:
+        wanted = set(args.extra_skill) | set(args.invoke_skill)
+        staged = [skill for skill in effective_skills if skill.name in wanted]
+        if staged:
+            harness_projection = add_skills_to_native(workspace, staged, args.harness)
+
     # Where the agent runs decides which harness it can see. Claude Code and
     # opencode auto-load their adapter file and native skills from the cwd, so
     # cwd IS the harness condition:
@@ -2345,6 +2442,7 @@ def main(argv: list[str] | None = None) -> int:
         session_id,
         out_dir,
         repo_note=repo_note,
+        invoke_skills=args.invoke_skill,
     )
     print(f"  Prompt:      {prompt_path.relative_to(REPO_ROOT)}")
 
@@ -2469,6 +2567,7 @@ def main(argv: list[str] | None = None) -> int:
                         case_spec,
                         last_swe_eval,
                         in_repo_cwd=agent_cwd is not None,
+                        invoke_skills=args.invoke_skill,
                     )
                 elif step_n - 1 < len(case_step_prompts):
                     # The case author wrote this step; neither canned
@@ -2479,6 +2578,7 @@ def main(argv: list[str] | None = None) -> int:
                         step_n,
                         steps_dir,
                         case_step_prompts[step_n - 1],
+                        invoke_skills=args.invoke_skill,
                     )
                 elif runs_path is not None:
                     # Curated benchmark lane only: this prompt is Tetris/pygame
@@ -2489,6 +2589,7 @@ def main(argv: list[str] | None = None) -> int:
                         step_n,
                         steps_dir,
                         workspace_dir=WORKSPACE_ROOT / args.run,
+                        invoke_skills=args.invoke_skill,
                     )
                     # Also copy step prompt to clipboard so user can paste if needed
                     copy_to_clipboard(step_prompt_path.read_text())
@@ -2497,7 +2598,7 @@ def main(argv: list[str] | None = None) -> int:
                     # framing of its own, and inheriting Tetris's would tell the
                     # agent to smoke-test a main.py that does not exist.
                     step_prompt_path = generate_generic_continuation_prompt(
-                        args.run, step_n, steps_dir
+                        args.run, step_n, steps_dir, invoke_skills=args.invoke_skill
                     )
                 step_log = steps_dir / f"step-{step_n}.log"
                 print(f"\n  --- Step {step_n}/{max_steps} ---")

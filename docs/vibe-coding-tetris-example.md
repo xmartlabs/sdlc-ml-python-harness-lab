@@ -1,5 +1,9 @@
 # Vibe-Coding a Tetris Game: How Each AI Tool Executes the Same Task
 
+> Template-era illustrative walkthrough: it describes how each tool reads the
+> governed harness, not the lab's run pipeline. Some details have since moved
+> (e.g. Codex now has a generated `.codex/skills/` and `.codex/agents/`).
+
 ## The Prompt
 
 ```
@@ -123,9 +127,10 @@ both tools read `.github/sdlc.md`.
 ## 3. Codex (OpenAI Codex UI)
 
 ### Session bootstrap
-Codex reads `AGENTS.md` at session start. Skills are referenced directly from
-`.github/skills/` — there is no `.codex/skills/` native directory. The model must
-read skill files proactively when a skill is invoked in the prompt context.
+Codex reads `AGENTS.md` at session start. Skills are projected into the generated
+`.codex/skills/` (agents into `.codex/agents/`), with `.github/skills/` as the source
+of truth. The model must still read skill files proactively when a skill is invoked
+in the prompt context.
 
 ### Skills activated
 Same governed set. The model reads `.github/skills/<name>.md` files directly.
@@ -229,7 +234,7 @@ layer separation the plan phase would have established.
 | Dimension | Claude Code | OpenCode | Codex | Antigravity | Copilot |
 |---|---|---|---|---|---|
 | **Bootstrap file** | `CLAUDE.md` | `opencode.json` → `OPENCODE.md` | `AGENTS.md` | `.agents/rules/GEMINI.md` (`always_on`) | `.github/copilot-instructions.md` |
-| **Skill discovery** | Symlinks in `.claude/skills/` | Symlinks in `.opencode/skills/` | Direct read from `.github/skills/` | Copies in `.agents/skills/` + manifest | Direct read from `.github/skills/` |
+| **Skill discovery** | Symlinks in `.claude/skills/` | Symlinks in `.opencode/skills/` | Generated `.codex/skills/` | Copies in `.agents/skills/` + manifest | Direct read from `.github/skills/` |
 | **Agent delegation** | Real sub-agents (`.claude/agents/`) via `Agent` tool | Real sub-agents (`.opencode/agents/`) | Collapsed inline | Collapsed inline | Collapsed inline |
 | **Model tiers used** | planner=opus-4-8, executor=sonnet-4-6, fast=haiku-4-5 | Cloud default; self-hosted via `.github/portability.md` | Single model (GPT-4o/o1) | Single model (Gemini 2.x) | Single model (GPT-4o) |
 | **Governance auto-load** | Explicit instruction | Explicit + Level 5 structured | Explicit instruction | Guaranteed (`always_on`) | Explicit instruction |

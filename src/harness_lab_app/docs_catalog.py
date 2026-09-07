@@ -13,6 +13,13 @@ from harness_lab_app.config import get_settings
 # Order defines display order; `group` buckets them in the Guide page.
 _DOCS: list[dict[str, str]] = [
     {
+        "slug": "onboarding",
+        "file": "onboarding.md",
+        "group": "Start here",
+        "title": "Onboarding",
+        "description": "Credentials (gateway or Claude), .env, first run, troubleshooting.",
+    },
+    {
         "slug": "web-ui",
         "file": "guide-web-ui.md",
         "group": "Start here",
@@ -24,7 +31,7 @@ _DOCS: list[dict[str, str]] = [
         "file": "runbook-claude-codex.md",
         "group": "How-to",
         "title": "Test with claude & codex",
-        "description": "Host mode, pick a native model, score, compare.",
+        "description": "claude in Docker, codex in host mode, pick a native model, score, compare.",
     },
     {
         "slug": "improvement-cycle",
@@ -32,6 +39,27 @@ _DOCS: list[dict[str, str]] = [
         "group": "How-to",
         "title": "Continuous-improvement cycle",
         "description": "Turn a run's audit into GitHub issues for your repos.",
+    },
+    {
+        "slug": "target-repositories",
+        "file": "guide-target-repositories.md",
+        "group": "How-to",
+        "title": "Target repositories",
+        "description": "Clone it yourself, pin a commit, gate check, derive cases.",
+    },
+    {
+        "slug": "skill-validation",
+        "file": "guide-skill-validation.md",
+        "group": "How-to",
+        "title": "Validate a skill",
+        "description": "Import, A/B, enforce invocation, promote.",
+    },
+    {
+        "slug": "run-continuation",
+        "file": "guide-run-continuation.md",
+        "group": "How-to",
+        "title": "Continue a run",
+        "description": "Push a stopped run further with a new prompt.",
     },
     {
         "slug": "swebench",
@@ -46,6 +74,20 @@ _DOCS: list[dict[str, str]] = [
         "group": "Reference",
         "title": "Harness adapters",
         "description": "How opencode / codex / claude are wired; host mode.",
+    },
+    {
+        "slug": "langfuse",
+        "file": "guide-langfuse-observability.md",
+        "group": "Reference",
+        "title": "Langfuse observability",
+        "description": "Read a run turn by turn.",
+    },
+    {
+        "slug": "known-limitations",
+        "file": "known-limitations.md",
+        "group": "Reference",
+        "title": "Known limitations",
+        "description": "Accepted debt, stated up front.",
     },
 ]
 

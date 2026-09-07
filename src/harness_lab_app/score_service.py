@@ -124,6 +124,32 @@ class ScoreService:
             # the surface checks drop out.
             pass
 
+        # The skills this run is about (ADR-0041): what it staged or was asked
+        # to invoke, plus what a sibling arm of its experiment removes — the
+        # baseline of an ablation is "about" the skill being taken away. Minus
+        # what this run itself cannot see.
+        under_test: set[str] = set(config.skills_extra) | set(config.skills_invoke)
+        if run.experiment_id:
+            from harness_lab_app.experiment_service import ExperimentService
+
+            try:
+                for condition in ExperimentService(self.session).conditions(
+                    run.experiment_id
+                ):
+                    for key in ("skills_extra", "skills_disabled", "skills_invoke"):
+                        under_test.update(condition.overrides.get(key) or [])
+            except ValueError:
+                pass
+        # Only what this run could actually open: a staged skill another arm
+        # carries is not on this run's menu, and scoring "not invoked" against
+        # it would put a zero on the baseline of every Add-skills experiment.
+        from harness_lab_app.skills_catalog import known_skill_names
+
+        visible = (known_skill_names() - set(config.skills_disabled)) | set(
+            config.skills_extra
+        )
+        under_test &= visible
+
         # The harness-behaviour evaluator reads read-coverage off attribution,
         # and that coverage is only meaningful against the run's own governance
         # surface — which is what AttributionService resolves (ADR-0031).
@@ -154,6 +180,7 @@ class ScoreService:
             diff_text=diff_text,
             files_expected=expected,
             files_forbidden=forbidden,
+            skills_under_test=tuple(sorted(under_test)),
         )
 
     def evaluate_run(self, run_id: str, profile: str = "default") -> list[Score]:

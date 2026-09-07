@@ -110,13 +110,54 @@ def _check_gateway() -> tuple[str, str, list[str]]:
     base = read_env_file_value("GATEWAY_BASE_URL")
     token = read_env_file_value("GATEWAY_TOKEN")
     if not base or not token:
-        return WARN, "GATEWAY_BASE_URL / GATEWAY_TOKEN are not configured.", []
+        return (
+            WARN,
+            "GATEWAY_BASE_URL / GATEWAY_TOKEN are not configured. The opencode "
+            "lane needs them; the lab's own LLM calls fall back to the Claude "
+            "CLI (see the LLM transport row).",
+            [],
+        )
     if Path("/.dockerenv").exists():
         base = rewrite_localhost(base, get_settings().docker_host_alias)
     models = list_gateway_models(base_url=base, token=token)
     if not models:
         return ERROR, "The gateway returned no models (unreachable or bad token).", []
     return OK, f"{len(models)} models served.", []
+
+
+def _check_llm_transport() -> tuple[str, str, list[str]]:
+    """How the lab's own LLM calls — audits, judges, summaries — reach a model.
+
+    This is a different question from whether the gateway is up: the audit and
+    the trajectory judge run over a transport that prefers the gateway and falls
+    back to the Claude Code CLI, so a subscription-only lab is healthy here even
+    when the gateway row warns (ADR-0043).
+    """
+    from harness_lab_app import llm_transport
+
+    transport = llm_transport.available_transport()
+    if transport == "gateway":
+        return OK, "Gateway: audits, judges and summaries use your models.", []
+    if transport == "claude_cli":
+        return (
+            OK,
+            f"Claude CLI: audits and judges run headless as "
+            f"{llm_transport.default_audit_model('claude_cli')}.",
+            [],
+        )
+    if llm_transport.claude_cli_credential() and not llm_transport.claude_cli_path():
+        return (
+            WARN,
+            "A Claude credential is set but the `claude` CLI is not on PATH "
+            "here; rebuild the api image (`make app-down && make app-up`).",
+            [],
+        )
+    return (
+        WARN,
+        "No transport configured: set GATEWAY_BASE_URL + GATEWAY_TOKEN, or "
+        "CLAUDE_CODE_OAUTH_TOKEN. Audits and LLM-judged scores are unavailable.",
+        [],
+    )
 
 
 def _check_redis() -> tuple[str, str, list[str]]:
@@ -307,6 +348,7 @@ def collect_health(session: Session) -> dict:
 
     checks = [
         _timed("gateway", "AI gateway", _check_gateway),
+        _timed("llm_transport", "LLM transport", _check_llm_transport),
         _timed("redis", "Redis broker", _check_redis),
         _timed("worker", "Celery worker", lambda: _check_worker(facts)),
         _timed(

@@ -6,6 +6,8 @@ import type {
   ImprovementsDoc,
   CaseCreatePayload,
   CaseCandidates,
+  CaseDraftRequest,
+  CaseDraftResponse,
   ConditionRecord,
   CaseRecord,
   ContextProbeResult,
@@ -34,6 +36,8 @@ import type {
   OverviewReport,
   OfficialReferenceRow,
   ReadinessReport,
+  CheckoutState,
+  GateCheckRecord,
   GroupIssueResult,
   ProposalIssue,
   RunConfigPayload,
@@ -380,6 +384,24 @@ export const api = {
     ),
   getTargetReadiness: (targetId: string) =>
     request<ReadinessReport>(`/api/targets/${targetId}/readiness`),
+  // The engineer's own clone: the lab watches for it, it never makes it.
+  // Their terminal has their credentials; a run container does not.
+  getCheckout: (targetId: string) =>
+    request<CheckoutState>(`/api/targets/${targetId}/checkout`),
+  // Freeze the repository at the commit their clone is on. Every run, report
+  // and derived case reads that commit until somebody re-pins.
+  pinCheckout: (targetId: string) =>
+    request<CheckoutState>(`/api/targets/${targetId}/checkout/pin`, {
+      method: "POST"
+    }),
+  // Measure the repository alone: its own gate, at the pin, with no agent —
+  // so a red run afterwards is a fact about the agent, not about the image.
+  startGateCheck: (targetId: string) =>
+    request<GateCheckRecord>(`/api/targets/${targetId}/gate-check`, {
+      method: "POST"
+    }),
+  getGateCheck: (targetId: string) =>
+    request<GateCheckRecord | null>(`/api/targets/${targetId}/gate-check`),
   // Inspect a repository before it is saved: the same readiness report a target
   // would produce, so a mismatch (unsupported runtime, or a command whose
   // toolchain the repo lacks) is caught before creation rather than at a run.
@@ -398,13 +420,22 @@ export const api = {
       `/api/targets/${targetId}/derive-cases?limit=${limit}`,
       { method: "POST" }
     ),
-  listCases: () => request<CaseRecord[]>("/api/cases"),
+  listCases: (originTargetId = "") =>
+    request<CaseRecord[]>(
+      originTargetId
+        ? `/api/cases?origin_target_id=${encodeURIComponent(originTargetId)}`
+        : "/api/cases"
+    ),
   createCase: (payload: CaseCreatePayload) =>
     request<CaseRecord>("/api/cases", {
       method: "POST",
       body: JSON.stringify(payload)
     }),
   getCase: (caseId: string) => request<CaseRecord>(`/api/cases/${caseId}`),
+  getCasePromptContent: (caseId: string, variant: string) =>
+    request<{ variant: string; content: string }>(
+      `/api/cases/${caseId}/prompt-content?variant=${encodeURIComponent(variant)}`
+    ),
   updateCase: (caseId: string, payload: CaseCreatePayload) =>
     request<CaseRecord>(`/api/cases/${caseId}`, {
       method: "PATCH",
@@ -436,7 +467,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ instance_id: instanceId })
     }),
+  generateCaseDraft: (payload: CaseDraftRequest) =>
+    request<CaseDraftResponse>("/api/cases/generate-draft", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
   seedTetris: () => request<CaseRecord>("/api/cases/seed/tetris", { method: "POST" }),
+
   listRuns: () => request<RunRecord[]>("/api/runs"),
   getLeaderboard: () => request<LeaderboardRunRow[]>("/api/leaderboard"),
   getLeaderboardReference: () =>

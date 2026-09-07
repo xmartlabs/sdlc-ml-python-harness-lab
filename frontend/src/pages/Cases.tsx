@@ -1,9 +1,17 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
 import { SWE_CASE_TYPES, caseTestCounts, shortInstanceLabel } from "../caseLabels";
 import { EmptyState } from "../components/EmptyState";
-import type { CaseCreatePayload, CaseRecord, SwebenchProInstance } from "../types";
+import { Spinner } from "../components/Spinner";
+import { IconAlert, IconSparkles } from "../components/icons";
+import type {
+  CaseCreatePayload,
+  CaseRecord,
+  DroppedCommand,
+  ModelOption,
+  SwebenchProInstance
+} from "../types";
 
 type CasesProps = {
   cases: CaseRecord[];
@@ -58,6 +66,16 @@ export function Cases({
   const [description, setDescription] = useState("");
   const [promptBody, setPromptBody] = useState("Describe the task here.");
   const [maxSteps, setMaxSteps] = useState(1);
+  // One command per line, the shape the case stores and the runner executes.
+  const [commandText, setCommandText] = useState("");
+  const [stepPrompts, setStepPrompts] = useState<string[]>([]);
+  const [aiDescription, setAiDescription] = useState("");
+  const [aiModel, setAiModel] = useState("");
+  const [aiNotice, setAiNotice] = useState("");
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiDropped, setAiDropped] = useState<DroppedCommand[]>([]);
+  const [isDrafting, setIsDrafting] = useState(false);
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [swebenchId, setSwebenchId] = useState("pallets__flask-4992");
   const [isImporting, setIsImporting] = useState(false);
@@ -71,6 +89,22 @@ export function Cases({
   const [proMessage, setProMessage] = useState<string | null>(null);
   const [proError, setProError] = useState<string | null>(null);
   const [proExpandedId, setProExpandedId] = useState<string | null>(null);
+  // The assistant's model menu. A catalog the lab cannot reach is not an
+  // error here: the request falls back to the transport's own default model.
+  useEffect(() => {
+    let active = true;
+    api
+      .listModels(false)
+      .then((catalog) => {
+        if (!active) return;
+        setModelOptions(catalog.models);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const templateLabel = useMemo(
     () => CASE_TEMPLATES.find((item) => item.value === template)?.label ?? template,
     [template]
@@ -166,6 +200,66 @@ export function Cases({
       : items.filter((item) => item.repo === proRepoFilter);
   }, [proCatalog, proRepoFilter]);
 
+  /**
+   * Fill the form from one sentence.
+   *
+   * The assistant returns the whole case — type, id, name, description,
+   * instruction, per-step prompts and validation commands — because this form
+   * saves all of it in one press. Nothing is created here: every field lands
+   * editable, so the draft is a starting point and not a decision.
+   */
+  const handleGenerate = async () => {
+    setIsDrafting(true);
+    setAiError(null);
+    setAiNotice("");
+    setAiDropped([]);
+    try {
+      const draft = await api.generateCaseDraft({
+        description: aiDescription,
+        model: aiModel || undefined,
+        selected_skills: [],
+        existing_case_ids: cases.map((item) => item.case_id)
+      });
+      const draftType = draft.case_type || "single_prompt";
+      setTemplate(draftType);
+      if (draft.case_id) setCaseId(draft.case_id);
+      if (draft.subject) setName(draft.subject);
+      if (draft.description) setDescription(draft.description);
+      if (draft.instruction) setPromptBody(draft.instruction);
+      setStepPrompts(draft.step_prompts ?? []);
+      // The server screened these: what is left is one runnable command per
+      // line, which is the only shape this textarea preserves.
+      setCommandText((draft.validation_commands ?? []).join("\n"));
+      if (draft.max_steps) setMaxSteps(draft.max_steps);
+      setAiDropped(draft.dropped_commands ?? []);
+
+      const kept = draft.validation_commands?.length ?? 0;
+      const retried = draft.attempts > 1 ? " after one corrective retry" : "";
+      const plan =
+        draftType === "multi_step" && (draft.step_prompts?.length ?? 0) > 0
+          ? `, a ${1 + (draft.step_prompts?.length ?? 0)}-step plan`
+          : "";
+      if (kept === 0) {
+        setAiError(
+          `The draft has no runnable validation command${retried}. Without one the ` +
+            "case cannot score itself and every run waits for a manual score — " +
+            "write one below, or describe the check you want and generate again."
+        );
+      } else {
+        setAiNotice(
+          `Drafted a ${draftType.replace(/_/g, " ")} case${plan} with ${kept} ` +
+            `validation command(s)${retried}. Review every field, then Create case.`
+        );
+      }
+    } catch (error) {
+      setAiError(
+        error instanceof Error ? error.message : "Unable to generate the case draft."
+      );
+    } finally {
+      setIsDrafting(false);
+    }
+  };
+
   const handleCreate = async () => {
     setIsSaving(true);
     try {
@@ -176,17 +270,24 @@ export function Cases({
         description,
         tags: ["ui"],
         prompt_variants: { default: promptBody },
+        // A drafted plan drives step 2 onward; typing the steps into the
+        // prompt body keeps the old behaviour for a hand-written case.
         step_prompts:
           template === "multi_step"
-            ? promptBody
-                .split("\n")
-                .map((item) => item.trim())
-                .filter(Boolean)
+            ? stepPrompts.length > 0
+              ? stepPrompts
+              : promptBody
+                  .split("\n")
+                  .map((item) => item.trim())
+                  .filter(Boolean)
             : [],
         success_criteria: {},
         scoring_rubric: "",
         constraints: [],
-        validation_commands: [],
+        validation_commands: commandText
+          .split("\n")
+          .map((item) => item.trim())
+          .filter(Boolean),
         max_steps: maxSteps
       });
       onSelectCase(created.case_id);
@@ -214,10 +315,10 @@ export function Cases({
       <section className="panel">
         <div className="panel-head">
           <h2>Import SWE-bench instance</h2>
-          <span className="muted">SWE-bench Lite (HuggingFace)</span>
+          <span className="muted">SWE-bench Lite / Verified (HuggingFace)</span>
         </div>
         <p className="muted">
-          Fetches one instance from SWE-bench Lite and stores it as a case (DB only, no
+          Fetches one instance from SWE-bench Lite / Verified and stores it as a case (DB only, no
           YAML on disk). Equivalent CLI: <code>make swebench-import INSTANCE=&lt;id&gt;</code>.
           Prove the harness first with <code>make swebench-selftest INSTANCE=&lt;id&gt;</code>.
         </p>
@@ -372,6 +473,90 @@ export function Cases({
           <h2>New case</h2>
           <span className="muted">{templateLabel}</span>
         </div>
+
+        {/* AI case assistant: optional, fills every field below. */}
+        <div className="assist-card">
+          <div className="assist-card-head">
+            <strong className="assist-card-title">
+              <IconSparkles size={16} /> Draft it with AI (optional)
+            </strong>
+            <span className="muted small">
+              Shapes the whole case — type, id, instruction, steps and validation
+            </span>
+          </div>
+
+          <label>
+            <span>Describe the case you want, in plain language</span>
+            <textarea
+              onChange={(event) => setAiDescription(event.target.value)}
+              placeholder="e.g. A CLI that reads a CSV of transactions and writes a monthly summary as JSON, with tests for empty files and malformed rows."
+              rows={2}
+              value={aiDescription}
+            />
+          </label>
+
+          <div className="assist-card-row">
+            <label>
+              {/* Empty means "let the transport pick": the gateway's summary-tier
+                  model, or Claude Haiku on a subscription lab. The catalog's
+                  default is an *executor* model, which drafts prose worse than
+                  it writes code, so it is offered rather than preselected. */}
+              <span>Model</span>
+              <select
+                onChange={(event) => setAiModel(event.target.value)}
+                value={aiModel}
+              >
+                <option value="">Transport default (recommended)</option>
+                {modelOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label || option.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <button
+              className="primary"
+              disabled={isDrafting || !aiDescription.trim()}
+              onClick={() => void handleGenerate()}
+              type="button"
+            >
+              {isDrafting ? (
+                <Spinner label="Drafting…" />
+              ) : (
+                <>
+                  <IconSparkles size={14} /> Generate the case
+                </>
+              )}
+            </button>
+          </div>
+
+          {aiNotice ? <p className="callout callout--ok">{aiNotice}</p> : null}
+          {aiError ? (
+            <div className="callout callout--warning">
+              <IconAlert size={16} />
+              <span>{aiError}</span>
+            </div>
+          ) : null}
+          {aiDropped.length > 0 ? (
+            <div className="callout callout--warning">
+              <IconAlert size={16} />
+              <div>
+                <strong>Left out of the draft — the lab would not run these:</strong>
+                <ul className="blocking-list dropped-list">
+                  {aiDropped.map((item) => (
+                    <li key={item.command}>
+                      <code>{item.command.split("\n")[0]}</code>
+                      {item.command.includes("\n") ? " …" : ""}
+                      <span className="muted small"> — {item.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
         <div className="form-grid">
           <label>
             <span>Template</span>
@@ -408,7 +593,33 @@ export function Cases({
             <span>Prompt body</span>
             <textarea value={promptBody} onChange={(event) => setPromptBody(event.target.value)} />
           </label>
+          {template === "multi_step" && stepPrompts.length > 0 ? (
+            <label className="full">
+              <span>Step prompts — one per line, driving step 2 onward</span>
+              <textarea
+                onChange={(event) =>
+                  setStepPrompts(
+                    event.target.value.split("\n").map((item) => item.trim())
+                  )
+                }
+                rows={Math.min(stepPrompts.length + 1, 8)}
+                value={stepPrompts.join("\n")}
+              />
+            </label>
+          ) : null}
+          <label className="full">
+            <span>Validation commands — one per line</span>
+            <textarea
+              onChange={(event) => setCommandText(event.target.value)}
+              placeholder="pytest {workspace}/test_summary.py -q"
+              value={commandText}
+            />
+          </label>
         </div>
+        <p className="muted small">
+          A case with no validation command cannot score itself: every run of it
+          stops in <code>awaiting_manual_score</code> until a person grades it.
+        </p>
         <div className="panel-actions">
           <button className="primary" disabled={isSaving} onClick={handleCreate} type="button">
             {isSaving ? "Saving..." : "Create case"}

@@ -22,6 +22,7 @@ import {
 } from "../harnesses";
 import type {
   AggregateRecord,
+  CaseOutcomeCell,
   ConditionSummary,
   DeltaRecord,
   ExperimentRecord,
@@ -36,7 +37,8 @@ import type {
 const MODE_LABEL: Record<string, string> = {
   harness_evaluation: "Harness evaluation",
   cross_repo: "Cross-repo",
-  discovery: "Discovery"
+  discovery: "Discovery",
+  subject_validation: "Subject validation"
 };
 
 /** What each mode does and does not license — shown, not assumed known. */
@@ -46,7 +48,9 @@ const MODE_CAVEAT: Record<string, string> = {
   cross_repo:
     "Harness and model held fixed; the repository varies. Read per repository: scores from different codebases are not equivalent conditions and must never be pooled.",
   discovery:
-    "No control. Exploratory evidence, not experimental evidence — this mode describes, it does not demonstrate."
+    "No control. Exploratory evidence, not experimental evidence — this mode describes, it does not demonstrate.",
+  subject_validation:
+    "No control, nothing ablated. Reports how reliably the declared subject passed under each harness/model arm — one rate per arm, never pooled, and nothing about the harness."
 };
 
 function formatNumber(value: number | null | undefined, digits = 3): string {
@@ -124,8 +128,8 @@ const MOVEMENT_CLASS: Record<string, string> = {
  * lab does not run hypothesis tests and must not sound as though it does.
  */
 /** A rate reads as a percentage, a cost as money, everything else as a number. */
-function formatHighlight(metric: string, value: number | null): string {
-  if (value === null) {
+function formatHighlight(metric: string, value: number | null | undefined): string {
+  if (value === null || value === undefined) {
     return "—";
   }
   if (metric.endsWith("_rate") || metric.endsWith("_ratio")) {
@@ -135,6 +139,61 @@ function formatHighlight(metric: string, value: number | null): string {
     return `$${value.toFixed(2)}`;
   }
   return formatNumber(value);
+}
+
+/**
+ * The per-arm, per-case grid for a mode with no control: counts per cell, with
+ * the repetitions kept. There is no movement column because there is nothing
+ * to move relative to.
+ */
+function CaseOutcomeGrid({
+  outcomes
+}: {
+  outcomes: Record<string, Record<string, CaseOutcomeCell>>;
+}) {
+  const labels = Object.keys(outcomes);
+  const caseIds = [
+    ...new Set(labels.flatMap((label) => Object.keys(outcomes[label] ?? {})))
+  ];
+  if (caseIds.length === 0) {
+    return null;
+  }
+  return (
+    <div className="card">
+      <h3>Per case, per arm</h3>
+      <p className="muted small">
+        Passed of scored, for every cell. Each arm is read down its own column —
+        the columns are not combined.
+      </p>
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>Case</th>
+            {labels.map((label) => (
+              <th key={label}>{label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {caseIds.map((caseId) => (
+            <tr key={caseId}>
+              <td className="mono small">{caseId}</td>
+              {labels.map((label) => {
+                const cell = outcomes[label]?.[caseId];
+                return (
+                  <td key={label}>
+                    {!cell || cell.scored_runs === 0
+                      ? "—"
+                      : `${cell.successes} of ${cell.scored_runs}`}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
@@ -167,11 +226,28 @@ function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
       {verdict.highlights.length > 0 ? (
         <div className="verdict-highlights">
           {verdict.highlights.map((highlight) => (
-            <div className="verdict-highlight" key={highlight.metric}>
+            <div
+              className="verdict-highlight"
+              key={`${highlight.label}:${highlight.metric}`}
+            >
               <span>{highlight.label}</span>
               <strong>
-                {formatHighlight(highlight.metric, highlight.control)} →{" "}
-                {formatHighlight(highlight.metric, highlight.treatment)}
+                {highlight.scored_runs === undefined ? (
+                  <>
+                    {formatHighlight(highlight.metric, highlight.control)} →{" "}
+                    {formatHighlight(highlight.metric, highlight.treatment)}
+                  </>
+                ) : (
+                  /* One arm on its own: a rate with nothing to compare it
+                     against, so it is shown with the counts behind it rather
+                     than as an arrow between two numbers. */
+                  <>
+                    {formatHighlight(highlight.metric, highlight.rate)}{" "}
+                    <span className="muted">
+                      ({highlight.successes} of {highlight.scored_runs})
+                    </span>
+                  </>
+                )}
               </strong>
             </div>
           ))}
@@ -460,7 +536,12 @@ function LaunchPanel({
               score_mode: "manual",
               max_steps: locked.max_steps,
               resume: false,
-              dry_run: false
+              dry_run: false,
+              // Dropping these turns a subject-validation relaunch into a
+              // config mismatch the backend refuses.
+              skills_disabled: locked.skills_disabled ?? [],
+              skills_extra: locked.skills_extra ?? [],
+              skills_invoke: locked.skills_invoke ?? []
             }
           : buildConfig(caseIds[0] ?? "")
       );
@@ -509,6 +590,24 @@ function LaunchPanel({
             <span>Step budget</span>
             <strong>{locked.max_steps}</strong>
           </div>
+          {locked.skills_extra?.length ? (
+            <div>
+              <span>Skills added</span>
+              <strong>{locked.skills_extra.join(", ")}</strong>
+            </div>
+          ) : null}
+          {locked.skills_invoke?.length ? (
+            <div>
+              <span>Skills asked for</span>
+              <strong>{locked.skills_invoke.join(", ")}</strong>
+            </div>
+          ) : null}
+          {locked.skills_disabled?.length ? (
+            <div>
+              <span>Skills removed</span>
+              <strong>{locked.skills_disabled.join(", ")}</strong>
+            </div>
+          ) : null}
         </div>
         {error ? (
           <ErrorBanner message={error} onDismiss={() => setError(null)} />
@@ -537,12 +636,9 @@ function LaunchPanel({
       <div className="card">
         <h3>Run this experiment</h3>
         <p className="callout callout--warning">
-          This experiment has no cases, so there is nothing to launch. It was
-          created before any case was attached — re-run the flow that created it
-          (for a repository audit: accept at least one derived case, then create
-          the discovery experiment again) or create a new experiment from{" "}
-          <Link to="/evaluate/new">New evaluation</Link>. Experiments are
-          immutable once declared, so this draft simply stays inert.
+          This experiment has no cases, so there is nothing to launch. Create a
+          new one from <Link to="/evaluate/new">New evaluation</Link> or from the
+          repository&apos;s workbench; experiments are immutable once declared.
         </p>
       </div>
     );
@@ -752,6 +848,11 @@ function ExperimentDetail({
           {summary.repetitions === 1 ? "" : "s"} per arm
         </p>
         <p className="muted small">{MODE_CAVEAT[summary.mode]}</p>
+        {summary.subject ? (
+          <p className="muted">
+            Subject under test: <strong>{summary.subject}</strong>
+          </p>
+        ) : null}
         {summary.conditions.flatMap((condition) => condition.warnings).length > 0 && (
           <ul className="warning-list">
             {[
@@ -771,6 +872,10 @@ function ExperimentDetail({
       </div>
 
       <LaunchPanel experimentId={summary.experiment_id} onLaunched={onLaunched} />
+
+      {summary.mode === "subject_validation" && summary.case_outcomes ? (
+        <CaseOutcomeGrid outcomes={summary.case_outcomes} />
+      ) : null}
 
       {summary.comparisons.map((comparison) => (
         <div className="card" key={`${comparison.control}-${comparison.treatment}`}>
@@ -949,7 +1054,8 @@ export function Experiments() {
       <HelpPanel title="What an experiment is, and what a batch is not">
         <p>
           An experiment states its <strong>question</strong> before anything runs, and
-          declares its arms up front — one control, the rest treatments. The lab
+          declares its arms up front — a control and its treatments, or, for subject
+          validation, peer arms with no control. The lab
           checks the design against the mode and refuses one that cannot answer the
           question it claims to: a comparison that varies both the harness and the
           repository produces a number that cannot be attributed to either.
@@ -996,7 +1102,7 @@ export function Experiments() {
                 </Link>
               </div>
             }
-            description="Start by choosing what you want to learn. An experiment needs a question, a mode, cases and at least one control condition."
+            description="Start by choosing what you want to learn. An experiment needs a question, a mode, cases and at least one arm."
             title="No experiments yet."
           />
         ) : (
