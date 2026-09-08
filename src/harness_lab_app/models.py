@@ -315,6 +315,12 @@ class Experiment(SQLModel, table=True):
     # The regression suite this experiment was generated from, when it was
     # (ADR-0037). Empty for a hand-designed experiment.
     suite_id: str = ""
+    # What the design was warned about when it was created (ADR-0046). The
+    # wizard's objections used to die in the 201 response body, so a design
+    # someone was told was confounded rendered a fully confident verdict
+    # afterwards with no trace of the objection. Persisting them is what lets
+    # `summarize` put them back in front of the reader.
+    design_notes: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     notes: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

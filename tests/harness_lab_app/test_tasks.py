@@ -827,3 +827,38 @@ def test_seed_continuation_workspace_fails_loudly_with_nothing_to_copy(
     with pytest.raises(RuntimeError) as excinfo:
         tasks._seed_continuation_workspace("gone-C-001", "gone")
     assert "workspace is gone" in str(excinfo.value)
+
+
+def test_a_harness_that_died_leaves_no_capability_score(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A non-zero exit must not reach the scorer (ADR-0046).
+
+    Until `bench_run` propagated its `harness_error`, a dead SSE connection
+    archived at exit 0 satisfied the success path above: the run was recorded
+    completed and auto-scored 0, and the corpus read a broken connection as a
+    model that could not solve the case. The repair is not the state string —
+    it is that objective validation and auto-scoring sit behind `failure is
+    None`, so no `task_validation_pass` is fabricated for a run that never
+    measured the subject.
+    """
+    engine = make_engine()
+    create_pending_run(engine, "task-harness-error")
+    scored: list[str] = []
+    monkeypatch.setattr(
+        tasks, "_autoscore_run", lambda _session, run_id: scored.append(run_id)
+    )
+    monkeypatch.setattr(
+        tasks,
+        "_run_objective_validation",
+        lambda _session, run_id: scored.append(f"validate:{run_id}"),
+    )
+    executor = FakeExecutor(FakeHandle([("info", "SSE connection reset")], exit_code=2))
+
+    _execute_run_body("task-harness-error", executor, db_engine=engine)
+
+    state, exit_code, failure = get_run_state(engine, "task-harness-error")
+    assert state == RunState.failed
+    assert exit_code == 2
+    assert failure is not None
+    assert scored == []

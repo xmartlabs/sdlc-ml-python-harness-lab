@@ -340,9 +340,18 @@ use *Governance source* (`native` vs `injected`) against an external repository
 both notes above the arm list.
 
 **Ask the agent to use the harness** appears under the prompt pair whenever the
-factor is *Full harness*. A prompt written in this UI says nothing about
+factor is *Full harness*, and is **on by default** — as is *Enforce skill use* for
+*Add skills*. Both default on because the treatment there is a skill the arm already
+has, and an arm that never invokes it measured availability
+([ADR-0046](adr/0046-an-experiment-reports-validity-before-it-reports-a-verdict.md)).
+Turn it off only to ask the different question: whether the agent reaches for the
+skills unprompted. *Remove skills* leaves it off, since its treatment is removal. A prompt written in this UI says nothing about
 governance, so the full-harness arm may never open a skill and the pair would
-measure only what sat on disk. Ticking it names the skills you choose in an
+measure only what sat on disk. On *Full harness* the skill grid also starts with
+the **whole catalog selected** — what that factor names is the catalog, and an
+activation block built from an empty selection is empty, which is how a
+full-harness arm reached its runs with `skills_invoke: []` and invoked none of
+its skills. Untick individual skills to narrow the block. The selection is named in an
 activation block at the start of every step of that arm (`skills_invoke`,
 [ADR-0041](adr/0041-a-skill-under-test-is-invoked-not-just-available.md)). The
 bare arm never receives it — it cannot see those skills at all, and a run told
@@ -876,7 +885,29 @@ an experiment makes a claim, so the lab checks the design against the declared m
 and **refuses one that cannot answer it** — a comparison varying both the harness and
 the repository produces a number attributable to neither.
 
-The detail view opens with a **verdict**: whether the treatment improved things, on
+The detail view opens with a **validity card whenever the comparison has a problem**,
+above the verdict and never inside it
+([ADR-0046](adr/0046-an-experiment-reports-validity-before-it-reports-a-verdict.md)).
+It answers a question the verdict cannot: *could this comparison have measured the
+thing it names?* Five things put a card there:
+
+- **The treatment never happened** — an arm carrying skills opened none of them in any
+  run. It measured the skills' availability, not the skills.
+- **These runs measured the connection** — half or more of an arm's runs died in the
+  harness (`harness_error`) or failed outright, or the arm has no scored runs at all.
+- **No headroom** — the control passed every repetition, so only "no change" or a
+  regression was ever representable.
+- **The arm mixes treated and untreated runs** — it invoked its skills in some and not
+  others.
+- **The design was objected to when it was created** — a warning the wizard showed you
+  and you created the experiment anyway.
+
+When any of these is severe, the headline becomes **Comparison not valid** and the
+sentence the lab would have led with moves down to *Measured: …*. Nothing is hidden:
+the deltas, highlights and case matrix are all still there. They stop being the first
+thing read, which is the whole change.
+
+Under it, the **verdict**: whether the treatment improved things, on
 which metrics, at what cost, and how much evidence stands behind it — "12 cases × 5
 repetitions" — plus the case movements as `fixed / broken / unchanged`. The wording
 is deliberately cautious. The lab runs no hypothesis test, so it never says

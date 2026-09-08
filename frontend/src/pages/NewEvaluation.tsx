@@ -351,10 +351,29 @@ export function NewEvaluation() {
 
   // The two skill factors draw from different catalogs, so a selection cannot
   // survive switching between them.
+  //
+  // This effect — not the `useState` initialiser — is where the activation
+  // default lives, because it overwrites the flag on every factor change.
+  // Asking is the default wherever the treatment is a skill the arm *has*: an
+  // arm that never invokes its skills measured availability, not the skill
+  // (ADR-0041/0046). It stays off for `skills_disabled`, whose treatment is
+  // removal, and for the factors that move no catalog at all.
+  //
+  // `full_harness` also seeds the selection with the whole catalog. Turning the
+  // flag on over an empty grid was a dead end: the activation block is built
+  // from `skillNames`, so it came out empty, and the only unblocking move the
+  // form offered was clearing the flag again — which is how the treatment arm
+  // of `...-on--4` reached its runs with `skills_invoke: []` and invoked none
+  // of its twenty-five skills. What "full harness" names *is* the catalog, so
+  // the catalog is the honest default; the operator can trim it below. The
+  // catalog is fetched once on mount, hence the `skills` dependency: on the
+  // first render it is still empty and there is nothing to seed.
   useEffect(() => {
-    setSkillNames([]);
-    setEnforceSkills(false);
-  }, [factorKey]);
+    setSkillNames(
+      factorKey === "full_harness" ? skills.map((skill) => skill.name).sort() : []
+    );
+    setEnforceSkills(factorKey === "full_harness" || factorKey === "skills_extra");
+  }, [factorKey, skills]);
 
   // Pair the arms with the conventional members of the prompt family:
   // naive→sdlc for the lab's own cases, swe_default→swe_harness for imported
@@ -509,10 +528,15 @@ export function NewEvaluation() {
       // says nothing about governance, so without it "full harness" means only
       // that the catalog was on disk.
       const invoked = enforceSkills ? [...skillNames].sort() : [];
+      // Naming all twenty-five would bury the arm's description under quoted
+      // strings — the same reason `statistics._skill_usage_issues` counts
+      // instead of listing once a catalog is more than a handful.
+      const invokedList =
+        invoked.length > 3
+          ? `its ${invoked.length} governed skills`
+          : invoked.map((name) => `'${name}'`).join(", ");
       const invokedNote = invoked.length
-        ? ` The agent is asked at the start of every step to invoke ${invoked
-            .map((name) => `'${name}'`)
-            .join(", ")} and follow it.`
+        ? ` The agent is asked at the start of every step to invoke ${invokedList} and follow them.`
         : "";
       return [
         {
@@ -691,6 +715,12 @@ export function NewEvaluation() {
   // operator should read that before the results rather than after them.
   const advisories = useMemo(() => {
     const notes: string[] = [];
+    const isSkillFactor =
+      factorKey === "full_harness" ||
+      factorKey === "skills_extra" ||
+      factorKey === "skills_disabled";
+    // A. Skills-only ablation: the arms share a prompt, so what moved is the
+    // catalog and nothing else.
     if (
       mode === "harness_evaluation" &&
       factorKey === "full_harness" &&
@@ -709,22 +739,50 @@ export function NewEvaluation() {
           "but read the result as a claim about the skills, not about the whole " +
           "harness."
       );
-      if (venue === "lab") {
-        // Ablation here is physical but partial: the sync engine rewrites only
-        // the generated skills region of CLAUDE.md, so the governance body
-        // survives in both arms. Saying so up front stops the write-up from
-        // claiming more than the runs can carry.
-        notes.push(
-          "Inside this lab both arms still carry the governance body of " +
-            "CLAUDE.md — only the generated skills catalog is stripped from the " +
-            "bare arm. For a bare-versus-governed comparison with nothing of the " +
-            "harness on the control side, use the 'Governance source' factor " +
-            "against an external repository."
-        );
-      }
+    }
+    // B. Partial ablation. This is a property of the *venue*, not of the prompt
+    // pair: the sync engine rewrites only the generated skills region of
+    // CLAUDE.md, so inside the lab the governance body, the SessionStart hook,
+    // the subagents and .github/ survive in both arms however the prompts are
+    // set. Gating this on "both arms run the same prompt" is what let three
+    // experiments describe a control arm as bare when it never was.
+    if (mode === "harness_evaluation" && venue === "lab" && isSkillFactor) {
+      notes.push(
+        "Inside this lab both arms still carry the governance body of " +
+          "CLAUDE.md, the SessionStart hook and the .github/ governance — only " +
+          "the generated skills catalog differs. The control arm is not a bare " +
+          "model. For a bare-versus-governed comparison, use the 'Governance " +
+          "source' factor against an external repository."
+      );
+    }
+    // C. Prompt and catalog moved together. Legitimate — it is what the factor
+    // means (ADR-0044) — and unattributable, which the reader must know before
+    // the numbers rather than after them.
+    if (
+      mode === "harness_evaluation" &&
+      factorKey === "full_harness" &&
+      bareVariant &&
+      harnessVariant &&
+      bareVariant !== harnessVariant
+    ) {
+      notes.push(
+        `The arms differ in prompt ('${bareVariant}' vs '${harnessVariant}') ` +
+          "and in skill catalog. That is the harness as a unit, and a " +
+          "difference cannot be attributed to either half. For a claim about " +
+          "the skills alone use 'Add skills' or 'Remove skills'; to run one " +
+          "prompt on both arms, set them equal above."
+      );
     }
     return notes;
-  }, [bareVariant, factorKey, harnessVariant, mode, skills, variantOptions, venue]);
+  }, [
+    bareVariant,
+    factorKey,
+    harnessVariant,
+    mode,
+    skills,
+    variantOptions,
+    venue
+  ]);
 
   // A verdict only describes the configuration that produced it, so any edit
   // voids it rather than leaving a stale green tick above the Launch button.
@@ -874,7 +932,11 @@ export function NewEvaluation() {
           mode,
           case_ids: caseIds,
           repetitions,
-          conditions
+          conditions,
+          // The objections the designer was shown and created anyway. Sent so
+          // the results page can repeat them next to the verdict instead of
+          // letting them die in this form (ADR-0046).
+          design_notes: advisories
         })
       );
       setWarnings(created.warnings ?? []);
@@ -1125,12 +1187,15 @@ export function NewEvaluation() {
                 <span>
                   Ask the agent to use the harness{" "}
                   <small className="muted">
+                    <strong>On by default, with the whole catalog selected.</strong>{" "}
                     A prompt written in this UI says nothing about governance, so
                     the full-harness arm may never open a skill and the pair
-                    measures only what sat on disk. Ticking this names the skills
-                    below in an activation block at the start of every step of
-                    that arm. The bare arm never gets it — it cannot see those
-                    skills at all.
+                    measures only what sat on disk. This names the skills below in
+                    an activation block at the start of every step of that arm;
+                    the bare arm never gets it — it cannot see those skills at
+                    all. Untick individual skills to narrow the block, or turn the
+                    whole thing off only to ask the different question: whether
+                    the agent reaches for them unprompted.
                   </small>
                 </span>
               </label>

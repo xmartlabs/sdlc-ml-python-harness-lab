@@ -31,6 +31,7 @@ import type {
   ModelOption,
   RunConfigPayload,
   RunValidationResult,
+  ValidityBlock,
   VerdictBlock
 } from "../types";
 
@@ -196,18 +197,67 @@ function CaseOutcomeGrid({
   );
 }
 
+const VALIDITY_TITLE: Record<string, string> = {
+  treatment_not_activated: "The treatment never happened",
+  infrastructure_failures: "These runs measured the connection",
+  no_headroom: "No headroom to detect an improvement",
+  mixed_treatment: "The arm mixes treated and untreated runs",
+  design_objection: "The design was objected to when it was created"
+};
+
+/**
+ * Read before the verdict (ADR-0046).
+ *
+ * Deliberately its own card above the verdict rather than another line in
+ * `verdict.caveats`: a caveat printed under a confident headline is exactly
+ * how this lab published three comparisons that could not have measured what
+ * they named.
+ */
+function ValidityBanner({ validity }: { validity: ValidityBlock }) {
+  if (validity.status === "valid" || validity.issues.length === 0) return null;
+  const invalid = validity.status === "invalid";
+  return (
+    <div className={`card validity ${invalid ? "validity--invalid" : "validity--degraded"}`}>
+      <div className="row space-between">
+        <p className="verdict-kicker">
+          {invalid ? "Comparison not valid" : "Read with care"}
+        </p>
+        <span className={`badge ${invalid ? "error" : "warn"}`}>{validity.status}</span>
+      </div>
+      <ul className="validity-issues">
+        {validity.issues.map((issue) => (
+          <li key={`${issue.code}:${issue.arm ?? ""}:${issue.detail}`}>
+            <strong>
+              <IconAlert size={14} /> {VALIDITY_TITLE[issue.code] ?? issue.code}
+            </strong>
+            <p>{issue.detail}</p>
+            {issue.remedy ? <p className="muted">{issue.remedy}</p> : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
-  const tone = verdict.headline.toLowerCase();
-  const Trend = tone.includes("improvement")
-    ? IconTrendUp
-    : tone.includes("regression")
-      ? IconTrendDown
-      : IconMinus;
-  const toneClass = tone.includes("improvement")
-    ? "verdict--better"
-    : tone.includes("regression")
-      ? "verdict--worse"
-      : "verdict--neutral";
+  // `tone` is authoritative since ADR-0046; the headline sniff below stays one
+  // release longer so a summary from an older backend still renders in colour.
+  const headline = verdict.headline.toLowerCase();
+  const tone =
+    verdict.tone ??
+    (headline.includes("improvement")
+      ? "better"
+      : headline.includes("regression")
+        ? "worse"
+        : "neutral");
+  const Trend =
+    tone === "better" ? IconTrendUp : tone === "worse" ? IconTrendDown : IconMinus;
+  const toneClass =
+    tone === "better"
+      ? "verdict--better"
+      : tone === "worse"
+        ? "verdict--worse"
+        : "verdict--neutral";
 
   return (
     <div className={`card verdict ${toneClass}`}>
@@ -219,6 +269,10 @@ function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
           <p className="verdict-kicker">Verdict</p>
           <h2>{verdict.headline}</h2>
           <p className="muted">{verdict.claim}</p>
+          {verdict.observed ? (
+            /* The measurement is demoted, never withheld (ADR-0041). */
+            <p className="muted verdict-observed">Measured: {verdict.observed}</p>
+          ) : null}
         </div>
         <span className="badge neutral verdict-strength">{verdict.strength}</span>
       </div>
@@ -814,6 +868,7 @@ function ExperimentDetail({
   const runCount = record?.run_count ?? 0;
   return (
     <div className="stack">
+      {summary.validity ? <ValidityBanner validity={summary.validity} /> : null}
       {summary.verdict ? <VerdictCard verdict={summary.verdict} /> : null}
       <div className="card">
         <div className="row space-between">

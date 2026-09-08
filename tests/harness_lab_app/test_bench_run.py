@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from argparse import Namespace
 from pathlib import Path
@@ -345,3 +346,83 @@ def test_stamp_event_line_leaves_non_json_untouched():
     assert bench_run.stamp_event_line("plain text\n") == "plain text\n"
     # `{}` cannot take a prepended key without corrupting the object.
     assert bench_run.stamp_event_line("{}\n") == "{}\n"
+
+
+def _managed_run(tmp_path, monkeypatch, rc: int) -> tuple[int, Path]:
+    """Drive `main()` down the managed path with a harness that exits `rc`."""
+    monkeypatch.setattr(bench_run, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(bench_run, "DATA_DIR", tmp_path / "data" / "runs")
+    monkeypatch.setattr(bench_run, "WORKSPACE_ROOT", tmp_path / "workspace")
+    for name in (
+        "_load_env",
+        "apply_gateway_overlay",
+        "restore_full_skill_views",
+        "write_bench_context",
+    ):
+        monkeypatch.setattr(bench_run, name, lambda *_a, **_k: None)
+    monkeypatch.setattr(bench_run, "build_effective_skills", lambda *_a, **_k: [])
+    monkeypatch.setattr(bench_run, "copy_to_clipboard", lambda *_a, **_k: False)
+    monkeypatch.setattr(bench_run.shutil, "which", lambda name: f"/usr/bin/{name}")
+    for name in ("pull_usage_litellm", "pull_usage_langfuse", "pull_usage_opencode_db"):
+        monkeypatch.setattr(bench_run, name, lambda *_a, **_k: None)
+
+    def fake_run(cmd, log_path, **kwargs):
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("SSE stream closed unexpectedly\n")
+        return rc
+
+    monkeypatch.setattr(bench_run, "run_opencode", fake_run)
+
+    out_dir = tmp_path / "data" / "runs" / "r-1"
+    out_dir.mkdir(parents=True)
+    (out_dir / "case_spec.json").write_text(
+        json.dumps(
+            {
+                "case_id": "db-case-1",
+                "prompt": "Build it.",
+                "prompt_variant": "sdlc",
+                "repo": "",
+            }
+        )
+    )
+    code = bench_run.main(
+        [
+            "--case",
+            "db-case-1",
+            "--run",
+            "r-1",
+            "--harness",
+            "claude",
+            "--executor-model",
+            "stub",
+            "--score-mode",
+            "manual",
+            "--fresh",
+        ]
+    )
+    return code, out_dir
+
+
+def test_a_dead_harness_exits_non_zero_but_keeps_its_evidence(tmp_path, monkeypatch):
+    """A crashed harness must not archive as a legitimate attempt (ADR-0046).
+
+    This exit used to be 0, so the worker — which reads the exit code, not
+    usage.json — recorded `state=completed` and auto-scored the run 0: a dead
+    connection entered the corpus as a model that could not solve the case.
+    The non-zero return comes *after* usage.json and the archive, because the
+    evidence of why is the whole point.
+    """
+    code, out_dir = _managed_run(tmp_path, monkeypatch, rc=2)
+
+    assert code != 0
+    usage = json.loads((out_dir / "usage.json").read_text())
+    assert usage["stop_reason"] == "harness_error"
+    # The archive survives the non-zero exit: the return sits after it.
+    assert (out_dir / "workspace").is_dir()
+
+
+def test_a_harness_that_finished_still_exits_zero(tmp_path, monkeypatch):
+    code, out_dir = _managed_run(tmp_path, monkeypatch, rc=0)
+
+    assert code == 0
+    assert json.loads((out_dir / "usage.json").read_text()).get("stop_reason") is None

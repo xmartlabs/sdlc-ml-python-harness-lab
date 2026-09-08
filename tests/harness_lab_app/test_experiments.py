@@ -1120,3 +1120,238 @@ def test_a_caseless_draft_deletes_cleanly(session):
     result = service.delete_experiment("empty-draft")
 
     assert result["deleted_runs"] == 0
+
+
+# --------------------------------------------------------------------------
+# Validity — an experiment says whether it could answer, before it answers
+# (ADR-0046)
+# --------------------------------------------------------------------------
+
+
+def _staged_skill_design(service, experiment_id="activation"):
+    from sqlmodel import select
+
+    from harness_lab_app.models import Case, CaseType, StagedSkill
+
+    session = service.session
+    if not session.exec(select(Case).where(Case.case_id == "tetris-v1")).first():
+        session.add(
+            Case(
+                case_id="tetris-v1",
+                name="Tetris",
+                type=CaseType.single_prompt,
+                prompt_variants={"sdlc": "Build Tetris, following the harness."},
+            )
+        )
+    if not session.exec(
+        select(StagedSkill).where(StagedSkill.name == "brainstorm_quick")
+    ).first():
+        session.add(StagedSkill(name="brainstorm_quick", status="testing"))
+    session.commit()
+    return service.create_experiment(
+        ExperimentCreate(
+            experiment_id=experiment_id,
+            name="Activation",
+            question="Does brainstorm_quick help?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["tetris-v1"],
+            repetitions=2,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="baseline", role=ConditionRole.control, overrides={}
+                ),
+                ExperimentConditionCreate(
+                    label="with-skills",
+                    role=ConditionRole.treatment,
+                    overrides={
+                        "skills_extra": ["brainstorm_quick"],
+                        "skills_invoke": ["brainstorm_quick"],
+                    },
+                ),
+            ],
+        )
+    )
+
+
+def _score(session, run, *, passed, skill_invoked=None, stop_reason=None):
+    """Give a launched run the artifacts a real one would leave behind."""
+    from harness_lab_app.models import RunState, Score, Validation
+
+    run.state = RunState.completed
+    session.add(run)
+    session.add(
+        Score(
+            run_id=run.run_id, name="task_validation_pass", version=1, value_bool=passed
+        )
+    )
+    if skill_invoked is not None:
+        session.add(
+            Score(
+                run_id=run.run_id,
+                name="skill_invoked",
+                version=1,
+                value_num=skill_invoked,
+            )
+        )
+    if stop_reason:
+        session.add(Validation(run_id=run.run_id, effort={"stop_reason": stop_reason}))
+    session.commit()
+
+
+def test_a_treatment_that_never_invoked_its_skill_invalidates_the_summary(session):
+    """The headline used to read as a result. The measurement stays; it stops leading."""
+    service = ExperimentService(session)
+    _staged_skill_design(service)
+    runs = service.launch("activation", _base_config())
+    for run in runs:
+        treatment = run.condition_label == "with-skills"
+        _score(
+            session,
+            run,
+            passed=treatment,
+            skill_invoked=0.0 if treatment else None,
+        )
+
+    summary = service.summarize("activation")
+
+    assert summary["validity"]["status"] == "invalid"
+    # Invalid leads, degraded follows.
+    assert [issue["code"] for issue in summary["validity"]["issues"]] == [
+        "treatment_not_activated",
+        "design_objection",
+    ]
+    assert summary["verdict"]["headline"] == "Comparison not valid"
+    assert summary["verdict"]["tone"] == "invalid"
+    # The numbers are still there — they are just no longer the first thing read.
+    assert "+100 points" in summary["verdict"]["observed"]
+
+
+def test_runs_that_died_on_the_connection_are_flagged_not_dropped(session):
+    """A harness_error is infrastructure. Filtering it would read as 'no evidence yet'."""
+    from harness_lab_app.models import RunState
+
+    service = ExperimentService(session)
+    _skills_design(service, "crashed")
+    runs = service.launch("crashed", _base_config())
+    for run in runs:
+        _score(session, run, passed=False, stop_reason="harness_error")
+        run.state = RunState.failed
+        session.add(run)
+    session.commit()
+
+    summary = service.summarize("crashed")
+
+    codes = [issue["code"] for issue in summary["validity"]["issues"]]
+    assert "infrastructure_failures" in codes
+    assert summary["validity"]["status"] == "invalid"
+    # Flagged, not filtered: the runs are still counted where cost is read.
+    assert all(condition["runs"] == 1 for condition in summary["conditions"])
+
+
+def test_a_skill_unopened_by_a_run_that_crashed_is_not_evidence(session):
+    """It never got the chance. Counting it would blame the skill for the network."""
+    from harness_lab_app.models import RunState
+
+    service = ExperimentService(session)
+    _staged_skill_design(service, "half-crashed")
+    runs = service.launch("half-crashed", _base_config())
+    for run in runs:
+        treatment = run.condition_label == "with-skills"
+        _score(
+            session, run, passed=not treatment, skill_invoked=0.0 if treatment else None
+        )
+        if treatment:
+            run.state = RunState.failed
+            session.add(run)
+    session.commit()
+
+    summary = service.summarize("half-crashed")
+
+    codes = [issue["code"] for issue in summary["validity"]["issues"]]
+    assert "treatment_not_activated" not in codes
+
+
+def test_a_design_the_wizard_objected_to_keeps_the_objection(session):
+    """The 201 body is not a place a warning can survive to be read again."""
+    service = ExperimentService(session)
+    experiment, warnings = _staged_skill_design(service, "objected")
+
+    assert any("only the skill directories differ" in note for note in warnings)
+    assert experiment.design_notes == warnings[:1]
+
+    runs = service.launch("objected", _base_config())
+    for run in runs:
+        _score(
+            session, run, passed=run.condition_label == "with-skills", skill_invoked=1.0
+        )
+
+    summary = service.summarize("objected")
+    codes = [issue["code"] for issue in summary["validity"]["issues"]]
+    assert "design_objection" in codes
+
+
+def test_a_full_harness_arm_is_about_the_catalog_its_control_removes(session):
+    """The treatment stages nothing, so its skills live on the control's ablation.
+
+    Three experiments in this lab reported a confident verdict while all six
+    full-harness runs carried `skill_invoked = 0`. Reading each arm's own
+    overrides left the treatment with an empty skill list, and the observation
+    had nowhere to land. The scorer already unions the siblings'
+    `skills_disabled` (`score_service.build_context`); the summary now reads the
+    arms the same way it scored them.
+    """
+    from harness_lab_app.models import Case, CaseType
+    from harness_lab_app.skills_catalog import known_skill_names
+
+    governed = sorted(known_skill_names())[:4]
+    if len(governed) < 4:
+        pytest.skip("not enough governed skills in this checkout")
+    service = ExperimentService(session)
+    session.add(
+        Case(
+            case_id="tetris-v1",
+            name="Tetris",
+            type=CaseType.single_prompt,
+            prompt_variants={"sdlc": "Build Tetris."},
+        )
+    )
+    session.commit()
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="full-harness",
+            name="Full harness",
+            question="Does the full harness help?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["tetris-v1"],
+            repetitions=2,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="bare",
+                    role=ConditionRole.control,
+                    overrides={"skills_disabled": governed},
+                ),
+                ExperimentConditionCreate(
+                    label="full-harness",
+                    role=ConditionRole.treatment,
+                    overrides={"skills_disabled": []},
+                ),
+            ],
+        )
+    )
+    runs = service.launch("full-harness", _base_config())
+    for run in runs:
+        treatment = run.condition_label == "full-harness"
+        _score(session, run, passed=True, skill_invoked=0.0 if treatment else None)
+
+    summary = service.summarize("full-harness")
+
+    issue = next(
+        item
+        for item in summary["validity"]["issues"]
+        if item["code"] == "treatment_not_activated"
+    )
+    assert issue["arm"] == "full-harness"
+    # Four skills is past the point where naming each one helps a reader.
+    assert "none of its 4 skills" in issue["detail"]
+    # The bare arm removed them, so it is not the arm that failed to open them.
+    assert summary["validity"]["status"] == "invalid"

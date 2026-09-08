@@ -74,6 +74,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0043 — One LLM transport for the lab, gateway first and the Claude CLI second](0043-one-llm-transport-gateway-first-claude-cli-second.md)
 - [0044 — A single-prompt case can carry the full-harness pair](0044-a-single-prompt-case-can-carry-the-full-harness-pair.md)
 - [0045 — A checkout the lab can be given, not only watched](0045-a-checkout-the-lab-can-be-given-not-only-watched.md)
+- [0046 — An experiment reports validity before it reports a verdict](0046-an-experiment-reports-validity-before-it-reports-a-verdict.md)
 
 ## Why ADRs exist
 

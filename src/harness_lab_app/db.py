@@ -190,6 +190,18 @@ def _apply_sqlite_compat_migrations() -> None:
                 )
             )
 
+        # What the design was warned about at creation (ADR-0046). Backfills
+        # empty: an experiment that predates the column was never told anything,
+        # and inventing objections for it retroactively would be a worse lie
+        # than the silence it already has.
+        if experiment_columns and "design_notes" not in experiment_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE experiment ADD COLUMN design_notes JSON "
+                    "NOT NULL DEFAULT '[]'"
+                )
+            )
+
         finding_columns = {
             row[1]
             for row in connection.execute(

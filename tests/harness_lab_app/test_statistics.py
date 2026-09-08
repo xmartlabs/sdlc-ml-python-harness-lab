@@ -12,6 +12,7 @@ import pytest
 
 from harness_lab_app.statistics import (
     aggregate_values,
+    assess_validity,
     compare,
     confidence_interval,
     evidence_strength,
@@ -489,3 +490,184 @@ def test_subject_validation_keeps_its_disclaimers_before_anything_is_scored():
     assert answer["headline"] == "Not enough evidence yet"
     assert answer["causal"] is False
     assert any("not pooled" in c for c in answer["caveats"])
+
+
+# --------------------------------------------------------------------------
+# Validity — read before the verdict
+# --------------------------------------------------------------------------
+
+
+def _codes(validity):
+    return [issue["code"] for issue in validity["issues"]]
+
+
+def test_a_treatment_arm_that_never_invoked_its_skill_invalidates_the_comparison():
+    """The treatment did not happen, so the delta is about something else."""
+    control, treatment = _pair([False] * 5, [True] * 5)
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+        skill_usage={treatment.label: {"skills": ["caveman"], "runs": 5, "invoked": 0}},
+    )
+    assert validity["status"] == "invalid"
+    assert _codes(validity) == ["treatment_not_activated"]
+    assert validity["issues"][0]["arm"] == treatment.label
+
+
+def test_a_control_arm_that_opened_nothing_is_not_an_issue_by_itself():
+    """An ablated arm has no skills to open — the asymmetry is the design."""
+    control, treatment = _pair([False] * 5, [True] * 5)
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+        skill_usage={control.label: {"skills": [], "runs": 5, "invoked": 0}},
+    )
+    assert validity["status"] == "valid"
+    assert validity["issues"] == []
+
+
+def test_a_control_that_passes_everything_leaves_no_headroom():
+    control, treatment = _pair([True] * 5, [True] * 5)
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+    )
+    assert validity["status"] == "invalid"
+    assert _codes(validity) == ["no_headroom"]
+
+
+def test_a_ceiling_that_still_measured_a_regression_only_degrades():
+    """A regression *was* detectable, so the design answered something."""
+    control, treatment = _pair([True] * 5, [True, True, True, True, False])
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+    )
+    assert validity["status"] == "degraded"
+    assert _codes(validity) == ["no_headroom"]
+
+
+def test_a_two_run_ceiling_is_evidence_of_two_runs_not_of_a_ceiling():
+    control, treatment = _pair([True, True], [True, True], reps=2)
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+    )
+    assert validity["status"] == "degraded"
+
+
+def test_an_arm_whose_runs_mostly_crashed_measured_the_connection():
+    control, treatment = _pair([False] * 5, [True] * 5)
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+        run_health={
+            treatment.label: {
+                "runs": 4,
+                "harness_error": 4,
+                "failed": 4,
+                "scored_runs": 0,
+            }
+        },
+    )
+    assert validity["status"] == "invalid"
+    assert "infrastructure_failures" in _codes(validity)
+
+
+def test_one_bad_run_out_of_five_degrades_rather_than_invalidates():
+    control, treatment = _pair([False] * 5, [True] * 5)
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+        run_health={
+            treatment.label: {
+                "runs": 5,
+                "harness_error": 1,
+                "failed": 1,
+                "scored_runs": 4,
+            }
+        },
+    )
+    assert validity["status"] == "degraded"
+
+
+def test_a_mode_that_makes_no_causal_claim_has_nothing_to_invalidate():
+    for mode in ("discovery", "cross_repo"):
+        validity = assess_validity(
+            mode=mode,
+            skill_usage={"arm": {"skills": ["caveman"], "runs": 5, "invoked": 0}},
+        )
+        assert validity == {"status": "valid", "issues": []}
+
+
+def test_subject_validation_reports_its_issues_but_never_invalidates():
+    """It has no control arm, so there is no comparison to break."""
+    validity = assess_validity(
+        mode="subject_validation",
+        skill_usage={"claude": {"skills": ["driver"], "runs": 3, "invoked": 0}},
+    )
+    assert validity["status"] == "degraded"
+    assert _codes(validity) == ["treatment_not_activated"]
+
+
+def test_an_invalid_verdict_replaces_the_headline_and_keeps_the_numbers():
+    """ADR-0041: the numbers are true. They stop leading, they do not vanish."""
+    control, treatment = _pair([False] * 5, [True] * 5)
+    success = success_delta(control, treatment)
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success,
+        skill_usage={treatment.label: {"skills": ["caveman"], "runs": 5, "invoked": 0}},
+    )
+    answer = verdict(
+        mode="harness_evaluation",
+        cases=1,
+        repetitions=5,
+        control=control,
+        treatment=treatment,
+        success=success,
+        validity=validity,
+    )
+    assert answer["headline"] == "Comparison not valid"
+    assert "improvement" not in answer["headline"].lower()
+    assert "regression" not in answer["headline"].lower()
+    assert "+100 points" in answer["observed"]
+    assert answer["tone"] == "invalid"
+    assert answer["highlights"]
+    assert answer["movements"] == {
+        "fixed": 0,
+        "broken": 0,
+        "unchanged": 0,
+        "incomplete": 0,
+    }
+
+
+def test_a_valid_verdict_carries_a_tone_the_frontend_can_read():
+    control, treatment = _pair([False] * 5, [True] * 5)
+    answer = verdict(
+        mode="harness_evaluation",
+        cases=1,
+        repetitions=5,
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+        validity={"status": "valid", "issues": []},
+    )
+    assert answer["tone"] == "better"
+    assert "observed" not in answer

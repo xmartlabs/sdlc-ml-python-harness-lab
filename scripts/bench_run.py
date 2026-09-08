@@ -2756,6 +2756,19 @@ def main(argv: list[str] | None = None) -> int:
             print("  [5/5] Archiving workspace (managed run)...")
             finalize_workspace(out_dir, workspace, args.run)
         print("=" * 66)
+        if stop_reason == "harness_error":
+            # The harness died; the model was never given the chance to fail.
+            # Exiting 0 here archived an infrastructure failure as a legitimate
+            # attempt, and the worker — which reads the exit code, not
+            # usage.json — recorded it completed with a score of 0. The exit
+            # comes after usage.json and the archive on purpose: the evidence
+            # of *why* is the whole point (ADR-0006, ADR-0046).
+            print(
+                f"  ⚠️  Exiting non-zero: {args.harness} failed "
+                "(stop_reason=harness_error). This run measured the "
+                "connection, not the subject."
+            )
+            return 2
         return 0
     else:  # interactive
         if args.score is not None and args.interventions is not None:

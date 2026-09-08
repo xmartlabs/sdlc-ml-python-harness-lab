@@ -240,6 +240,29 @@ def validate_design(
                 f"({', '.join(sorted(harness_axes))}). A difference cannot be "
                 "attributed to either — vary one factor per experiment."
             )
+        # A skills ablation inside the lab is a *partial* ablation, always. The
+        # agent runs against this repository's own root, so CLAUDE.md's body,
+        # the SessionStart hook, the subagents and .github/ governance survive
+        # in both arms whatever the skill catalog says. This is a property of
+        # the venue, not of which prompts the arms happen to carry, which is why
+        # it is stated here rather than only when the prompts match.
+        skill_axes = harness_axes & {
+            "skills_disabled",
+            "skills_extra",
+            "skills_invoke",
+            "skills_under_test",
+        }
+        if skill_axes and all(
+            (condition.get("overrides") or {}).get("harness_source", "lab_root")
+            == "lab_root"
+            for condition in conditions
+        ):
+            warnings.append(
+                "Every arm runs against the lab's own root, so only the skill "
+                "directories differ: CLAUDE.md's body, the SessionStart hook, "
+                "the subagents and .github/ governance are present in both arms. "
+                "This measures the skills, not the harness."
+            )
 
     if mode == ExperimentMode.cross_repo:
         if "target_repo_id" not in varying:
@@ -331,6 +354,7 @@ class ExperimentService:
         from harness_lab_app.score_service import ScoreService
         from harness_lab_app.scores import REGISTRY
         from harness_lab_app.statistics import (
+            assess_validity,
             compare,
             paired_by_case,
             success_delta,
@@ -362,6 +386,20 @@ class ExperimentService:
         stop_reasons: dict[str, list[str]] = {
             condition.label: [] for condition in conditions
         }
+        # Runs that measured the connection rather than the subject. A
+        # `harness_error` archived at exit 0 used to enter the corpus as a model
+        # scoring zero; counting it here is what lets the reader see it as
+        # infrastructure without rewriting the run's recorded state.
+        run_health: dict[str, dict[str, int]] = {
+            condition.label: {
+                "runs": 0,
+                "harness_error": 0,
+                "failed": 0,
+                "unhealthy": 0,
+                "scored_runs": 0,
+            }
+            for condition in conditions
+        }
         # Whether the skills an arm is about were actually opened (ADR-0041).
         # A comparison whose treatment arm never invoked its skill measured
         # availability, and the verdict has to say so before the delta.
@@ -369,6 +407,23 @@ class ExperimentService:
             condition.label: {"skills": [], "runs": 0, "invoked": 0, "requested": False}
             for condition in conditions
         }
+        # What each arm is *about* follows the same rule the scorer used when it
+        # wrote `skill_invoked` (``score_service.build_context``): the skills an
+        # arm stages or is asked for, plus the ones a sibling arm removes. The
+        # second half is what makes a full-harness treatment legible — it stages
+        # nothing and asks for nothing, and the whole catalog is only named on
+        # the control's `skills_disabled`. Reading the arm's own overrides alone
+        # left that arm with an empty skill list, so the observation that none
+        # of its twenty-five skills was ever opened had nowhere to land.
+        removed_elsewhere: dict[str, list[str]] = {}
+        for condition in conditions:
+            mine = set((condition.overrides or {}).get("skills_disabled") or [])
+            others: set[str] = set()
+            for sibling in conditions:
+                if sibling.label == condition.label:
+                    continue
+                others.update((sibling.overrides or {}).get("skills_disabled") or [])
+            removed_elsewhere[condition.label] = sorted(others - mine)
         for run in runs:
             label = run.condition_label or ""
             if label not in per_condition:
@@ -383,14 +438,23 @@ class ExperimentService:
             per_condition[label].append(values)
             config = run_service.get_run_config(run.run_config_id)
             case_id = config.case_id
+            crashed = run.state in (RunState.failed, RunState.cancelled)
             invoked = values.get("skill_invoked")
-            if invoked is not None:
+            # A skill left unopened by a run that died at minute two is not
+            # evidence about activation.
+            if invoked is not None and not crashed:
                 usage = skill_usage[label]
                 usage["runs"] += 1
                 usage["invoked"] += int(float(invoked) > 0)
                 usage["requested"] = usage["requested"] or bool(config.skills_invoke)
                 for name in sorted(
-                    set(config.skills_extra) | set(config.skills_invoke)
+                    (set(config.skills_extra) | set(config.skills_invoke))
+                    # Minus what this run itself cannot see, mirroring the
+                    # scorer: an arm is not measured against a hidden skill.
+                    | (
+                        set(removed_elsewhere.get(label, []))
+                        - set(config.skills_disabled)
+                    )
                 ):
                     if name not in usage["skills"]:
                         usage["skills"].append(name)
@@ -411,6 +475,12 @@ class ExperimentService:
             )
             if reason:
                 stop_reasons[label].append(str(reason))
+            health = run_health[label]
+            health["runs"] += 1
+            health["scored_runs"] += int(values.get("task_validation_pass") is not None)
+            health["harness_error"] += int(reason == "harness_error")
+            health["failed"] += int(crashed)
+            health["unhealthy"] += int(crashed or reason == "harness_error")
 
         summaries = {
             condition.label: summarize_condition(
@@ -460,6 +530,17 @@ class ExperimentService:
                 )
 
         first: dict[str, Any] | None = comparisons[0] if comparisons else None
+        # Before the verdict, not beside it: whether this comparison could have
+        # measured the thing it names (ADR-0046).
+        validity = assess_validity(
+            mode=str(experiment.mode.value),
+            control=summaries[first["control"]] if first else None,
+            treatment=summaries[first["treatment"]] if first else None,
+            skill_usage=skill_usage,
+            run_health=run_health,
+            success=first["success"] if first else None,
+            design_notes=list(experiment.design_notes or []),
+        )
         answer = verdict(
             mode=str(experiment.mode.value),
             cases=len(experiment.case_ids),
@@ -476,6 +557,7 @@ class ExperimentService:
             subject=experiment.subject,
             arms=list(summaries.values()),
             skill_usage=skill_usage,
+            validity=validity,
         )
 
         return {
@@ -487,6 +569,8 @@ class ExperimentService:
             "case_repetitions": dict(experiment.case_repetitions),
             "suite_id": experiment.suite_id,
             "verdict": answer,
+            "validity": validity,
+            "run_health": run_health,
             "conditions": [
                 {
                     "label": summary.label,
@@ -643,7 +727,15 @@ class ExperimentService:
                     f"Condition '{condition['label']}' fixes unknown axis field(s): "
                     f"{', '.join(unknown)}. Valid: {', '.join(sorted(CONDITION_FIELDS))}."
                 )
-        warnings = validate_design(data.mode, conditions)
+        # Objections about the *design*: they stay true for the life of the
+        # experiment, so they are persisted and read back beside the verdict.
+        # The warnings below them are about this moment (no cases yet, too few
+        # repetitions) and are answered by the verdict's own caveats later.
+        design_notes = validate_design(data.mode, conditions)
+        design_notes.extend(
+            note.strip() for note in data.design_notes if note and note.strip()
+        )
+        warnings = list(design_notes)
         # The weakest case governs the caveat: an experiment whose SWE-bench
         # instance runs once is exploratory *for that case* however many times
         # the canaries repeat.
@@ -676,6 +768,7 @@ class ExperimentService:
                 if case_id in data.case_ids
             },
             suite_id=data.suite_id,
+            design_notes=design_notes,
             notes=data.notes,
         )
         self.session.add(experiment)

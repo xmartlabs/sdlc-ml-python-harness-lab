@@ -569,6 +569,43 @@ export type VerdictBlock = {
   highlights: VerdictHighlight[];
   movements: { fixed: number; broken: number; unchanged: number; incomplete: number };
   caveats: string[];
+  /**
+   * How the claim should be read. Present since ADR-0046; before it the page
+   * sniffed the headline for "improvement"/"regression", which is kept as a
+   * fallback for summaries computed by an older backend.
+   */
+  tone?: "invalid" | "better" | "worse" | "neutral";
+  /**
+   * The sentence that would have been the claim, when validity replaced it.
+   * The measurement is never withheld (ADR-0041), only demoted.
+   */
+  observed?: string;
+};
+
+/** One reason a comparison could not have measured the thing it names. */
+export type ValidityIssue = {
+  code:
+    | "treatment_not_activated"
+    | "infrastructure_failures"
+    | "no_headroom"
+    | "mixed_treatment"
+    | "design_objection";
+  severity: "invalid" | "degraded";
+  /** The arm the issue belongs to, when it belongs to one. */
+  arm?: string | null;
+  detail: string;
+  remedy: string;
+};
+
+/**
+ * Validity is read before the verdict (ADR-0046).
+ *
+ * Not folded into `verdict.caveats` on purpose: a caveat printed under a
+ * confident headline is the failure this block exists to fix.
+ */
+export type ValidityBlock = {
+  status: "valid" | "degraded" | "invalid";
+  issues: ValidityIssue[];
 };
 
 /** One cell of the per-arm, per-case grid: a count, never a verdict. */
@@ -603,6 +640,22 @@ export type ExperimentSummary = {
    * mode without a control never has.
    */
   case_outcomes?: Record<string, Record<string, CaseOutcomeCell>>;
+  /** Whether this comparison could have measured what it names (ADR-0046). */
+  validity?: ValidityBlock;
+  /**
+   * Per-arm run counts behind the validity call: how many ran, how many the
+   * harness killed, how many left a score at all.
+   */
+  run_health?: Record<
+    string,
+    {
+      runs: number;
+      harness_error: number;
+      failed: number;
+      unhealthy: number;
+      scored_runs: number;
+    }
+  >;
 };
 
 export type FindingRecord = {

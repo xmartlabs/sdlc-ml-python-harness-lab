@@ -770,6 +770,52 @@ key. Unit tests never saw it; a real subscription-only run did. See
 [ADR-0043](../docs/adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)
 and [the plan](../docs/plans/2026-09-claude-native-llm-transport.md).
 
+## Three experiments that could not answer their own question (2026-09-08)
+
+**What happened:** three `harness_evaluation` experiments asked "does the full
+harness improve outcomes over the bare model on Tetris?". All three rendered a
+confident verdict; none of them could have measured it. The corpus is still in
+`data/app/harness_lab.db` and is the cheapest regression fixture this lab has —
+every guard below is verifiable against it with no new runs.
+
+**What the evidence showed, in the order it was found:**
+
+- All six full-harness runs carried `skill_invoked = 0.0` — *the treatment never
+  happened*. The score existed and the caveat sentence was already written. It
+  landed as a footnote under a headline that read as a result.
+- The summary never even reached that sentence. It rebuilt each arm's skill list
+  from that arm's own `skills_extra`/`skills_invoke`, and a full-harness
+  treatment stages nothing: the whole catalog is named on the **control's**
+  `skills_disabled`. `score_service.build_context` already unioned the siblings;
+  `summarize` did not, so the treatment's list came back empty and the
+  observation had nowhere to land. Two readers of the same fact, two rules.
+- Four of four opencode runs ended `stop_reason: harness_error` (SSE timeout)
+  and were recorded `state=completed, exit_code=0`, then auto-scored 0. The
+  worker reads the exit code, not `usage.json`; `bench_run` returned 0 on the
+  managed path regardless. A dead connection was averaged in as a model failing.
+- Two experiments had a control passing every repetition. Improvement above 100%
+  is unrepresentable — the design could not detect the thing it was built for.
+- The control arm was never bare. Venue `lab` means the governance body of
+  CLAUDE.md, the SessionStart hook, six subagents and `.github/` are present in
+  **both** arms; skill ablation rewrites only the generated catalog region. The
+  wizard's advisory about this was gated on "both arms run the same prompt",
+  which is unrelated to the property it describes.
+
+**Why it matters:** none of these was a missing measurement. Every fact was
+already computed, stored and even phrased correctly. The lab simply had no way
+to say *this comparison could not have measured the thing it names*, so
+everything it knew was expressed as a caveat under a confident sentence — the
+one place a reader will not weigh it.
+
+**How to apply:** when a check is worth making, decide where the reader meets it
+before deciding how to compute it; a correct sentence in the wrong slot is
+indistinguishable from silence. When two components read the same fact (here:
+"which skills is this arm about?"), extract the rule or they will drift — the
+scorer and the summariser disagreed for three experiments. And a guard computed
+on read needs no migration: the bad rows are re-read correctly where they stand,
+which is also the argument for never rewriting them. See
+[ADR-0046](../docs/adr/0046-an-experiment-reports-validity-before-it-reports-a-verdict.md).
+
 <!-- Add new learnings above this line -->
 
 ## "Audit a third-party repo" fails at provisioning when setup_commands mismatch the language — 2026-08-31

@@ -361,6 +361,258 @@ def stop_reason_caveat(
     )
 
 
+# --------------------------------------------------------------------------
+# Validity — the thing a reader must meet before the verdict
+# --------------------------------------------------------------------------
+
+# Three different accidents — a treatment that never fired, runs that never ran,
+# a control with nowhere to go — make the same claim about an experiment: *this
+# comparison could not have measured the thing it names*. They share an audience,
+# a placement and a consequence, so they share a vocabulary here rather than
+# arriving as three unrelated flags nobody can render together.
+VALID = "valid"
+DEGRADED = "degraded"
+INVALID = "invalid"
+
+# The order a reader should meet these in when several hold at once.
+_ISSUE_ORDER = (
+    "treatment_not_activated",
+    "infrastructure_failures",
+    "no_headroom",
+    "mixed_treatment",
+    "design_objection",
+)
+
+
+@dataclass
+class ValidityIssue:
+    """One reason this comparison could not have measured what it names."""
+
+    code: str
+    severity: str
+    detail: str
+    remedy: str
+    arm: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "severity": self.severity,
+            "arm": self.arm,
+            "detail": self.detail,
+            "remedy": self.remedy,
+        }
+
+
+def _skill_usage_issues(
+    skill_usage: Mapping[str, Mapping[str, Any]],
+    *,
+    treatment_label: str | None = None,
+) -> list[ValidityIssue]:
+    """Turn the per-arm invocation observation into issues (ADR-0041).
+
+    Only the *treatment* arm at zero invalidates. A control arm that opened
+    nothing is usually correct — an ablated arm has no skills to open — and the
+    asymmetry is by design in ``score_service.build_context``.
+    """
+    issues: list[ValidityIssue] = []
+    for label, usage in skill_usage.items():
+        skills = list(usage.get("skills") or [])
+        runs = int(usage.get("runs") or 0)
+        invoked = int(usage.get("invoked") or 0)
+        if not skills or runs == 0:
+            continue
+        # A full-harness arm is "about" the whole catalog, so naming every skill
+        # would bury the sentence under twenty-five quoted strings.
+        many = len(skills) > 3
+        names = ", ".join(f"'{name}'" for name in skills)
+        never = (
+            f"none of its {len(skills)} skills was invoked"
+            if many
+            else f"{names} was never invoked"
+        )
+        mixed = f"its {len(skills)} skills were invoked" if many else f"{names} invoked"
+        requested = bool(usage.get("requested"))
+        if invoked == 0:
+            issues.append(
+                ValidityIssue(
+                    code="treatment_not_activated",
+                    severity=INVALID if label == treatment_label else DEGRADED,
+                    arm=label,
+                    detail=(
+                        f"{label}: {never} in its {runs} run(s)"
+                        + (" although the prompt asked for it" if requested else "")
+                        + " — this arm measured the skill's availability, not its use."
+                    ),
+                    remedy=(
+                        "Check the skill's own instructions before reading the result."
+                        if requested
+                        else "Ask for it in the design ('Enforce skill use'), or make "
+                        "the skill's triggers match the task, before reading the result."
+                    ),
+                )
+            )
+        elif invoked < runs:
+            issues.append(
+                ValidityIssue(
+                    code="mixed_treatment",
+                    severity=DEGRADED,
+                    arm=label,
+                    detail=(
+                        f"{label}: {mixed} in {invoked} of {runs} run(s) — the "
+                        "arm mixes runs with and without the treatment."
+                    ),
+                    remedy=(
+                        "Read the per-run skill_invoked observation before the "
+                        "aggregate."
+                    ),
+                )
+            )
+    return issues
+
+
+def _run_health_issues(
+    run_health: Mapping[str, Mapping[str, Any]],
+) -> list[ValidityIssue]:
+    """Flag an arm whose runs measured the connection rather than the subject.
+
+    A run that ended in ``harness_error`` and was archived at exit 0 entered the
+    corpus as a model scoring zero. Flagging on read rather than rewriting the
+    run's recorded state keeps the record of what the lab believed at the time.
+    """
+    issues: list[ValidityIssue] = []
+    for label, health in run_health.items():
+        runs = int(health.get("runs") or 0)
+        if not runs:
+            continue
+        harness_error = int(health.get("harness_error") or 0)
+        failed = int(health.get("failed") or 0)
+        # A failed run usually *is* the harness_error run; without a union count
+        # from the caller the larger of the two is the safe lower bound.
+        unhealthy = int(health.get("unhealthy") or max(harness_error, failed))
+        if not unhealthy:
+            continue
+        starved = int(health.get("scored_runs") or 0) == 0
+        issues.append(
+            ValidityIssue(
+                code="infrastructure_failures",
+                severity=INVALID if starved or unhealthy * 2 >= runs else DEGRADED,
+                arm=label,
+                detail=(
+                    f"{label}: {unhealthy} of {runs} run(s) ended in an "
+                    f"infrastructure failure ({harness_error} harness error(s), "
+                    f"{failed} failed)"
+                    + (" and the arm has no scored run left" if starved else "")
+                    + " — these runs measured the connection, not the subject."
+                ),
+                remedy=(
+                    f"Re-run the affected repetitions of {label} before reading "
+                    "the result."
+                ),
+            )
+        )
+    return issues
+
+
+def _ceiling_issue(
+    control: ConditionSummary, success: Mapping[str, Any] | None
+) -> ValidityIssue | None:
+    """Flag a control arm that already passes everything.
+
+    A control at 100% leaves the design able to detect a regression and nothing
+    else, because an improvement above 100% is unrepresentable. Below
+    ``EXPLORATORY_ONLY`` this stays quiet: a 1/1 control is evidence of one run,
+    not of a ceiling.
+    """
+    if control.scored_runs < EXPLORATORY_ONLY:
+        return None
+    if control.successes != control.scored_runs:
+        return None
+    points = (success or {}).get("points")
+    regressed = points is not None and points < 0
+    return ValidityIssue(
+        code="no_headroom",
+        severity=(
+            DEGRADED
+            if regressed or control.scored_runs < USEFUL_COMPARISON
+            else INVALID
+        ),
+        arm=control.label,
+        detail=(
+            f"{control.label} passed every one of its {control.scored_runs} "
+            "scored run(s), so this design has no headroom"
+            + (
+                ", though the regression it did measure was still detectable."
+                if regressed
+                else " — it could only ever have shown no change or a regression."
+            )
+        ),
+        remedy=(
+            "Pick a case the control does not already solve, or score on a "
+            "metric with room to move."
+        ),
+    )
+
+
+def assess_validity(
+    *,
+    mode: str,
+    control: ConditionSummary | None = None,
+    treatment: ConditionSummary | None = None,
+    skill_usage: Mapping[str, Mapping[str, Any]] | None = None,
+    run_health: Mapping[str, Mapping[str, Any]] | None = None,
+    success: Mapping[str, Any] | None = None,
+    design_notes: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Can this experiment answer the question it asks?
+
+    Returns ``{"status": valid|degraded|invalid, "issues": [...]}``. A mode that
+    makes no causal claim has nothing to invalidate, and ``subject_validation``
+    reports its issues capped at ``degraded``: it has no control arm, so a
+    ceiling is meaningless and an unopened skill is information about that arm
+    rather than a broken comparison.
+    """
+    if mode in ("discovery", "cross_repo"):
+        return {"status": VALID, "issues": []}
+
+    issues = _skill_usage_issues(
+        skill_usage or {},
+        treatment_label=treatment.label if treatment else None,
+    )
+    issues.extend(_run_health_issues(run_health or {}))
+    if mode == "harness_evaluation" and control is not None:
+        ceiling = _ceiling_issue(control, success)
+        if ceiling:
+            issues.append(ceiling)
+    for note in design_notes or []:
+        issues.append(
+            ValidityIssue(
+                code="design_objection",
+                severity=DEGRADED,
+                arm=None,
+                detail=str(note),
+                remedy="Revisit the design before treating this as a finding.",
+            )
+        )
+
+    if mode == "subject_validation":
+        for issue in issues:
+            issue.severity = DEGRADED
+
+    issues.sort(
+        key=lambda issue: (
+            0 if issue.severity == INVALID else 1,
+            _ISSUE_ORDER.index(issue.code)
+            if issue.code in _ISSUE_ORDER
+            else len(_ISSUE_ORDER),
+        )
+    )
+    status = INVALID
+    if not any(issue.severity == INVALID for issue in issues):
+        status = DEGRADED if issues else VALID
+    return {"status": status, "issues": [issue.as_dict() for issue in issues]}
+
+
 def skill_usage_caveats(skill_usage: Mapping[str, Mapping[str, Any]]) -> list[str]:
     """What to say when an arm's skills were not actually opened (ADR-0041).
 
@@ -371,40 +623,18 @@ def skill_usage_caveats(skill_usage: Mapping[str, Mapping[str, Any]]) -> list[st
 
     A with-skills arm at zero is the whole point: its number compared the
     skill's *availability*, and the reader must learn that before the delta.
+    Kept as the sentence-level view of :func:`_skill_usage_issues`, so the prose
+    lives in exactly one place.
     """
-    caveats: list[str] = []
-    for label, usage in skill_usage.items():
-        skills = list(usage.get("skills") or [])
-        runs = int(usage.get("runs") or 0)
-        invoked = int(usage.get("invoked") or 0)
-        if not skills or runs == 0:
-            continue
-        names = ", ".join(f"'{name}'" for name in skills)
-        if invoked == 0:
-            caveats.append(
-                f"{label}: {names} was never invoked in its {runs} run(s)"
-                + (
-                    " although the prompt asked for it"
-                    if usage.get("requested")
-                    else ""
-                )
-                + " — this arm measured the skill's availability, not its use. "
-                + (
-                    "Check the skill's own instructions before reading the result."
-                    if usage.get("requested")
-                    else "Ask for it in the design ('Enforce skill use'), or make "
-                    "the skill's triggers match the task, before reading the result."
-                )
-            )
-        elif invoked < runs:
-            caveats.append(
-                f"{label}: {names} invoked in {invoked} of {runs} run(s) — the "
-                "arm mixes runs with and without the treatment."
-            )
-    return caveats
+    return [
+        f"{issue.detail} {issue.remedy}"
+        if issue.code == "treatment_not_activated"
+        else issue.detail
+        for issue in _skill_usage_issues(skill_usage)
+    ]
 
 
-def verdict(
+def _compose_verdict(
     *,
     mode: str,
     cases: int,
@@ -653,3 +883,57 @@ def verdict(
         "highlights": highlights,
         "caveats": caveats,
     }
+
+
+def _apply_validity(
+    answer: dict[str, Any], validity: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Lead with invalidity; keep the measurement.
+
+    ADR-0041 refused to *withhold* a verdict when the treatment never fired —
+    the numbers are true, and blocking hides them. This does not reverse that
+    decision, it relocates it: the sentence the page would have led with moves
+    to ``observed``, intact, and what a reader meets first becomes the reason
+    it cannot be read as an answer. A caveat under a confident headline is the
+    failure mode this exists to end.
+    """
+    headline = str(answer.get("headline", "")).lower()
+    tone = "neutral"
+    if "improvement" in headline:
+        tone = "better"
+    elif "regression" in headline:
+        tone = "worse"
+
+    issues = list((validity or {}).get("issues") or [])
+    if validity and validity.get("status") == INVALID and issues:
+        lead, *rest = issues
+        answer["observed"] = answer.get("claim", "")
+        answer["headline"] = "Comparison not valid"
+        answer["claim"] = (
+            f"{lead.get('detail', '')} The numbers below describe what happened, "
+            "not whether the harness helped."
+        ).strip()
+        leading = [str(lead.get("remedy") or "")] + [
+            f"{issue.get('detail')} {issue.get('remedy')}".strip() for issue in rest
+        ]
+        leading = [text for text in leading if text]
+        answer["caveats"] = leading + [
+            caveat for caveat in (answer.get("caveats") or []) if caveat not in leading
+        ]
+        tone = "invalid"
+
+    answer["tone"] = tone
+    return answer
+
+
+def verdict(
+    *, validity: Mapping[str, Any] | None = None, **kwargs: Any
+) -> dict[str, Any]:
+    """The answer an experiment page leads with — see :func:`_compose_verdict`.
+
+    ``validity`` comes from :func:`assess_validity`. When it says the comparison
+    is invalid, the composed claim is preserved under ``observed`` and the
+    headline is replaced by the reason. ``tone`` is always set, so the frontend
+    reads a field rather than sniffing English out of the headline.
+    """
+    return _apply_validity(_compose_verdict(**kwargs), validity)

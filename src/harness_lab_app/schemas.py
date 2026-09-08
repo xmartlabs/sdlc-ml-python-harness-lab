@@ -162,6 +162,11 @@ class ExperimentCreate(BaseModel):
     # Per-case override of ``repetitions``; empty means uniform.
     case_repetitions: dict[str, int] = Field(default_factory=dict)
     suite_id: str = ""
+    # Objections the designer was shown and created the experiment anyway
+    # (ADR-0046). The wizard raises advisories the server cannot derive — which
+    # prompts were paired, what the venue leaves in place — and they used to
+    # vanish the moment the form was submitted.
+    design_notes: list[str] = Field(default_factory=list)
     notes: str = ""
 
 

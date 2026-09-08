@@ -3925,3 +3925,39 @@ button.danger:hover {
   color: var(--accent);
   font-weight: 600;
 }
+
+/* --- validity: the card that is read before the verdict (ADR-0046) -------- */
+
+.validity {
+  border-left: 4px solid var(--line-strong);
+}
+
+.validity--invalid {
+  border-left-color: var(--danger);
+}
+
+.validity--degraded {
+  border-left-color: var(--warning);
+}
+
+.validity-issues {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.validity-issues strong {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.validity-issues p {
+  margin: var(--space-1) 0 0;
+}
+
+.verdict-observed {
+  font-size: 0.85rem;
+}
