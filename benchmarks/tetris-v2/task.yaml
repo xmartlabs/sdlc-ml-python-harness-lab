@@ -1,0 +1,57 @@
+task_id: tetris-v2
+version: "1"
+status: active
+category: game-build
+tags: [pygame, single-file, graded, ships-tests]
+
+description: >
+  Build a playable Tetris in pygame whose game logic is exposed as a `Game`
+  class and graded by a shipped pytest suite (ADR-0050). The successor of
+  tetris-v1: same task, but with ten independent objective assertions instead
+  of one smoke check, so `test_pass_rate` has room to move and the LLM judge
+  is no longer the only source of a graded score.
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+target_level: 10
+complexity: medium
+
+validation: objective
+validation_note: >
+  The tests in benchmarks/tetris-v2/tests/test_game.py are the grade. One
+  validation command per test so the pass rate is graded to the test, not to
+  the suite. The first command is the tamper guard: the shipped tests must be
+  byte-identical to the checked-in ones.
+
+# {workspace} is substituted at validation time (relative to /app, where the
+# validation container runs). The tests import `main` from the cwd, headless.
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/tetris-v2/tests && test -z \"$(git -C /app status --porcelain -- benchmarks/tetris-v2/tests)\""
+  - "BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy timeout 45 python {workspace}/main.py"
+  - "cd {workspace} && SDL_VIDEODRIVER=dummy timeout 60 python -m pytest /app/benchmarks/tetris-v2/tests/test_game.py::test_board_has_the_requested_shape test_a_piece_spawns_at_the_top test_the_same_seed_gives_the_same_pieces test_soft_drop_moves_the_piece_down test_move_is_blocked_by_the_wall test_rotate_changes_the_shape_or_is_refused test_hard_drop_locks_the_piece_into_the_board test_locked_cells_block_movement test_a_full_row_is_cleared_and_scored test_game_over_when_the_stack_reaches_the_top -q -p no:cacheprovider"
+
+files_forbidden:
+  - benchmarks/tetris-v2/tests/test_game.py
+
+constraints:
+  - Single Python file: main.py
+  - pygame only, no external assets (sprites, sounds)
+  - Entry point: python main.py; importing main must not open a window
+  - Do not edit the shipped tests
+
+success_criteria:
+  level_0: no useful code produced
+  level_2: runs headless without crashing (smoke check passes)
+  level_5: the Game contract exists and pieces spawn, move and drop (tests 1-4)
+  level_8: walls, rotation, locking and stacking behave (tests 5-8)
+  level_10: lines clear with score and the game ends (tests 9-10)
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+# `harness` is `_harness_preamble.md` concatenated onto `prompt_default.md`;
+# regenerate with `make prompts`.
+prompts:
+  default: benchmarks/tetris-v2/prompt_default.md
+  harness: benchmarks/tetris-v2/prompt_harness.md
+
+scoring_rubric: benchmarks/tetris-v2/scoring.md
