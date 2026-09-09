@@ -348,8 +348,21 @@ def test_stamp_event_line_leaves_non_json_untouched():
     assert bench_run.stamp_event_line("{}\n") == "{}\n"
 
 
-def _managed_run(tmp_path, monkeypatch, rc: int) -> tuple[int, Path]:
-    """Drive `main()` down the managed path with a harness that exits `rc`."""
+def _managed_run(
+    tmp_path,
+    monkeypatch,
+    rc: int,
+    *,
+    spec_extra: dict | None = None,
+    argv_extra: tuple[str, ...] = (),
+    calls: dict | None = None,
+) -> tuple[int, Path, dict]:
+    """Drive `main()` down the managed path with a harness that exits `rc`.
+
+    `calls` opts into recording which lab-root mutations were attempted: the
+    named functions write the lab's own adapter files, and a masked harness
+    condition must not call them at all.
+    """
     monkeypatch.setattr(bench_run, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(bench_run, "DATA_DIR", tmp_path / "data" / "runs")
     monkeypatch.setattr(bench_run, "WORKSPACE_ROOT", tmp_path / "workspace")
@@ -358,15 +371,36 @@ def _managed_run(tmp_path, monkeypatch, rc: int) -> tuple[int, Path]:
         "apply_gateway_overlay",
         "restore_full_skill_views",
         "write_bench_context",
+        "apply_skill_views",
     ):
-        monkeypatch.setattr(bench_run, name, lambda *_a, **_k: None)
-    monkeypatch.setattr(bench_run, "build_effective_skills", lambda *_a, **_k: [])
+        if calls is not None and name in calls:
+            monkeypatch.setattr(
+                bench_run,
+                name,
+                lambda *_a, _n=name, **_k: calls.__setitem__(_n, calls[_n] + 1),
+            )
+        else:
+            monkeypatch.setattr(bench_run, name, lambda *_a, **_k: None)
+    if calls is not None and "build_effective_skills" in calls:
+        monkeypatch.setattr(
+            bench_run,
+            "build_effective_skills",
+            lambda *_a, **_k: calls.__setitem__(
+                "build_effective_skills", calls["build_effective_skills"] + 1
+            )
+            or [],
+        )
+    else:
+        monkeypatch.setattr(bench_run, "build_effective_skills", lambda *_a, **_k: [])
     monkeypatch.setattr(bench_run, "copy_to_clipboard", lambda *_a, **_k: False)
     monkeypatch.setattr(bench_run.shutil, "which", lambda name: f"/usr/bin/{name}")
     for name in ("pull_usage_litellm", "pull_usage_langfuse", "pull_usage_opencode_db"):
         monkeypatch.setattr(bench_run, name, lambda *_a, **_k: None)
 
+    seen: dict = {}
+
     def fake_run(cmd, log_path, **kwargs):
+        seen["cwd"] = kwargs.get("cwd")
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("SSE stream closed unexpectedly\n")
         return rc
@@ -375,16 +409,14 @@ def _managed_run(tmp_path, monkeypatch, rc: int) -> tuple[int, Path]:
 
     out_dir = tmp_path / "data" / "runs" / "r-1"
     out_dir.mkdir(parents=True)
-    (out_dir / "case_spec.json").write_text(
-        json.dumps(
-            {
-                "case_id": "db-case-1",
-                "prompt": "Build it.",
-                "prompt_variant": "sdlc",
-                "repo": "",
-            }
-        )
-    )
+    spec = {
+        "case_id": "db-case-1",
+        "prompt": "Build it.",
+        "prompt_variant": "sdlc",
+        "repo": "",
+    }
+    spec.update(spec_extra or {})
+    (out_dir / "case_spec.json").write_text(json.dumps(spec))
     code = bench_run.main(
         [
             "--case",
@@ -398,9 +430,10 @@ def _managed_run(tmp_path, monkeypatch, rc: int) -> tuple[int, Path]:
             "--score-mode",
             "manual",
             "--fresh",
+            *argv_extra,
         ]
     )
-    return code, out_dir
+    return code, out_dir, seen
 
 
 def test_a_dead_harness_exits_non_zero_but_keeps_its_evidence(tmp_path, monkeypatch):
@@ -412,7 +445,7 @@ def test_a_dead_harness_exits_non_zero_but_keeps_its_evidence(tmp_path, monkeypa
     The non-zero return comes *after* usage.json and the archive, because the
     evidence of why is the whole point.
     """
-    code, out_dir = _managed_run(tmp_path, monkeypatch, rc=2)
+    code, out_dir, _ = _managed_run(tmp_path, monkeypatch, rc=2)
 
     assert code != 0
     usage = json.loads((out_dir / "usage.json").read_text())
@@ -422,7 +455,123 @@ def test_a_dead_harness_exits_non_zero_but_keeps_its_evidence(tmp_path, monkeypa
 
 
 def test_a_harness_that_finished_still_exits_zero(tmp_path, monkeypatch):
-    code, out_dir = _managed_run(tmp_path, monkeypatch, rc=0)
+    code, out_dir, _ = _managed_run(tmp_path, monkeypatch, rc=0)
 
     assert code == 0
     assert json.loads((out_dir / "usage.json").read_text()).get("stop_reason") is None
+
+
+# --------------------------------------------------------------------------
+# Harness conditions in the runner (ADR-0049)
+# --------------------------------------------------------------------------
+
+
+def test_a_bare_run_never_writes_to_the_lab_tree(tmp_path, monkeypatch):
+    """A bare arm must not touch what a bare arm cannot see.
+
+    `restore_full_skill_views` and `apply_skill_views` rewrite the lab's own
+    adapter files (CLAUDE.md, OPENCODE.md, `.claude/skills`), which in a masked
+    container are read-only empty binds: the write would raise, and if it
+    succeeded it would refill the very mask that makes the arm bare. Same for
+    BENCH_CONTEXT.md.
+    """
+    calls = {
+        "restore_full_skill_views": 0,
+        "apply_skill_views": 0,
+        "write_bench_context": 0,
+        "build_effective_skills": 0,
+    }
+    code, out_dir, seen = _managed_run(
+        tmp_path,
+        monkeypatch,
+        rc=0,
+        spec_extra={"harness_source": "bare"},
+        argv_extra=("--disable-skill", "brainstorming"),
+        calls=calls,
+    )
+
+    assert code == 0
+    assert calls == dict.fromkeys(calls, 0)
+    # The agent runs from the workspace, not the lab root.
+    assert seen["cwd"] == tmp_path / "workspace" / "r-1"
+    meta = json.loads((out_dir / "metadata.json").read_text())
+    assert meta["harness_source"] == "bare"
+    # No catalog and no subagents, stated rather than inferred from the masks.
+    assert meta["skills_bundle"] == []
+    assert meta["subagents"] == []
+    # The declaration survives for the condition hash even though nothing was
+    # ablated: it is what makes the arm addressable.
+    assert meta["skills_disabled"] == ["brainstorming"]
+    assert meta["harness_git_dirty"] is None
+    assert meta["harness_fingerprint"]["harness_root"] == "workspace"
+    assert "current working directory" in (out_dir / "prompt.md").read_text()
+
+
+def test_a_bare_run_reads_its_condition_before_it_acts_on_it(tmp_path, monkeypatch):
+    """The reorder, pinned.
+
+    `--disable-skill <unknown>` is rejected by `build_effective_skills`, which
+    used to run before `harness_source` was read. A bare run has no catalog to
+    check the name against, so reaching exit 0 here proves the condition is now
+    known before anything acts on it.
+    """
+    code, _out_dir, _seen = _managed_run(
+        tmp_path,
+        monkeypatch,
+        rc=0,
+        spec_extra={"harness_source": "bare"},
+        argv_extra=("--disable-skill", "no-such-skill-anywhere"),
+    )
+
+    assert code == 0
+
+
+def test_a_bare_run_refuses_to_stage_or_invoke_a_skill(tmp_path, monkeypatch):
+    with pytest.raises(SystemExit) as excinfo:
+        _managed_run(
+            tmp_path,
+            monkeypatch,
+            rc=0,
+            spec_extra={"harness_source": "bare"},
+            argv_extra=("--invoke-skill", "brainstorming"),
+        )
+
+    assert "bare" in str(excinfo.value)
+
+
+def test_a_bare_run_refuses_an_unmasked_lab_root(tmp_path, monkeypatch):
+    """The tripwire: on the host lane nothing masks the lab (ADR-0049).
+
+    The workspace lives under the repo root, so a readable CLAUDE.md there is
+    an ancestor memory file — the control arm would be a second treatment arm
+    and nothing downstream would ever say so.
+    """
+    (tmp_path / "CLAUDE.md").write_text("# the lab's governance\n")
+
+    with pytest.raises(SystemExit) as excinfo:
+        _managed_run(tmp_path, monkeypatch, rc=0, spec_extra={"harness_source": "bare"})
+
+    assert "masked" in str(excinfo.value) or "readable" in str(excinfo.value)
+
+
+def test_a_lab_root_run_still_regenerates_its_skill_views(tmp_path, monkeypatch):
+    """The gate must not be so broad that it breaks the ordinary ablation."""
+    calls = {
+        "restore_full_skill_views": 0,
+        "apply_skill_views": 0,
+        "build_effective_skills": 0,
+    }
+    code, _out_dir, seen = _managed_run(
+        tmp_path,
+        monkeypatch,
+        rc=0,
+        argv_extra=("--disable-skill", "brainstorming"),
+        calls=calls,
+    )
+
+    assert code == 0
+    assert calls["restore_full_skill_views"] == 1
+    assert calls["apply_skill_views"] == 1
+    assert calls["build_effective_skills"] == 1
+    # And it runs from the lab root, which is the whole point of the condition.
+    assert seen["cwd"] is None

@@ -134,8 +134,8 @@ def test_the_real_repository_suite_translates(tmp_path):
         control=INSTALLED,
         treatment=CANDIDATE,
     )
-    assert len(payload.case_ids) == 4
-    assert payload.case_repetitions["pallets__flask-4992"] == 1
+    assert len(payload.case_ids) == 2
+    assert payload.case_repetitions["tetris-v2"] == 3
 
 
 # --------------------------------------------------------------------------
@@ -177,9 +177,8 @@ def test_the_endpoint_creates_the_experiment_from_the_shipped_suite(session):
     assert result["suite_id"] == "harness-regression-v1"
     assert result["mode"] == ExperimentMode.harness_evaluation
     # Cases and per-case repetitions come from suite.yaml, not from the request.
-    assert len(result["case_ids"]) == 4
-    assert result["case_repetitions"]["pallets__flask-4992"] == 1
-    assert any("exploratory only" in warning for warning in result["warnings"])
+    assert len(result["case_ids"]) == 2
+    assert result["case_repetitions"]["tetris-v2"] == 3
 
 
 def test_the_endpoint_refuses_an_unknown_suite(session):

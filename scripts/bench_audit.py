@@ -377,7 +377,15 @@ def build_inputs(run: dict, out_dir: Path) -> dict:
     rules_warning = surface.warning
     rules_root = Path(surface.root)
     rules = read_text_if_exists(rules_root / rules_name)
-    if rules is None and surface.source != "lab_root":
+    if rules is None and surface.source == "bare":
+        # Not a missing file but the condition itself (ADR-0049): the runner
+        # masked the lab's governance, so there is no rulebook to adhere to.
+        rules = (
+            "(This run was a bare arm: the lab's governance was masked in the "
+            "container, so it had no governance surface beyond the prompt. "
+            "Judge nothing against rules it could not read.)"
+        )
+    elif rules is None and surface.source != "lab_root":
         # A `native` target that ships no governance at all is a real and
         # interesting condition, not a missing file: say so instead of silently
         # substituting the lab's.
@@ -429,6 +437,8 @@ def build_user_message(run_id: str, inp: dict) -> str:
         origin = (
             "el repositorio target archivado con esta corrida"
             if governance.get("source") == "target_workspace"
+            else "ninguno — el runner enmascaró la governance del lab"
+            if governance.get("source") == "bare"
             else "el repositorio del lab"
         )
         rules_header = (

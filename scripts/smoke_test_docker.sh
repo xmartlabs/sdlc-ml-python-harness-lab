@@ -3,8 +3,8 @@ set -e
 
 echo "--- Starting Docker Smoke Test ---"
 
-# Run id must exist in benchmarks/tetris/runs.yaml (bench_run.py validates it).
-RUN_ID="${RUN_ID:-tetris-v1-K-001}"
+# A run id created through the web UI / API for a DB case (e.g. tetris-v2).
+RUN_ID="${RUN_ID:-tetris-v2-K-001}"
 
 # 1. Wait for services to be up
 echo "Waiting for API to be healthy..."

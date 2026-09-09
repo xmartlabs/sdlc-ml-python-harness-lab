@@ -98,16 +98,30 @@ class HarnessSource(StrEnum):
     repository. They differ in what is there when it arrives — nothing but the
     repo's own conventions, or the lab's harness materialized on top. That pair
     is the comparison: same repo, same case, same model, harness varied.
+
+    ``bare`` is the same idea without a repository (ADR-0049): the agent runs in
+    an empty workspace and the lab's governance surface is masked inside the
+    runner container, so it sees the prompt and nothing else. It is the control
+    a lab-native case like Tetris needs — a `lab_root` "bare" arm still carries
+    CLAUDE.md, the SessionStart hook, the subagents and `.github/`.
     """
 
     lab_root = "lab_root"
     native = "native"
     injected = "injected"
+    bare = "bare"
 
 
 # The two sources that require an external target: both run the agent inside the
 # cloned repository, which does not exist for a lab-root run.
 IN_TARGET_HARNESS_SOURCES = frozenset({HarnessSource.native, HarnessSource.injected})
+
+# Every source whose agent runs from the workspace rather than the lab root, and
+# whose container therefore masks the lab's governance so it cannot be picked up
+# from an ancestor directory (the workspace lives under the repo root).
+MASKED_HARNESS_SOURCES = frozenset(
+    {HarnessSource.native, HarnessSource.injected, HarnessSource.bare}
+)
 
 
 class TargetStatus(StrEnum):
@@ -315,6 +329,11 @@ class Experiment(SQLModel, table=True):
     # The regression suite this experiment was generated from, when it was
     # (ADR-0037). Empty for a hand-designed experiment.
     suite_id: str = ""
+    # The family this experiment belongs to — a set of single-factor
+    # experiments read together, such as the harness ladder (ADR-0051):
+    # bare → governance → +skills → +harness prompt → +activation. Empty for
+    # a standalone experiment.
+    family_id: str = ""
     # What the design was warned about when it was created (ADR-0046). The
     # wizard's objections used to die in the 201 response body, so a design
     # someone was told was confounded rendered a fully confident verdict
@@ -495,6 +514,28 @@ class Audit(SQLModel, table=True):
     # verdict scored against the lab's own rules has to be identifiable rather
     # than trusted (see `harness_lab_app.governance`).
     governance_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    error: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ExperimentAudit(SQLModel, table=True):
+    """A natural-language reading of a finished experiment, written by an LLM.
+
+    The summary page already computes everything — validity, verdict, deltas,
+    what each arm read and invoked — but it renders as cards and caveats. This
+    is the same evidence read back as prose: what was compared, what came out,
+    what the arms actually used, and whether the comparison can be trusted.
+    The evidence the model was given is stored beside the text so a reader can
+    check any sentence against the numbers it came from.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    experiment_id: str = Field(index=True, unique=True)
+    auditor_model: str = ""
+    status: str = "running"  # running | done | failed
+    markdown: str = ""
+    evidence_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
     error: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

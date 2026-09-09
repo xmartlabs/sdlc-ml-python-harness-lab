@@ -191,9 +191,6 @@ bench-close:
 	uv run python scripts/bench_close.py --run $(RUN) --score $(SCORE) \
 	  --interventions $(INTERVENTIONS) $(if $(NOTES),--notes "$(NOTES)",)
 
-# Print a live comparison table from runs.yaml (legacy CLI lane). Shows scores, status, and cell averages.
-bench-results:
-	@uv run python scripts/show_results.py
 
 # Run a benchmark end-to-end: prepare workspace, execute, optionally score and close.
 # Usage: make bench-run CASE=tetris-v1 RUN=tetris-v1-A-003 PROMPT=incremental \
@@ -235,7 +232,7 @@ bench-run:
 # (logs, diff, usage, score) and writes a descriptive diagnostic to audit.md.
 # Usage: make bench-audit RUN=tetris-v1-K-001 [AUDITOR_MODEL=gateway/gpt-5.5] [DRY_RUN=1]
 bench-audit:
-	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-K-001"; exit 1; }
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v2-K-001"; exit 1; }
 	@set -a; [ -f .env ] && . ./.env; set +a; \
 	uv run python scripts/bench_audit.py \
 		--run $(RUN) \
@@ -282,6 +279,13 @@ harness-proposal-issue:
 # Read-only; needs the `template` remote (make template-remote-setup).
 harness-status:
 	@uv run python scripts/harness_lifecycle.py status
+
+# Record a template release as the installed harness: writes .harness-version.yaml
+# so every run from now on carries template_ref=<REF> (ADR-0052). Rollback is
+# adopting the previous ref. Usage: make harness-adopt REF=v0.4.0
+harness-adopt:
+	@[ -n "$(REF)" ] || { echo "❌ REF is required. Example: REF=v0.4.0"; exit 1; }
+	@uv run python scripts/harness_lifecycle.py adopt --ref $(REF)
 
 # Read-only diff of an immutable candidate release (governance changes + blockers).
 # Works with a dirty tree; writes nothing. Usage: make harness-sync-preview REF=v0.3.0
@@ -514,10 +518,10 @@ sandbox-build:
 
 # Smoke-test the runner image directly against the host gateway (no Celery):
 # proves opencode-in-container can reach LiteLLM/LM Studio on the host.
-# Usage: make app-runner-smoke RUN=tetris-v1-K-001 [PROMPT=sdlc] [MAX_STEPS=10] \
+# Usage: make app-runner-smoke RUN=tetris-v2-K-001 [PROMPT=sdlc] [MAX_STEPS=10] \
 #          [EXECUTOR_MODEL=gateway/lmstudio-qwen3.6-35b-build] [DRY_RUN=1]
 app-runner-smoke:
-	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-K-001"; exit 1; }
+	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v2-K-001"; exit 1; }
 	@[ -f .env ] || echo "⚠️  no .env found — gateway env vars will be empty inside the container."
 	@docker compose build runner
 	@tmp_env=$$(mktemp); \
@@ -528,7 +532,7 @@ app-runner-smoke:
 	    --add-host host.docker.internal:host-gateway \
 	    harness-lab-runner:latest \
 	    /opt/venv/bin/python scripts/bench_run.py \
-	      --case $(if $(CASE),$(CASE),tetris-v1) \
+	      --case $(if $(CASE),$(CASE),tetris-v2) \
 	      --run $(RUN) \
 	      $(if $(PROMPT),--prompt $(PROMPT),) \
 	      $(if $(EXECUTOR_MODEL),--executor-model $(EXECUTOR_MODEL),) \
@@ -545,6 +549,14 @@ app-smoke-test:
 	@echo "🧪 Running Docker smoke test..."
 	@chmod +x scripts/smoke_test_docker.sh
 	@./scripts/smoke_test_docker.sh
+
+# Create the harness ladder (ADR-0051): four single-factor experiments, one
+# family, one (harness, model) pair. Add LAUNCH=1 to queue the runs.
+# Usage: make ladder MODEL=claude-haiku-4-5-20251001 [CASES="tetris-v2" HARNESS=claude REPS=2 LAUNCH=1]
+# CASES defaults to every active case; REPS defaults to 2 (a judgement).
+ladder:
+	@[ -n "$(MODEL)" ] || { echo "❌ MODEL is required. Example: MODEL=claude-haiku-4-5-20251001"; exit 1; }
+	@uv run python scripts/ladder.py $(if $(CASES),--cases $(CASES),) --model $(MODEL) --harness $(or $(HARNESS),claude) --reps $(or $(REPS),2) $(if $(LAUNCH),--launch,)
 
 # Import a hand-authored benchmark case from its task.yaml (idempotent).
 # Usage: make case-import TASK=benchmarks/cli-textstats/task.yaml
@@ -864,6 +876,14 @@ sync-skills:
 check-sync:
 	@$(SKILLS_SYNC) check
 
+# Regenerate each case's `harness` prompt from its `default` sibling (ADR-0047).
+prompts:
+	@. $(VENV_DIR)/bin/activate && python scripts/build_prompt_variants.py
+
+# Fail if any `harness` prompt drifted from its `default` sibling (CI drift gate).
+prompts-check:
+	@. $(VENV_DIR)/bin/activate && python scripts/build_prompt_variants.py --check
+
 # Remove all external skills and reset native views to internal-only.
 purge-external-skills:
 	@$(SKILLS_SYNC) purge
@@ -949,4 +969,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync purge-external-skills sync-gateway-models set-password case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill
+.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill

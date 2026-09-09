@@ -55,7 +55,9 @@ RUN uv sync --no-dev --frozen || uv sync --no-dev
 # (Tetris) case needs for its headless objective validation (SDL dummy driver).
 # jinja2 lives in the dev group (skills_sync renderer), but bench_run needs the
 # renderer inside the container for per-run skill ablation (ADR-0011).
-RUN uv pip install --python /opt/venv/bin/python --no-cache pygame jinja2
+# pytest: graded cases ship their own test suite (ADR-0050, tetris-v2) and the
+# validation container runs it against the agent's workspace.
+RUN uv pip install --python /opt/venv/bin/python --no-cache pygame jinja2 pytest pytest-cov
 
 # opencode CLI (host equivalent: brew install anomalyco/tap/opencode) and the
 # conductor plugin the Makefile installs into ~/.config/opencode.

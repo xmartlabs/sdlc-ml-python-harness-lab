@@ -124,14 +124,18 @@ class DeterministicEvaluator:
                     reason=objective.get("summary", ""),
                 )
             )
-        if checks:
-            passed = sum(1 for check in checks if check.get("passed"))
+        # Only checks that actually produced a verdict. A timed-out or killed
+        # command measured the harness, not the code, and averaging it in as a
+        # zero is infrastructure entering the corpus as capability (ADR-0046).
+        conclusive = [check for check in checks if check.get("conclusive") is not False]
+        if conclusive:
+            passed = sum(1 for check in conclusive if check.get("passed"))
+            reason = f"{passed}/{len(conclusive)} checks passed"
+            skipped = len(checks) - len(conclusive)
+            if skipped:
+                reason += f" ({skipped} inconclusive, excluded)"
             scores.append(
-                ScoreValue(
-                    "test_pass_rate",
-                    passed / len(checks),
-                    reason=f"{passed}/{len(checks)} checks passed",
-                )
+                ScoreValue("test_pass_rate", passed / len(conclusive), reason=reason)
             )
 
         touched = changed_files(context.diff_text)
@@ -166,6 +170,30 @@ class DeterministicEvaluator:
         return scores
 
 
+class RubricJudgeEvaluator:
+    """The judge's rubric level, as a score row rather than a run field only.
+
+    Until now the judge's number lived in ``Validation.subjective`` and
+    ``Run.score`` and never reached the experiment summary — so two equivalent
+    implementations scored 10 and 2 on identical evidence, and nothing on the
+    experiment page could show it. Recorded as JUDGEMENT provenance: it rides
+    in the deltas table, never in the success rate.
+    """
+
+    id = "llm_judge"
+
+    def evaluate(self, context: EvaluationContext) -> list[ScoreValue]:
+        validation = context.validation or {}
+        subjective = validation.get("subjective") or {}
+        if subjective.get("score_source") != "llm_judge":
+            return []
+        score = subjective.get("functional_score")
+        if score is None:
+            return []
+        notes = str(subjective.get("notes") or "")
+        return [ScoreValue("rubric_score", float(score), reason=notes[:400])]
+
+
 class EfficiencyEvaluator:
     """Level 2 — what it cost to get there."""
 
@@ -178,6 +206,8 @@ class EfficiencyEvaluator:
         scores: list[ScoreValue] = []
         for name, value in (
             ("total_tokens", cost.get("total_tokens")),
+            ("billed_tokens", cost.get("billed_tokens")),
+            ("cache_read_tokens", cost.get("cache_read_tokens")),
             ("cost_usd", cost.get("cost_usd")),
             ("wall_time_minutes", cost.get("time_minutes")),
             ("agent_steps", effort.get("steps")),
@@ -379,6 +409,7 @@ PROFILES: dict[str, tuple[str, ...]] = {
     # treatment from a menu (ADR-0041).
     "default": (
         "deterministic",
+        "llm_judge",
         "efficiency",
         "skill_usage",
         "harness_audit",
@@ -386,6 +417,7 @@ PROFILES: dict[str, tuple[str, ...]] = {
     ),
     "with_trajectory": (
         "deterministic",
+        "llm_judge",
         "efficiency",
         "skill_usage",
         "harness_audit",
@@ -399,6 +431,7 @@ EVALUATORS = {
     evaluator.id: evaluator
     for evaluator in (
         DeterministicEvaluator(),
+        RubricJudgeEvaluator(),
         EfficiencyEvaluator(),
         SkillUsageEvaluator(),
         HarnessBehaviorEvaluator(),

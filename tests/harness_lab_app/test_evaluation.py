@@ -243,3 +243,46 @@ def test_trajectory_metrics_ride_in_the_default_profile():
     assert "deepeval" in PROFILES["default"]
     # And a bare context still evaluates without raising.
     run_profile("default", EvaluationContext(run_id="r1"))
+
+
+def test_the_judges_level_becomes_a_score_row():
+    """The judge's number never reached the experiment page (ADR-0034 gap).
+
+    Recorded as JUDGEMENT provenance so it shows in the deltas — where a 10 vs
+    2 split on identical evidence is finally visible — and never as success.
+    """
+    from harness_lab_app.evaluation import EvaluationContext, RubricJudgeEvaluator
+    from harness_lab_app.scores import JUDGEMENT, get_definition
+
+    context = EvaluationContext(
+        run_id="r",
+        validation={
+            "objective": {},
+            "cost": {},
+            "effort": {},
+            "subjective": {
+                "functional_score": 9,
+                "score_source": "llm_judge",
+                "notes": "level 9",
+            },
+        },
+    )
+
+    [score] = RubricJudgeEvaluator().evaluate(context)
+
+    assert score.name == "rubric_score"
+    assert score.value == 9.0
+    assert get_definition("rubric_score").provenance == JUDGEMENT
+
+
+def test_a_human_score_is_not_filed_as_the_judges():
+    from harness_lab_app.evaluation import EvaluationContext, RubricJudgeEvaluator
+
+    context = EvaluationContext(
+        run_id="r",
+        validation={
+            "subjective": {"functional_score": 7, "score_source": "manual"},
+        },
+    )
+
+    assert RubricJudgeEvaluator().evaluate(context) == []

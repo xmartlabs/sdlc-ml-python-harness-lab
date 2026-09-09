@@ -136,6 +136,19 @@ def _normalize_event_path(path: str) -> str:
     return path.removeprefix("/app/").lstrip("/") if path.startswith("/") else path
 
 
+_WORKSPACE_PREFIX_RE = re.compile(r"^workspace/[^/]+/")
+
+
+def _relative_to_workspace(path: str) -> str:
+    """`workspace/<run>/x` → `x`; anything outside the workspace is kept as is.
+
+    Keeping the lab-root path intact is deliberate: under an in-target
+    condition a read of `CLAUDE.md` (the lab's) must *not* look like a read of
+    the workspace's own, so it stays distinguishable in `files_read`.
+    """
+    return _WORKSPACE_PREFIX_RE.sub("", path, count=1)
+
+
 def parse_claude_events(lines: list[str]) -> dict[str, Any]:
     """Extract tool/file/skill signals from claude stream-json event lines.
 
@@ -210,6 +223,14 @@ def _assemble(
     if reading_surface is not None:
         surface = tuple(reading_surface)
     read_set = set(parsed["files_read"]) | set(parsed["files_edited"])
+    # A run whose harness lives in the workspace (native, injected, bare —
+    # ADR-0031/0049) reads its rulebook at `workspace/<run>/CLAUDE.md`, while
+    # the surface lists it as `CLAUDE.md`. Without this the two never matched:
+    # an in-target run scored 0/N on its own governance, and — worse — a read
+    # of the *lab's* `/app/CLAUDE.md` was the one path that did match, so the
+    # only read that signalled contamination counted as compliance.
+    if governance and governance.get("source") != "lab_root":
+        read_set = {_relative_to_workspace(path) for path in read_set}
     docs_read = [doc for doc in surface if doc in read_set]
     skills_available = sorted(skills_available or [])
 

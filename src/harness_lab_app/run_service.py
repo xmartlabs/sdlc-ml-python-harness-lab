@@ -19,6 +19,7 @@ from harness_lab_app.models import (
     Attribution,
     Audit,
     Case,
+    HarnessSource,
     Run,
     RunConfig,
     RunEvent,
@@ -349,6 +350,20 @@ class RunService:
         self._check_target(config)
         if config.dry_run:
             return
+        # A bare arm is bare only because the runner masks the lab's governance
+        # at the container level (ADR-0049). On the host lane there is nothing
+        # to mask with, and the agent would silently read the lab's CLAUDE.md
+        # from the workspace's parent directory — a control arm that is a second
+        # treatment arm, which is exactly what this condition exists to prevent.
+        if (
+            config.harness_source == HarnessSource.bare
+            and get_settings().execution_backend != "docker"
+        ):
+            raise RunPreflightError(
+                "harness_source='bare' needs the docker backend: the lab's "
+                "governance is masked inside the runner container, and a host "
+                "run would see it through the workspace's parent directory."
+            )
         self._check_runner_image()
         if config.harness in ("codex", "claude"):
             # These harnesses drive their own CLI with native auth (no gateway
@@ -767,6 +782,12 @@ class RunService:
         the ref is a separate step (``_resolve_target``) because a batch needs it
         once per repository, not once per run.
         """
+        if config.target_repo_id and config.harness_source == HarnessSource.bare:
+            raise RunPreflightError(
+                "harness_source='bare' runs without a repository, so it cannot "
+                "target one. Against a target the bare arm is 'native' — the "
+                "repository's own conventions and nothing of the lab's."
+            )
         if not config.target_repo_id:
             if config.harness_source in IN_TARGET_HARNESS_SOURCES:
                 raise RunPreflightError(

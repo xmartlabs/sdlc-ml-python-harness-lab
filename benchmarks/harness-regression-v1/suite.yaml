@@ -10,19 +10,16 @@ execution:
   sequential: true
   require_clean_harness: true
 
+# Only cases that exist in the lab. The canaries the plan named
+# (systematic-debugging-v1, documentation-update-v1) and the flask instance are
+# not authored/imported yet; listing them made the suite fail silently at launch.
 cases:
   - id: cli-textstats-v1
     role: simple-feature
     repetitions: 3
-  - id: systematic-debugging-v1
-    role: proposal-canary
+  - id: tetris-v2
+    role: graded-build
     repetitions: 3
-  - id: documentation-update-v1
-    role: documentation
-    repetitions: 3
-  - id: pallets__flask-4992
-    role: swebench-easy
-    repetitions: 1
 
 comparison:
   baseline: installed

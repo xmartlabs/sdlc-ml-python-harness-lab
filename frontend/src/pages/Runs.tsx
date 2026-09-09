@@ -687,11 +687,14 @@ export function Runs({
                   </small>
                 </fieldset>
               ) : null}
-              {targets.length > 0 ? (
-                <fieldset className="batch-axis">
+              <fieldset className="batch-axis">
                   <legend>Harness ({batchHarnessSources.size})</legend>
                   <div className="batch-options">
-                    {(["lab_root", "native", "injected"] as HarnessSource[]).map(
+                    {(
+                      targets.length > 0
+                        ? (["lab_root", "native", "injected"] as HarnessSource[])
+                        : (["lab_root", "bare"] as HarnessSource[])
+                    ).map(
                       (source) => (
                         <label className="skill-checkbox" key={source}>
                           <input
@@ -709,12 +712,22 @@ export function Runs({
                     )}
                   </div>
                   <small className="muted">
-                    Selecting <code>native</code> and <code>injected</code> together on
-                    one repository is the harness A/B: same repo, same case, same
-                    model, harness varied. Both require a target repository.
+                    {targets.length > 0 ? (
+                      <>
+                        Selecting <code>native</code> and <code>injected</code>{" "}
+                        together on one repository is the harness A/B: same repo, same
+                        case, same model, harness varied. Both require a target
+                        repository.
+                      </>
+                    ) : (
+                      <>
+                        Selecting <code>bare</code> and <code>lab_root</code> together
+                        is the bare-versus-governed A/B: one arm sees the prompt and
+                        nothing else, the other sees the whole harness.
+                      </>
+                    )}
                   </small>
                 </fieldset>
-              ) : null}
               <label>
                 <span>Repetitions</span>
                 <input
@@ -925,7 +938,7 @@ export function Runs({
                   </small>
                 </label>
               ) : null}
-              {targetRepoId !== "" && !batchMode ? (
+              {!batchMode ? (
                 <label>
                   <span>Governance source</span>
                   <select
@@ -935,15 +948,29 @@ export function Runs({
                     value={harnessSource}
                   >
                     <option value="lab_root">Lab harness (from the lab repo)</option>
-                    <option value="native">Native — the target's own conventions</option>
-                    <option value="injected">Injected — our harness inside the target</option>
+                    {/* The in-target pair needs a repository to be inside;
+                        `bare` needs the absence of one (ADR-0049). */}
+                    {targetRepoId === "" ? (
+                      <option value="bare">Bare — nothing, not even governance</option>
+                    ) : (
+                      <>
+                        <option value="native">
+                          Native — the target's own conventions
+                        </option>
+                        <option value="injected">
+                          Injected — our harness inside the target
+                        </option>
+                      </>
+                    )}
                   </select>
                   <small className="muted">
                     {harnessSource === "lab_root"
-                      ? "The agent works from the lab repo and edits the target from outside."
-                      : harnessSource === "native"
-                        ? "Control arm: the agent works inside the repo with only what that repo ships."
-                        : "Treatment arm: the agent works inside the repo with our harness projected into it."}
+                      ? "The agent works from the lab repo, so it sees CLAUDE.md, the hooks, the subagents and .github/."
+                      : harnessSource === "bare"
+                        ? "Control arm: an empty workspace with the lab's governance masked in the container — the agent sees the prompt and nothing else. Needs the docker backend."
+                        : harnessSource === "native"
+                          ? "Control arm: the agent works inside the repo with only what that repo ships."
+                          : "Treatment arm: the agent works inside the repo with our harness projected into it."}
                   </small>
                 </label>
               ) : null}

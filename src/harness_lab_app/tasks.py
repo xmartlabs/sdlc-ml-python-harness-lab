@@ -28,16 +28,28 @@ from harness_lab_app.celery_app import celery_app
 from harness_lab_app.config import get_settings
 from harness_lab_app.db import engine, init_db
 from harness_lab_app.executors import (
+    GOVERNANCE_MASK_ALL,
+    GOVERNANCE_MASK_ANCESTORS,
+    GOVERNANCE_MASK_NONE,
     build_run_environment,
     container_name_for_run,
     get_executor,
 )
-from harness_lab_app.models import Case, CaseType, Run, RunEvent, RunState, utc_now
+from harness_lab_app.models import (
+    Case,
+    CaseType,
+    HarnessSource,
+    Run,
+    RunEvent,
+    RunState,
+    utc_now,
+)
 from harness_lab_app.run_service import RunService, continuation_source_dir
 from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.sandbox_service import SandboxService
 from harness_lab_app.schemas import RunConfigCreate
 from harness_lab_app.target_service import TargetError, TargetService, clone_source
+from harness_lab_app.validation import describe_objective_for_judge
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +64,19 @@ if TYPE_CHECKING:
     from harness_lab_app.executors import RunExecutor, RunHandle
 
 _FAILURE_TAIL_LINES = 30
+
+
+# A run's harness condition decides how much of the lab the container hides
+# (ADR-0049). `lab_root` hides nothing — there the lab's harness *is* the
+# treatment. The in-target pair hides what an agent could otherwise pick up from
+# the workspace's ancestors, but keeps `.github/` because bench_run.py projects
+# the injected harness from it. `bare` hides all of it.
+GOVERNANCE_MASK_FOR_SOURCE = {
+    HarnessSource.lab_root: GOVERNANCE_MASK_NONE,
+    HarnessSource.native: GOVERNANCE_MASK_ANCESTORS,
+    HarnessSource.injected: GOVERNANCE_MASK_ANCESTORS,
+    HarnessSource.bare: GOVERNANCE_MASK_ALL,
+}
 
 
 def _config_payload(session: Session, run: Run) -> RunConfigCreate:
@@ -144,6 +169,7 @@ def _write_case_spec(
     continuation_prompt: str = "",
     parent_run_id: str | None = None,
     target: dict[str, Any] | None = None,
+    harness_source: str = "lab_root",
 ) -> None:
     """Stage the case, as the DB holds it, for the DB-blind runner container.
 
@@ -234,14 +260,24 @@ def _write_case_spec(
         # instead of inferring one from the shape of the data.
         spec["source"] = "git_target"
         spec["target"] = target
-        # ALSO at the top level, because that is where bench_run.py reads it
-        # (`case_spec.get("harness_source")`). Staging it only inside the
-        # target block silently degraded every declared `native`/`injected`
-        # run to `lab_root`: the agent ran from the lab root with the lab's
-        # own governance loaded — a control arm quietly turned into a second
-        # treatment arm, and the audit then judged it against documents the
-        # condition said it never had.
-        spec["harness_source"] = target.get("harness_source", "lab_root")
+    # At the top level, because that is where bench_run.py reads it
+    # (`case_spec.get("harness_source")`), and unconditionally, because a
+    # targetless run has a condition too: `bare` lives entirely without a
+    # repository (ADR-0049). Staging it only inside the target block silently
+    # degraded every declared non-`lab_root` run to `lab_root` — the agent ran
+    # from the lab root with the lab's own governance loaded, a control arm
+    # quietly turned into a second treatment arm, and the audit then judged it
+    # against documents the condition said it never had.
+    #
+    # The target block, when there is one, is built from the same config field,
+    # so the two can only disagree if a caller omitted the argument — in which
+    # case the target's value is the better answer, because degrading a
+    # declared condition to `lab_root` is the failure being guarded against.
+    spec["harness_source"] = (
+        (target or {}).get("harness_source") or "lab_root"
+        if harness_source == "lab_root"
+        else harness_source
+    )
     if continuation_prompt:
         # A continuation replaces the instruction, not the case (ADR-0026): the
         # SWE fields, constraints and success criteria still describe the task
@@ -624,6 +660,7 @@ def _execute_run_body(
                 continuation_prompt=config_payload.continuation_prompt,
                 parent_run_id=run.parent_run_id,
                 target=_target_spec(session, run),
+                harness_source=str(config_payload.harness_source),
             )
             # Pro lane only: image-based provisioning needs docker, which the
             # runner lacks — do it here before the container starts. Skipped for
@@ -632,7 +669,17 @@ def _execute_run_body(
             if not run.parent_run_id:
                 _provision_pro_workspace(session, run_id, config_payload.case_id)
 
-            handle = executor.start(run_id, command)
+            # How much of the lab's own governance the container hides
+            # (ADR-0049). The keyword is passed only when there is something to
+            # hide, so an unmasked run reaches the executor exactly as before.
+            mask = GOVERNANCE_MASK_FOR_SOURCE.get(
+                config_payload.harness_source, GOVERNANCE_MASK_NONE
+            )
+            handle = (
+                executor.start(run_id, command)
+                if mask == GOVERNANCE_MASK_NONE
+                else executor.start(run_id, command, governance_mask=mask)
+            )
             outcome = _stream_run(
                 session,
                 run_id,
@@ -790,16 +837,33 @@ def _autoscore_run(
     try:
         run_service = RunService(session)
         run = run_service.get_run(run_id)
-        if run.state != RunState.awaiting_manual_score:
-            return
-        config = run_service.get_run_config(run.run_config_id)
-        case = CaseService(session).get_case(config.case_id)
         validation = session.exec(
             select(Validation).where(Validation.run_id == run_id)
         ).first()
+        previous_source = ((validation.subjective if validation else None) or {}).get(
+            "score_source"
+        )
+        # A run waiting for its score is scored. A run already scored by the
+        # judge or by an objective verdict is scored *again* when validation is
+        # re-run: the checks are its evidence, so a corrected check must reach
+        # the score (four tetris-v2 runs sat at 2/10 with 12/12 checks passed
+        # because the judge never looked twice). A human's score is never
+        # overwritten — that is a different kind of judgement.
+        rescorable = run.state == RunState.completed and previous_source in (
+            "llm_judge",
+            "objective",
+        )
+        if run.state != RunState.awaiting_manual_score and not rescorable:
+            return
+        config = run_service.get_run_config(run.run_config_id)
+        case = CaseService(session).get_case(config.case_id)
         objective = (validation.objective if validation else None) or {}
         passed = objective.get("passed")
         summary = objective.get("summary", "")
+        # The judge gets the checks, not the headline: "0/1 checks passed" reads
+        # the same whether the smoke command timed out or an assertion returned
+        # the wrong number, and those are different facts about the agent.
+        evidence = describe_objective_for_judge(objective)
 
         if case.type in (CaseType.swe_bench_instance, CaseType.swe_pro_instance):
             if passed is not None:
@@ -817,10 +881,10 @@ def _autoscore_run(
             # No conclusive objective verdict.
             if case.type == CaseType.swe_bench_instance:
                 return  # bare SWE-bench without a verdict → manual fallback
-            _llm_judge_swe_pro(session, run_service, run_id, summary, gateway)
+            _llm_judge_swe_pro(session, run_service, run_id, evidence, gateway)
             return
 
-        _llm_judge_rubric(session, run_service, run_id, case, summary, gateway)
+        _llm_judge_rubric(session, run_service, run_id, case, evidence, gateway)
     except Exception as exc:  # auto-scoring must never fail the run
         session.add(
             RunEvent(
@@ -891,7 +955,7 @@ def _rubric_text(case: Case) -> str:
     """The case's rubric, whether it is stored inline or as a repo path.
 
     ``scoring_rubric`` holds a path for benchmark cases synced from disk
-    (``benchmarks/tetris/scoring.md``) and inline markdown for cases created in
+    (``benchmarks/tetris-v2/scoring.md``) and inline markdown for cases created in
     the UI. Both are legitimate; the judge needs the text either way.
     """
     raw = (case.scoring_rubric or "").strip()
@@ -1190,6 +1254,57 @@ def audit_run(run_id: str, auditor_model: str | None = None) -> None:
         else:
             tail = (result.stderr or result.stdout or "").strip()[-1500:]
             service.store_error(run_id, tail or "Audit failed (no output)")
+
+
+def _audit_experiment_body(
+    session: Session,
+    experiment_id: str,
+    auditor_model: str | None = None,
+    gateway: Callable[[str, str, str], str] | None = None,
+) -> None:
+    """Read a finished experiment back as prose; store text and evidence.
+
+    Separated from the Celery task so a test can inject the gateway. Failure is
+    recorded on the row, never raised: an experiment without a reading is still
+    an experiment, and the page falls back to the cards.
+    """
+    from harness_lab_app.experiment_audit_service import (
+        EXPERIMENT_AUDIT_SYSTEM_PROMPT,
+        ExperimentAuditService,
+        build_evidence,
+        render_audit_prompt,
+    )
+
+    service = ExperimentAuditService(session)
+    model = (
+        auditor_model
+        or os.environ.get("AUDITOR_MODEL")
+        or (llm_transport.default_audit_model())
+    )
+    service.mark_running(experiment_id, model)
+    try:
+        evidence = build_evidence(session, experiment_id)
+        call = gateway or (
+            lambda m, sys_, user: llm_transport.chat(
+                m, sys_, user, timeout=_AUDIT_TIMEOUT_SECONDS, temperature=0.2
+            )
+        )
+        markdown = call(
+            model, EXPERIMENT_AUDIT_SYSTEM_PROMPT, render_audit_prompt(evidence)
+        ).strip()
+        if not markdown:
+            raise RuntimeError("the auditor returned an empty reading")
+        service.store_result(experiment_id, markdown, evidence, model)
+    except Exception as exc:  # the reading is optional; the record says why
+        service.store_error(experiment_id, f"{type(exc).__name__}: {exc}")
+
+
+@celery_app.task(name="harness_lab_app.tasks.audit_experiment", acks_late=True)
+def audit_experiment(experiment_id: str, auditor_model: str | None = None) -> None:
+    """The LLM reading of a finished experiment (worker-side, one gateway call)."""
+    init_db()
+    with Session(engine) as session:
+        _audit_experiment_body(session, experiment_id, auditor_model)
 
 
 @celery_app.task(name="harness_lab_app.tasks.improve_run", acks_late=True)

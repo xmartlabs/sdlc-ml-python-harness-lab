@@ -198,6 +198,36 @@ def test_condition_hash_ignores_provenance_only_fields(monkeypatch, tmp_path: Pa
     assert cond_a["harness_git_dirty"] != cond_b["harness_git_dirty"]
 
 
+def test_a_masked_run_does_not_claim_the_lab_tree_is_dirty(monkeypatch, tmp_path: Path):
+    """`harness_git_dirty` is about the harness under test (ADR-0049).
+
+    Under every source but `lab_root` the runner masks the lab's governance
+    with empty mounts, so git reports those paths as deleted and the flag would
+    read true on every such run. None is the honest answer: not applicable.
+    """
+    monkeypatch.setattr(provenance, "_tool_version", lambda _cmd: None)
+    monkeypatch.setattr(provenance, "_conductor_plugin_version", lambda _root: None)
+    _write_harness(tmp_path)
+    monkeypatch.setattr(provenance, "_git", lambda _root, *_a: "commit-A")
+    monkeypatch.setattr(provenance, "_harness_git_dirty", lambda _root, **_kw: True)
+
+    def condition(source: str) -> dict:
+        return build_condition(
+            repo_root=tmp_path,
+            run={},
+            executor_model="gateway/x",
+            planner_model=None,
+            prompt_source=None,
+            task_path=None,
+            harness_source=source,
+        )
+
+    assert condition("lab_root")["harness_git_dirty"] is True
+    assert condition("")["harness_git_dirty"] is True
+    assert condition("bare")["harness_git_dirty"] is None
+    assert condition("native")["harness_git_dirty"] is None
+
+
 def test_enrich_metadata_never_raises_and_adds_condition(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(provenance, "_tool_version", lambda _cmd: None)
     monkeypatch.setattr(provenance, "_conductor_plugin_version", lambda _root: None)

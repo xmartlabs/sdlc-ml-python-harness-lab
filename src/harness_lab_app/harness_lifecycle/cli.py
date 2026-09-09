@@ -209,6 +209,61 @@ def cmd_status(_args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_adopt(args: argparse.Namespace) -> int:
+    """Record a template release as the installed harness (ADR-0052).
+
+    Writes ``.harness-version.yaml`` — the one file that makes every run from
+    now on attributable to a release rather than to a content hash:
+    ``bench_run.read_template_ref`` stamps ``metadata.template_ref`` from it,
+    and the leaderboard and the overview trend group by it. The release must be
+    a ``vX.Y.Z`` tag that resolves on the template remote; the commit, not the
+    tag, is what is recorded.
+
+    Adopting is a record, not a sync: it says which release the governance
+    tree *is*, and the operator is expected to have brought the tree there
+    (``harness-sync-branch`` + merge). Rollback is adopting the previous ref.
+    """
+    ref = str(args.ref).strip()
+    releases.validate_release_ref(ref)
+    if not releases.template_remote_configured(REPO_ROOT):
+        raise errors.LifecycleError(
+            "template remote not configured — run `make template-remote-setup`",
+            exit_code=EXIT_PRECONDITION,
+        )
+    releases.fetch_template(REPO_ROOT)
+    commit = releases.resolve_ref_commit(REPO_ROOT, ref)
+    protocol = sync.read_registry_protocol(REPO_ROOT) or 1
+    previous = manifests.read_installed_manifest(REPO_ROOT)
+    from harness_lab_app.harness_lifecycle.models import (
+        InstalledManifest,
+        InstalledRef,
+        SyncInfo,
+    )
+
+    manifest = InstalledManifest(
+        installed=InstalledRef(
+            repository=template_repository(),
+            ref=ref,
+            commit=commit,
+            channel=str(args.channel),
+            adopted_at=_utc_now(),
+        ),
+        sync=SyncInfo(
+            protocol=protocol,
+            tools=list(previous.sync.tools) if previous else [],
+            paths=list(previous.sync.paths) if previous else [],
+        ),
+    )
+    if args.dry_run:
+        print(manifests.installed_manifest_to_yaml(manifest))
+        return EXIT_OK
+    path = manifests.write_installed_manifest(REPO_ROOT, manifest)
+    was = f" (was {previous.installed.ref})" if previous else ""
+    print(f"✅ adopted {ref} ({commit[:12]}){was} → {path.relative_to(REPO_ROOT)}")
+    print("   every run from now on records template_ref=" + ref)
+    return EXIT_OK
+
+
 def _protocol_incompatibility(ref: str) -> tuple[int, int] | None:
     """Return (current, candidate) if adopting ``ref`` needs a newer sync protocol.
 
@@ -402,6 +457,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     sc = sub.add_parser("sync-clean", help="Remove a candidate worktree and branch.")
     sc.add_argument("--ref", required=True)
     sc.set_defaults(func=cmd_sync_clean)
+
+    ad = sub.add_parser(
+        "adopt", help="Record a template release as the installed harness."
+    )
+    ad.add_argument("--ref", required=True, help="Release tag, e.g. v0.4.0")
+    ad.add_argument("--channel", default="governance")
+    ad.add_argument("--dry-run", action="store_true")
+    ad.set_defaults(func=cmd_adopt)
 
     pr = sub.add_parser("proposal", help="Draft a versioned proposal from a run.")
     pr.add_argument("--run", required=True)

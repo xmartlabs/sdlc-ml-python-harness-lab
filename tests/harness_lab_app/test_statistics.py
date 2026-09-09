@@ -52,12 +52,17 @@ def test_a_missing_value_is_counted_never_imputed():
     [
         (0, "No runs"),
         (1, "exploratory result"),
-        (3, "exploratory comparison"),
-        (7, "useful comparison"),
+        (3, "a judgement"),
+        (7, None),
     ],
 )
 def test_repetition_counts_state_what_they_do_not_support(n, fragment):
-    assert fragment in repetition_warnings(n)[0]
+    warnings = repetition_warnings(n)
+    if fragment is None:
+        # Five or more is a validation: nothing left to caveat about the count.
+        assert warnings == []
+    else:
+        assert fragment in warnings[0]
 
 
 def test_ten_repetitions_needs_no_caveat():
@@ -264,13 +269,14 @@ def test_a_clear_move_over_enough_repetitions_is_a_likely_improvement():
 
     assert answer["causal"] is True
     assert answer["headline"] == "Likely improvement"
-    assert answer["strength"] == "useful comparison"
+    assert answer["strength"] == "validation"
     assert answer["evidence"] == "1 case \u00d7 5 repetitions"
     # Never the vocabulary of proof.
     assert "significant" not in answer["claim"].lower()
 
 
-def test_the_same_move_over_two_repetitions_is_only_observed():
+def test_two_repetitions_are_a_judgement():
+    """Two per arm is the budget-sized level that earns a directional headline."""
     control, treatment = _pair([False, False], [True, True], reps=2)
     answer = verdict(
         mode="harness_evaluation",
@@ -281,9 +287,24 @@ def test_the_same_move_over_two_repetitions_is_only_observed():
         success=success_delta(control, treatment),
     )
 
+    assert answer["headline"] == "Likely improvement"
+    assert answer["strength"] == "judgement"
+    assert any("judgement" in caveat for caveat in answer["caveats"])
+
+
+def test_the_same_move_over_one_repetition_is_only_observed():
+    control, treatment = _pair([False], [True], reps=1)
+    answer = verdict(
+        mode="harness_evaluation",
+        cases=1,
+        repetitions=1,
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+    )
+
     assert answer["headline"] == "Improvement observed"
-    assert answer["strength"] == "exploratory comparison"
-    assert "within observed variance" in answer["caveats"][0].lower()
+    assert answer["strength"] == "exploratory"
 
 
 def test_arms_that_stopped_differently_carry_a_confound_caveat():
@@ -400,9 +421,9 @@ def test_headline_metrics_lead_with_success_then_cost():
     ("reps", "word"),
     [
         (1, "exploratory"),
-        (3, "exploratory comparison"),
-        (6, "useful comparison"),
-        (12, "stronger evidence"),
+        (3, "judgement"),
+        (6, "validation"),
+        (12, "validation"),
     ],
 )
 def test_evidence_strength_uses_prudent_words_only(reps, word):
@@ -671,3 +692,37 @@ def test_a_valid_verdict_carries_a_tone_the_frontend_can_read():
     )
     assert answer["tone"] == "better"
     assert "observed" not in answer
+
+
+# --------------------------------------------------------------------------
+# Highlights carry their direction (2026-09-08)
+# --------------------------------------------------------------------------
+
+
+def test_highlights_say_which_way_is_good():
+    """ "10,712 → 7,223 tokens" is an improvement for a cost and a regression for
+    a rate; the page used to leave that to the reader."""
+    from harness_lab_app.statistics import _highlight, summarize_condition
+
+    control = summarize_condition(
+        "c",
+        [{"task_validation_pass": True, "billed_tokens": 900_000.0}],
+    )
+    treatment = summarize_condition(
+        "t",
+        [{"task_validation_pass": True, "billed_tokens": 200_000.0}],
+    )
+
+    found = _highlight("Billed tokens", "billed_tokens", control, treatment)
+
+    assert found is not None
+    assert found["direction"] == "lower_is_better"
+
+
+def test_headline_metrics_lead_with_the_graded_outcome_and_the_billed_cost():
+    from harness_lab_app.statistics import HEADLINE_METRICS
+
+    assert HEADLINE_METRICS[0] == "test_pass_rate"
+    assert "billed_tokens" in HEADLINE_METRICS
+    # The uncached count hid a 71% cost increase behind a lower number.
+    assert "total_tokens" not in HEADLINE_METRICS

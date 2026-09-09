@@ -61,7 +61,7 @@ The graded tests live at `/app/benchmarks/tetris-v2/tests/test_game.py`. Read
 them, and run them yourself before you finish:
 
 ```bash
-cd {workspace} && SDL_VIDEODRIVER=dummy python -m pytest /app/benchmarks/tetris-v2/tests -q
+cd {workspace} && SDL_VIDEODRIVER=dummy python -m pytest -c /dev/null -q /app/benchmarks/tetris-v2/tests
 ```
 
 Do not edit the tests. Also keep the headless smoke mode: with the environment

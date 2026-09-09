@@ -26,11 +26,21 @@ validation_note: >
 
 # {workspace} is substituted at validation time (relative to /app, where the
 # validation container runs). The tests import `main` from the cwd, headless.
+# `-c /dev/null` keeps the lab's own pytest configuration (pyproject addopts)
+# out of the grade: it lives above the workspace and pytest would find it.
 validation_commands:
   - "git -C /app diff --quiet HEAD -- benchmarks/tetris-v2/tests && test -z \"$(git -C /app status --porcelain -- benchmarks/tetris-v2/tests)\""
   - "BENCH_SMOKE=1 SDL_VIDEODRIVER=dummy timeout 45 python {workspace}/main.py"
-  - "cd {workspace} && SDL_VIDEODRIVER=dummy timeout 60 python -m pytest /app/benchmarks/tetris-v2/tests/test_game.py::test_board_has_the_requested_shape test_a_piece_spawns_at_the_top test_the_same_seed_gives_the_same_pieces test_soft_drop_moves_the_piece_down test_move_is_blocked_by_the_wall test_rotate_changes_the_shape_or_is_refused test_hard_drop_locks_the_piece_into_the_board test_locked_cells_block_movement test_a_full_row_is_cleared_and_scored test_game_over_when_the_stack_reaches_the_top -q -p no:cacheprovider"
-
+  - "cd {workspace} && SDL_VIDEODRIVER=dummy timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/tetris-v2/tests/test_game.py::test_board_has_the_requested_shape"
+  - "cd {workspace} && SDL_VIDEODRIVER=dummy timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/tetris-v2/tests/test_game.py::test_a_piece_spawns_at_the_top"
+  - "cd {workspace} && SDL_VIDEODRIVER=dummy timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/tetris-v2/tests/test_game.py::test_the_same_seed_gives_the_same_pieces"
+  - "cd {workspace} && SDL_VIDEODRIVER=dummy timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/tetris-v2/tests/test_game.py::test_soft_drop_moves_the_piece_down"
+  - "cd {workspace} && SDL_VIDEODRIVER=dummy timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/tetris-v2/tests/test_game.py::test_move_is_blocked_by_the_wall"
+  - "cd {workspace} && SDL_VIDEODRIVER=dummy timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/tetris-v2/tests/test_game.py::test_rotate_changes_the_shape_or_is_refused"
+  - "cd {workspace} && SDL_VIDEODRIVER=dummy timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/tetris-v2/tests/test_game.py::test_hard_drop_locks_the_piece_into_the_board"
+  - "cd {workspace} && SDL_VIDEODRIVER=dummy timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/tetris-v2/tests/test_game.py::test_locked_cells_block_movement"
+  - "cd {workspace} && SDL_VIDEODRIVER=dummy timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/tetris-v2/tests/test_game.py::test_a_full_row_is_cleared_and_scored"
+  - "cd {workspace} && SDL_VIDEODRIVER=dummy timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/tetris-v2/tests/test_game.py::test_game_over_when_the_stack_reaches_the_top"
 files_forbidden:
   - benchmarks/tetris-v2/tests/test_game.py
 

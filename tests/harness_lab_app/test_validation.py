@@ -6,19 +6,30 @@ from types import SimpleNamespace
 
 import harness_lab_app.validation as validation
 from harness_lab_app.validation import (
+    DEFAULT_VALIDATION_DEADLINE_SECONDS,
     _portable_timeout,
     build_validation_spec,
     collect_cost,
     collect_effort,
+    command_deadline_seconds,
     compute_composite,
+    describe_objective_for_judge,
     parse_objective,
 )
 
 
-def test_portable_timeout_keeps_gnu_timeout_when_present(monkeypatch):
+def test_portable_timeout_adds_the_kill_escalation(monkeypatch):
+    """`timeout N` alone cannot kill a child that survives SIGTERM.
+
+    That is not hypothetical: SDL2 turns SIGTERM into an SDL_QUIT *event*, so
+    the fourth run of experiment `...-on--2` sat wedged until it was killed by
+    hand. `-k` escalates to SIGKILL, which nothing can catch.
+    """
     monkeypatch.setattr(validation.shutil, "which", lambda _name: "/usr/bin/timeout")
-    cmd = "BENCH_SMOKE=1 timeout 45 python main.py"
-    assert _portable_timeout(cmd) == cmd
+    assert (
+        _portable_timeout("BENCH_SMOKE=1 timeout 45 python main.py")
+        == "BENCH_SMOKE=1 timeout -k 5 45 python main.py"
+    )
 
 
 def test_portable_timeout_uses_gtimeout_fallback(monkeypatch):
@@ -26,7 +37,22 @@ def test_portable_timeout_uses_gtimeout_fallback(monkeypatch):
         validation.shutil, "which", lambda name: None if name == "timeout" else "/x"
     )
     assert (
-        _portable_timeout("timeout 45 python main.py") == "gtimeout 45 python main.py"
+        _portable_timeout("timeout 45 python main.py")
+        == "gtimeout -k 5 45 python main.py"
+    )
+
+
+def test_command_deadline_reads_the_rewritten_budget(monkeypatch):
+    """The outer watchdog must still find the budget after `-k` is inserted."""
+    monkeypatch.setattr(validation.shutil, "which", lambda _name: "/usr/bin/timeout")
+    rendered = _portable_timeout("timeout 45 python main.py")
+    assert command_deadline_seconds(rendered) == 45 + 5 + 30
+
+
+def test_command_deadline_falls_back_when_the_command_states_none():
+    assert (
+        command_deadline_seconds("pytest tests/ -q")
+        == DEFAULT_VALIDATION_DEADLINE_SECONDS
     )
 
 
@@ -235,3 +261,101 @@ def test_compute_composite_caps_when_objective_fails():
 def test_compute_composite_unknown_objective_does_not_cap():
     composite = compute_composite({"passed": None}, {"functional_score": 7})
     assert composite == 7.0
+
+
+def _result(command: str, exit_code: int, output: str = "") -> dict:
+    return {"command": command, "exit_code": exit_code, "output": output}
+
+
+def test_a_timed_out_check_is_inconclusive_not_a_failure():
+    """Exit 124 measured the lab, not the agent.
+
+    All four runs of experiment `...-on--2` were recorded as functional
+    failures on the strength of a `timeout` that never proved anything about
+    the code. `passed` must say "we do not know", not "it does not work".
+    """
+    objective = parse_objective([_result("smoke", 124)], "smoke")
+    assert objective["passed"] is None
+    assert objective["checks"][0]["conclusive"] is False
+    assert "inconclusive" in objective["summary"]
+
+
+def test_a_real_failure_still_fails_even_beside_a_timeout():
+    objective = parse_objective(
+        [_result("assert", 1, "AssertionError"), _result("smoke", 124)], "smoke"
+    )
+    assert objective["passed"] is False
+
+
+def test_all_checks_conclusive_and_passing_still_passes():
+    objective = parse_objective([_result("a", 0), _result("b", 0)], "tests")
+    assert objective["passed"] is True
+    assert all(check["conclusive"] for check in objective["checks"])
+    assert "inconclusive" not in objective["summary"]
+
+
+def test_an_inconclusive_run_is_not_capped_at_one():
+    """`compute_composite` caps a failing run at 1.0 — but this one did not fail.
+
+    Capping on a timeout is how infrastructure entered the corpus as capability.
+    """
+    inconclusive = parse_objective([_result("smoke", 124)], "smoke")
+    assert compute_composite(inconclusive, {"functional_score": 7}) == 7.0
+    failed = parse_objective([_result("smoke", 1)], "smoke")
+    assert compute_composite(failed, {"functional_score": 7}) == 1.0
+
+
+def test_judge_evidence_names_the_command_its_code_and_its_verdict():
+    """The judge used to receive eight words; give it the facts instead."""
+    objective = parse_objective(
+        [_result("pytest -q", 1, "1 failed, 2 passed"), _result("smoke", 124)], "tests"
+    )
+    text = describe_objective_for_judge(objective)
+    assert "[FAIL] exit=1 pytest -q" in text
+    assert "[INCONCLUSIVE] exit=124 smoke" in text
+    assert "neither confirms nor refutes" in text
+
+
+def test_judge_evidence_is_silent_about_inconclusiveness_when_there_is_none():
+    text = describe_objective_for_judge(parse_objective([_result("a", 0)], "tests"))
+    assert "[PASS] exit=0 a" in text
+    assert "INCONCLUSIVE" not in text
+
+
+def test_billed_tokens_count_the_prompt_cache(tmp_path):
+    """A harness is paid for in cache reads, not in `input_tokens`.
+
+    Real numbers from the first bare-vs-full-harness experiment: input 89,
+    output 8,553, cache_read 724,054. `total_tokens` keeps its historical
+    meaning (ADR-0034); `billed_tokens` is the figure that moved with the cost.
+    """
+    from harness_lab_app.validation import collect_cost
+
+    (tmp_path / "usage.json").write_text(
+        json.dumps(
+            {
+                "input_tokens": 89,
+                "output_tokens": 8553,
+                "cache_read_tokens": 724054,
+                "cache_creation_tokens": 126597,
+                "cost_usd": 0.368,
+            }
+        )
+    )
+
+    cost = collect_cost(tmp_path)
+
+    assert cost["total_tokens"] == 8642
+    assert cost["billed_tokens"] == 89 + 8553 + 724054 + 126597
+    assert cost["cache_read_tokens"] == 724054
+
+
+def test_billed_tokens_are_absent_when_nothing_is_known(tmp_path):
+    from harness_lab_app.validation import collect_cost
+
+    (tmp_path / "usage.json").write_text(json.dumps({"cost_usd": 0.1}))
+
+    cost = collect_cost(tmp_path)
+
+    assert cost["total_tokens"] is None
+    assert cost["billed_tokens"] is None

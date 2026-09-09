@@ -164,6 +164,10 @@ def test_harness_source_enters_the_hash_but_lab_root_never_does():
     baseline = digest()
     assert digest("native") != digest("injected") != baseline
     assert digest("native") != baseline
+    # A bare arm is its own condition, distinct from both in-target ones and
+    # from the lab default (ADR-0049) — otherwise it would share an arm with
+    # whichever it collided with and the comparison would vanish.
+    assert len({digest("bare"), digest("native"), digest("injected"), baseline}) == 4
     # The default must hash exactly as it did before harness conditions existed.
     assert digest("lab_root") == digest("") == baseline
 
@@ -213,6 +217,33 @@ def _config(**over) -> RunConfigCreate:
 def test_an_in_target_condition_requires_a_target(lab, source):
     with pytest.raises(RunPreflightError, match="target is required"):
         lab.create_run(RunCreate(config=_config(harness_source=source)))
+
+
+def test_bare_refuses_a_target(lab):
+    """`bare` and `native` are different answers to "no lab harness"."""
+    with pytest.raises(RunPreflightError, match="without a repository"):
+        lab.create_run(
+            RunCreate(
+                config=_config(
+                    target_repo_id="payments", harness_source=HarnessSource.bare
+                )
+            )
+        )
+
+
+def test_bare_is_creatable_without_a_target(lab):
+    run = lab.create_run(RunCreate(config=_config(harness_source=HarnessSource.bare)))
+    assert lab.get_run_config(run.run_config_id).harness_source == HarnessSource.bare
+
+
+def test_bare_needs_the_docker_backend(lab, monkeypatch):
+    """On the host lane nothing masks the lab, so the arm would not be bare."""
+    monkeypatch.setattr(
+        "harness_lab_app.run_service.get_settings",
+        lambda: SimpleNamespace(execution_backend="subprocess"),
+    )
+    with pytest.raises(RunPreflightError, match="docker backend"):
+        lab.create_run(RunCreate(config=_config(harness_source=HarnessSource.bare)))
 
 
 def test_the_pair_is_creatable_on_one_repository(lab):
@@ -375,3 +406,46 @@ def test_case_spec_stages_harness_source_where_the_runner_reads_it(
     # of the provisioning block.
     assert spec["harness_source"] == "native"
     assert spec["target"]["harness_source"] == "native"
+
+
+def test_case_spec_carries_the_condition_of_a_targetless_run(
+    session, tmp_path, monkeypatch
+):
+    """A run with no repository has a condition too (ADR-0049).
+
+    Staging `harness_source` only alongside a target block silently degraded
+    every bare arm to `lab_root` in the runner: the agent would have run from
+    the lab root with the whole harness loaded, which is the one thing a bare
+    arm exists not to do.
+    """
+    import json
+
+    from harness_lab_app import tasks
+
+    CaseService(session).create_case(
+        CaseCreate(
+            case_id="bare-spec-case",
+            name="Bare spec case",
+            type=CaseType.build_from_scratch,
+            prompt_variants={"default": "Do the task."},
+        )
+    )
+    runs_dir = tmp_path / "runs"
+    monkeypatch.setattr(
+        tasks,
+        "get_settings",
+        lambda: SimpleNamespace(data_runs_dir=runs_dir, repo_root=tmp_path),
+    )
+    tasks._write_case_spec(
+        session,
+        "bare-spec-case-K-001",
+        "bare-spec-case",
+        "default",
+        harness_source="bare",
+    )
+    spec = json.loads(
+        (runs_dir / "bare-spec-case-K-001" / "case_spec.json").read_text()
+    )
+
+    assert spec["harness_source"] == "bare"
+    assert "target" not in spec

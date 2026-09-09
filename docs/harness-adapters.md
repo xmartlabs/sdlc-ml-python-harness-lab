@@ -57,9 +57,27 @@ rendering (`→ Read(path)`, `→ Bash(cmd)`, final stats line). Three consumers
 **Control-arm hygiene:** Claude Code auto-loads `CLAUDE.md` + `.claude/skills/`
 from its cwd, so a "bare" run launched from the repo root silently inherits the
 whole lab harness. For SWE cases with the `swe_default` variant, the claude
-agent therefore runs with **cwd = workspace/<run_id>/** (truly bare context);
-the `swe_harness` variant keeps the repo-root cwd so the surface is available.
-Prompts adjust their path references accordingly.
+agent therefore runs with **cwd = workspace/<run_id>/**; the `swe_harness`
+variant keeps the repo-root cwd so the surface is available. Prompts adjust
+their path references accordingly.
+
+**A different cwd is not isolation on its own.** The workspace lives *under* the
+repo root, which is bind-mounted whole at `/app`. Two archived `native` runs show
+what that means in practice: the agent got none of the lab's `.claude/` (no
+subagents, no slash commands, no skills, no SessionStart hook) — but it did get
+`/app/.mcp.json`, and Claude Code's memory lookup collects `CLAUDE.md` from every
+ancestor directory. So the container masks the governance surface for every
+condition that runs from the workspace (ADR-0049):
+
+| `harness_source` | agent cwd | what the container masks |
+|---|---|---|
+| `lab_root` | the lab repo | nothing — the lab's harness *is* the treatment |
+| `native` / `injected` | `workspace/<run>/` | `.claude`, `.agents`, `.opencode`, `.codex`, `memory`, `docs/adr`, and the adapter files (`CLAUDE.md`, `AGENTS.md`, `OPENCODE.md`, …) plus `.mcp.json`. `.github/` stays readable: `bench_run.py` projects the injected harness from it |
+| `bare` | `workspace/<run>/` (empty) | all of the above **and** `.github/` |
+
+`opencode.json` is never masked — it is routing, not governance, and blanking it
+would take the gateway provider block with it. The `swe_default` cwd hygiene
+above predates this and is unchanged.
 
 Two details the docker lane handles for you:
 
@@ -67,11 +85,15 @@ Two details the docker lane handles for you:
   Code refuses `--dangerously-skip-permissions` as root unless `IS_SANDBOX=1`
   is set. `build_run_environment` injects it into every run container (the
   same escape hatch Anthropic's devcontainers use).
-- **Project settings travel with the bind mount:** `.claude/settings.local.json`
-  (e.g. `ANTHROPIC_BASE_URL` → a LiteLLM gateway + custom headers for metrics)
-  is project-level config inside the mounted repo, so the containerized claude
-  picks it up exactly like a host run. Remember it is gitignored — copy it to
-  any new deployment (the bench server) along with `.env`.
+- **Project settings reach the run as environment, not as a file.** Claude Code
+  reads `.claude/settings*.json` from its *project* directory, so a run whose cwd
+  is the workspace never saw the lab's — and with it `ANTHROPIC_BASE_URL`, i.e.
+  the LiteLLM gateway and its metrics headers. `build_run_environment` therefore
+  merges the `env` block of
+  `.claude/settings.json` and `.claude/settings.local.json` (local wins, and both
+  win over `.env`) into every run container, so routing is identical whatever the
+  harness condition. The file is still gitignored — copy it to any new deployment
+  (the bench server) along with `.env`.
 
 The preflight guard checks the credential is present before a Docker claude run,
 with an actionable message if it's missing. `codex` in Docker is not wired yet

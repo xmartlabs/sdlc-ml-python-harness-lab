@@ -3,6 +3,7 @@ import type {
   AttentionFeed,
   AttributionRecord,
   AuditRecord,
+  ExperimentAuditRecord,
   ImprovementsDoc,
   CaseCreatePayload,
   CaseCandidates,
@@ -260,6 +261,15 @@ export const api = {
   getAttention: () => request<AttentionFeed>("/api/attention"),
   getEvidenceSummary: () => request<EvidenceSummary>("/api/evidence-summary"),
   listExperiments: () => request<ExperimentRecord[]>("/api/experiments"),
+  getExperimentAudit: (id: string) =>
+    request<ExperimentAuditRecord>(`/api/experiments/${id}/audit`),
+  runExperimentAudit: (id: string, auditorModel?: string) => {
+    const query = auditorModel ? `?auditor_model=${encodeURIComponent(auditorModel)}` : "";
+    return request<{ status: string; experiment_id: string }>(
+      `/api/experiments/${id}/audit${query}`,
+      { method: "POST" }
+    );
+  },
   getExperiment: (id: string) =>
     request<
       ExperimentRecord & {
@@ -504,7 +514,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  seedTetris: () => request<CaseRecord>("/api/cases/seed/tetris", { method: "POST" }),
+  seedBenchmarks: () => request<CaseRecord[]>("/api/cases/seed", { method: "POST" }),
 
   listRuns: () => request<RunRecord[]>("/api/runs"),
   getLeaderboard: () => request<LeaderboardRunRow[]>("/api/leaderboard"),

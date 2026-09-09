@@ -84,3 +84,64 @@ def test_proposal_issue_not_found_is_missing(
     monkeypatch.setattr(cli, "REPO_ROOT", tmp_path)
     rc = cli.main(["proposal-issue", "--proposal", "HEP-2026-999"])
     assert rc == cli.EXIT_MISSING
+
+
+# --------------------------------------------------------------------------
+# adopt (ADR-0052)
+# --------------------------------------------------------------------------
+
+
+def test_adopt_writes_the_installed_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`.harness-version.yaml` is what makes a run attributable to a release."""
+    monkeypatch.setattr(cli, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(cli.releases, "template_remote_configured", lambda _root: True)
+    monkeypatch.setattr(cli.releases, "fetch_template", lambda _root: None)
+    monkeypatch.setattr(
+        cli.releases, "resolve_ref_commit", lambda _root, _ref: "a" * 40
+    )
+    monkeypatch.setattr(cli.sync, "read_registry_protocol", lambda _root: 1)
+    monkeypatch.setattr(cli, "template_repository", lambda: "xmartlabs/ml-python-base")
+
+    code = cli.main(["adopt", "--ref", "v0.4.0"])
+
+    assert code == 0
+    manifest = cli.manifests.read_installed_manifest(tmp_path)
+    assert manifest is not None
+    assert manifest.installed.ref == "v0.4.0"
+    assert manifest.installed.commit == "a" * 40
+    # The runner reads the same file with a regex, no yaml dependency.
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    import bench_run
+
+    assert bench_run.read_template_ref(tmp_path) == "v0.4.0"
+
+
+def test_adopt_refuses_a_non_release_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "REPO_ROOT", tmp_path)
+
+    code = cli.main(["adopt", "--ref", "main"])
+
+    assert code != 0
+    assert cli.manifests.read_installed_manifest(tmp_path) is None
+
+
+def test_adopt_dry_run_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(cli.releases, "template_remote_configured", lambda _root: True)
+    monkeypatch.setattr(cli.releases, "fetch_template", lambda _root: None)
+    monkeypatch.setattr(
+        cli.releases, "resolve_ref_commit", lambda _root, _ref: "b" * 40
+    )
+    monkeypatch.setattr(cli.sync, "read_registry_protocol", lambda _root: 1)
+    monkeypatch.setattr(cli, "template_repository", lambda: "xmartlabs/ml-python-base")
+
+    assert cli.main(["adopt", "--ref", "v0.4.0", "--dry-run"]) == 0
+    assert not (tmp_path / ".harness-version.yaml").exists()

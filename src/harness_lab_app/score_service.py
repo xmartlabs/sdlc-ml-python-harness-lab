@@ -12,7 +12,7 @@ from harness_lab_app.attribution_service import AttributionService
 from harness_lab_app.case_service import CaseService
 from harness_lab_app.config import get_settings
 from harness_lab_app.evaluation import EvaluationContext, run_profile
-from harness_lab_app.models import Audit, Score, Validation
+from harness_lab_app.models import Audit, HarnessSource, Score, Validation
 from harness_lab_app.run_service import RunService
 
 
@@ -145,9 +145,16 @@ class ScoreService:
         # it would put a zero on the baseline of every Add-skills experiment.
         from harness_lab_app.skills_catalog import known_skill_names
 
-        visible = (known_skill_names() - set(config.skills_disabled)) | set(
-            config.skills_extra
-        )
+        if config.harness_source == HarnessSource.bare:
+            # A bare arm has no catalog at all: the runner masks every skill
+            # directory (ADR-0049). Whether its `skills_disabled` names them is
+            # a declaration for the condition hash, not a fact about the run, so
+            # nothing here may depend on the operator having written it out.
+            visible: set[str] = set()
+        else:
+            visible = (known_skill_names() - set(config.skills_disabled)) | set(
+                config.skills_extra
+            )
         under_test &= visible
 
         # The harness-behaviour evaluator reads read-coverage off attribution,
@@ -165,6 +172,7 @@ class ScoreService:
                     "objective": validation.objective,
                     "cost": validation.cost,
                     "effort": validation.effort,
+                    "subjective": validation.subjective,
                 }
                 if validation
                 else None

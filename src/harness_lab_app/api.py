@@ -40,6 +40,7 @@ from harness_lab_app.case_service import (
 from harness_lab_app.celery_app import (
     enqueue_audit,
     enqueue_container_cleanup,
+    enqueue_experiment_audit,
     enqueue_gate_check,
     enqueue_improve,
     enqueue_run,
@@ -51,6 +52,11 @@ from harness_lab_app.checkout_service import CheckoutError
 from harness_lab_app.config import get_settings, read_env_file_value
 from harness_lab_app.constants import EXAMPLE_LMSTUDIO_URL, EXAMPLE_OLLAMA_URL
 from harness_lab_app.db import get_engine, get_session, init_db
+from harness_lab_app.experiment_audit_service import (
+    TERMINAL_STATES,
+    ExperimentAuditService,
+    runs_finished,
+)
 from harness_lab_app.experiment_service import (
     ExperimentDesignError,
     ExperimentError,
@@ -258,11 +264,11 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def startup() -> None:
         init_db()
-        # Ensure the Tetris pilot case always exists on a fresh DB so the run
-        # form never falls back to a non-existent "default" prompt variant.
-        # Seeding must never block startup.
+        # Every authored benchmark case exists on a fresh DB, and a stale one
+        # is refreshed from its task.yaml (ADR-0025). Seeding must never block
+        # startup.
         with contextlib.suppress(Exception), Session(get_engine()) as session:
-            CaseService(session).seed_tetris_case()
+            CaseService(session).seed_benchmark_cases()
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -1113,17 +1119,29 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/experiments")
-    def list_experiments(session: Session = Depends(get_session)):
+    def list_experiments(family_id: str = "", session: Session = Depends(get_session)):
         service = ExperimentService(session)
         experiments = service.list_experiments()
-        return [
-            {
-                **experiment.model_dump(),
-                "condition_count": len(service.conditions(experiment.experiment_id)),
-                "run_count": len(service.runs(experiment.experiment_id)),
-            }
-            for experiment in experiments
-        ]
+        if family_id:
+            # A ladder is read as one family (ADR-0051).
+            experiments = [e for e in experiments if e.family_id == family_id]
+        rows = []
+        for experiment in experiments:
+            runs = service.runs(experiment.experiment_id)
+            rows.append(
+                {
+                    **experiment.model_dump(),
+                    "condition_count": len(
+                        service.conditions(experiment.experiment_id)
+                    ),
+                    "run_count": len(runs),
+                    # Derived from the runs, not from `status`, which is set at
+                    # launch and can lag behind the last run.
+                    "finished": bool(runs)
+                    and all(run.state in TERMINAL_STATES for run in runs),
+                }
+            )
+        return rows
 
     @app.get("/api/experiments/{experiment_id}")
     def get_experiment(experiment_id: str, session: Session = Depends(get_session)):
@@ -1141,6 +1159,47 @@ def create_app() -> FastAPI:
             # how two measurements end up filed under one name.
             "launch_config": service.launch_config(experiment_id),
         }
+
+    @app.get("/api/experiments/{experiment_id}/audit")
+    def get_experiment_audit(
+        experiment_id: str, session: Session = Depends(get_session)
+    ):
+        audit = ExperimentAuditService(session).get(experiment_id)
+        if audit is None:
+            raise HTTPException(status_code=404, detail="No audit for this experiment")
+        return audit
+
+    @app.post("/api/experiments/{experiment_id}/audit")
+    def audit_experiment(
+        experiment_id: str,
+        auditor_model: str | None = None,
+        session: Session = Depends(get_session),
+    ):
+        """Queue the LLM reading of a finished experiment.
+
+        Refused while any run is still executing: a reading of a half-finished
+        experiment would describe a comparison that does not exist yet, and it
+        would be persisted as though it did.
+        """
+        service = ExperimentService(session)
+        try:
+            service.get_experiment(experiment_id)
+        except ExperimentNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        finished, done, total = runs_finished(session, experiment_id)
+        if not finished:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{done} of {total} run(s) have finished; the reading waits "
+                    "for the last one."
+                    if total
+                    else "This experiment has no runs to read."
+                ),
+            )
+        ExperimentAuditService(session).mark_running(experiment_id, auditor_model or "")
+        enqueue_experiment_audit(experiment_id, auditor_model)
+        return {"status": "queued", "experiment_id": experiment_id}
 
     @app.get("/api/experiments/{experiment_id}/summary")
     def summarize_experiment(
@@ -1742,9 +1801,10 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return CaseService(session).import_swebench_pro_instance(spec, polish=True)
 
-    @app.post("/api/cases/seed/tetris")
-    def seed_tetris(session: Session = Depends(get_session)):
-        return CaseService(session).seed_tetris_case()
+    @app.post("/api/cases/seed")
+    def seed_benchmarks(session: Session = Depends(get_session)):
+        """Import or refresh every benchmarks/*/task.yaml case."""
+        return CaseService(session).seed_benchmark_cases()
 
     @app.get("/api/cases/{case_id}/run-ids")
     def list_case_run_ids(case_id: str, session: Session = Depends(get_session)):

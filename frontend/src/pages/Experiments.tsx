@@ -5,6 +5,7 @@ import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
+import { Markdown } from "../components/Markdown";
 import { ModelPicker } from "../components/ModelPicker";
 import { Spinner } from "../components/Spinner";
 import {
@@ -25,6 +26,7 @@ import type {
   CaseOutcomeCell,
   ConditionSummary,
   DeltaRecord,
+  ExperimentAuditRecord,
   ExperimentRecord,
   ExperimentSummary,
   LaunchConfigSummary,
@@ -32,7 +34,8 @@ import type {
   RunConfigPayload,
   RunValidationResult,
   ValidityBlock,
-  VerdictBlock
+  VerdictBlock,
+  VerdictHighlight
 } from "../types";
 
 const MODE_LABEL: Record<string, string> = {
@@ -129,6 +132,36 @@ const MOVEMENT_CLASS: Record<string, string> = {
  * lab does not run hypothesis tests and must not sound as though it does.
  */
 /** A rate reads as a percentage, a cost as money, everything else as a number. */
+/**
+ * ▲ / ▼ with a good/bad colour, read from the registry direction the backend
+ * attaches. "10,712 → 7,223 tokens" is an improvement for a cost and a
+ * regression for a rate; without this the reader supplied the direction.
+ */
+function highlightMove(highlight: VerdictHighlight) {
+  const { control, treatment, direction } = highlight;
+  if (
+    control === null ||
+    control === undefined ||
+    treatment === null ||
+    treatment === undefined ||
+    !direction ||
+    direction === "neutral" ||
+    control === treatment
+  ) {
+    return null;
+  }
+  const up = treatment > control;
+  const better = direction === "higher_is_better" ? up : !up;
+  return (
+    <span
+      className={`highlight-move ${better ? "highlight-move--better" : "highlight-move--worse"}`}
+      title={better ? "better" : "worse"}
+    >
+      {up ? "▲" : "▼"}
+    </span>
+  );
+}
+
 function formatHighlight(metric: string, value: number | null | undefined): string {
   if (value === null || value === undefined) {
     return "—";
@@ -290,6 +323,7 @@ function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
                   <>
                     {formatHighlight(highlight.metric, highlight.control)} →{" "}
                     {formatHighlight(highlight.metric, highlight.treatment)}
+                    {highlightMove(highlight)}
                   </>
                 ) : (
                   /* One arm on its own: a rate with nothing to compare it
@@ -852,6 +886,123 @@ function LaunchPanel({
   );
 }
 
+/**
+ * The LLM reading of a finished experiment (ADR-0053).
+ *
+ * The cards above already hold every fact; this is the same evidence read
+ * back as prose — what was compared, what came out, what each arm actually
+ * used, whether the comparison can be trusted. Disabled until every run has
+ * stopped: a reading of half an experiment would be persisted as though the
+ * comparison existed.
+ */
+function ExperimentAuditPanel({
+  experimentId,
+  finished
+}: {
+  experimentId: string;
+  finished: boolean;
+}) {
+  const [audit, setAudit] = useState<ExperimentAuditRecord | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showEvidence, setShowEvidence] = useState(false);
+
+  useEffect(() => {
+    setAudit(null);
+    setError(null);
+    api
+      .getExperimentAudit(experimentId)
+      .then(setAudit)
+      .catch(() => setAudit(null));
+  }, [experimentId]);
+
+  // Poll while the worker is writing; the call is one gateway request, so a
+  // few seconds between polls is enough.
+  useEffect(() => {
+    if (audit?.status !== "running") {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      api
+        .getExperimentAudit(experimentId)
+        .then(setAudit)
+        .catch(() => undefined);
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [audit?.status, experimentId]);
+
+  const handleRun = () => {
+    setPending(true);
+    setError(null);
+    api
+      .runExperimentAudit(experimentId)
+      .then(() => api.getExperimentAudit(experimentId))
+      .then(setAudit)
+      .catch((runError: unknown) =>
+        setError(runError instanceof Error ? runError.message : "Unable to audit")
+      )
+      .finally(() => setPending(false));
+  };
+
+  return (
+    <div className="card">
+      <div className="row space-between">
+        <h3>Reading</h3>
+        <div className="button-row">
+          {audit ? <span className="badge">{audit.status}</span> : null}
+          <button
+            disabled={!finished || pending || audit?.status === "running"}
+            onClick={handleRun}
+            title={
+              finished
+                ? "An LLM reads the summary's evidence and writes what was compared, what came out, what each arm used, and whether to trust it."
+                : "Available once every run has stopped."
+            }
+            type="button"
+          >
+            {audit?.status === "running"
+              ? "Reading…"
+              : audit?.status === "done"
+                ? "Read again"
+                : "Read this experiment"}
+          </button>
+        </div>
+      </div>
+      {error !== null && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+      {audit === null ? (
+        <p className="muted">
+          {finished
+            ? "No reading yet. Ask for one to get the verdict, the result per arm, what each arm read and invoked, and why the comparison can or cannot be trusted — in plain language."
+            : "The reading becomes available once every run has stopped."}
+        </p>
+      ) : audit.status === "running" ? (
+        <p className="muted">Reading with {audit.auditor_model || "the default model"}…</p>
+      ) : audit.status === "failed" ? (
+        <ErrorBanner message={audit.error ?? "The reading failed"} />
+      ) : (
+        <>
+          <Markdown>{audit.markdown}</Markdown>
+          <p className="muted small">
+            {audit.auditor_model} · {new Date(audit.updated_at).toLocaleString()} ·{" "}
+            <button
+              className="link"
+              onClick={() => setShowEvidence((value) => !value)}
+              type="button"
+            >
+              {showEvidence ? "hide the evidence it was given" : "show the evidence it was given"}
+            </button>
+          </p>
+          {showEvidence && audit.evidence_json ? (
+            <pre className="evidence-json">
+              {JSON.stringify(audit.evidence_json, null, 1)}
+            </pre>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 function ExperimentDetail({
   summary,
   record,
@@ -870,6 +1021,10 @@ function ExperimentDetail({
     <div className="stack">
       {summary.validity ? <ValidityBanner validity={summary.validity} /> : null}
       {summary.verdict ? <VerdictCard verdict={summary.verdict} /> : null}
+      <ExperimentAuditPanel
+        experimentId={summary.experiment_id}
+        finished={record?.finished ?? false}
+      />
       <div className="card">
         <div className="row space-between">
           <h2>{summary.question}</h2>
@@ -1020,6 +1175,9 @@ function ExperimentDetail({
 export function Experiments() {
   const [params, setParams] = useSearchParams();
   const [experiments, setExperiments] = useState<ExperimentRecord[]>([]);
+  // A ladder is read as one family (ADR-0051): `?family=<id>` narrows the
+  // list to its rungs, in the order they were created.
+  const familyFilter = params.get("family") ?? "";
   // Deep-linkable: the wizard lands here on the experiment it just created.
   const [selected, setSelected] = useState<string | null>(params.get("experiment"));
   const [summary, setSummary] = useState<ExperimentSummary | null>(null);
@@ -1125,7 +1283,22 @@ export function Experiments() {
 
       <div className="card">
         <div className="row space-between">
-          <h2>All experiments</h2>
+          <h2>
+            {familyFilter ? (
+              <>
+                Family <code>{familyFilter}</code>{" "}
+                <button
+                  className="link"
+                  onClick={() => setParams({})}
+                  type="button"
+                >
+                  show all
+                </button>
+              </>
+            ) : (
+              "All experiments"
+            )}
+          </h2>
           {experiments.some((item) => item.status === "abandoned") ? (
             <label className="row gap">
               <input
@@ -1179,11 +1352,30 @@ export function Experiments() {
                   (experiment) =>
                     showAbandoned || experiment.status !== "abandoned"
                 )
+                .filter(
+                  (experiment) =>
+                    !familyFilter || experiment.family_id === familyFilter
+                )
                 .map((experiment) => (
                 <tr key={experiment.experiment_id}>
                   <td>
                     <strong>{experiment.experiment_id}</strong>
-                    <div className="muted small">{experiment.status}</div>
+                    <div className="muted small">
+                      {experiment.status}
+                      {experiment.family_id && !familyFilter ? (
+                        <>
+                          {" · "}
+                          <button
+                            className="link"
+                            onClick={() => setParams({ family: experiment.family_id ?? "" })}
+                            title="Read this experiment with the rest of its ladder"
+                            type="button"
+                          >
+                            family {experiment.family_id}
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
                   </td>
                   <td className="small">{experiment.question}</td>
                   <td className="small">
@@ -1193,9 +1385,11 @@ export function Experiments() {
                   <td>{experiment.run_count ?? "—"}</td>
                   <td>
                     {experiment.repetitions}
-                    {experiment.repetitions < 5 && (
+                    {experiment.repetitions < 2 ? (
                       <div className="muted small">exploratory</div>
-                    )}
+                    ) : experiment.repetitions < 5 ? (
+                      <div className="muted small">judgement</div>
+                    ) : null}
                   </td>
                   <td>
                     <button

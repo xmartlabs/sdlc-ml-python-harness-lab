@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import threading
 from typing import TYPE_CHECKING, Any
 
 from sqlmodel import Session, select
@@ -17,6 +18,7 @@ from harness_lab_app.validation import (
     build_validation_spec,
     collect_cost,
     collect_effort,
+    command_deadline_seconds,
     compute_composite,
     parse_objective,
 )
@@ -69,8 +71,7 @@ class ValidationService:
             label = command[-1] if command else ""
             try:
                 handle = executor.start(f"{run_id}-validate", command)
-                output = "\n".join(message for _level, message in handle.iter_lines())
-                exit_code = handle.wait()
+                output, exit_code = self._drain(handle, label)
             except Exception as exc:  # record the failure, never crash the run
                 results.append(
                     {
@@ -82,6 +83,43 @@ class ValidationService:
                 continue
             results.append({"command": label, "exit_code": exit_code, "output": output})
         return parse_objective(results, spec["strategy"])
+
+    def _drain(self, handle: Any, label: str) -> tuple[str, int]:
+        """Collect a validation command's output under a hard deadline.
+
+        Neither ``iter_lines()`` nor ``wait()`` has a deadline of its own, so a
+        command that never returns blocked this loop forever — the state the
+        fourth run of experiment `...-on--2` sat in until it was killed by hand.
+        A watchdog calls ``handle.stop()`` (SIGTERM for the subprocess backend,
+        ``container.stop`` for docker, which escalates to SIGKILL on its own),
+        which is what lets the loop finish and record an exit code rather than
+        hang. The command's own ``timeout -k`` prefix remains the first line of
+        defence; this is the one that fires when that prefix cannot help.
+        """
+        expired = threading.Event()
+
+        def _kill() -> None:
+            expired.set()
+            with contextlib.suppress(Exception):
+                handle.stop()
+
+        watchdog = threading.Timer(command_deadline_seconds(label), _kill)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            output = "\n".join(message for _level, message in handle.iter_lines())
+            exit_code = handle.wait()
+        finally:
+            watchdog.cancel()
+        if expired.is_set():
+            # Whatever the terminated process reported on the way out, the
+            # check settled nothing — say so with a code parse_objective reads
+            # as inconclusive rather than as a failed assertion.
+            return (
+                f"{output}\nvalidation deadline exceeded; command terminated".strip(),
+                124,
+            )
+        return output, exit_code
 
     def validate_run(self, run_id: str) -> Validation:
         """Run objective validation and record cost + effort (subjective stays)."""
@@ -120,10 +158,16 @@ class ValidationService:
         validation.composite = compute_composite(objective, validation.subjective)
         validation.updated_at = utc_now()
         self.session.add(validation)
+        # Three outcomes, three levels: a failure is an error, a check that
+        # settled nothing is a warning about the lab rather than the agent.
+        verdict = objective.get("passed")
+        level = "error" if verdict is False else "info"
+        if verdict is None and objective.get("checks"):
+            level = "warning"
         self.session.add(
             RunEvent(
                 run_id=run_id,
-                level="info" if objective.get("passed") is not False else "error",
+                level=level,
                 message=f"Objective validation: {objective.get('summary', 'done')}",
             )
         )

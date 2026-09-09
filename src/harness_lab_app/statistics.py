@@ -24,9 +24,12 @@ if TYPE_CHECKING:
 
 # Repetition thresholds. Product defaults, not statistical law — what they buy is
 # a UI that cannot silently present one run as a result.
-EXPLORATORY_ONLY = 2
-USEFUL_COMPARISON = 5
-STRONGER_EVIDENCE = 10
+# Three named levels, chosen for the budget a lab can actually spend: one
+# repetition explores, two is enough for a judgement the page will state, five
+# is a validation. The wording ladder below never says "significant".
+EXPLORATORY_ONLY = 2  # below this: exploratory, no directional headline
+USEFUL_COMPARISON = 2  # from this: a judgement
+STRONGER_EVIDENCE = 5  # from this: a validation
 
 
 @dataclass
@@ -126,17 +129,13 @@ def repetition_warnings(n: int) -> list[str]:
     if n < EXPLORATORY_ONLY:
         return [
             "Only 1 repetition — exploratory result. A single trial cannot "
-            "separate a real difference from run-to-run variance."
-        ]
-    if n < USEFUL_COMPARISON:
-        return [
-            f"{n} repetitions — exploratory comparison. Use {USEFUL_COMPARISON} or "
-            "more before treating a delta as a finding."
+            "separate a real difference from run-to-run variance; use "
+            f"{USEFUL_COMPARISON} for a judgement."
         ]
     if n < STRONGER_EVIDENCE:
         return [
-            f"{n} repetitions — a useful comparison. {STRONGER_EVIDENCE} or more "
-            "makes it a strong one."
+            f"{n} repetitions — a judgement, not a validation. {STRONGER_EVIDENCE} "
+            "or more makes it one."
         ]
     return []
 
@@ -291,7 +290,16 @@ def confidence_interval(
 
 # What a reader wants first, in order: did it work, what did it cost, how much
 # work was it. Everything else belongs in the full metric table.
-HEADLINE_METRICS = ("cost_usd", "agent_steps", "wall_time_minutes", "total_tokens")
+# Graded outcome first, then what it cost. `billed_tokens` rather than
+# `total_tokens`: the latter excludes the prompt cache and once showed a
+# full-harness arm using fewer tokens than a bare one while costing 71% more.
+HEADLINE_METRICS = (
+    "test_pass_rate",
+    "cost_usd",
+    "billed_tokens",
+    "agent_steps",
+    "wall_time_minutes",
+)
 
 # A success-rate move smaller than this is not worth a directional word at the
 # top of the page whatever the design. Product judgement, not statistics — and
@@ -303,11 +311,9 @@ def evidence_strength(repetitions: int) -> str:
     """Prudent words for what a repetition count supports. Never "significant"."""
     if repetitions < EXPLORATORY_ONLY:
         return "exploratory"
-    if repetitions < USEFUL_COMPARISON:
-        return "exploratory comparison"
     if repetitions < STRONGER_EVIDENCE:
-        return "useful comparison"
-    return "stronger evidence"
+        return "judgement"
+    return "validation"
 
 
 def _highlight(
@@ -317,12 +323,26 @@ def _highlight(
     right = treatment.metrics.get(name)
     if not left or not right or left.mean is None or right.mean is None:
         return None
+    # The reader needs to know which way is good: "10,712 → 7,223 tokens"
+    # reads as an improvement, and for a cost it is — but the page used to
+    # leave that to the reader, who supplied the direction from the label.
     return {
         "label": label,
         "metric": name,
         "control": left.mean,
         "treatment": right.mean,
+        "direction": _direction_of(name),
     }
+
+
+def _direction_of(name: str) -> str:
+    """`higher_is_better` / `lower_is_better` / `neutral` for a registry score."""
+    try:
+        from harness_lab_app.scores import get_definition
+
+        return str(get_definition(name).direction)
+    except (KeyError, ImportError):
+        return "neutral"
 
 
 def _movements(case_matrix: list[dict[str, Any]]) -> dict[str, int]:
@@ -534,7 +554,7 @@ def _ceiling_issue(
         code="no_headroom",
         severity=(
             DEGRADED
-            if regressed or control.scored_runs < USEFUL_COMPARISON
+            if regressed or control.scored_runs < STRONGER_EVIDENCE
             else INVALID
         ),
         arm=control.label,
@@ -792,6 +812,7 @@ def _compose_verdict(
             "metric": "success_rate",
             "control": success.get("control"),
             "treatment": success.get("treatment"),
+            "direction": "higher_is_better",
         }
     ]
     for name in HEADLINE_METRICS:
@@ -822,6 +843,11 @@ def _compose_verdict(
             f"{repetitions} repetition{'s' if repetitions != 1 else ''} per arm — "
             f"{strength}. Agents are stochastic; this cannot separate a real "
             "difference from run-to-run variance."
+        )
+    elif repetitions < STRONGER_EVIDENCE:
+        caveats.append(
+            f"{repetitions} repetitions per arm — a {strength}, not a validation. "
+            f"{STRONGER_EVIDENCE} or more makes it one."
         )
     if movements["broken"]:
         caveats.append(

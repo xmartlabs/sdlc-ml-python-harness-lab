@@ -245,15 +245,41 @@ class CaseService:
         self.session.refresh(case)
         return case
 
-    def seed_tetris_case(self) -> Case:
-        existing = self.session.exec(
-            select(Case).where(Case.case_id == "tetris-v1")
-        ).first()
-        if existing is not None:
-            return existing
-        settings = get_settings()
-        task_path = settings.repo_root / "benchmarks" / "tetris" / "task.yaml"
-        return self.import_task_yaml(task_path)
+    def seed_benchmark_cases(self) -> list[Case]:
+        """Seed every ``benchmarks/*/task.yaml``, refreshing on re-seed.
+
+        The authored corpus is the source of truth for its cases (ADR-0025):
+        a fresh database gets all of them at startup, and an existing one has
+        its variant map and graded commands rebuilt from the file — a stale
+        variant list would keep offering prompts the benchmark no longer
+        declares. Only those two fields are rebuilt; name, description, tags
+        and status stay as the operator left them, because those are the
+        fields the case editor exists to change.
+        """
+        root = get_settings().repo_root / "benchmarks"
+        seeded: list[Case] = []
+        for task_path in sorted(root.glob("*/task.yaml")):
+            raw = yaml.safe_load(task_path.read_text()) or {}
+            case_id = raw.get("task_id")
+            if not case_id:
+                continue
+            existing = self.session.exec(
+                select(Case).where(Case.case_id == case_id)
+            ).first()
+            if existing is None:
+                seeded.append(self.import_task_yaml(task_path))
+                continue
+            existing.prompt_variants = dict(raw.get("prompts", {}))
+            if raw.get("validation_commands"):
+                existing.validation_commands = [
+                    str(cmd) for cmd in raw["validation_commands"]
+                ]
+            existing.updated_at = utc_now()
+            self.session.add(existing)
+            self.session.commit()
+            self.session.refresh(existing)
+            seeded.append(existing)
+        return seeded
 
     def import_task_yaml(self, task_path: Path) -> Case:
         raw = yaml.safe_load(task_path.read_text())

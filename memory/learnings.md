@@ -816,6 +816,130 @@ on read needs no migration: the bad rows are re-read correctly where they stand,
 which is also the argument for never rewriting them. See
 [ADR-0046](../docs/adr/0046-an-experiment-reports-validity-before-it-reports-a-verdict.md).
 
+## A timeout is a fact about the lab, not about the agent (2026-09-08)
+
+Four Tetris runs — all four working games — scored 1/10. Nothing in the chain was
+about the code:
+
+- **`timeout` alone cannot kill an SDL program.** Plain `timeout <N>` sends SIGTERM;
+  SDL converts SIGTERM into an `SDL_QUIT` *event*, which an interactive loop is free
+  to ignore. The command wedged, exited 124, and `passed = exit_code == 0` read that
+  as "the code fails". Always `timeout -k <grace> <N>`.
+- **A `-k` escalation is not enough on its own.** The wedge can sit anywhere, and
+  `RunHandle` (executors.py) has no deadline: `wait()` takes no timeout and
+  `iter_lines()` is the blocking call. The only shape that works is a
+  `threading.Timer` watchdog calling `handle.stop()`, sized from the command's own
+  `timeout` budget.
+- **"0/1 checks passed" is the worst possible sentence to hand a judge.** It reads
+  identically whether an assertion returned the wrong number or the process was
+  killed before it could answer — and the judge, which *does* read the diff
+  (`judge.py:build_rubric_message`), had no reason to distrust it. Passing the full
+  per-check list with an explicit INCONCLUSIVE marker costs nothing and removes the
+  ambiguity.
+
+**Why it matters:** two-valued validation forces every unknown into "failed", and a
+false zero is worse than a missing one — it averages into `success_rate` and looks
+like a measured result. This is ADR-0046's *infrastructure entering the corpus as
+capability*, one layer below the crashed harness it was written about.
+
+**How to apply:** when a boolean summarizes a process that can be interrupted, check
+whether it can also express "did not run". Then propagate that third value all the
+way out — evaluator (exclude, do not zero), judge prompt (refutes nothing), UI (warn,
+not error) — because any layer that flattens it back to false undoes the other three.
+See [ADR-0048](../docs/adr/0048-a-check-that-did-not-measure-is-not-a-failure.md).
+
+## A different cwd is not isolation (2026-09-08)
+
+The lab assumed "the agent's cwd is the workspace, so it cannot see the lab's
+harness". Two archived `native` runs measured what that assumption actually buys:
+
+- **`.claude/` is genuinely not read from an ancestor.** Their `system/init`
+  events list only Claude Code's built-in agents, no lab slash commands, no lab
+  skills, and no `SessionStart` hook fired. That half of the assumption holds.
+- **`.mcp.json` is.** Both runs came up with the lab's `context7` and `git` MCP
+  servers while having no `.mcp.json` of their own. And `CLAUDE.md` memory lookup
+  walks ancestors by design — `workspace/<run>/` sits under the repo root, which
+  is bind-mounted whole at `/app`, so the lab's rulebook was one directory up the
+  entire time.
+- **`.claude/settings*.json` is read from the project dir, not from an ancestor
+  either** — so a workspace-cwd run never sees the lab's `env` block
+  (`ANTHROPIC_BASE_URL`, the LiteLLM gateway). Do **not** read
+  `apiKeySource: "none"` as proof of a bypass: OAuth-token auth reports that on
+  every arm, lab-root included (ADR-0049 erratum). A cwd change can move
+  routing, not only governance — so routing is injected as container env.
+
+**Why it matters:** the whole point of a control arm is that it *lacks* something,
+and nothing in the pipeline can detect a control arm that quietly kept it. The
+only fix that is both tool-agnostic and unbypassable is masking at the container
+level — empty tmpfs over directories, read-only empty-file binds over files. No
+CLI flag turns off ancestor `CLAUDE.md` lookup.
+
+**How to apply:** when isolating an agent, enumerate what its tools auto-load and
+from *where* — cwd, ancestors, `$HOME`, env — then verify against a run's own
+`system/init` event rather than against the docs. Two Docker details that cost
+time: a bind source must exist on the host first or Docker silently creates a
+*directory* there and the mount fails, and an empty `.json` mask is invalid JSON
+rather than "no config" (use `{}`). See
+[ADR-0049](../docs/adr/0049-a-bare-arm-is-a-masked-runner-not-a-lab-root-run.md).
+
+## The first valid bare-vs-harness run, and what the instrument got wrong (2026-09-08)
+
+The control arm was finally bare (masks verified in `system/init`: built-in agents
+only, no MCP servers, no hooks), and the experiment was still invalid — every reason
+was a defect of the *instrument*:
+
+- **The judge scored equivalent code 10 and 2 on identical evidence.** Not a
+  sampling problem: `tetris-v1`'s rubric levels 3-10 describe gameplay ("opens a
+  window", "rotation works") that neither a diff nor a headless smoke can establish,
+  and the prompt asked the judge both to award what the diff shows and to withhold
+  what only a check proves. Fix the *rubric* before sampling: levels now carry
+  `[check]`/`[diff]`/`[manual]` tags, `[manual]` is never awarded, `[diff]` needs a
+  quoted citation. `tetris-v1` honestly caps at level 2; `tetris-v2` ships ten
+  tests so the grade is objective (ADR-0050).
+- **The judge's number never reached the experiment page.** `Validation.subjective`
+  is not a score row, so the 10/2 split was invisible in the deltas. `rubric_score`
+  is now a JUDGEMENT-provenance registry score — visible, never the success metric.
+- **"Total tokens" showed the harness using *fewer* tokens while costing +71%.**
+  `collect_claude_usage` summed `input_tokens` (42-146 per run — the uncached
+  sliver) and ignored `cache_read_input_tokens` (724k vs 184k). A harness is paid
+  for in cache reads. `billed_tokens` is the new headline; `total_tokens` keeps its
+  meaning (ADR-0034: never redefine a name). Highlights now carry a direction.
+- **The case matrix kept the last repetition only** (`verdicts[label][case_id] =
+  passed`), so 1-of-5 and 5-of-5 rendered identically. Now all-pass per cell.
+- **`apiKeySource: "none"` is not a gateway bypass** — the lab-root arm shows it
+  too; it is how OAuth reports. Recorded as an erratum on ADR-0049.
+
+**Why it matters:** none of these would have shown up on a harness that helped; they
+showed up because the bare arm made the comparison sharp enough to notice.
+
+**How to apply:** before trusting a delta, ask three questions of the instrument —
+is the outcome metric graded finer than the thing being varied, does the opinion
+metric reach the page where the delta is read, and does the cost metric count what
+the treatment actually adds. `make ladder` (ADR-0051) now creates the four
+single-factor rungs consistently; `make harness-adopt REF=` (ADR-0052) makes every
+run attributable to a release.
+
+## Never write the live SQLite from the host (2026-09-09)
+
+`data/app/harness_lab.db` went "database disk image is malformed" after a day of
+host-side writes (`sqlite3` one-liners, `import_case.py`, `ladder.py`, a seed
+call) while the api and worker containers were writing the same file through a
+Docker bind mount on macOS. WAL over a bind mount with two hosts is a known
+corruption path. The symptoms before the diagnosis were subtle: imported cases
+"disappeared", Celery tasks "succeeded" in 0.14 s having done nothing (the
+exception was swallowed into a RunEvent), and re-validations never landed.
+
+**Recovery that worked:** `sqlite3 corrupt.db ".recover" | sqlite3 new.db`, then
+`PRAGMA integrity_check`, then `VACUUM INTO` the real path with api+worker
+stopped. Every row survived except one `case` row, which the startup seed
+re-imported from `task.yaml`.
+
+**How to apply:** when the app is up, go through the API (`POST /api/cases/seed`,
+`/validate`, `/experiments`) — never `sqlite3` or a script against the file.
+Also: `_autoscore_run` only scored `awaiting_manual_score` runs, so a re-validate
+never re-judged; it now re-scores a run whose previous score came from the judge
+or an objective verdict (never a human's). See ADR-0053.
+
 <!-- Add new learnings above this line -->
 
 ## "Audit a third-party repo" fails at provisioning when setup_commands mismatch the language — 2026-08-31
@@ -1492,5 +1616,37 @@ it: this one uncovered `ToolCorrectnessMetric()` being constructed outside its
 key. Unit tests never saw it; a real subscription-only run did. See
 [ADR-0043](../docs/adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)
 and [the plan](../docs/plans/2026-09-claude-native-llm-transport.md).
+
+## A timeout is a fact about the lab, not about the agent (2026-09-08)
+
+Four Tetris runs — all four working games — scored 1/10. Nothing in the chain was
+about the code:
+
+- **`timeout` alone cannot kill an SDL program.** Plain `timeout <N>` sends SIGTERM;
+  SDL converts SIGTERM into an `SDL_QUIT` *event*, which an interactive loop is free
+  to ignore. The command wedged, exited 124, and `passed = exit_code == 0` read that
+  as "the code fails". Always `timeout -k <grace> <N>`.
+- **A `-k` escalation is not enough on its own.** The wedge can sit anywhere, and
+  `RunHandle` (executors.py) has no deadline: `wait()` takes no timeout and
+  `iter_lines()` is the blocking call. The only shape that works is a
+  `threading.Timer` watchdog calling `handle.stop()`, sized from the command's own
+  `timeout` budget.
+- **"0/1 checks passed" is the worst possible sentence to hand a judge.** It reads
+  identically whether an assertion returned the wrong number or the process was
+  killed before it could answer — and the judge, which *does* read the diff
+  (`judge.py:build_rubric_message`), had no reason to distrust it. Passing the full
+  per-check list with an explicit INCONCLUSIVE marker costs nothing and removes the
+  ambiguity.
+
+**Why it matters:** two-valued validation forces every unknown into "failed", and a
+false zero is worse than a missing one — it averages into `success_rate` and looks
+like a measured result. This is ADR-0046's *infrastructure entering the corpus as
+capability*, one layer below the crashed harness it was written about.
+
+**How to apply:** when a boolean summarizes a process that can be interrupted, check
+whether it can also express "did not run". Then propagate that third value all the
+way out — evaluator (exclude, do not zero), judge prompt (refutes nothing), UI (warn,
+not error) — because any layer that flattens it back to false undoes the other three.
+See [ADR-0048](../docs/adr/0048-a-check-that-did-not-measure-is-not-a-failure.md).
 
 <!-- Add new learnings above this line -->

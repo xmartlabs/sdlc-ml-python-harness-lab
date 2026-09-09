@@ -1173,6 +1173,10 @@ button.ghost:disabled {
   color: #fca5a5;
 }
 
+.run-console-line.warn {
+  color: var(--warning);
+}
+
 .run-console-time {
   color: var(--muted);
   white-space: nowrap;
@@ -3551,6 +3555,19 @@ button.ghost {
   font-variant-numeric: tabular-nums;
 }
 
+.highlight-move {
+  margin-left: 6px;
+  font-size: 0.85rem;
+}
+
+.highlight-move--better {
+  color: var(--success);
+}
+
+.highlight-move--worse {
+  color: var(--danger);
+}
+
 .verdict-movements {
   display: flex;
   flex-wrap: wrap;
@@ -3960,4 +3977,14 @@ button.danger:hover {
 
 .verdict-observed {
   font-size: 0.85rem;
+}
+
+.evidence-json {
+  max-height: 420px;
+  overflow: auto;
+  font-size: 0.75rem;
+  background: var(--console-bg);
+  color: var(--console-text);
+  padding: 10px;
+  border-radius: 6px;
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from harness_lab_app.attribution import (
@@ -93,3 +94,72 @@ def test_read_step_logs_missing_is_empty(tmp_path: Path):
     text, count = read_step_logs(tmp_path)
     assert text == ""
     assert count == 0
+
+
+def test_an_in_target_run_reads_its_own_rulebook_not_the_labs():
+    """`workspace/<run>/CLAUDE.md` is the run's rulebook; `CLAUDE.md` is the lab's.
+
+    Both used to normalise to something the surface could not match — or,
+    worse, only the lab's did, so the one read that signalled contamination
+    counted as compliance.
+    """
+    from harness_lab_app.attribution import build_attribution_from_events
+
+    events = [
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "Read",
+                            "input": {"file_path": path},
+                        }
+                    ]
+                },
+            }
+        )
+        for path in (
+            "/app/workspace/r-9/CLAUDE.md",
+            "/app/workspace/r-9/memory/context.md",
+        )
+    ]
+
+    usage = build_attribution_from_events(
+        events,
+        reading_surface=("CLAUDE.md", "memory/context.md", ".github/standards.md"),
+        governance={"source": "target_workspace", "harness_source": "native"},
+    )["harness_usage"]
+
+    assert usage["governance_docs_read"] == ["CLAUDE.md", "memory/context.md"]
+    assert usage["governance_coverage"] == "2/3"
+
+
+def test_a_lab_root_run_is_still_read_against_the_lab():
+    from harness_lab_app.attribution import build_attribution_from_events
+
+    events = [
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "Read",
+                            "input": {"file_path": "/app/CLAUDE.md"},
+                        }
+                    ]
+                },
+            }
+        )
+    ]
+
+    usage = build_attribution_from_events(
+        events,
+        reading_surface=("CLAUDE.md",),
+        governance={"source": "lab_root", "harness_source": "lab_root"},
+    )["harness_usage"]
+
+    assert usage["governance_docs_read"] == ["CLAUDE.md"]

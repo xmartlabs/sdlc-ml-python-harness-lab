@@ -7,6 +7,7 @@
   [ADR-0011](0011-per-run-skill-ablation-and-staging.md),
   [ADR-0028](0028-evaluation-modes.md),
   [ADR-0029](0029-target-repositories-pinned-per-run.md),
+  [ADR-0049](0049-a-bare-arm-is-a-masked-runner-not-a-lab-root-run.md),
   [roadmap-lab-v2.md](../roadmap-lab-v2.md)
 
 ## Context

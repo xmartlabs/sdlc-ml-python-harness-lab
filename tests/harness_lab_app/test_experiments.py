@@ -119,6 +119,112 @@ def test_varying_two_harness_factors_warns_without_blocking():
     assert any("more than one harness factor" in w.lower() for w in warnings)
 
 
+def test_a_bare_control_is_one_axis_not_four():
+    """Bare-versus-full-harness is a single intervention (ADR-0049).
+
+    A bare arm has no prompt family and no catalog to hold fixed — the runner
+    masks every governance directory — so what its `prompt_variant` and
+    `skills_disabled` say are declarations that keep the condition hash honest,
+    not levers that moved. Reporting them as confounds would put a permanent
+    `design_objection` on the lab's most basic comparison.
+    """
+    warnings = validate_design(
+        ExperimentMode.harness_evaluation,
+        [
+            _condition(
+                "bare",
+                ConditionRole.control,
+                harness_source=HarnessSource.bare,
+                prompt_variant="default",
+                skills_disabled=["brainstorming", "writing-plans"],
+            ),
+            _condition(
+                "full-harness",
+                prompt_variant="harness",
+                skills_disabled=[],
+            ),
+        ],
+    )
+
+    assert warnings == []
+
+
+def test_a_governance_only_pair_is_also_one_axis():
+    """Same prompt, no skills on either side: what moved is the rulebook."""
+    warnings = validate_design(
+        ExperimentMode.harness_evaluation,
+        [
+            _condition(
+                "bare",
+                ConditionRole.control,
+                harness_source=HarnessSource.bare,
+                skills_disabled=["brainstorming"],
+            ),
+            _condition("governance-only", skills_disabled=["brainstorming"]),
+        ],
+    )
+
+    assert warnings == []
+
+
+def test_a_bare_arm_told_to_follow_a_harness_it_cannot_see_is_flagged():
+    warnings = validate_design(
+        ExperimentMode.harness_evaluation,
+        [
+            _condition(
+                "bare",
+                ConditionRole.control,
+                harness_source=HarnessSource.bare,
+                prompt_variant="harness",
+            ),
+            _condition("full-harness", prompt_variant="harness"),
+        ],
+    )
+
+    assert any("cannot see" in warning for warning in warnings)
+
+
+def test_the_partial_ablation_warning_stops_firing_once_an_arm_is_bare():
+    """The advisory ADR-0046 added was true only while every arm was lab_root."""
+    warnings = validate_design(
+        ExperimentMode.harness_evaluation,
+        [
+            _condition(
+                "bare",
+                ConditionRole.control,
+                harness_source=HarnessSource.bare,
+                skills_disabled=["brainstorming"],
+            ),
+            _condition("governed", skills_disabled=[]),
+        ],
+    )
+
+    assert not any("lab's own root" in warning for warning in warnings)
+
+
+def test_the_governed_arms_keep_their_own_axes_beside_a_bare_one():
+    """Subsumption covers the bare arm, not a real confound between the others."""
+    warnings = validate_design(
+        ExperimentMode.harness_evaluation,
+        [
+            _condition(
+                "bare",
+                ConditionRole.control,
+                harness_source=HarnessSource.bare,
+                prompt_variant="default",
+            ),
+            _condition("plain prompt", prompt_variant="default", skills_disabled=[]),
+            _condition(
+                "harness prompt",
+                prompt_variant="harness",
+                skills_disabled=["brainstorming"],
+            ),
+        ],
+    )
+
+    assert any("more than one harness factor" in w.lower() for w in warnings)
+
+
 def test_a_comparison_needs_exactly_one_control():
     with pytest.raises(ExperimentDesignError, match="exactly one control"):
         validate_design(
@@ -239,7 +345,7 @@ def test_subject_validation_warns_when_harness_and_model_both_vary():
 
 @pytest.mark.parametrize(
     ("reps", "expected"),
-    [(1, "exploratory only"), (3, "exploratory comparison"), (5, None), (10, None)],
+    [(1, "exploratory only"), (3, "a judgement"), (5, None), (10, None)],
 )
 def test_low_repetition_counts_say_what_they_do_not_support(reps, expected):
     note = repetition_warning(reps)
@@ -465,7 +571,7 @@ def test_a_harness_summary_reports_its_evidence_honestly(lab):
     summary = lab.summarize("migration-safety")
 
     assert summary["verdict"]["evidence"] == "1 case \u00d7 2 repetitions"
-    assert summary["verdict"]["strength"] == "exploratory comparison"
+    assert summary["verdict"]["strength"] == "judgement"
     # Nothing has run, so there is nothing to conclude.
     assert summary["verdict"]["headline"] == "Not enough evidence yet"
 
@@ -557,7 +663,7 @@ def test_subject_validation_creates_without_a_control(validated_case):
         ConditionRole.treatment,
         ConditionRole.treatment,
     ]
-    assert any("exploratory comparison" in w for w in warnings)
+    assert any("a judgement" in w for w in warnings)
 
 
 def test_subject_validation_summary_reports_per_arm_and_never_pools(validated_case):
@@ -1355,3 +1461,221 @@ def test_a_full_harness_arm_is_about_the_catalog_its_control_removes(session):
     assert "none of its 4 skills" in issue["detail"]
     # The bare arm removed them, so it is not the arm that failed to open them.
     assert summary["validity"]["status"] == "invalid"
+
+
+def test_a_bare_arm_is_never_about_a_skill(session):
+    """A bare arm sees no catalog, whatever its overrides happen to say.
+
+    The sibling-removes rule is what gives a full-harness treatment its skill
+    list, and it hands the same list back to the control. That is right when the
+    control merely hid the skills; it is wrong when the control is `bare`, whose
+    catalog is masked in the container (ADR-0049) — the control would be filed
+    as "had 4 skills, opened none" and the design would be marked invalid on the
+    strength of a treatment that never existed.
+    """
+    from harness_lab_app.models import Case, CaseType, HarnessSource
+    from harness_lab_app.skills_catalog import known_skill_names
+
+    governed = sorted(known_skill_names())[:4]
+    if len(governed) < 4:
+        pytest.skip("not enough governed skills in this checkout")
+    service = ExperimentService(session)
+    session.add(
+        Case(
+            case_id="tetris-v1",
+            name="Tetris",
+            type=CaseType.single_prompt,
+            prompt_variants={"sdlc": "Build Tetris."},
+        )
+    )
+    session.commit()
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="bare-vs-harness",
+            name="Bare vs full harness",
+            question="Does the harness help at all?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["tetris-v1"],
+            repetitions=1,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="bare",
+                    role=ConditionRole.control,
+                    # Deliberately not declaring the catalog it cannot see:
+                    # correctness must not depend on the operator having
+                    # written the declaration out. Its sibling disables those
+                    # skills, and the sibling-removes rule would otherwise hand
+                    # that list straight back to this arm.
+                    overrides={"harness_source": HarnessSource.bare.value},
+                ),
+                ExperimentConditionCreate(
+                    label="ablated",
+                    role=ConditionRole.treatment,
+                    overrides={"skills_disabled": governed},
+                ),
+            ],
+        )
+    )
+    runs = service.launch("bare-vs-harness", _base_config())
+    for run in runs:
+        _score(session, run, passed=True, skill_invoked=0.0)
+
+    summary = service.summarize("bare-vs-harness")
+
+    arms = [
+        issue["arm"]
+        for issue in summary["validity"]["issues"]
+        if issue["code"] in ("treatment_not_activated", "mixed_treatment")
+    ]
+    assert arms == []
+
+
+def test_the_scorer_puts_no_skill_on_a_bare_arms_menu(session):
+    """The other half of the same rule, one layer down (ADR-0049).
+
+    `build_context` unions the siblings' skill fields into "what this run is
+    about" and then intersects with what the run could see. For a bare arm what
+    it could see is nothing at all, so the intersection must be empty — else
+    `SkillUsageEvaluator` writes `skill_invoked = 0` and the control enters the
+    corpus as an arm that ignored skills it was never given.
+    """
+    from harness_lab_app.models import Case, CaseType, HarnessSource
+    from harness_lab_app.score_service import ScoreService
+    from harness_lab_app.skills_catalog import known_skill_names
+
+    governed = sorted(known_skill_names())[:3]
+    if len(governed) < 3:
+        pytest.skip("not enough governed skills in this checkout")
+    service = ExperimentService(session)
+    session.add(
+        Case(
+            case_id="tetris-v1",
+            name="Tetris",
+            type=CaseType.single_prompt,
+            prompt_variants={"sdlc": "Build Tetris."},
+        )
+    )
+    session.commit()
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="bare-menu",
+            name="Bare menu",
+            question="Does the harness help at all?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["tetris-v1"],
+            repetitions=1,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="bare",
+                    role=ConditionRole.control,
+                    overrides={"harness_source": HarnessSource.bare.value},
+                ),
+                ExperimentConditionCreate(
+                    label="governed",
+                    role=ConditionRole.treatment,
+                    overrides={"skills_invoke": governed},
+                ),
+            ],
+        )
+    )
+    runs = service.launch("bare-menu", _base_config())
+    contexts = {
+        run.condition_label: ScoreService(session).build_context(run.run_id)
+        for run in runs
+    }
+
+    assert contexts["bare"].skills_under_test == ()
+    assert sorted(contexts["governed"].skills_under_test) == governed
+
+
+def test_the_case_matrix_reads_every_repetition_not_the_last(session):
+    """A 1-of-3 pass and a 3-of-3 pass used to render identically.
+
+    The cell kept whichever repetition came last, so "fixed" could mean the
+    treatment passed once. A case counts as passed for an arm only when every
+    scored repetition passed.
+    """
+    from harness_lab_app.models import Case, CaseType
+
+    service = ExperimentService(session)
+    session.add(
+        Case(
+            case_id="tetris-v1",
+            name="Tetris",
+            type=CaseType.single_prompt,
+            prompt_variants={"sdlc": "Build Tetris."},
+        )
+    )
+    session.commit()
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="matrix-reps",
+            name="Matrix over repetitions",
+            question="Does the skill help?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["tetris-v1"],
+            repetitions=3,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="control",
+                    role=ConditionRole.control,
+                    overrides={"skills_disabled": ["brainstorming"]},
+                ),
+                ExperimentConditionCreate(
+                    label="treatment",
+                    role=ConditionRole.treatment,
+                    overrides={"skills_disabled": []},
+                ),
+            ],
+        )
+    )
+    runs = service.launch("matrix-reps", _base_config())
+    treatment_runs = [run for run in runs if run.condition_label == "treatment"]
+    for run in runs:
+        if run.condition_label == "control":
+            _score(session, run, passed=False)
+    # Treatment: fails twice, passes once — and the last one is the pass.
+    for run, passed in zip(treatment_runs, (False, False, True), strict=True):
+        _score(session, run, passed=passed)
+
+    summary = service.summarize("matrix-reps")
+
+    [row] = summary["comparisons"][0]["case_matrix"]
+    assert row["treatment"] is False
+    assert row["movement"] == "unchanged"
+    assert summary["verdict"]["movements"]["fixed"] == 0
+
+
+def test_a_ladder_rung_is_not_objected_to_for_being_single_factor():
+    """A rung of a family is single-factor by design (ADR-0051)."""
+    warnings = validate_design(
+        ExperimentMode.harness_evaluation,
+        [
+            _condition("governance-only", ConditionRole.control, skills_disabled=["a"]),
+            _condition("skills-available", skills_disabled=[]),
+        ],
+        in_family=True,
+    )
+
+    assert not any("lab's own root" in warning for warning in warnings)
+
+
+def test_an_activation_experiment_is_not_told_its_directories_differ():
+    """`skills_invoke` moves no directory; the venue warning was false for it."""
+    warnings = validate_design(
+        ExperimentMode.harness_evaluation,
+        [
+            _condition("available", ConditionRole.control, skills_invoke=[]),
+            _condition("activated", skills_invoke=["a", "b"]),
+        ],
+    )
+
+    assert not any("skill directories differ" in warning for warning in warnings)
+
+
+def test_a_family_id_travels_with_the_experiment(session):
+    service = ExperimentService(session)
+    experiment, _ = service.create_experiment(_payload(family_id="ladder-x"))
+
+    assert experiment.family_id == "ladder-x"
+    assert service.summarize(experiment.experiment_id)["family_id"] == "ladder-x"

@@ -308,6 +308,29 @@ def discover_skills() -> list[str]:
 SKILLS_STAGING_DIR = REPO_ROOT / "data" / "skills_staging"
 
 
+def _require_masked_lab_root() -> None:
+    """Refuse a `bare` run whose lab tree is still readable (ADR-0049).
+
+    A bare arm is bare only because the runner container masks the lab's
+    governance: the workspace lives *under* the repo root, so Claude Code would
+    otherwise collect `CLAUDE.md` from an ancestor directory and the control arm
+    would quietly be a second treatment arm. On the host lane there is nothing
+    to mask with, so the run must not proceed rather than record a condition it
+    does not have.
+    """
+    for relative in ("CLAUDE.md", ".claude"):
+        path = REPO_ROOT / relative
+        if not path.exists():
+            continue
+        occupied = any(path.iterdir()) if path.is_dir() else path.stat().st_size > 0
+        if occupied:
+            sys.exit(
+                f"❌ harness_source='bare' but {relative} is readable at "
+                f"{REPO_ROOT}: this run would see the lab's governance. Bare "
+                "runs need the docker backend, where the container masks it."
+            )
+
+
 def build_effective_skills(disabled: list[str], extra: list[str]) -> list:
     """Governed skills minus `disabled`, plus staged `extra`. Fails fast on
     unknown names or collisions, BEFORE any view is mutated."""
@@ -598,12 +621,15 @@ def generate_prompt(
     out_dir: Path,
     repo_note: str | None = None,
     invoke_skills: Sequence[str] = (),
+    cwd_note: bool = False,
 ) -> Path:
     """Write the final prompt: metadata header + location constraint + body.
 
     `repo_note` overrides the default build-from-scratch constraint (workspace
     main.py) for repo-task/SWE runs, where the correct wording depends on the
-    agent's working directory.
+    agent's working directory. `cwd_note` keeps that default constraint but adds
+    that the workspace already *is* the working directory, which is true for
+    every condition that launches the agent from it (ADR-0031, ADR-0049).
     """
     workspace = agent_workspace_path(run_id)
     constraint = repo_note or (
@@ -612,6 +638,7 @@ def generate_prompt(
         f"> written elsewhere (for example `/workspace/{run_id}/`) is discarded\n"
         f"> when the container exits.\n"
         f"> Entry point: `{workspace}/main.py`\n"
+        + ("> That directory is your current working directory.\n" if cwd_note else "")
     )
     header = (
         f"<!-- BENCHMARK RUN METADATA\n"
@@ -975,13 +1002,16 @@ def write_metadata(
         # Exclusions are applied to the native views BEFORE metadata is written,
         # so discover_skills() already reflects the effective bundle; the
         # explicit lists below record the ablation itself.
-        "skills_bundle": discover_skills(),
+        # A bare run has no catalog and no subagents whatever the masked tree
+        # happens to look like from here (ADR-0049): stating it explicitly keeps
+        # the record right even if the masks were ever misconfigured.
+        "skills_bundle": [] if harness_source == "bare" else discover_skills(),
         "skills_disabled": sorted(set(getattr(args, "disable_skill", []) or [])),
         "skills_experimental": sorted(set(getattr(args, "extra_skill", []) or [])),
         # Skills the prompt told the agent to invoke (ADR-0041). Part of the
         # arm, so it also enters the condition hash below.
         "skills_invoke": sorted(set(getattr(args, "invoke_skill", []) or [])),
-        "subagents": discover_subagents(),
+        "subagents": [] if harness_source == "bare" else discover_subagents(),
         "base_commit": task.get("base_commit", ""),
         "workspace": f"workspace/{args.run}",
         # Which external repository this run worked in, if any (ADR-0029).
@@ -1852,6 +1882,7 @@ def collect_claude_usage(out_dir: Path) -> dict:
         return {}
 
     input_tokens = output_tokens = 0
+    cache_read_tokens = cache_creation_tokens = 0
     cost = 0.0
     turns = tool_calls = 0
     duration_ms = 0
@@ -1888,6 +1919,14 @@ def collect_claude_usage(out_dir: Path) -> dict:
                 usage = event.get("usage") or {}
                 input_tokens += usage.get("input_tokens") or 0
                 output_tokens += usage.get("output_tokens") or 0
+                # The prompt cache is where a harness actually costs: a 25-skill
+                # catalog plus CLAUDE.md is re-read on every turn as
+                # `cache_read_input_tokens`, and `input_tokens` counts only the
+                # uncached sliver (42-146 in real runs). Summing just the latter
+                # once showed a full-harness arm using *fewer* tokens than a
+                # bare one while costing 71% more.
+                cache_read_tokens += usage.get("cache_read_input_tokens") or 0
+                cache_creation_tokens += usage.get("cache_creation_input_tokens") or 0
                 if isinstance(event.get("total_cost_usd"), (int, float)):
                     cost += event["total_cost_usd"]
                 turns += event.get("num_turns") or 0
@@ -1899,6 +1938,8 @@ def collect_claude_usage(out_dir: Path) -> dict:
         "tool_calls": tool_calls or None,
         "input_tokens": input_tokens or None,
         "output_tokens": output_tokens or None,
+        "cache_read_tokens": cache_read_tokens or None,
+        "cache_creation_tokens": cache_creation_tokens or None,
         "cost_usd": round(cost, 6) if cost else None,
         "time_minutes": round(duration_ms / 60000, 2) if duration_ms else None,
         "files_modified": sorted(files_modified),
@@ -1914,6 +1955,8 @@ def write_usage_json(out_dir: Path, usage: dict | None) -> Path:
         "steps": None,
         "input_tokens": None,
         "output_tokens": None,
+        "cache_read_tokens": None,
+        "cache_creation_tokens": None,
         "cost_usd": None,
         "time_minutes": None,
         "files_modified": [],
@@ -2063,8 +2106,14 @@ def close_run(
             f"workspace/{args.run}/ appears to have no implementation."
         )
 
-    BENCH_CONTEXT.write_text(BENCH_CONTEXT_PLACEHOLDER)
-    print("  BENCH_CONTEXT.md reset")
+    # Best-effort: under a masked harness condition (ADR-0049) this file is a
+    # read-only empty bind in the container, and there is nothing to reset
+    # because nothing wrote it.
+    try:
+        BENCH_CONTEXT.write_text(BENCH_CONTEXT_PLACEHOLDER)
+        print("  BENCH_CONTEXT.md reset")
+    except OSError:
+        print("  BENCH_CONTEXT.md not writable (masked run) — nothing to reset")
 
     env_path = REPO_ROOT / ".env"
     restore_env_token(env_path)
@@ -2113,9 +2162,7 @@ def close_run(
         f"(score={score}/10, interventions={interventions}{notes_suffix})"
     )
     print("  Suggested commit:")
-    print(
-        f"    git add data/runs/{args.run}/ benchmarks/tetris/runs.yaml benchmarks/tetris/results.csv BENCH_CONTEXT.md"
-    )
+    print(f"    git add data/runs/{args.run}/ BENCH_CONTEXT.md")
     print(f'    git commit -m "{commit_msg}"')
 
 
@@ -2147,6 +2194,30 @@ def main(argv: list[str] | None = None) -> int:
     # Everything downstream that used to test `case_spec is not None` was really
     # asking this question.
     provisions_repo = spec_provisions_repo(case_spec)
+    # The harness condition (ADR-0031, ADR-0049) is read here — before anything
+    # acts on it — because it decides three things that happen in three
+    # different places: whether the lab's own skill views may be regenerated,
+    # where the agent runs, and whether provisioning injects the harness.
+    # Reading it late is what let a `bare` run mutate the lab tree first.
+    #
+    # The worker historically staged this only inside the target block; read
+    # both so a spec from either generation resolves to the condition the run
+    # was actually created with. Falling back to "lab_root" here once silently
+    # turned a declared `native` control into a lab-harness arm — the exact
+    # collapse ADR-0031 exists to prevent.
+    harness_source = str(
+        (case_spec or {}).get("harness_source")
+        or ((case_spec or {}).get("target") or {}).get("harness_source")
+        or "lab_root"
+    )
+    # The lab root is what the agent reads: its skill views are worth
+    # regenerating, and the files it writes there are reachable.
+    lab_root_visible = harness_source == "lab_root"
+    # The agent runs from the workspace, with the lab's governance masked in the
+    # container. Nothing may write to the lab's adapter files under these.
+    workspace_cwd = harness_source in ("native", "injected", "bare")
+    if harness_source == "bare":
+        _require_masked_lab_root()
     # Per-step instructions authored on the case (multi_step in the web UI).
     case_step_prompts: list[str] = [
         str(item) for item in (case_spec or {}).get("step_prompts", []) if str(item)
@@ -2222,6 +2293,13 @@ def main(argv: list[str] | None = None) -> int:
     # A resumed run learns its models from stored metadata, after the overlay
     # was first written; re-apply so a direct LM Studio executor is routable.
     apply_gateway_overlay(direct_models(args))
+    # opencode resolves its project config from the cwd, so a run launched from
+    # the workspace would lose the lab's provider block — its gateway routing —
+    # along with the governance it is meant to lose. Routing is not part of the
+    # harness condition, so point it back at the tracked file explicitly. The
+    # overlay wins when it set the variable itself (see opencode_overlay).
+    if workspace_cwd and args.harness == "opencode":
+        os.environ.setdefault("OPENCODE_CONFIG", str(REPO_ROOT / "opencode.json"))
     # Precedence mirrors the model flags: an explicit --harness wins over the
     # harness recorded in runs.yaml. It used to be the other way round, and a
     # web run whose id collided with a pre-declared cell was executed by one
@@ -2311,36 +2389,59 @@ def main(argv: list[str] | None = None) -> int:
     # ablation (native views are generated artifacts, so this is idempotent);
     # atexit covers every return/sys.exit path of this run. Runs without
     # ablation flags skip the restore only if it fails (best-effort heal).
+    #
+    # All of it is gated on the harness condition. `restore_full_skill_views`
+    # and `apply_skill_views` write the lab's own adapter files (CLAUDE.md,
+    # OPENCODE.md, .claude/skills, …), which under any masked condition are
+    # read-only empty binds in the container — the write would raise, and if it
+    # succeeded it would refill the very mask that makes the arm bare.
     skills_ablation = bool(args.disable_skill or args.extra_skill)
-    try:
-        restore_full_skill_views()
-    except Exception as exc:
-        if skills_ablation:
-            sys.exit(f"❌ Could not sync skill views before ablation: {exc!r}")
-        print(f"  ⚠️  Skill view sync skipped: {exc!r}")
-    # Always resolved, ablated or not: the `injected` harness condition projects
-    # this exact set into the target, so a run with no ablation still needs to
-    # know what "the harness" currently is.
-    effective_skills = build_effective_skills(args.disable_skill, args.extra_skill)
-    # A skill the prompt asks for must be one the agent can see, or the run
-    # records "asked and not invoked" about a skill that was never there.
-    invisible = sorted(
-        set(args.invoke_skill) - {skill.name for skill in effective_skills}
-    )
-    if invisible:
-        sys.exit(
-            f"❌ --invoke-skill: not available to this run: {', '.join(invisible)} "
-            "(stage it with --extra-skill, or do not disable it)"
+    effective_skills: list
+    if harness_source == "bare":
+        # There is no catalog to ablate: every skill directory is masked. A
+        # `--disable-skill` here is a declaration that keeps the condition hash
+        # honest, nothing more.
+        if args.extra_skill or args.invoke_skill:
+            sys.exit(
+                "❌ harness_source='bare': a bare run has no skills to stage or "
+                "invoke — every catalog is masked in the container. Drop "
+                "--extra-skill/--invoke-skill, or use a governed condition."
+            )
+        effective_skills = []
+        print("  Skills:      bare — every catalog is masked in the container")
+    else:
+        if lab_root_visible:
+            try:
+                restore_full_skill_views()
+            except Exception as exc:
+                if skills_ablation:
+                    sys.exit(f"❌ Could not sync skill views before ablation: {exc!r}")
+                print(f"  ⚠️  Skill view sync skipped: {exc!r}")
+        # Always resolved, ablated or not: the `injected` harness condition
+        # projects this exact set into the target, so a run with no ablation
+        # still needs to know what "the harness" currently is.
+        effective_skills = build_effective_skills(args.disable_skill, args.extra_skill)
+        # A skill the prompt asks for must be one the agent can see, or the run
+        # records "asked and not invoked" about a skill that was never there.
+        invisible = sorted(
+            set(args.invoke_skill) - {skill.name for skill in effective_skills}
         )
-    if skills_ablation:
-        apply_skill_views(effective_skills)
-        import atexit
+        if invisible:
+            sys.exit(
+                f"❌ --invoke-skill: not available to this run: "
+                f"{', '.join(invisible)} "
+                "(stage it with --extra-skill, or do not disable it)"
+            )
+        if skills_ablation and lab_root_visible:
+            apply_skill_views(effective_skills)
+            import atexit
 
-        atexit.register(restore_full_skill_views)
-        print(
-            f"  Skills:      ablation active — disabled={sorted(set(args.disable_skill))} "
-            f"extra={sorted(set(args.extra_skill))}"
-        )
+            atexit.register(restore_full_skill_views)
+            print(
+                f"  Skills:      ablation active — "
+                f"disabled={sorted(set(args.disable_skill))} "
+                f"extra={sorted(set(args.extra_skill))}"
+            )
 
     out_dir = DATA_DIR / args.run
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -2368,18 +2469,6 @@ def main(argv: list[str] | None = None) -> int:
         validate_workspace(workspace, args.run, args.resume, fresh=args.fresh)
     workspace.mkdir(parents=True, exist_ok=True)
 
-    # The harness condition (ADR-0031) is decided before provisioning, because
-    # `injected` is a step *of* provisioning.
-    # The worker historically staged this only inside the target block; read
-    # both so a spec from either generation resolves to the condition the run
-    # was actually created with. Falling back to "lab_root" here once silently
-    # turned a declared `native` control into a lab-harness arm — the exact
-    # collapse ADR-0031 exists to prevent.
-    harness_source = str(
-        (case_spec or {}).get("harness_source")
-        or ((case_spec or {}).get("target") or {}).get("harness_source")
-        or "lab_root"
-    )
     harness_projection: dict | None = None
 
     def _inject(ws: Path) -> None:
@@ -2414,8 +2503,10 @@ def main(argv: list[str] | None = None) -> int:
     #
     # Running `native` from the repo root would silently hand the agent the lab
     # harness and quietly turn the control arm into a second treatment arm.
+    #   bare      — an empty workspace with the lab's governance masked in the
+    #               container: the agent sees the prompt and nothing else.
     agent_cwd: Path | None = None
-    if harness_source in ("native", "injected"):
+    if workspace_cwd:
         agent_cwd = workspace
     elif args.harness == "claude" and provisions_repo and prompt_short == "swe_default":
         # Pre-existing control-arm hygiene for the SWE lane, unchanged.
@@ -2443,8 +2534,13 @@ def main(argv: list[str] | None = None) -> int:
         out_dir,
         repo_note=repo_note,
         invoke_skills=args.invoke_skill,
+        cwd_note=agent_cwd is not None and not provisions_repo,
     )
     print(f"  Prompt:      {prompt_path.relative_to(REPO_ROOT)}")
+    print(
+        f"  Harness src: {harness_source}"
+        + (" — the lab's governance is masked" if harness_source == "bare" else "")
+    )
 
     write_metadata(
         out_dir,
@@ -2468,7 +2564,7 @@ def main(argv: list[str] | None = None) -> int:
         # set `agent_cwd = workspace` for its bare claude arm since long before
         # harness conditions existed, and moving that arm's fingerprint now
         # would re-bin every historical SWE run against a hash it never had.
-        harness_root=(workspace if harness_source in ("native", "injected") else None),
+        harness_root=(workspace if workspace_cwd else None),
         harness_projection=harness_projection,
     )
     print(f"  Metadata:    {(out_dir / 'metadata.json').relative_to(REPO_ROOT)}")
@@ -2480,7 +2576,11 @@ def main(argv: list[str] | None = None) -> int:
         scaffold_report(run, out_dir)
     print(f"  Report:      {(out_dir / 'report.md').relative_to(REPO_ROOT)}")
 
-    write_bench_context(args.run)
+    # Read by opencode through the lab's `opencode.json` instructions list, so
+    # it is only reachable — and only writable — from a lab-root run. Under any
+    # masked condition the file is a read-only empty bind in the container.
+    if lab_root_visible:
+        write_bench_context(args.run)
     if runs_path is not None:
         set_status_running(runs_path, args.run)
 
@@ -2785,7 +2885,7 @@ def main(argv: list[str] | None = None) -> int:
             print("  -" * 33)
             print("  Test the result before scoring:")
             print(f"    python workspace/{args.run}/main.py")
-            print("    # Reference: benchmarks/tetris/scoring.md")
+            print("    # Reference: the case's scoring.md (benchmarks/<case>/)")
             print()
             try:
                 input("  Press Enter when ready to score (Ctrl+C to leave open)...")

@@ -53,7 +53,7 @@ def reset_database(purge_disk: bool = False) -> None:
     # Seed default data
     print("🌱 Seeding essential database data (Tetris case)...")
     with Session(engine) as session:
-        CaseService(session).seed_tetris_case()
+        CaseService(session).seed_benchmark_cases()
 
     if purge_disk:
         print("🧨 Purging on-disk run state (data/runs/*, workspace/*)...")

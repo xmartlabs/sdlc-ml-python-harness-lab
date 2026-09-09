@@ -7,6 +7,10 @@ import pytest
 
 from harness_lab_app import executors
 from harness_lab_app.executors import (
+    GOVERNANCE_MASK_ALL,
+    GOVERNANCE_MASK_ANCESTORS,
+    GOVERNANCE_MASK_NONE,
+    RUNNER_GOVERNANCE_FILES,
     RUNNER_MASKED_SKILL_DIRS,
     RUNNER_SKILLS_DIR,
     DockerRunExecutor,
@@ -14,6 +18,8 @@ from harness_lab_app.executors import (
     build_run_environment,
     container_name_for_run,
     rewrite_localhost,
+    runner_governance_masks,
+    runner_masks,
     runner_skill_masks,
 )
 
@@ -47,6 +53,7 @@ class FakeSettings:
         self.host_repo_root = "/host/repo"
         self.runner_image = "harness-lab-runner:latest"
         self.execution_backend = "docker"
+        self.data_runs_dir = repo_root / "data" / "runs"
 
 
 def test_build_run_environment_rewrites_host_urls(
@@ -191,6 +198,8 @@ def test_docker_executor_configures_container(
         "/app/.codex/skills": "",
     }
     assert f"/app/{RUNNER_SKILLS_DIR}" not in kwargs["tmpfs"]
+    # An unmasked run reaches Docker exactly as it did before ADR-0049.
+    assert "mounts" not in kwargs
     assert messages == ["step one", "step two"]
     assert exit_code == 0
     assert container.removed is True
@@ -252,3 +261,191 @@ def test_runner_skill_masks_cover_every_tool_in_the_registry() -> None:
     }
 
     assert materialized - {RUNNER_SKILLS_DIR} == set(RUNNER_MASKED_SKILL_DIRS)
+
+
+# --------------------------------------------------------------------------
+# Governance masks (ADR-0049)
+# --------------------------------------------------------------------------
+
+
+def test_an_unmasked_run_hides_nothing_but_the_skill_mirrors() -> None:
+    tmpfs, files = runner_governance_masks(GOVERNANCE_MASK_NONE)
+
+    assert tmpfs == {}
+    assert files == []
+    assert runner_masks(GOVERNANCE_MASK_NONE)[0] == runner_skill_masks()
+
+
+def test_an_in_target_mask_keeps_the_governed_sources_readable() -> None:
+    """`native` and `injected` hide the lab from the agent, not from the runner.
+
+    bench_run.py discovers governed skills from `.github/skills` and projects
+    the injected harness from `.github/`. Masking it would make an injected arm
+    project nothing and turn `--disable-skill X` into "unknown skill" — the arm
+    would silently equal its own control.
+    """
+    tmpfs, files = runner_governance_masks(GOVERNANCE_MASK_ANCESTORS)
+    targets = {target for target, _kind in files}
+
+    assert "/app/.github" not in tmpfs
+    assert "/app/.claude" in tmpfs
+    assert "/app/memory" in tmpfs
+    assert "/app/CLAUDE.md" in targets
+    # Proven to leak from an ancestor directory in two archived native runs.
+    assert "/app/.mcp.json" in targets
+    # Routing, not governance: blanking it would also blank the gateway
+    # provider block and drift `gateway_overlay_hash` on every masked run.
+    assert "/app/opencode.json" not in targets
+
+
+def test_a_bare_mask_hides_the_governed_sources_too() -> None:
+    tmpfs, _files = runner_governance_masks(GOVERNANCE_MASK_ALL)
+
+    assert "/app/.github" in tmpfs
+    assert set(tmpfs.values()) == {""}
+    assert all(path.startswith("/app/") for path in tmpfs)
+
+
+def test_a_bare_mask_covers_every_document_the_surface_counts() -> None:
+    """The masks must not drift from what `governance.py` calls governance.
+
+    That module defines the reading surface an audit scores a run against. If a
+    document is in the surface but not in the masks, a bare run can read it —
+    and the arm that exists to see nothing sees something.
+    """
+    from harness_lab_app import governance
+
+    tmpfs, files = runner_governance_masks(GOVERNANCE_MASK_ALL)
+    targets = {target for target, _kind in files}
+
+    for name in governance._SINGLE_FILES:
+        covered = f"/app/{name}" in targets or any(
+            f"/app/{name}".startswith(f"{masked}/") for masked in tmpfs
+        )
+        assert covered, f"{name} is in the governance surface but is not masked"
+    for directory, _pattern in governance._GLOBS:
+        target = f"/app/{directory}"
+        covered = target in tmpfs or any(
+            target.startswith(f"{masked}/") for masked in tmpfs
+        )
+        assert covered, f"{directory} is in the governance surface but is not masked"
+
+
+def test_a_bare_mask_covers_every_adapter_file_in_the_registry() -> None:
+    """Adding an AI tool adds an adapter file the runner must also hide."""
+    import tomllib
+
+    registry = tomllib.loads(
+        (Path(__file__).resolve().parents[2] / "adapters" / "registry.toml").read_text()
+    )
+    tmpfs, files = runner_governance_masks(GOVERNANCE_MASK_ALL)
+    targets = {target for target, _kind in files}
+
+    for entry in registry["tool"]:
+        adapter = entry.get("adapter_file")
+        if not adapter:
+            continue
+        covered = f"/app/{adapter}" in targets or any(
+            f"/app/{adapter}".startswith(f"{masked}/") for masked in tmpfs
+        )
+        assert covered, f"adapter file {adapter} is not masked for a bare run"
+
+
+def test_masks_never_collide_on_one_destination() -> None:
+    """Docker refuses two mounts with the same destination."""
+    for level in (GOVERNANCE_MASK_ANCESTORS, GOVERNANCE_MASK_ALL):
+        tmpfs, files = runner_masks(level)
+        targets = [target for target, _kind in files]
+
+        assert len(targets) == len(set(targets))
+        assert not set(tmpfs) & set(targets)
+        for path in tmpfs:
+            assert not any(
+                path.startswith(f"{other}/") for other in tmpfs if other != path
+            )
+
+
+def test_docker_executor_binds_an_empty_file_over_every_governance_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only files that exist are masked: a bind whose target is missing makes
+    # Docker create it, and the target sits inside the /app bind — an empty
+    # `.cursorrules` would land in the operator's own checkout.
+    present = ["CLAUDE.md", "AGENTS.md", ".mcp.json"]
+    for name in present:
+        (tmp_path / name).write_text("real content\n")
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+    client = FakeDockerClient(FakeContainer([]))
+    executor = DockerRunExecutor(client_factory=lambda: client)
+
+    executor.start(
+        "tetris-v1-K-100",
+        ["python", "scripts/bench_run.py"],
+        governance_mask=GOVERNANCE_MASK_ALL,
+    )
+
+    kwargs = client.containers.run_kwargs
+    mounts = kwargs["mounts"]
+    assert {mount["Target"] for mount in mounts} == {f"/app/{name}" for name in present}
+    assert set(present) <= set(RUNNER_GOVERNANCE_FILES)
+    assert all(mount["ReadOnly"] for mount in mounts)
+    assert all(
+        mount["Source"].startswith("/host/repo/data/runs/tetris-v1-K-100/masks/")
+        for mount in mounts
+    )
+    assert "/app/.github" in kwargs["tmpfs"]
+    # An empty `.mcp.json` is invalid JSON, not "no config" — a tool may refuse
+    # to start on it, so the JSON masks carry an empty object.
+    masks = tmp_path / "data" / "runs" / "tetris-v1-K-100" / "masks"
+    assert (masks / "empty.json").read_text().strip() == "{}"
+    assert (masks / "empty.md").read_text() == ""
+
+
+def test_the_host_lane_refuses_to_pretend_it_masked_anything(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+
+    with pytest.raises(RuntimeError, match="docker backend"):
+        SubprocessRunExecutor().start(
+            "r-1", ["true"], governance_mask=GOVERNANCE_MASK_ALL
+        )
+
+
+def test_run_environment_carries_the_claude_settings_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Routing must not depend on where the agent's cwd happens to be.
+
+    Claude Code reads `.claude/settings*.json` from its project directory, so a
+    run launched from the workspace lost ANTHROPIC_BASE_URL — the LiteLLM
+    gateway and its metrics headers — along with the governance it was meant to
+    lose (ADR-0049, and its erratum on what `apiKeySource` does not prove).
+    """
+    (tmp_path / ".env").write_text("ANTHROPIC_MODEL=from-env-file\n")
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text('{"env": {"ANTHROPIC_MODEL": "shared"}}')
+    (claude / "settings.local.json").write_text(
+        '{"env": {"ANTHROPIC_BASE_URL": "http://localhost:4000",'
+        ' "ANTHROPIC_MODEL": "local-wins"}}'
+    )
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+
+    env = build_run_environment()
+
+    assert env["ANTHROPIC_BASE_URL"] == "http://host.docker.internal:4000"
+    # settings.local.json wins over settings.json, and both over .env — the
+    # same order Claude Code itself applies when it reads them from the cwd.
+    assert env["ANTHROPIC_MODEL"] == "local-wins"
+
+
+def test_a_broken_settings_file_never_fails_a_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text("{ not json")
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+
+    assert "ANTHROPIC_BASE_URL" not in build_run_environment()
