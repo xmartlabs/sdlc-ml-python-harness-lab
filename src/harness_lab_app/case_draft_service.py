@@ -126,7 +126,7 @@ def _load_skill_context(selected_skills: list[str]) -> str:
     return "\n\nAvailable Skills Context:\n" + "\n\n".join(sections)
 
 
-def _call_model(model: str, system: str, user: str) -> str:
+def _call_model(model: str, system: str, user: str, *, target_id: str = "") -> str:
     """One draft completion over the lab's LLM transport.
 
     Gateway first, Claude CLI second (ADR-0043). A missing transport is a
@@ -135,7 +135,13 @@ def _call_model(model: str, system: str, user: str) -> str:
     """
     try:
         return llm_transport.chat(
-            model, system, user, timeout=DRAFT_TIMEOUT_SECONDS, temperature=0.2
+            model,
+            system,
+            user,
+            timeout=DRAFT_TIMEOUT_SECONDS,
+            temperature=0.2,
+            trace_kind="case_draft",
+            trace_metadata={"target_id": target_id} if target_id else None,
         ).strip()
     except llm_transport.TransportNotConfigured as exc:
         raise ValueError(
@@ -323,7 +329,9 @@ def generate_case_draft(req: CaseDraftRequest) -> CaseDraftResponse:
     prompt = user_prompt
     while attempts < MAX_ATTEMPTS:
         attempts += 1
-        raw_response = _call_model(chosen_model, _SYSTEM_PROMPT, prompt)
+        raw_response = _call_model(
+            chosen_model, _SYSTEM_PROMPT, prompt, target_id=req.target_id
+        )
         parsed = _parse_draft(raw_response)
         commands, dropped = screen_commands(_raw_commands(parsed))
         if commands or not dropped:

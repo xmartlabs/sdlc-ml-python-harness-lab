@@ -449,3 +449,82 @@ def test_case_spec_carries_the_condition_of_a_targetless_run(
 
     assert spec["harness_source"] == "bare"
     assert "target" not in spec
+
+
+# ---------------------------------------------------------------------------
+# Staging the adapter files an injected run's own mask hides (ADR-0049)
+# ---------------------------------------------------------------------------
+
+
+def test_an_injected_run_gets_its_adapter_files_staged(monkeypatch, tmp_path):
+    """The projection needs the bytes the runner masks, so the worker stages them.
+
+    The agent's cwd sits under the lab root, so `CLAUDE.md` has to be masked to
+    an empty stub there. The `injected` projection splices its generated-skills
+    region into that same file. The worker is not masked, so it is the one that
+    can put the real bytes somewhere the runner still reaches.
+    """
+    from harness_lab_app import config, tasks
+    from harness_lab_app.executors import GOVERNANCE_MASK_ANCESTORS
+    from harness_lab_app.models import HarnessSource
+
+    settings = config.Settings(repo_root=tmp_path)
+    monkeypatch.setattr(tasks, "get_settings", lambda: settings)
+    (tmp_path / "adapters").mkdir()
+    (tmp_path / "adapters" / "registry.toml").write_text(
+        '[governance]\nfiles = []\nautomation = ""\norchestration = ""\n\n'
+        '[[tool]]\nid = "claude"\nadapter_file = "CLAUDE.md"\n'
+        '\n[[tool]]\nid = "antigravity"\nadapter_file = ".agents/rules/GEMINI.md"\n'
+    )
+    (tmp_path / "CLAUDE.md").write_text("# Real rules\n")
+    (tmp_path / ".agents" / "rules").mkdir(parents=True)
+    (tmp_path / ".agents" / "rules" / "GEMINI.md").write_text("# Gemini\n")
+
+    staged = tasks._stage_harness_adapters(
+        "run-1", HarnessSource.injected, GOVERNANCE_MASK_ANCESTORS
+    )
+
+    assert sorted(staged) == [".agents/rules/GEMINI.md", "CLAUDE.md"]
+    root = settings.data_runs_dir / "run-1" / "harness_source"
+    assert (root / "CLAUDE.md").read_text() == "# Real rules\n"
+    # A nested adapter path keeps its shape, so `adapter_root / relative` finds it.
+    assert (root / ".agents" / "rules" / "GEMINI.md").read_text() == "# Gemini\n"
+
+
+def test_a_native_run_stages_nothing(monkeypatch, tmp_path):
+    """Only the injected arm projects, so only it needs the unmasked bytes."""
+    from harness_lab_app import config, tasks
+    from harness_lab_app.executors import GOVERNANCE_MASK_ANCESTORS
+    from harness_lab_app.models import HarnessSource
+
+    settings = config.Settings(repo_root=tmp_path)
+    monkeypatch.setattr(tasks, "get_settings", lambda: settings)
+
+    assert (
+        tasks._stage_harness_adapters(
+            "run-2", HarnessSource.native, GOVERNANCE_MASK_ANCESTORS
+        )
+        == []
+    )
+    assert not (settings.data_runs_dir / "run-2" / "harness_source").exists()
+
+
+def test_staging_never_breaks_a_run(monkeypatch, tmp_path):
+    """A missing registry is provisioning's failure to report, not the worker's.
+
+    Raising here would kill the run before the runner could say anything useful
+    about why the harness could not be built.
+    """
+    from harness_lab_app import config, tasks
+    from harness_lab_app.executors import GOVERNANCE_MASK_ANCESTORS
+    from harness_lab_app.models import HarnessSource
+
+    settings = config.Settings(repo_root=tmp_path)
+    monkeypatch.setattr(tasks, "get_settings", lambda: settings)
+
+    assert (
+        tasks._stage_harness_adapters(
+            "run-3", HarnessSource.injected, GOVERNANCE_MASK_ANCESTORS
+        )
+        == []
+    )

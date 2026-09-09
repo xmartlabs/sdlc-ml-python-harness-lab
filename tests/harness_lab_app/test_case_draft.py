@@ -101,7 +101,7 @@ def test_generate_case_draft_reports_dropped_commands_next_to_kept_ones():
 def test_generate_case_draft_retries_once_when_nothing_is_runnable():
     calls: list[tuple[str, str, str]] = []
 
-    def fake_chat(model: str, system: str, user: str) -> str:
+    def fake_chat(model: str, system: str, user: str, *, target_id: str = "") -> str:
         calls.append((model, system, user))
         if len(calls) == 1:
             return _draft([HEREDOC], subject="first")
@@ -187,7 +187,16 @@ def test_generate_case_draft_rides_the_shared_transport(monkeypatch):
 
     seen: dict = {}
 
-    def fake_chat(model, system, user, *, timeout, temperature):
+    def fake_chat(
+        model,
+        system,
+        user,
+        *,
+        timeout,
+        temperature,
+        trace_kind="",
+        trace_metadata=None,
+    ):
         seen.update(model=model, system=system, user=user, timeout=timeout)
         return _draft(["pytest {workspace}/test_x.py -q"])
 
@@ -273,8 +282,8 @@ def test_repository_context_reaches_the_draft_prompt(monkeypatch, tmp_path):
 
     seen: dict = {}
 
-    def _fake_call(model, system, user):
-        seen.update(model=model, system=system, user=user)
+    def _fake_call(model, system, user, *, target_id=""):
+        seen.update(model=model, system=system, user=user, target_id=target_id)
         return json.dumps(
             {
                 "subject": "payments: add a refund endpoint",
@@ -302,8 +311,8 @@ def test_a_draft_without_a_target_carries_no_repository_context(monkeypatch):
 
     seen: dict = {}
 
-    def _fake_call(model, system, user):
-        seen.update(model=model, system=system, user=user)
+    def _fake_call(model, system, user, *, target_id=""):
+        seen.update(model=model, system=system, user=user, target_id=target_id)
         return json.dumps(
             {
                 "subject": "s",

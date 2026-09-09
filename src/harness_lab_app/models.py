@@ -541,6 +541,39 @@ class ExperimentAudit(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class RepositoryAudit(SQLModel, table=True):
+    """The LLM reading of a repository's harness, before the lab runs anything.
+
+    Step 2 of the guided audit. The lab reads the checkout at the pinned commit
+    — rules files, skills, agents, hooks, CI, build files — and an auditor
+    model says what harness that amounts to, in which language, and what could
+    be tried on it. One row per target: a re-audit at a new pin replaces it,
+    and ``commit`` says which tree the text is about.
+
+    The gate that decides whether the wizard continues (``next_step`` inside
+    ``evidence_json``) is computed from the deterministic evidence, never taken
+    from the model: which toolchains the runner ships and whether any harness
+    file exists are facts the lab can check, and a judgement must not be able
+    to open a door a fact has closed.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    target_id: str = Field(index=True, unique=True)
+    commit: str = ""
+    auditor_model: str = ""
+    status: str = "running"  # running | done | failed
+    markdown: str = ""
+    # The model's structured answer (summary, harness_verdict, components, use
+    # cases, gaps). Empty with a `parse_error` key when its JSON did not parse.
+    findings_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    # What the model was given, plus the lab's own verdict on runtime support
+    # and harness presence — the half of the report a reader can verify.
+    evidence_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    error: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class FindingSeverity(StrEnum):
     low = "low"
     medium = "medium"

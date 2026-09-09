@@ -212,6 +212,21 @@ _MISMATCH_PATTERNS: tuple[tuple[re.Pattern[str], str, tuple[str, ...]], ...] = (
 )
 
 
+def detect_ecosystems(paths: list[str]) -> dict[str, bool]:
+    """``{ecosystem: runner ships its toolchain}`` for every marker at the root.
+
+    Shared by the readiness check and the repository audit so the two never
+    disagree about what language a repository is in or whether the runner
+    image could build it.
+    """
+    path_set = set(paths)
+    return {
+        label: supported
+        for marker, label, supported in _ECOSYSTEMS
+        if marker in path_set
+    }
+
+
 def runtime_compatibility(
     paths: list[str] | None,
     setup_commands: list[str],
@@ -234,11 +249,7 @@ def runtime_compatibility(
             "The repository could not be read, so its runtime cannot be confirmed.",
         )
     path_set = set(paths)
-    present = {
-        label_: supported
-        for marker, label_, supported in _ECOSYSTEMS
-        if marker in path_set
-    }
+    present = detect_ecosystems(paths)
     supported = sorted(name for name, ok in present.items() if ok)
     unsupported = sorted(name for name, ok in present.items() if not ok)
 

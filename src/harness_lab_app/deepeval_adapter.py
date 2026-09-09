@@ -150,13 +150,23 @@ def _extract_json(text: str) -> str:
 
 
 def _judge_chat(model: str, prompt: str) -> str:
-    """One chat call for the judge, over whichever transport it resolved to."""
+    """One chat call for the judge, over whichever transport it resolved to.
+
+    Only the Claude CLI fallback goes through :func:`llm_transport.chat` and
+    is traced (``trace_kind="judge"``); the gateway branch below calls
+    :func:`llm_transport.gateway_chat` directly through this module's own
+    ``_gateway_config`` (kept independent of the transport's own resolution —
+    see :func:`judge_transport`), so it does not pass through `chat` and is
+    not traced by this change.
+    """
     base, token = _gateway_config()
     if base and token:
         return llm_transport.gateway_chat(
             base, token, model, "", prompt, timeout=180, temperature=0.0
         )
-    return llm_transport.chat(model, "", prompt, timeout=180, temperature=0.0)
+    return llm_transport.chat(
+        model, "", prompt, timeout=180, temperature=0.0, trace_kind="judge"
+    )
 
 
 def _judge_llm(model: str) -> Any:

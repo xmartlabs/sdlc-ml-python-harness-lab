@@ -9,6 +9,7 @@ from harness_lab_app.models import (
     Finding,
     FindingSeverity,
     FindingStatus,
+    RepositoryAudit,
     TargetRepository,
 )
 
@@ -211,3 +212,38 @@ def test_a_case_in_the_repository_library_reaches_the_report(session):
 
     markdown = build_report(session, target, {"checks": []})
     assert "refund-endpoint" in markdown
+
+
+def test_an_ungenerated_harness_audit_claims_nothing(session):
+    report = build_report(session, _target(), _readiness())
+
+    assert "## The harness, as read by the auditor" in report
+    assert "Not generated" in report
+
+
+def test_a_generated_harness_audit_is_quoted_as_a_judgement(session):
+    session.add(
+        RepositoryAudit(
+            target_id="acme",
+            commit="f" * 40,
+            auditor_model="auditor-x",
+            status="done",
+            findings_json={
+                "summary": "Este repositorio cuenta con un harness parcial.",
+                "harness_verdict": "partial",
+                "gaps": ["No hay comando de validación."],
+            },
+            evidence_json={
+                "runtime": {"ecosystems": ["Python"], "runner_can_execute": True}
+            },
+        )
+    )
+    session.commit()
+
+    report = build_report(session, _target(), _readiness())
+
+    assert "a judgement, not a measurement" in report
+    assert "cuenta con un harness parcial" in report
+    assert "Harness verdict: **partial**" in report
+    assert "Gap: No hay comando de validación." in report
+    assert "Runtime (fact): Python; the runner image can execute it." in report

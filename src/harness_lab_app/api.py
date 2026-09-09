@@ -43,6 +43,7 @@ from harness_lab_app.celery_app import (
     enqueue_experiment_audit,
     enqueue_gate_check,
     enqueue_improve,
+    enqueue_repository_audit,
     enqueue_run,
     enqueue_sandbox_start,
     enqueue_sandbox_stop,
@@ -1612,6 +1613,54 @@ def create_app() -> FastAPI:
             return ReadinessService(session).build(target_id)
         except TargetNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/targets/{target_id}/repository-audit")
+    def get_repository_audit(target_id: str, session: Session = Depends(get_session)):
+        """The LLM harness audit of this repository, if one was generated."""
+        from harness_lab_app.repository_audit_service import RepositoryAuditService
+
+        audit = RepositoryAuditService(session).get(target_id)
+        if audit is None:
+            raise HTTPException(status_code=404, detail="No audit for this repository")
+        return audit
+
+    @app.post("/api/targets/{target_id}/repository-audit", status_code=202)
+    def run_repository_audit(
+        target_id: str,
+        auditor_model: str | None = None,
+        session: Session = Depends(get_session),
+    ):
+        """Queue the LLM harness audit of a pinned repository.
+
+        Refused without a pin: the audit reads one commit and says which, and
+        a report about a moving branch could not be re-read a week later. Runs
+        in the worker like every other LLM reading; the UI polls the GET.
+        """
+        from harness_lab_app.repository_audit_service import RepositoryAuditService
+
+        try:
+            target = TargetService(session).get_target(target_id)
+        except TargetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not (target.pinned_commit or "").strip():
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This repository is not pinned to a commit yet. Pin its "
+                    "checkout in step 1, then audit it."
+                ),
+            )
+        service = RepositoryAuditService(session)
+        service.mark_running(target_id, auditor_model or "", target.pinned_commit)
+        try:
+            enqueue_repository_audit(target_id, auditor_model)
+        except Exception as exc:
+            service.store_error(target_id, f"could not queue the audit: {exc}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"The worker queue is unreachable: {exc}",
+            ) from exc
+        return {"status": "queued", "target_id": target_id}
 
     @app.get("/api/targets/{target_id}/audit-report")
     def target_audit_report(target_id: str, session: Session = Depends(get_session)):

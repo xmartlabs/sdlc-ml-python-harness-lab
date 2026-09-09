@@ -160,6 +160,53 @@ def _case_prompt_text(case: Case, prompt_variant: str) -> str:
     return case.prompt_variants.get(prompt_variant, "")
 
 
+def _stage_harness_adapters(
+    run_id: str, harness_source: object, mask: str
+) -> list[str]:
+    """Copy the registry's adapter files where a masked runner can read them.
+
+    The `injected` arm projects the lab's harness into the target clone, and
+    the adapter file (`CLAUDE.md`, `AGENTS.md`, …) is the document that
+    projection splices the generated skills region into. That same file is
+    masked to an empty stub inside the runner (ADR-0049), because the agent's
+    cwd sits under the lab root and would otherwise read it from an ancestor.
+    Both are right, and together they used to abort provisioning with
+    "Adapter file is missing the generated-skills sentinels".
+
+    The worker is not masked, so it stages the real bytes into the run
+    directory, which no mask covers. `bench_run.inject_harness` prefers that
+    directory when it exists and falls back to the repo root, so a lane that
+    never masks keeps working untouched.
+    """
+    if (
+        str(harness_source) != str(HarnessSource.injected)
+        or mask == GOVERNANCE_MASK_NONE
+    ):
+        return []
+    from ml_python_base.skills_sync.config import DEFAULT_REGISTRY_PATH, load_registry
+
+    settings = get_settings()
+    staged: list[str] = []
+    try:
+        registry = load_registry(settings.repo_root / DEFAULT_REGISTRY_PATH)
+        destination = settings.data_runs_dir / run_id / "harness_source"
+        destination.mkdir(parents=True, exist_ok=True)
+        for tool in registry.tools:
+            relative = tool.adapter_file
+            if not relative:
+                continue
+            source = settings.repo_root / relative
+            if not source.is_file():
+                continue
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            staged.append(relative)
+    except Exception as exc:  # provisioning reports the real failure itself
+        logger.warning("Could not stage harness adapters for %s: %s", run_id, exc)
+    return staged
+
+
 def _write_case_spec(
     session: Session,
     run_id: str,
@@ -675,6 +722,10 @@ def _execute_run_body(
             mask = GOVERNANCE_MASK_FOR_SOURCE.get(
                 config_payload.harness_source, GOVERNANCE_MASK_NONE
             )
+            # An injected arm has to read the very adapter files that mask
+            # hides, so the worker — which is not masked — stages them where
+            # the runner can still reach them.
+            _stage_harness_adapters(run_id, config_payload.harness_source, mask)
             handle = (
                 executor.start(run_id, command)
                 if mask == GOVERNANCE_MASK_NONE
@@ -934,7 +985,7 @@ def _llm_judge_swe_pro(
         return  # nothing to grade → manual fallback
     # The sentinel "No objective validation defined" is noise, not a test summary.
     test_summary = objective_summary if "F2P" in objective_summary else ""
-    gateway = gateway or _worker_gateway()
+    gateway = gateway or _worker_gateway(run_id)
     model = os.environ.get("AUDITOR_MODEL") or llm_transport.default_audit_model()
     result = judge.judge_functional_score(
         problem_statement=problem,
@@ -992,7 +1043,7 @@ def _llm_judge_rubric(
     report = _read_run_text(run_dir / "report.md")
     if not diff and not report:
         return  # nothing to grade → manual fallback
-    gateway = gateway or _worker_gateway()
+    gateway = gateway or _worker_gateway(run_id)
     model = os.environ.get("AUDITOR_MODEL") or llm_transport.default_audit_model()
     result = judge.judge_rubric_score(
         task=task,
@@ -1017,7 +1068,7 @@ def _read_run_text(path: Path) -> str:
         return ""
 
 
-def _worker_gateway() -> Callable[[str, str, str], str]:
+def _worker_gateway(run_id: str = "") -> Callable[[str, str, str], str]:
     """An in-process LLM caller for the worker.
 
     Thin adapter over :mod:`harness_lab_app.llm_transport`: the judges take an
@@ -1025,10 +1076,22 @@ def _worker_gateway() -> Callable[[str, str, str], str]:
     without a network call. Raising on a missing transport or a bad response is
     the contract — the best-effort caller catches it and falls back to manual
     scoring, because an ungraded run is not a run that scored zero.
+
+    ``run_id`` only travels to Langfuse as trace metadata: a judgement is the
+    one score nobody can re-derive from the artifacts, so being able to open
+    the prompt that produced it is worth the label.
     """
 
     def _call(model: str, system: str, user: str) -> str:
-        return llm_transport.chat(model, system, user, timeout=120, temperature=0.2)
+        return llm_transport.chat(
+            model,
+            system,
+            user,
+            timeout=120,
+            temperature=0.2,
+            trace_kind="judge",
+            trace_metadata={"run_id": run_id} if run_id else None,
+        )
 
     return _call
 
@@ -1048,7 +1111,7 @@ def _export_langfuse_traces(session: Session, run_id: str) -> None:
         session.add(
             RunEvent(
                 run_id=run_id,
-                level="error",
+                level="warn",
                 message=f"Langfuse export failed: {exc!r}",
             )
         )
@@ -1286,7 +1349,13 @@ def _audit_experiment_body(
         evidence = build_evidence(session, experiment_id)
         call = gateway or (
             lambda m, sys_, user: llm_transport.chat(
-                m, sys_, user, timeout=_AUDIT_TIMEOUT_SECONDS, temperature=0.2
+                m,
+                sys_,
+                user,
+                timeout=_AUDIT_TIMEOUT_SECONDS,
+                temperature=0.2,
+                trace_kind="experiment_audit",
+                trace_metadata={"experiment_id": experiment_id},
             )
         )
         markdown = call(
@@ -1305,6 +1374,73 @@ def audit_experiment(experiment_id: str, auditor_model: str | None = None) -> No
     init_db()
     with Session(engine) as session:
         _audit_experiment_body(session, experiment_id, auditor_model)
+
+
+def _audit_repository_body(
+    session: Session,
+    target_id: str,
+    auditor_model: str | None = None,
+    gateway: Callable[[str, str, str], str] | None = None,
+) -> None:
+    """Read a pinned repository's harness and store the auditor's reading.
+
+    Separated from the Celery task so a test can inject the gateway. Failure
+    is recorded on the row, never raised: a repository without a reading is
+    still a repository, and the wizard says the audit failed instead of
+    hanging on "running".
+    """
+    from harness_lab_app.repository_audit_service import (
+        REPOSITORY_AUDIT_SYSTEM_PROMPT,
+        RepositoryAuditService,
+        gather_evidence,
+        parse_findings,
+        render_audit_prompt,
+        render_markdown,
+    )
+
+    service = RepositoryAuditService(session)
+    model = (
+        auditor_model
+        or os.environ.get("AUDITOR_MODEL")
+        or (llm_transport.default_audit_model())
+    )
+    service.mark_running(target_id, model)
+    try:
+        target = TargetService(session).get_target(target_id)
+        evidence = gather_evidence(target)
+        call = gateway or (
+            lambda m, sys_, user: llm_transport.chat(
+                m,
+                sys_,
+                user,
+                timeout=_AUDIT_TIMEOUT_SECONDS,
+                temperature=0.2,
+                trace_kind="repository_audit",
+                trace_metadata={"target_id": target_id, "commit": evidence["commit"]},
+            )
+        )
+        raw = call(model, REPOSITORY_AUDIT_SYSTEM_PROMPT, render_audit_prompt(evidence))
+        if not (raw or "").strip():
+            raise RuntimeError("the auditor returned an empty reading")
+        findings = parse_findings(raw)
+        markdown = render_markdown(findings, evidence, model=model, raw=raw)
+        service.store_result(
+            target_id,
+            markdown=markdown,
+            findings=findings,
+            evidence=evidence,
+            model=model,
+        )
+    except Exception as exc:  # the reading is optional; the record says why
+        service.store_error(target_id, f"{type(exc).__name__}: {exc}")
+
+
+@celery_app.task(name="harness_lab_app.tasks.audit_repository", acks_late=True)
+def audit_repository(target_id: str, auditor_model: str | None = None) -> None:
+    """The LLM harness audit of a pinned repository (worker-side, one call)."""
+    init_db()
+    with Session(engine) as session:
+        _audit_repository_body(session, target_id, auditor_model)
 
 
 @celery_app.task(name="harness_lab_app.tasks.improve_run", acks_late=True)

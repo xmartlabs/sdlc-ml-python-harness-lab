@@ -20,12 +20,15 @@ The provisioning contract: [ADR-0030](adr/0030-one-workspace-source-interface.md
 
 ## 1. Register the repository
 
-**Evaluate → Audit a repository** (the front page's third door) walks the three
-steps: register the repository, put a checkout under `data/checkouts/` (clone it
-yourself where your ssh agent and tokens already work, attach one that is already
-there, or have the lab copy a folder you have on this machine), and pin a commit
+**Evaluate → Audit a repository** (the front page's third door) walks four steps:
+register the repository, put a checkout under `data/checkouts/` (clone it yourself
+where your ssh agent and tokens already work, attach one that is already there, or
+have the lab copy a folder you have on this machine) and pin a commit
 ([ADR-0042](adr/0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md),
-[ADR-0045](adr/0045-a-checkout-the-lab-can-be-given-not-only-watched.md)).
+[ADR-0045](adr/0045-a-checkout-the-lab-can-be-given-not-only-watched.md)); then the
+harness audit, which decides from the tree whether the lab can go on
+([ADR-0054](adr/0054-a-repository-is-audited-before-the-lab-runs-anything-on-it.md));
+then a case; then an experiment.
 **Evidence → Repositories** lists what is registered, offers *Add a repository*
 for the form alone, and **Open** leads to the repository's workbench
 (`/evidence/repositories/<id>`).

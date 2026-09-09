@@ -34,6 +34,7 @@ import os
 import shutil
 import subprocess  # nosec B404 - the Claude CLI is spawned with a fixed argv
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -46,6 +47,11 @@ Transport = Literal["gateway", "claude_cli", "none"]
 #: Mirrors the auditor's timeout; every caller passes its own.
 DEFAULT_TIMEOUT = 120
 DEFAULT_TEMPERATURE = 0.2
+#: Deliberately short: a Langfuse host that is unreachable already costs the
+#: completion itself a socket timeout, so tracing must not add a second, much
+#: longer one to every judge/audit call. An operator working away from the
+#: Langfuse host should feel no stall from turning tracing on.
+CALL_TRACE_TIMEOUT = 2.0
 
 
 class TransportError(RuntimeError):
@@ -176,25 +182,122 @@ def chat(
     *,
     timeout: int = DEFAULT_TIMEOUT,
     temperature: float = DEFAULT_TEMPERATURE,
+    trace_kind: str = "",
+    trace_metadata: dict | None = None,
 ) -> str:
     """One chat completion over whichever transport is available.
 
     `system` may be empty, in which case no system message is sent at all.
     Raises :class:`TransportError` (or a subclass) on any failure; never
     returns a placeholder.
+
+    `trace_kind`, when set, emits one Langfuse trace for this call (e.g.
+    ``"repository_audit"``, ``"case_draft"``, ``"judge"`` — see
+    :mod:`harness_lab_app.observability.call_export`), tagged with
+    ``trace_metadata``. Left at the default "", this costs nothing extra: no
+    import, no clock read, no chance of a second network call — this module is
+    the lowest layer and must stay usable in a lab with no observability
+    configured. Tracing never changes what `chat` returns or raises.
     """
     transport = available_transport()
-    if transport == "gateway":
-        base, token = gateway_config()  # type: ignore[misc]
-        return gateway_chat(
-            base, token, model, system, user, timeout=timeout, temperature=temperature
+    start_ns = time.time_ns() if trace_kind else 0
+    try:
+        if transport == "gateway":
+            base, token = gateway_config()  # type: ignore[misc]
+            answer = gateway_chat(
+                base,
+                token,
+                model,
+                system,
+                user,
+                timeout=timeout,
+                temperature=temperature,
+            )
+        elif transport == "claude_cli":
+            answer = _claude_cli_chat(model, system, user, timeout=timeout)
+        else:
+            raise TransportNotConfigured(
+                "No LLM transport is configured: set GATEWAY_BASE_URL + "
+                "GATEWAY_TOKEN, or install the Claude Code CLI and set "
+                "CLAUDE_CODE_OAUTH_TOKEN."
+            )
+    except Exception as exc:
+        if trace_kind:
+            _trace_call(
+                trace_kind,
+                model=model,
+                system=system,
+                user=user,
+                transport=transport,
+                temperature=temperature,
+                metadata=trace_metadata,
+                start_ns=start_ns,
+                error=str(exc),
+            )
+        raise
+    if trace_kind:
+        _trace_call(
+            trace_kind,
+            model=model,
+            system=system,
+            user=user,
+            transport=transport,
+            temperature=temperature,
+            metadata=trace_metadata,
+            start_ns=start_ns,
+            output=answer,
         )
-    if transport == "claude_cli":
-        return _claude_cli_chat(model, system, user, timeout=timeout)
-    raise TransportNotConfigured(
-        "No LLM transport is configured: set GATEWAY_BASE_URL + GATEWAY_TOKEN, "
-        "or install the Claude Code CLI and set CLAUDE_CODE_OAUTH_TOKEN."
-    )
+    return answer
+
+
+def _trace_call(
+    kind: str,
+    *,
+    model: str,
+    system: str,
+    user: str,
+    transport: str,
+    temperature: float,
+    metadata: dict | None,
+    start_ns: int,
+    output: str | None = None,
+    error: str | None = None,
+) -> None:
+    """Best-effort Langfuse trace for one `chat` call.
+
+    Never raises and never lengthens a stall: the whole emit is wrapped in
+    `try/except Exception: pass` and posts with a short timeout
+    (`CALL_TRACE_TIMEOUT`), not the exporter's normal default. Imports are
+    local to this function so a lab with no observability configured pays
+    nothing to import `llm_transport`.
+    """
+    try:
+        from harness_lab_app.observability import call_export
+        from harness_lab_app.observability.client import OtlpHttpTransport
+        from harness_lab_app.observability.config import LangfuseConfig
+
+        config = LangfuseConfig.from_env()
+        if not config.enabled:
+            return
+        call_export.export_call(
+            kind,
+            model=model,
+            system=system,
+            user=user,
+            start_ns=start_ns,
+            end_ns=time.time_ns(),
+            output=output,
+            error=error,
+            metadata={
+                **(metadata or {}),
+                "transport": transport,
+                "temperature": temperature,
+            },
+            config=config,
+            transport=OtlpHttpTransport(config, timeout=CALL_TRACE_TIMEOUT),
+        )
+    except Exception:
+        pass
 
 
 def gateway_chat(

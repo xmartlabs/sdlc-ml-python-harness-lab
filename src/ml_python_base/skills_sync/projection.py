@@ -28,9 +28,10 @@ from typing import TYPE_CHECKING
 
 from ml_python_base.skills_sync.agents import discover_agents, project_agents
 from ml_python_base.skills_sync.discovery import discover_skills
+from ml_python_base.skills_sync.errors import SkillsSyncError
 from ml_python_base.skills_sync.linker import link_tool
 from ml_python_base.skills_sync.models import LINK_COPY
-from ml_python_base.skills_sync.renderer import render_tool
+from ml_python_base.skills_sync.renderer import BEGIN_MARKER, END_MARKER, render_tool
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -75,6 +76,37 @@ def _place(source: Path, target: Path, result: ProjectionResult, rel: str) -> No
     result.files_written.append(rel)
 
 
+def _require_spliceable(source: Path, tool_id: str) -> None:
+    """Refuse a source adapter file the projection could not manage.
+
+    Without this the failure surfaces four frames deeper, as ``splice``
+    complaining that *the target's* adapter file has no sentinels — which sends
+    the reader to the client repository, the one file that is not at fault. The
+    two ways to get here are a source that was never synced and a source the
+    runner masked to an empty stub, so both are named.
+    """
+    if not source.exists():
+        raise SkillsSyncError(
+            f"Cannot project the '{tool_id}' harness: no adapter file at "
+            f"{source}. Run `make sync-skills`, or — for an injected run — "
+            "check that the worker staged the adapter files outside the "
+            "container's governance mask."
+        )
+    text = source.read_text(encoding="utf-8", errors="replace")
+    if BEGIN_MARKER in text and END_MARKER in text:
+        return
+    detail = (
+        "it is empty, which is what the runner's governance mask leaves behind "
+        "(ADR-0049) — the projection must read the adapter files from outside "
+        "the mask"
+        if not text.strip()
+        else "it has no generated-skills sentinels; run `make sync-skills`"
+    )
+    raise SkillsSyncError(
+        f"Cannot project the '{tool_id}' harness from {source}: {detail}."
+    )
+
+
 def project_harness(
     source_root: Path,
     target_root: Path,
@@ -83,6 +115,7 @@ def project_harness(
     skills: list[Skill] | None = None,
     tool_ids: tuple[str, ...] | None = None,
     governance_files: tuple[str, ...] = (),
+    adapter_root: Path | None = None,
 ) -> ProjectionResult:
     """Materialize ``source_root``'s harness inside ``target_root``.
 
@@ -93,6 +126,16 @@ def project_harness(
     ``tool_ids`` narrows the projection to the tools a run actually uses.
     Projecting every registered tool would litter the target with surfaces no
     agent reads, and those files are visible to the agent.
+
+    ``adapter_root`` is where the tools' adapter files are read from when that
+    is not ``source_root``. An injected run reads its harness from a lab root
+    whose adapter files the runner container has *masked* to empty stubs
+    (ADR-0049): the agent's cwd sits under that root, so `CLAUDE.md` has to be
+    hidden there or the arm would inherit it twice — once masked-away in an
+    ancestor and once projected. The projection still needs the real bytes, so
+    the worker stages them outside the masked tree and names that directory
+    here. Everything else (templates, skills, agents, `.github/`) is read from
+    ``source_root``, which no mask covers.
     """
     result = ProjectionResult()
     resolved = skills if skills is not None else discover_skills(source_root)
@@ -120,8 +163,10 @@ def project_harness(
         # can be spliced, and a foreign repository has no reason to have one —
         # so the source's file is placed first and then re-rendered against the
         # effective skill set.
+        adapter_source = (adapter_root or source_root) / tool.adapter_file
+        _require_spliceable(adapter_source, tool.id)
         _place(
-            source_root / tool.adapter_file,
+            adapter_source,
             target_root / tool.adapter_file,
             result,
             tool.adapter_file,

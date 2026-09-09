@@ -63,6 +63,16 @@ def enqueue_experiment_audit(
     )
 
 
+def enqueue_repository_audit(target_id: str, auditor_model: str | None = None) -> None:
+    """Publish the LLM harness audit of a pinned repository (runs in the worker)."""
+    celery_app.send_task(
+        "harness_lab_app.tasks.audit_repository",
+        args=[target_id, auditor_model],
+        queue="runs",
+        retry=False,
+    )
+
+
 def enqueue_audit(run_id: str, auditor_model: str | None = None) -> None:
     """Publish a qualitative-audit task (LLM call, runs in the worker); raises if
     the broker is unreachable."""

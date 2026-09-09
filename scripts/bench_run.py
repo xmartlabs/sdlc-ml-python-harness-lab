@@ -426,7 +426,9 @@ def add_skills_to_native(workspace: Path, skills: list, tool_id: str) -> dict:
     return {"mode": "native_skills", "tool": tool_id, "skills": placed}
 
 
-def inject_harness(workspace: Path, skills: list, tool_id: str) -> dict:
+def inject_harness(
+    workspace: Path, skills: list, tool_id: str, adapter_root: Path | None = None
+) -> dict:
     """Project the lab harness into a target workspace (ADR-0031).
 
     This is the `injected` arm. The agent runs inside the cloned repository, so
@@ -436,6 +438,14 @@ def inject_harness(workspace: Path, skills: list, tool_id: str) -> dict:
     ``skills`` is the run's **effective** set, so an ablated arm stays ablated
     inside the target. Passing the full governed set here would silently undo
     the ablation for exactly the runs meant to measure it.
+
+    ``adapter_root`` is where the adapter files are read from. It matters
+    because this container masks the lab's own `CLAUDE.md` / `AGENTS.md` to
+    empty stubs (ADR-0049) — the agent's cwd is under the lab root, so they
+    have to be hidden there — while the projection needs their real bytes to
+    splice into. The worker stages them under the run directory, which no mask
+    covers. Left unset (a lane that masks nothing) the repo root is read as
+    before.
     """
     from ml_python_base.skills_sync.config import DEFAULT_REGISTRY_PATH, load_registry
     from ml_python_base.skills_sync.projection import project_harness
@@ -453,6 +463,7 @@ def inject_harness(workspace: Path, skills: list, tool_id: str) -> dict:
         skills=skills,
         tool_ids=(tool_id,),
         governance_files=tuple(doc for doc in governance if doc),
+        adapter_root=adapter_root,
     )
     print(
         f"  ✓ Harness projected into the target: {len(result.skills)} skill(s), "
@@ -2473,7 +2484,13 @@ def main(argv: list[str] | None = None) -> int:
 
     def _inject(ws: Path) -> None:
         nonlocal harness_projection
-        harness_projection = inject_harness(ws, effective_skills, args.harness)
+        # The worker stages the unmasked adapter files here; absent (an
+        # unmasked lane, or an older run dir) the projection reads the repo
+        # root, which is what it always did.
+        staged = out_dir / "harness_source"
+        harness_projection = inject_harness(
+            ws, effective_skills, args.harness, staged if staged.is_dir() else None
+        )
 
     if provisions_repo and case_spec is not None:
         provision_workspace(

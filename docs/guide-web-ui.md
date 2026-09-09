@@ -101,10 +101,10 @@ adds the arms together. Lane C of
 
 This is the flow that spans everything above: take a repository you did not write,
 find out how an agent behaves in it, and turn what you see into something testable.
-It has two halves — a **one-time setup** that ends when a case passes against the
-repository, and a **workbench** you come back to afterwards.
+It has two halves — a **one-time setup** that ends with an experiment queued against
+the repository, and a **workbench** you come back to afterwards.
 
-### Setup: Audit a repository (three steps, once)
+### Setup: Audit a repository (four steps, once)
 
 **1. Point at the repository.** The step opens a folder picker on the directory the lab
 sits in. Each row is one folder: click it to open it, and the folders that are git
@@ -129,11 +129,30 @@ downstream reads your local checkout at the pinned commit. `git pull` moves noth
 that is what lets two experiments a week apart compare agents rather than a moving
 branch.
 
-**2. Read what the repository already ships.** Rules files (`CLAUDE.md`, `AGENTS.md`),
-native skills, agents, CI workflows, ADRs, and the validation gate inferred from its
-own files — which you can **adopt** onto the repository in one press. Everything here
-is *detected*; what the lab could not observe says "Not detected" rather than being
-guessed at.
+**2. Harness audit.** Press **Generate the audit**. The lab reads the tree at the
+pinned commit — rules files, the opening of every skill and agent, commands, the hooks
+in `.claude/settings.json`, pre-commit, CI, Makefile targets, build manifests, README —
+and the auditor model writes a short report with fixed sections: a summary ("this
+repository ships a harness made of…"), the harness parts and what each is worth, the
+language and toolchain, the standards its rules impose, the gaps, and three to five
+use cases with a validation hint each
+([ADR-0054](adr/0054-a-repository-is-audited-before-the-lab-runs-anything-on-it.md)).
+It runs in the worker like every other LLM reading and uses `AUDITOR_MODEL` when set.
+
+The callout under the report is the lab's, not the model's, and it decides where the
+wizard goes:
+
+| Verdict | Decided from | What happens |
+|---|---|---|
+| **The lab cannot run cases here** | No Python or Node ecosystem detected — by marker file, or by which extensions dominate the tree (a mostly-`.cbl` repository is named as COBOL) | The audit ends. No continue button. |
+| **No harness to evaluate** | Nothing written for an agent: no rules file, skills, agents, commands or hooks. CI and pre-commit do not count. | The primary flow ends; one secondary button continues, to compare the repository against the lab harness. |
+| **Can be evaluated here** | Supported runtime and a harness present | **Choose or create a case →** |
+
+Each proposed use case has **Draft this as a case**, which pre-fills the next step's AI
+draft with it. Below the report, the deterministic readiness checklist and the gate
+check are still there: rules files, skills, agents, CI, ADRs, the validation gate
+inferred from the repository's own files — which you can **adopt** in one press.
+Everything there is *detected*; what the lab could not observe says "Not detected".
 
 Then press **Run gate check**. It provisions the pinned commit in the runner image,
 runs the repository's setup and its own validation commands, and stops — no agent, no
@@ -141,8 +160,8 @@ prompt, no model. Without it a red run is ambiguous between "the agent failed" a
 "this repository does not build here", which look identical and mean opposite things.
 A green gate check is what makes every later failure a fact about the agent.
 
-**3. Get one case that passes.** Four ways to get one, all storing the case against
-this repository:
+**3. One case.** Four ways to get one, all storing the case against this repository;
+every case created or selected here is ticked for the experiment in step 4:
 
 | Source | When to use it |
 |---|---|
@@ -158,14 +177,24 @@ this repository:
 results is not a measurement. A derived candidate carries the commit it came from,
 which is what lets you show later that the case predates the results.
 
-Setup ends with a one-run validation against the repository (`native` harness) that
-proves the case actually runs there. Pick the **Harness** and its **Executor model**
+**4. Run an experiment.** Tick the cases (the ones from step 3 plus any from the
+catalog), pick the repetitions, and choose the comparison:
+
+- **This repository only — one arm.** A subject validation with no control: does the
+  case pass here at all?
+- **This repository vs the lab harness (ml-python-base).** A harness evaluation:
+  `native` (the repository's own governance, nothing injected) against `injected` (the
+  lab's harness materialised into the same workspace at the same commit). The only
+  thing that varies is the harness.
+
+A `bare` arm is not on offer: it is a masked lab container and cannot be put inside
+somebody else's repository (ADR-0049). Pick the **Harness** and its **Executor model**
 from the menus: `claude` and `codex` list their own CLI's model names and offer
 *CLI default*, which needs no configuration at all, while `opencode` opens the
 three-tier picker (source → provider → model) used everywhere else and starts on the
 gateway's default. Switching the harness clears the model, because the two menus name
 different things and a model carried across would name one the new harness cannot
-reach.
+reach. **Create and launch** queues the runs and links to the experiment.
 
 ### Workbench: the repository's own page
 
@@ -438,18 +467,22 @@ Setup runs once per repository, at **Evaluate → Audit a repository**:
    ([ADR-0042](adr/0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md),
    [ADR-0045](adr/0045-a-checkout-the-lab-can-be-given-not-only-watched.md)).
    Nothing after this reads the remote.
-2. **Repository readiness** — what the lab could actually read at the pinned
-   commit: validation gates, setup, and any AI governance already there (rules
-   files, skills, agents, commands, ADRs, CI). Anything it could not observe says
-   **Not detected** rather than being guessed at. "Ready" is a narrow claim — a run
-   would execute and be scored — and says nothing about how good that governance is.
-   The **gate check** here runs the repository's own commands at the pin with no
-   agent, which is what makes a later failed run readable.
-3. **One case that passes** — drafted by the assistant from your checkout, mined
-   from the repository's own history
+2. **Harness audit** — an auditor model reads the tree at the pinned commit and
+   says what harness it ships, in which language, and what could be tried on it
+   ([ADR-0054](adr/0054-a-repository-is-audited-before-the-lab-runs-anything-on-it.md)).
+   The verdict under the report is the lab's own, from the evidence: an unsupported
+   runtime ends the audit, a missing harness ends the primary flow, and only a
+   supported runtime with a harness goes on. Below it, the deterministic readiness
+   checklist — validation gates, setup, rules files, skills, agents, commands, ADRs,
+   CI — where anything not observed says **Not detected**, and the **gate check**,
+   which runs the repository's own commands at the pin with no agent.
+3. **One case** — drafted by the assistant (from a description, or from a use case
+   the audit proposed), mined from the repository's own history
    ([ADR-0032](adr/0032-cases-are-derived-from-a-targets-own-history.md)), written by
-   hand, or reused from the catalog. Setup ends when the case validates against the
-   repository.
+   hand, or reused from the catalog.
+4. **Run an experiment** — the selected cases, N repetitions, either one `native` arm
+   (does it pass here at all) or `native` vs `injected` (the repository's own setup
+   against the lab harness). Setup ends with the experiment queued.
 
 Afterwards the repository has its own page under **Evidence → Repositories**, with
 its checkout, readiness, case library, experiments and report. Two experiment presets

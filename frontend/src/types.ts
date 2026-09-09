@@ -256,6 +256,65 @@ export type ExperimentAuditRecord = {
   updated_at: string;
 };
 
+/**
+ * The LLM reading of a repository's harness, before the lab runs anything.
+ *
+ * `findings` is the structured half (what the model was asked to return as
+ * JSON) and `markdown` the rendered report. `next_step` is decided by the lab
+ * from the deterministic evidence, never by the model: which runtimes the
+ * runner ships and whether any harness file exists are facts, not judgements.
+ */
+export type RepositoryAuditNextStep = "continue" | "no_harness" | "unsupported_runtime";
+
+export type RepositoryAuditComponent = {
+  kind: "rules_file" | "skill" | "agent" | "command" | "hook" | "ci" | "docs" | "other";
+  name: string;
+  assessment: string;
+};
+
+export type RepositoryAuditUseCase = {
+  title: string;
+  why: string;
+  validation_hint: string;
+};
+
+export type RepositoryAuditFindings = {
+  summary: string;
+  harness_verdict: "complete" | "partial" | "none" | "unknown";
+  harness_components: RepositoryAuditComponent[];
+  language_notes: string;
+  standards: string[];
+  gaps: string[];
+  use_cases: RepositoryAuditUseCase[];
+  parse_error?: string;
+};
+
+export type RepositoryAuditRuntime = {
+  ecosystems: string[];
+  supported: string[];
+  unsupported: string[];
+  runner_can_execute: boolean;
+};
+
+export type RepositoryAuditRecord = {
+  target_id: string;
+  commit: string;
+  auditor_model: string;
+  status: "running" | "done" | "failed";
+  markdown: string;
+  findings_json: RepositoryAuditFindings | Record<string, never>;
+  evidence_json: {
+    runtime?: RepositoryAuditRuntime;
+    harness_present?: boolean;
+    next_step?: RepositoryAuditNextStep;
+    next_step_reason?: string;
+    [key: string]: unknown;
+  };
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AuditRecord = {
   run_id: string;
   auditor_model: string;

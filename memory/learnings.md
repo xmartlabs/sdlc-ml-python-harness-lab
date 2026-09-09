@@ -3,6 +3,45 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## A file can be both the thing you hide and the thing you read (2026-09-09)
+
+Every `injected` arm was dying in provisioning with a message that pointed at the
+wrong repository:
+
+    SkillsSyncError: Adapter file is missing the generated-skills sentinels.
+
+Two correct decisions collided. ADR-0049 masks the lab's `CLAUDE.md` inside the
+runner, because the agent's cwd sits under the lab root and Claude Code collects
+`CLAUDE.md` from every ancestor. And `inject_harness` *reads* `CLAUDE.md` — it is
+the document the generated-skills region is spliced into. So the runner copied
+its own empty mask stub over the client repository's governance and then refused
+to splice it.
+
+The tell was already in the codebase. `RUNNER_GOVERNED_SOURCE_DIRS` carves
+`.github/` out of the same mask, with a comment saying that masking it would make
+an injected arm project nothing. The carve-out had been reasoned out for the
+*directories* the projection reads and never extended to the *files* it reads.
+
+Three things worth carrying:
+
+- **Ask of every mask: does anything on this machine still need to read what I am
+  hiding?** A mask is not a property of a file, it is a property of a file *for a
+  reader*. Here the agent must not see it and the projection must. The answer was
+  to give the projection a different root (the worker stages the real bytes into
+  the run directory, which no mask covers), not to weaken the mask.
+- **An error naming a file is not an error about that file.** `splice` complained
+  about the target's adapter file, which was the only innocent party; the reader
+  goes to the client repository and finds nothing wrong. A check that runs *before*
+  the copy, naming the source path and the tool, turns a six-frame traceback into
+  one sentence.
+- **Reproduce a container failure without the container.** Writing an empty
+  `CLAUDE.md` into a temp "lab root" and calling `project_harness` reproduced it in
+  seconds. The mask is just an empty file; nothing about the diagnosis needed
+  Docker.
+
+See [ADR-0055](../docs/adr/0055-the-projection-reads-its-adapter-files-from-outside-the-mask.md).
+Related: [[a-single-bind-mount-decides-what-use-my-local-repo-can-mean]].
+
 ## A Docker bind mount is a watched tree, not a window (2026-09-07)
 
 Rooting the folder picker at `${HOME}` did not just widen what the API could read
