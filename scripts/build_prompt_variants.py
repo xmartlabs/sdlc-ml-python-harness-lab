@@ -9,6 +9,13 @@ the resulting delta would be unattributable.
 
 Run as ``make prompts``. ``make prompts-check`` fails when a file is stale, so
 CI stays read-only.
+
+The two halves are joined by :data:`SEPARATOR` rather than by a trailing blank
+line inside the preamble. That is not a style choice: this repository runs
+``end-of-file-fixer`` as a pre-commit hook, which trims a file back to exactly
+one closing newline, so a preamble ending in a blank line cannot survive a
+commit. Encoding the join here keeps it where a hook cannot reach it, and keeps
+the generator and its test reading from one definition.
 """
 
 from __future__ import annotations
@@ -20,6 +27,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PREAMBLE = REPO_ROOT / "benchmarks" / "_harness_preamble.md"
 
+#: What sits between the preamble and the task body. The preamble ends with a
+#: `---` rule and every task body opens with a `# Task:` heading, so they need a
+#: blank line between them; see the module docstring for why it lives here and
+#: not at the end of the preamble file.
+SEPARATOR = "\n"
+
 
 def pairs() -> list[tuple[Path, Path]]:
     """Every ``(default, harness)`` prompt pair under ``benchmarks/``."""
@@ -30,7 +43,13 @@ def pairs() -> list[tuple[Path, Path]]:
 
 
 def expected(default: Path) -> str:
-    return PREAMBLE.read_text() + default.read_text()
+    """What ``prompt_harness.md`` must contain for this ``prompt_default.md``.
+
+    The single definition of the pair. The drift test asserts against this
+    function rather than re-deriving the concatenation, so the generator and
+    the gate that guards it cannot disagree.
+    """
+    return PREAMBLE.read_text() + SEPARATOR + default.read_text()
 
 
 def main() -> int:

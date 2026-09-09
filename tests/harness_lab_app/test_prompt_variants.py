@@ -8,6 +8,7 @@ someone edits one side.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,12 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PREAMBLE = REPO_ROOT / "benchmarks" / "_harness_preamble.md"
 TASK_YAMLS = sorted(REPO_ROOT.glob("benchmarks/*/task.yaml"))
+
+_SCRIPTS = REPO_ROOT / "scripts"
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+
+import build_prompt_variants  # noqa: E402
 
 
 def _pairs() -> list[Path]:
@@ -36,7 +43,11 @@ def test_harness_prompt_is_the_preamble_plus_the_identical_task(default: Path):
     """
     harness = default.with_name("prompt_harness.md")
     assert harness.is_file(), f"missing {harness.relative_to(REPO_ROOT)}"
-    assert harness.read_text() == PREAMBLE.read_text() + default.read_text(), (
+    # Asserted against the generator's own definition, not a second copy of the
+    # concatenation: two copies drift, and the failure then reads as a stale
+    # prompt when it is really a disagreement between the gate and the tool it
+    # tells you to run.
+    assert harness.read_text() == build_prompt_variants.expected(default), (
         f"{harness.relative_to(REPO_ROOT)} drifted from its default sibling — "
         "run `make prompts`"
     )
@@ -106,3 +117,17 @@ def test_default_states_the_contract_it_is_graded_against(task_path: Path):
     for token in tokens:
         assert token in graded, f"{case}: {token!r} is not actually graded"
         assert token in body, f"{case}: prompt_default.md never states {token!r}"
+
+
+def test_the_preamble_needs_no_trailing_blank_line_to_survive_a_commit():
+    """The separator must not live at the end of the preamble file.
+
+    `end-of-file-fixer` runs as a pre-commit hook here and trims a file to
+    exactly one closing newline, so a preamble ending in a blank line is
+    reverted on every commit — silently, leaving the drift gate red with no
+    diff to look at. The join belongs in the generator, and this test fails if
+    anybody moves it back.
+    """
+    assert PREAMBLE.read_text().endswith("---\n")
+    assert not PREAMBLE.read_text().endswith("\n\n")
+    assert build_prompt_variants.SEPARATOR == "\n"
