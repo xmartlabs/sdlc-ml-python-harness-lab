@@ -450,7 +450,12 @@ def infer_commands(paths: list[str], contents: dict[str, str]) -> dict[str, list
         or "pytest.ini" in path_set
         or "tox.ini" in path_set
         or any(
-            part.startswith("tests/") and "test" in part.rsplit("/", 1)[-1]
+            part.startswith("tests/")
+            and "test" in part.rsplit("/", 1)[-1]
+            # `.py`, not "any file under tests/": a repository whose suite is
+            # `tests/test_parse.sh` would otherwise be told to run pytest,
+            # which finds nothing and reports a green gate over no tests.
+            and part.endswith(".py")
             for part in path_set
         )
     )
@@ -466,6 +471,19 @@ def infer_commands(paths: list[str], contents: dict[str, str]) -> dict[str, list
         elif has_pytest:
             setup.append("pip install -e .")
             validation.append("pytest -x -q")
+
+    # Shell: a tree of executable test scripts is a suite, even though no
+    # package manager anywhere declares it. The loop is the repository's own
+    # convention, written the way its CLAUDE.md or README writes it.
+    shell_tests = sorted(
+        part
+        for part in path_set
+        if part.startswith("tests/")
+        and part.rsplit("/", 1)[-1].startswith("test")
+        and part.endswith(".sh")
+    )
+    if shell_tests:
+        validation.append('for t in tests/test_*.sh; do bash "$t" || exit 1; done')
 
     if "go.mod" in path_set:
         validation.append("go test ./...")

@@ -3,6 +3,53 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## The gate that stops a repository runs before anything can argue with it (2026-09-09)
+
+Shell repositories were ending the audit wizard with "the runner ships only Python and
+Node toolchains" while the runner had been executing bash all along: `python:3.11-slim`
+ships **bash 5.2.37** with its Debian base, so adding Shell support needed no line in
+`Dockerfile.runner`. Verified with `docker run --rm python:3.11-slim bash --version`.
+Check the base image before assuming a toolchain is missing — the block was a
+classification table, not a capability. (`/bin/sh` there is dash, which is a separate
+fact with teeth: a command using `[[`, `<(` or `pipefail` must be handed to `bash -c`
+or it fails for a reason that has nothing to do with the code under test.)
+
+The structural half is the ordering. In `tasks.py::_audit_repository_body`,
+`collect_evidence()` — and therefore `next_step` — runs **before** the LLM has proposed
+a single case, so per-case classification cannot feed the gate in one pass. Wanting it
+to is what makes this look like a rewrite. It is two stages instead: a deterministic
+pre-LLM gate that asks the capability table, and a post-LLM plan permitted exactly one
+transition, `unsupported_runtime → continue`. One direction only, or a model's proposal
+would be reopening a door a fact closed (ADR-0035).
+
+Three smaller ones found on the way:
+
+- **The validation lane was receiving the entire lab `.env`** — `GATEWAY_TOKEN`, GitHub
+  tokens, Langfuse keys — through `build_run_environment()`, while running an audited
+  repository's own `make test`. Shared helpers spread by being convenient; the lane
+  that runs untrusted code and the lane that calls a model had drifted into one
+  environment builder.
+- **`network_mode="none"` needs a phase, not a flag.** Cutting the validation lane's
+  egress outright breaks `git clone`, `npm ci` and `uv sync`. The existing
+  `provision`/`setup`/`validate` tag is what makes "no network, but only while running
+  their code" expressible at all.
+- **A test whose verdict depends on the developer's machine is not a test.** Two new
+  shell tests failed locally for host reasons — `get_executor()` resolving to Docker,
+  which cannot see a macOS `/var/folders` temp path, and `_portable_timeout` correctly
+  dropping its `timeout` prefix on a box with no coreutils `timeout`. Both were the
+  test reaching outside the repository, not the code being wrong: pin the executor and
+  shorten the deadline through `command_deadline_seconds` instead.
+
+**Why it matters:** the bug was one conflated question — *what is this repository
+written in* answering *what does this case need to run* — and it cost a whole class of
+repositories. Neither half was wrong on its own.
+
+**How to apply:** when a single boolean gates a whole flow, check whether it is
+answering one question or two. Then look at *when* it is computed: a gate that runs
+before the information that would correct it needs a second stage, and that stage must
+be allowed to move in one direction only. See
+[ADR-0056](../docs/adr/0056-cases-are-matched-against-runner-capabilities.md).
+
 ## A file can be both the thing you hide and the thing you read (2026-09-09)
 
 Every `injected` arm was dying in provisioning with a message that pointed at the

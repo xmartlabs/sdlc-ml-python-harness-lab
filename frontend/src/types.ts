@@ -278,6 +278,38 @@ export type RepositoryAuditUseCase = {
   validation_hint: string;
 };
 
+/**
+ * The lab's verdict on one proposed case, decided deterministically.
+ *
+ * The model proposes the case; a capability match decides whether the runner
+ * can settle it. `static` is the reason a Shell repository is still evaluable:
+ * a case answered by reading the tree depends on no runtime at all.
+ */
+export type RepositoryAuditCaseStatus = "runnable" | "blocked" | "static";
+
+export type RepositoryAuditCase = {
+  title: string;
+  why: string;
+  validation_hint: string;
+  /** Empty for a static case: it needs none. */
+  runtime: string;
+  /** What the runner measured, when it could. */
+  runtime_version: string;
+  /** What the repository declares it targets, when it declares one. */
+  required_runtime_version: string;
+  compatibility: "exact" | "partial" | "unknown";
+  status: RepositoryAuditCaseStatus;
+  reason: string;
+};
+
+export type RepositoryAuditCasePlan = {
+  cases: RepositoryAuditCase[];
+  runnable: number;
+  blocked: number;
+  static: number;
+  coverage: "none" | "partial" | "full";
+};
+
 export type RepositoryAuditFindings = {
   summary: string;
   harness_verdict: "complete" | "partial" | "none" | "unknown";
@@ -289,11 +321,27 @@ export type RepositoryAuditFindings = {
   parse_error?: string;
 };
 
+export type RepositoryAuditRuntimeCapability = {
+  runtime: string;
+  available: boolean;
+  /** Empty when the runtime was declared by the image recipe but never probed. */
+  version: string;
+  executable: string;
+  source: "declared" | "probed";
+};
+
 export type RepositoryAuditRuntime = {
   ecosystems: string[];
   supported: string[];
   unsupported: string[];
+  /**
+   * Whether the runner can execute the repository's *dominant* language. It no
+   * longer decides whether the repository can be evaluated — `case_plan` does,
+   * per case. Kept because it is still the honest answer to its own question.
+   */
   runner_can_execute: boolean;
+  /** Absent on audits recorded before capabilities were part of the evidence. */
+  capabilities?: RepositoryAuditRuntimeCapability[];
 };
 
 export type RepositoryAuditRecord = {
@@ -305,6 +353,7 @@ export type RepositoryAuditRecord = {
   findings_json: RepositoryAuditFindings | Record<string, never>;
   evidence_json: {
     runtime?: RepositoryAuditRuntime;
+    case_plan?: RepositoryAuditCasePlan;
     harness_present?: boolean;
     next_step?: RepositoryAuditNextStep;
     next_step_reason?: string;

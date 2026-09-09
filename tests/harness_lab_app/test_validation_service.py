@@ -39,7 +39,7 @@ class FakeExecutor:
         self.lines = lines or []
         self.calls: list[tuple[str, list[str]]] = []
 
-    def start(self, run_id: str, command: list[str]) -> FakeHandle:
+    def start(self, run_id: str, command: list[str], **kwargs) -> FakeHandle:
         self.calls.append((run_id, command))
         return FakeHandle(self.lines, self.exit_code)
 
@@ -182,7 +182,7 @@ class HangingExecutor:
     def __init__(self) -> None:
         self.handle = HangingHandle()
 
-    def start(self, run_id: str, command: list[str]) -> HangingHandle:
+    def start(self, run_id: str, command: list[str], **kwargs) -> HangingHandle:
         return self.handle
 
 

@@ -80,6 +80,42 @@ def test_a_governed_python_repository_can_continue():
     assert "Python" in evidence["next_step_reason"]
 
 
+GOVERNED_NODE = {
+    "package.json": json.dumps({"name": "checkout", "scripts": {"test": "vitest run"}}),
+    "README.md": "# Checkout\n",
+    "AGENTS.md": "# Rules\nRun npm test before finishing.\n",
+    "src/index.ts": "export const x = 1;\n",
+    "src/cart.ts": "export const y = 2;\n",
+    "tests/cart.test.ts": "it('works', () => {});\n",
+}
+
+
+def test_a_governed_node_repository_can_continue():
+    """Characterization: Node reaches `continue` exactly as it always has.
+
+    Pinned before the capability model went in, so a regression in how the
+    runner's abilities are computed shows up here as a Node repository that
+    stopped being executable rather than as a subtle wording change.
+    """
+    evidence = _evidence(GOVERNED_NODE)
+
+    assert evidence["harness_present"] is True
+    assert evidence["runtime"]["runner_can_execute"] is True
+    assert evidence["runtime"]["supported"] == ["Node.js"]
+    assert evidence["runtime"]["unsupported"] == []
+    assert evidence["next_step"] == svc.NEXT_STEP_CONTINUE
+    assert "Node.js" in evidence["next_step_reason"]
+
+
+def test_node_files_without_a_project_marker_still_count_as_node():
+    files = {"scripts/build.mjs": "", "scripts/lint.mjs": "", "AGENTS.md": "# R\n"}
+    evidence = _evidence(files)
+
+    assert evidence["runtime"]["supported"] == ["Node.js"]
+    assert evidence["runtime"]["detected_from_files_only"] is True
+    assert evidence["next_step"] == svc.NEXT_STEP_CONTINUE
+
+
 def test_the_evidence_carries_what_the_model_is_allowed_to_read():
     evidence = _evidence(GOVERNED_PYTHON)
 

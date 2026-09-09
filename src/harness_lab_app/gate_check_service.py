@@ -22,6 +22,7 @@ from __future__ import annotations
 import shlex
 from typing import TYPE_CHECKING, Any
 
+from harness_lab_app.runner_capabilities import shell_for_command
 from harness_lab_app.validation import is_executable_command
 
 if TYPE_CHECKING:
@@ -100,10 +101,17 @@ def build_gate_check_spec(target: TargetRepository) -> dict[str, Any]:
                 {
                     "phase": phase,
                     "label": raw,
-                    # sh -c (not -lc): a login shell resets PATH and would drop
-                    # the runner image's /opt/venv/bin, exactly as objective
-                    # validation documents.
-                    "argv": ["sh", "-c", f"cd {shlex.quote(workspace)} && {rendered}"],
+                    # `-c` and not `-lc`: a login shell resets PATH and would
+                    # drop the runner image's /opt/venv/bin, exactly as
+                    # objective validation documents. Only argv[0] varies —
+                    # `/bin/sh` is dash in the runner image, so a command using
+                    # bash syntax has to be handed to bash or it fails for a
+                    # reason that has nothing to do with the repository.
+                    "argv": [
+                        shell_for_command(rendered),
+                        "-c",
+                        f"cd {shlex.quote(workspace)} && {rendered}",
+                    ],
                 }
             )
     return {

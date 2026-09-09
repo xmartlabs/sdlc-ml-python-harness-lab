@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     local_sources_root: str = ""
     host_local_sources_root: str = ""
     docker_host_alias: str = "host.docker.internal"
+    # Network the *validation* lane gets while running an audited repository's
+    # own commands. `none` by default: that lane executes untrusted code and
+    # never calls a model, so it needs no egress. Provisioning and setup
+    # (`git clone`, `npm ci`, `uv sync`) are a different phase and keep the
+    # network. Set to `bridge` to restore the old behavior for a repository
+    # whose test suite genuinely reaches the network.
+    validation_network: str = "none"
     run_timeout_seconds: int = 7200
     # Kill a run that has produced no output for this long, even though its
     # total budget is nowhere near spent.

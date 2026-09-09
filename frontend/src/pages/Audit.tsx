@@ -22,6 +22,7 @@ import type {
   LocalSourceListing,
   ModelOption,
   ReadinessReport,
+  RepositoryAuditCaseStatus,
   RepositoryAuditRecord,
   RunConfigPayload,
   TargetRecord
@@ -61,6 +62,27 @@ type CloneSource = "remote" | "existing" | "local";
 const WAIT_TICKS_BEFORE_DIAGNOSIS = 5;
 
 const MAX_STEP_OPTIONS = [5, 10, 20, 40];
+
+// How the lab's per-case verdict reads. "Static" is not a lesser outcome: a
+// case answered by reading the repository is settled, and no runtime can block
+// it — which is why a Shell repository is evaluable at all.
+const CASE_STATUS_LABEL: Record<RepositoryAuditCaseStatus, string> = {
+  runnable: "runnable",
+  static: "static",
+  blocked: "blocked",
+};
+
+const CASE_STATUS_BADGE: Record<RepositoryAuditCaseStatus, string> = {
+  runnable: "badge ok",
+  static: "badge neutral",
+  blocked: "badge warn",
+};
+
+const COVERAGE_LABEL: Record<"none" | "partial" | "full", string> = {
+  none: "none",
+  partial: "partial",
+  full: "full",
+};
 
 function slugify(value: string): string {
   return (
@@ -1597,6 +1619,36 @@ export function Audit() {
                     </code>
                   </div>
                   <div>
+                    <span className="muted small">Runner</span>
+                    <code>
+                      {(repositoryAudit.evidence_json.runtime?.capabilities ?? [])
+                        .filter(
+                          (capability) =>
+                            capability.available &&
+                            capability.runtime !== "sh" &&
+                            capability.runtime !== "git"
+                        )
+                        .map((capability) =>
+                          capability.version
+                            ? `${capability.runtime} ${capability.version}`
+                            : capability.runtime
+                        )
+                        .join(" · ") || "not probed"}
+                    </code>
+                  </div>
+                  {repositoryAudit.evidence_json.case_plan ? (
+                    <div>
+                      <span className="muted small">Coverage</span>
+                      <code>
+                        {COVERAGE_LABEL[repositoryAudit.evidence_json.case_plan.coverage]}
+                        {" · "}
+                        {repositoryAudit.evidence_json.case_plan.runnable} runnable ·{" "}
+                        {repositoryAudit.evidence_json.case_plan.static} static ·{" "}
+                        {repositoryAudit.evidence_json.case_plan.blocked} blocked
+                      </code>
+                    </div>
+                  ) : null}
+                  <div>
                     <span className="muted small">Model</span>
                     <code>{repositoryAudit.auditor_model}</code>
                   </div>
@@ -1673,30 +1725,58 @@ export function Audit() {
                   <>
                     <h3>Use cases the auditor proposes</h3>
                     <ul className="check-list">
-                      {repositoryAudit.findings_json.use_cases.map((useCase) => (
-                        <li key={useCase.title}>
-                          <strong>{useCase.title}</strong>
-                          <p className="muted">{useCase.why}</p>
-                          <p className="small muted">Check: {useCase.validation_hint}</p>
-                          {repositoryAudit.evidence_json.next_step !==
-                          "unsupported_runtime" ? (
-                            <button
-                              className="secondary"
-                              onClick={() => {
-                                setAiDescription(
-                                  `${useCase.title}. ${useCase.why} Validate with: ` +
-                                    `${useCase.validation_hint}`
-                                );
-                                setCaseTab("ai");
-                                setStep("case");
-                              }}
-                              type="button"
-                            >
-                              Draft this as a case
-                            </button>
-                          ) : null}
-                        </li>
-                      ))}
+                      {repositoryAudit.findings_json.use_cases.map((useCase, index) => {
+                        // The lab's own verdict on this one case. Absent on audits
+                        // recorded before cases were matched against capabilities,
+                        // which then read exactly as they did before.
+                        const planned =
+                          repositoryAudit.evidence_json.case_plan?.cases[index];
+                        return (
+                          <li key={useCase.title}>
+                            <strong>{useCase.title}</strong>
+                            {planned ? (
+                              <>
+                                {" "}
+                                <span className={CASE_STATUS_BADGE[planned.status]}>
+                                  {CASE_STATUS_LABEL[planned.status]}
+                                </span>
+                                {planned.compatibility === "partial" ? (
+                                  <span className="badge warn">
+                                    {planned.runtime} {planned.runtime_version} vs{" "}
+                                    {planned.required_runtime_version} — partial
+                                  </span>
+                                ) : null}
+                              </>
+                            ) : null}
+                            <p className="muted">{useCase.why}</p>
+                            <p className="small muted">Check: {useCase.validation_hint}</p>
+                            {planned ? (
+                              <p className="small muted">{planned.reason}</p>
+                            ) : null}
+                            {(
+                              planned
+                                ? planned.status !== "blocked"
+                                : repositoryAudit.evidence_json.next_step !==
+                                  "unsupported_runtime"
+                            ) ? (
+                              <button
+                                className="secondary"
+                                onClick={() => {
+                                  setAiDescription(
+                                    `${useCase.title}. ${useCase.why} Validate with: ` +
+                                      `${useCase.validation_hint}`
+                                  );
+                                  setCaseTab("ai");
+                                  setStep("case");
+                                }}
+                                type="button"
+                              >
+                                Draft this as a case
+                              </button>
+                            ) : null}
+                          </li>
+                        );
+                      })}
                     </ul>
                   </>
                 ) : null}

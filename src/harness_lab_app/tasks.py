@@ -1229,7 +1229,15 @@ def gate_check_target(gate_check_id: str) -> None:
         results: list[dict[str, Any]] = []
         for index, command in enumerate(spec["commands"]):
             try:
-                handle = executor.start(f"{gate_check_id}-{index}", command["argv"])
+                # The gate check runs the audited repository's own commands
+                # with no agent and no model, so it takes the hardened lane:
+                # no lab secrets, and no network once past provisioning.
+                handle = executor.start(
+                    f"{gate_check_id}-{index}",
+                    command["argv"],
+                    hardened=True,
+                    phase=command["phase"],
+                )
                 output = "\n".join(message for _level, message in handle.iter_lines())
                 exit_code = handle.wait()
             except Exception as exc:  # an executor failure is a result, not a crash
@@ -1392,10 +1400,16 @@ def _audit_repository_body(
     from harness_lab_app.repository_audit_service import (
         REPOSITORY_AUDIT_SYSTEM_PROMPT,
         RepositoryAuditService,
+        apply_case_plan,
         gather_evidence,
         parse_findings,
+        plan_cases,
         render_audit_prompt,
         render_markdown,
+    )
+    from harness_lab_app.runner_capabilities import (
+        capabilities_from_dicts,
+        runner_capabilities,
     )
 
     service = RepositoryAuditService(session)
@@ -1423,6 +1437,16 @@ def _audit_repository_body(
         if not (raw or "").strip():
             raise RuntimeError("the auditor returned an empty reading")
         findings = parse_findings(raw)
+        # The model proposed the cases; this decides, per case, whether the
+        # runner can settle it. The repository's dominant language never gets
+        # to answer that question for a case that needs no execution.
+        capabilities = (
+            capabilities_from_dicts(evidence.get("runtime", {}).get("capabilities"))
+            or runner_capabilities()
+        )
+        plan = plan_cases(findings.get("use_cases") or [], capabilities)
+        evidence = apply_case_plan(evidence, plan)
+        _log_case_plan(session, target_id, evidence, plan)
         markdown = render_markdown(findings, evidence, model=model, raw=raw)
         service.store_result(
             target_id,
@@ -1433,6 +1457,56 @@ def _audit_repository_body(
         )
     except Exception as exc:  # the reading is optional; the record says why
         service.store_error(target_id, f"{type(exc).__name__}: {exc}")
+
+
+def _log_case_plan(
+    session: Session, target_id: str, evidence: dict, plan: dict
+) -> None:
+    """Record the match as run events: what the runner had, what each case needed.
+
+    Observability here is the same shape it is everywhere else in this repo —
+    `RunEvent` rows and Langfuse traces rebuilt from artifacts, not a metrics
+    layer this project does not have. Never raises: a missing log line must not
+    cost the audit its reading.
+    """
+    from harness_lab_app.models import RunEvent
+
+    try:
+        runtime = evidence.get("runtime") or {}
+        offered = ", ".join(
+            f"{item.get('runtime')}{' ' + str(item.get('version')) if item.get('version') else ''}"
+            for item in runtime.get("capabilities") or []
+            if item.get("available")
+        )
+        session.add(
+            RunEvent(
+                run_id=f"audit-{target_id}",
+                level="info",
+                message=(
+                    f"Runner capabilities: {offered or 'unknown'}; "
+                    f"execution coverage {plan['coverage']} "
+                    f"({plan['runnable']} runnable, {plan['static']} static, "
+                    f"{plan['blocked']} blocked)"
+                ),
+            )
+        )
+        for case in plan.get("cases") or []:
+            session.add(
+                RunEvent(
+                    run_id=f"audit-{target_id}",
+                    level="warning" if case["status"] == "blocked" else "info",
+                    message=(
+                        f"Case [{case['status']}] runtime="
+                        f"{case['runtime'] or 'none'} "
+                        f"version={case['runtime_version'] or 'unknown'} "
+                        f"required={case['required_runtime_version'] or 'any'} "
+                        f"compatibility={case['compatibility']}: {case['title']}"
+                    ),
+                )
+            )
+        session.commit()
+    except Exception:  # observability never breaks the thing it observes
+        session.rollback()
 
 
 @celery_app.task(name="harness_lab_app.tasks.audit_repository", acks_late=True)

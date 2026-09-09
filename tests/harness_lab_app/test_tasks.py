@@ -192,7 +192,7 @@ def test_execute_run_streams_real_subprocess_output_in_order():
     create_pending_run(engine, "task-stream-1")
 
     class FixedCommandExecutor(SubprocessRunExecutor):
-        def start(self, run_id: str, command: list[str]):
+        def start(self, run_id: str, command: list[str], **kwargs):
             return super().start(
                 run_id,
                 [
@@ -230,7 +230,7 @@ def test_execute_run_cancel_requested_terminates_run():
         session.commit()
 
     class FixedCommandExecutor(SubprocessRunExecutor):
-        def start(self, run_id: str, command: list[str]):
+        def start(self, run_id: str, command: list[str], **kwargs):
             return super().start(
                 run_id,
                 ["python3", "-c", "import time; time.sleep(30); print('late')"],
@@ -261,7 +261,7 @@ def test_execute_run_timeout_marks_failed(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
 
     class FixedCommandExecutor(SubprocessRunExecutor):
-        def start(self, run_id: str, command: list[str]):
+        def start(self, run_id: str, command: list[str], **kwargs):
             return super().start(
                 run_id,
                 ["python3", "-c", "import time; time.sleep(30)"],
@@ -295,7 +295,7 @@ def test_execute_run_stall_marks_failed(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
 
     class SilentExecutor(SubprocessRunExecutor):
-        def start(self, run_id: str, command: list[str]):
+        def start(self, run_id: str, command: list[str], **kwargs):
             # Speaks once, then goes quiet without exiting — a hung tool call.
             return super().start(
                 run_id,
@@ -330,7 +330,7 @@ def test_a_talking_run_is_never_treated_as_stalled(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
 
     class ChattyExecutor(SubprocessRunExecutor):
-        def start(self, run_id: str, command: list[str]):
+        def start(self, run_id: str, command: list[str], **kwargs):
             return super().start(
                 run_id,
                 [
@@ -370,7 +370,7 @@ def _script_executor(program: str):
     """A SubprocessRunExecutor that runs `program` instead of the real command."""
 
     class ScriptExecutor(SubprocessRunExecutor):
-        def start(self, run_id: str, command: list[str]):
+        def start(self, run_id: str, command: list[str], **kwargs):
             return super().start(run_id, ["python3", "-c", program])
 
     return ScriptExecutor()
@@ -585,7 +585,7 @@ def test_execute_run_executor_error_marks_failed():
     create_pending_run(engine, "task-error-1")
 
     class BrokenExecutor:
-        def start(self, run_id: str, command: list[str]):
+        def start(self, run_id: str, command: list[str], **kwargs):
             raise RuntimeError("docker daemon unreachable")
 
     _execute_run_body("task-error-1", BrokenExecutor(), db_engine=engine)

@@ -36,6 +36,16 @@ if TYPE_CHECKING:
 
 from harness_lab_app.models import RepositoryAudit, TargetRepository, utc_now
 from harness_lab_app.readiness_service import RULES_FILES, classify, detect_ecosystems
+from harness_lab_app.runner_capabilities import (
+    RunnerCapability,
+    capabilities_as_dicts,
+    clean_version,
+    compare_runtime_version,
+    declared_capabilities,
+    declared_runtime_for_binary,
+    runner_capabilities,
+    runtime_for_command,
+)
 
 
 class RepositoryAuditError(ValueError):
@@ -72,9 +82,9 @@ _HUSKY_DIR = ".husky/"
 
 _MAKE_TARGET = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_./-]*):(?!=)", re.MULTILINE)
 
-# File extensions the runner image can execute, for a repository that has no
-# project marker at its root (a script collection, a monorepo subfolder).
-_SUPPORTED_EXTENSIONS = {
+# Every extension the census names, so the report can say "mostly .cbl" instead
+# of "unknown". Order does not matter; the count does.
+_KNOWN_EXTENSIONS = {
     "py": "Python",
     "js": "Node.js",
     "mjs": "Node.js",
@@ -82,11 +92,6 @@ _SUPPORTED_EXTENSIONS = {
     "jsx": "Node.js",
     "ts": "Node.js",
     "tsx": "Node.js",
-}
-# Everything else the census names so the report can say "mostly .cbl" instead
-# of "unknown". Order does not matter; the count does.
-_KNOWN_EXTENSIONS = {
-    **_SUPPORTED_EXTENSIONS,
     "go": "Go",
     "rs": "Rust",
     "java": "Java",
@@ -112,6 +117,43 @@ _KNOWN_EXTENSIONS = {
     "lua": "Lua",
     "sql": "SQL",
 }
+
+# Which runtime a language needs in order to be executed at all. This is the
+# only place a language is tied to a capability: whether the runner *has* that
+# runtime is the capability table's answer, not this module's. Adding Go is
+# declaring it in `runner_capabilities.DECLARED_RUNTIMES`, not editing an
+# "unsupported" list here — the list no longer exists.
+_LANGUAGE_RUNTIME = {
+    "Python": "python",
+    "Node.js": "node",
+    "Shell": "bash",
+    "Go": "go",
+    "Rust": "rust",
+    "Java": "java",
+    "Kotlin": "java",
+    "Ruby": "ruby",
+    "PHP": "php",
+    "C#": "dotnet",
+}
+
+
+def supported_extensions(
+    capabilities: dict[str, RunnerCapability] | None = None,
+) -> dict[str, str]:
+    """Extensions the runner can execute, for a tree with no project marker.
+
+    Derived from what the runner offers rather than hardcoded, so a Shell
+    collection stopped being unreadable the moment bash was declared — no line
+    of this module names Shell as a special case.
+    """
+    table = capabilities if capabilities is not None else declared_capabilities()
+    runnable = {name for name, capability in table.items() if capability.available}
+    return {
+        extension: language
+        for extension, language in _KNOWN_EXTENSIONS.items()
+        if _LANGUAGE_RUNTIME.get(language) in runnable
+    }
+
 
 _IGNORED_SEGMENTS = ("node_modules/", "vendor/", "dist/", "build/", ".venv/")
 
@@ -144,21 +186,31 @@ def language_census(paths: list[str]) -> list[dict[str, Any]]:
     ]
 
 
-def runtime_verdict(paths: list[str]) -> dict[str, Any]:
+def runtime_verdict(
+    paths: list[str], *, capabilities: dict[str, RunnerCapability] | None = None
+) -> dict[str, Any]:
     """Can the runner image build and test this tree? Facts, no judgement.
 
     Marker files decide first, because they are what the setup commands act
-    on. With no marker, the census decides: a tree that is mostly ``.py`` is a
-    Python repository even without a ``pyproject.toml``, and a tree that is
-    mostly ``.cbl`` is one the runner cannot execute whatever the markers say.
+    on. With no marker, the census decides against the runner's capability
+    table: a tree that is mostly ``.py`` is a Python repository even without a
+    ``pyproject.toml``, a tree that is mostly ``.sh`` is one the runner can
+    execute because it ships bash, and a tree that is mostly ``.cbl`` is one it
+    cannot, whatever the markers say.
+
+    This answers a question about the *repository*, which is a coarser question
+    than the one that matters: a repository whose dominant language the runner
+    cannot execute may still propose cases it can. That is what
+    :func:`plan_cases` decides, case by case, once cases exist.
     """
+    table = capabilities if capabilities is not None else declared_capabilities()
     present = detect_ecosystems(paths)
     supported = sorted(name for name, ok in present.items() if ok)
     unsupported = sorted(name for name, ok in present.items() if not ok)
     census = language_census(paths)
     dominant = census[0]["language"] if census else ""
     by_files = False
-    if not present and dominant in _SUPPORTED_EXTENSIONS.values():
+    if not present and dominant in supported_extensions(table).values():
         supported = [dominant]
         by_files = True
     return {
@@ -169,6 +221,7 @@ def runtime_verdict(paths: list[str]) -> dict[str, Any]:
         "detected_from_files_only": by_files,
         "dominant_language": dominant,
         "census": census,
+        "capabilities": capabilities_as_dicts(table),
     }
 
 
@@ -279,22 +332,41 @@ def harness_present(governance: dict[str, list[str]], hooks: dict[str, Any]) -> 
     )
 
 
+def _runner_summary(runtime: dict[str, Any]) -> str:
+    """What the runner offers, named, so a refusal says what it measured."""
+    names = [
+        str(item.get("runtime"))
+        for item in runtime.get("capabilities") or []
+        if item.get("available") and item.get("runtime") not in {"sh", "git"}
+    ]
+    return ", ".join(names) or "python, node, bash"
+
+
 def decide_next_step(runtime: dict[str, Any], present: bool) -> tuple[str, str]:
     """Where the wizard goes after the report, and why — from facts only.
 
-    Runtime is checked first: a repository the runner cannot build stops here
-    however good its harness is, because nothing the lab measures afterwards
-    would be about the agent. Then the harness: with nothing written for an
-    agent there is no harness to evaluate, only a baseline to compare against.
+    This is the *repository-level* answer, and it is provisional in one
+    direction only. It runs before the auditor proposes anything, so all it can
+    say is whether the tree itself is made of something the runner executes.
+    A repository that fails it may still propose cases that need no execution
+    at all, or cases in a second language it does ship — which is why the
+    refusal below says the audit ends *unless* such cases appear, and why
+    :func:`apply_case_plan` is allowed to lift exactly this verdict once real
+    cases exist. Nothing may push the verdict the other way.
+
+    Then the harness: with nothing written for an agent there is no harness to
+    evaluate, only a baseline to compare against.
     """
     if not runtime["runner_can_execute"]:
         named = ", ".join(runtime["unsupported"]) or runtime["dominant_language"]
+        offered = _runner_summary(runtime)
         if named:
             return (
                 NEXT_STEP_UNSUPPORTED,
-                f"Detected {named}. The runner image ships only Python and Node "
-                "toolchains, so no case can be executed against this repository "
-                "until the runner image is extended. The audit ends here.",
+                f"Detected {named}. The runner image ships {offered}, so no "
+                "command written in this repository's own language can be "
+                "executed until the image is extended. Unless the audit "
+                "proposes cases that need no execution, the audit ends here.",
             )
         return (
             NEXT_STEP_UNSUPPORTED,
@@ -324,15 +396,20 @@ def collect_evidence(
     commit: str,
     paths: list[str],
     read: Callable[[str], str],
+    *,
+    capabilities: dict[str, RunnerCapability] | None = None,
 ) -> dict[str, Any]:
     """Everything the auditor is shown, plus the lab's own verdicts.
 
     Pure over ``paths`` and ``read`` so the rules can be argued with in a test
     against a handful of strings rather than only observed against a clone.
+    ``capabilities`` defaults to what the runner image *declares*, which needs
+    no container and no docker socket, so the verdict a test computes is the
+    verdict the worker computes.
     """
     governance = classify(paths)
     hooks = hooks_evidence(paths, read)
-    runtime = runtime_verdict(paths)
+    runtime = runtime_verdict(paths, capabilities=capabilities)
     present = harness_present(governance, hooks)
     next_step, reason = decide_next_step(runtime, present)
     path_set = set(paths)
@@ -405,8 +482,15 @@ def gather_evidence(target: TargetRepository) -> dict[str, Any]:
         clone_source(target), get_settings().target_mirrors_dir, target.target_id
     )
     paths = list_paths(mirror, commit)
+    # Worker-side: ask the image itself, so the report can name real versions.
+    # A probe that cannot run falls back to the declared table, which is what
+    # classification used anyway — the verdict never depends on the probe.
     return collect_evidence(
-        target, commit, paths, lambda p: read_file(mirror, commit, p)
+        target,
+        commit,
+        paths,
+        lambda p: read_file(mirror, commit, p),
+        capabilities=runner_capabilities(),
     )
 
 
@@ -456,11 +540,16 @@ REPOSITORY_AUDIT_SYSTEM_PROMPT = (
     '- "gaps": lista corta de strings — qué le falta al harness para ser evaluable '
     "o efectivo (sin comando de validación, skills sin descripción, reglas sin "
     "criterio de done, etc.). Vacía si no ves nada.\n"
-    '- "use_cases": lista de 3 a 5 objetos {"title", "why", "validation_hint"}: '
-    "tareas concretas y acotadas que un agente podría hacer EN ESTE repositorio y "
-    "que servirían para medir si el harness ayuda. title corto; why una frase; "
-    "validation_hint el comando o test que diría si salió bien. Si el runtime no es "
-    "ejecutable por el laboratorio, igual proponé casos pero decilo en why.\n\n"
+    '- "use_cases": lista de 3 a 5 objetos {"title", "why", "validation_hint", '
+    '"required_runtime_version"}: tareas concretas y acotadas que un agente podría '
+    "hacer EN ESTE repositorio y que servirían para medir si el harness ayuda. "
+    "title corto; why una frase; validation_hint el comando o test que diría si "
+    "salió bien — si lo que decide el caso es una revisión y no un comando "
+    "(que exista un AGENTS.md, que un kit tenga README, que se respete una regla), "
+    "escribí esa comprobación en prosa y no inventes un comando. "
+    "required_runtime_version solo si el repositorio declara una versión concreta "
+    'del runtime (por ejemplo "3.2" para bash); si no la declara, "". Si el runtime '
+    "no es ejecutable por el laboratorio, igual proponé casos pero decilo en why.\n\n"
     "Reglas: usá SOLO la evidencia dada — no inventes archivos, skills ni comandos "
     "que no aparezcan; nombrá las cosas exactamente como aparecen; sé breve, nada "
     "de párrafos largos; no incluyas secretos, tokens ni rutas absolutas."
@@ -516,6 +605,12 @@ def _use_cases(raw: object) -> list[dict[str, str]]:
                 "title": title,
                 "why": str(item.get("why") or "").strip()[:400],
                 "validation_hint": str(item.get("validation_hint") or "").strip()[:300],
+                # Clamped to a shape, not trusted: a model-supplied version can
+                # only ever degrade a verdict (exact to partial), never promote
+                # a blocked case to a runnable one.
+                "required_runtime_version": clean_version(
+                    item.get("required_runtime_version")
+                ),
             }
         )
     return rows[:_MAX_USE_CASES]
@@ -557,6 +652,186 @@ def parse_findings(raw: str) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------
+# Capability matching — one case at a time, against what the runner has
+# --------------------------------------------------------------------------
+
+CASE_RUNNABLE = "runnable"
+CASE_BLOCKED = "blocked"
+CASE_STATIC = "static"
+
+COVERAGE_NONE = "none"
+COVERAGE_PARTIAL = "partial"
+COVERAGE_FULL = "full"
+
+
+def _is_available(capabilities: dict[str, RunnerCapability], runtime: str) -> bool:
+    """Whether the runner offers this runtime. Absent and present-but-off are
+    the same answer to the only question the classifier asks."""
+    capability = capabilities.get(runtime)
+    return capability is not None and capability.available
+
+
+def classify_case(
+    use_case: dict[str, Any], capabilities: dict[str, RunnerCapability]
+) -> dict[str, Any]:
+    """One proposed case, matched against the runner's capabilities.
+
+    Three outcomes, and the order they are decided in is the whole point:
+
+    - **blocked** — the hint names a runtime the runner does not have. Decided
+      first, and from the leading binary alone, because a command like
+      ``docker build .`` does not look executable to the run-time heuristic:
+      calling it static would file it as "settled by reading", which promises a
+      check nothing will ever run. Blocked is a statement about this case, not
+      about the repository — its siblings are classified on their own terms and
+      still run.
+    - **static** — the case is settled by reading, not by running. It has no
+      executable command at all, so no runtime can block it. This is why a
+      repository written in Shell can still be evaluated on "does the right
+      AGENTS.md apply here": the dominant language of the tree is irrelevant to
+      a case that never executes anything.
+    - **runnable** — the command names a runtime the runner has.
+
+    Whether a hint is executable is decided by ``validation.is_executable_command``
+    — the same function that decides, at run time, whether a validation entry is
+    a command or a prose note. Using a second, kinder heuristic here would let
+    the audit promise a check the runner then silently skips.
+    """
+    from harness_lab_app.validation import is_executable_command
+
+    hint = str(use_case.get("validation_hint") or "").strip()
+    required_version = clean_version(use_case.get("required_runtime_version"))
+    row = {
+        "title": use_case.get("title", ""),
+        "why": use_case.get("why", ""),
+        "validation_hint": hint,
+        "runtime": "",
+        "runtime_version": "",
+        "required_runtime_version": required_version,
+        "compatibility": "unknown",
+        "status": CASE_STATIC,
+        "reason": "",
+    }
+
+    def _blocked(runtime: str) -> dict[str, Any]:
+        row["runtime"] = runtime
+        row["status"] = CASE_BLOCKED
+        row["reason"] = (
+            f"Necesita `{runtime}`, que el runner no tiene. Los demás casos de "
+            "este repositorio se evalúan igual."
+        )
+        return row
+
+    named = declared_runtime_for_binary(hint)
+    if named and not _is_available(capabilities, named):
+        return _blocked(named)
+
+    if not is_executable_command(hint):
+        row["reason"] = (
+            "Se resuelve leyendo el repositorio, no ejecutando nada: no depende "
+            "de ningún runtime del runner."
+        )
+        return row
+
+    runtime = runtime_for_command(hint)
+    row["runtime"] = runtime
+    if not _is_available(capabilities, runtime):
+        return _blocked(runtime)
+    capability = capabilities[runtime]
+
+    row["status"] = CASE_RUNNABLE
+    row["runtime_version"] = capability.version
+    row["compatibility"] = compare_runtime_version(required_version, capability.version)
+    if not required_version:
+        row["reason"] = f"El runner ejecuta `{runtime}`."
+    elif row["compatibility"] == "exact":
+        row["reason"] = (
+            f"El runner ejecuta `{runtime} {capability.version}`, que es la "
+            f"versión que el repositorio declara ({required_version})."
+        )
+    elif row["compatibility"] == "partial":
+        # The one thing this must never say is "certified".
+        row["reason"] = (
+            f"Ejecutable sí, pero el repositorio apunta a `{runtime} "
+            f"{required_version}` y el runner tiene `{capability.version}`. "
+            "El caso corre; la compatibilidad con el runtime destino es parcial."
+        )
+    else:
+        row["reason"] = (
+            f"El runner ejecuta `{runtime}`, pero no pudo medir su versión, así "
+            f"que la compatibilidad con `{runtime} {required_version}` queda sin "
+            "determinar."
+        )
+    return row
+
+
+def execution_coverage(rows: list[dict[str, Any]]) -> str:
+    """How much of what was proposed the lab can actually settle.
+
+    ``none`` when nothing can be settled at all — neither by running nor by
+    reading. ``full`` when nothing is blocked. ``partial`` otherwise, which is
+    the honest answer for a repository whose cases the lab can only half cover.
+    """
+    runnable = sum(row["status"] == CASE_RUNNABLE for row in rows)
+    static = sum(row["status"] == CASE_STATIC for row in rows)
+    blocked = sum(row["status"] == CASE_BLOCKED for row in rows)
+    if runnable + static == 0:
+        return COVERAGE_NONE
+    return COVERAGE_FULL if blocked == 0 else COVERAGE_PARTIAL
+
+
+def plan_cases(
+    use_cases: list[dict[str, Any]],
+    capabilities: dict[str, RunnerCapability] | None = None,
+) -> dict[str, Any]:
+    """Classify every proposed case and total up what the lab can cover."""
+    table = capabilities if capabilities is not None else declared_capabilities()
+    rows = [classify_case(use_case, table) for use_case in use_cases or []]
+    return {
+        "cases": rows,
+        "runnable": sum(row["status"] == CASE_RUNNABLE for row in rows),
+        "blocked": sum(row["status"] == CASE_BLOCKED for row in rows),
+        "static": sum(row["status"] == CASE_STATIC for row in rows),
+        "coverage": execution_coverage(rows),
+    }
+
+
+def apply_case_plan(evidence: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+    """Fold the per-case plan back into the evidence, in one direction only.
+
+    The repository-level gate runs before any case exists, so it can be wrong
+    in exactly one way: it can stop a repository whose cases the lab could in
+    fact have evaluated. This corrects that, and only that. A repository that
+    already reached ``continue`` is never demoted here, and neither is one with
+    no harness — a model that proposes five beautiful cases for a repository
+    containing nothing written for an agent has not created a harness to
+    measure. Facts close doors; the plan may only reopen the one door the facts
+    closed for a reason that turned out not to apply (ADR-0035).
+    """
+    updated = {**evidence, "case_plan": plan}
+    if evidence.get("next_step") != NEXT_STEP_UNSUPPORTED:
+        return updated
+    if plan["runnable"] + plan["static"] == 0:
+        return updated
+    parts = []
+    if plan["runnable"]:
+        parts.append(f"{plan['runnable']} ejecutable(s) por el runner")
+    if plan["static"]:
+        parts.append(f"{plan['static']} que se resuelven sin ejecutar nada")
+    reason = (
+        f"El lenguaje dominante del repositorio no es ejecutable por el runner, "
+        f"pero de los casos propuestos hay {' y '.join(parts)}. "
+        "El lenguaje dominante no decide si el repositorio se puede evaluar: "
+        "cada caso se evalúa contra las capacidades del runner por separado."
+    )
+    if plan["blocked"]:
+        reason += f" Quedan {plan['blocked']} bloqueado(s), que no corren."
+    updated["next_step"] = NEXT_STEP_CONTINUE
+    updated["next_step_reason"] = reason
+    return updated
+
+
 _VERDICT_LABEL = {
     "complete": "completo",
     "partial": "parcial",
@@ -572,6 +847,16 @@ _KIND_LABEL = {
     "ci": "CI",
     "docs": "docs",
     "other": "otro",
+}
+_CASE_STATUS_LABEL = {
+    CASE_RUNNABLE: "Ejecutable por el runner",
+    CASE_BLOCKED: "Bloqueado",
+    CASE_STATIC: "Estático (sin ejecución)",
+}
+_COVERAGE_LABEL = {
+    COVERAGE_NONE: "ninguna",
+    COVERAGE_PARTIAL: "parcial",
+    COVERAGE_FULL: "total",
 }
 _NEXT_STEP_LABEL = {
     NEXT_STEP_CONTINUE: "Se puede continuar",
@@ -636,6 +921,7 @@ def render_markdown(
             lines.append("")
         use_cases = findings.get("use_cases") or []
         if use_cases:
+            planned = (evidence.get("case_plan") or {}).get("cases") or []
             lines += ["## Casos de uso posibles", ""]
             for index, row in enumerate(use_cases, start=1):
                 hint = (
@@ -644,6 +930,13 @@ def render_markdown(
                     else ""
                 )
                 lines.append(f"{index}. **{row['title']}** — {row['why']}{hint}")
+                # The lab's verdict on this one case, printed under it: the
+                # model proposed it, a deterministic match decided whether the
+                # runner can settle it.
+                case = planned[index - 1] if index - 1 < len(planned) else None
+                if case:
+                    label = _CASE_STATUS_LABEL.get(case["status"], case["status"])
+                    lines.append(f"   - _{label}._ {case['reason']}")
             lines.append("")
     # The lab's own line, printed last and from the evidence: the model above
     # described the repository, this decides what the wizard does next.
@@ -652,12 +945,34 @@ def render_markdown(
         "## Veredicto del laboratorio",
         "",
         f"- Ecosistemas detectados: {ecosystems}. El runner puede ejecutarlo: **{execute}**.",
+        f"- Capacidades del runner: {_capabilities_line(runtime)}.",
         f"- Harness presente: **{'sí' if evidence.get('harness_present') else 'no'}**.",
+    ]
+    plan = evidence.get("case_plan") or {}
+    if plan.get("cases"):
+        coverage = _COVERAGE_LABEL.get(plan.get("coverage", ""), "?")
+        lines.append(
+            f"- Cobertura de ejecución: **{coverage}** — "
+            f"{plan['runnable']} ejecutable(s), {plan['static']} "
+            f"estático(s), {plan['blocked']} bloqueado(s)."
+        )
+    lines += [
         f"- **{_NEXT_STEP_LABEL.get(evidence.get('next_step', ''), '?')}.** "
         f"{evidence.get('next_step_reason', '')}",
         "",
     ]
     return "\n".join(lines)
+
+
+def _capabilities_line(runtime: dict[str, Any]) -> str:
+    """The runner's runtimes as the report shows them, versions when measured."""
+    parts = []
+    for item in runtime.get("capabilities") or []:
+        if not item.get("available") or item.get("runtime") in {"sh", "git"}:
+            continue
+        version = str(item.get("version") or "")
+        parts.append(f"`{item['runtime']}{' ' + version if version else ''}` ✓")
+    return " ".join(parts) or "no determinadas"
 
 
 # --------------------------------------------------------------------------

@@ -291,6 +291,64 @@ def build_run_environment() -> dict[str, str]:
     return env
 
 
+# Hard limits for a container running an audited repository's own commands.
+# Generous enough that a real test suite never notices; low enough that a fork
+# bomb or a runaway allocation in untrusted code cannot take the host with it.
+_HARDENED_PIDS_LIMIT = 512
+_HARDENED_MEMORY = "4g"
+
+
+def sanitized_run_environment() -> dict[str, str]:
+    """Environment for a container running an audited repository's commands.
+
+    Deliberately *not* :func:`build_run_environment`. That one exists for the
+    agent lane and carries the whole lab ``.env`` — the gateway token, GitHub
+    tokens, Langfuse keys — because the agent lane is where a model is called.
+    The validation lane calls no model and runs code the lab did not write, so
+    it gets none of that: no ``.env``, no ``.claude/settings*.json``, no host
+    environment.
+
+    ``PATH`` is deliberately absent. The container has its own from the image
+    (``/opt/venv/bin`` included); passing the host's would point a Linux
+    container at macOS directories.
+    """
+    return {
+        "PYTHONUNBUFFERED": "1",
+        "SDL_VIDEODRIVER": "dummy",
+        "SDL_AUDIODRIVER": "dummy",
+        # A repository's own suite may branch on CI, and anything reading a
+        # TERM it cannot drive prints control codes into the captured output.
+        "CI": "1",
+        "TERM": "dumb",
+        "LANG": "C.UTF-8",
+        # Inside the container, not on the host: a writable HOME the audited
+        # repository's tooling can put its caches in without reaching the
+        # lab's own.
+        "HOME": "/tmp",  # nosec B108 - container-local, not a host tempfile
+    }
+
+
+def hardened_container_options(phase: str) -> dict[str, Any]:
+    """Docker options for the validation lane, keyed by the command's phase.
+
+    ``network_mode="none"`` applies to ``validate`` only. ``provision`` and
+    ``setup`` are the phases that clone and install (``git clone``, ``npm ci``,
+    ``uv sync``); cutting their network would not harden anything, it would
+    just make every gate check fail at step one.
+    """
+    options: dict[str, Any] = {
+        "cap_drop": ["ALL"],
+        "security_opt": ["no-new-privileges"],
+        "pids_limit": _HARDENED_PIDS_LIMIT,
+        "mem_limit": _HARDENED_MEMORY,
+    }
+    if phase in ("", "validate"):
+        network = (get_settings().validation_network or "none").strip()
+        if network:
+            options["network_mode"] = network
+    return options
+
+
 class RunHandle(Protocol):
     def iter_lines(self) -> Iterator[tuple[str, str]]:
         """Yield (level, message) pairs until the run's output is exhausted."""
@@ -312,6 +370,8 @@ class RunExecutor(Protocol):
         command: list[str],
         *,
         governance_mask: str = GOVERNANCE_MASK_NONE,
+        hardened: bool = False,
+        phase: str = "",
     ) -> RunHandle: ...
 
 
@@ -363,18 +423,30 @@ class SubprocessRunExecutor:
         command: list[str],
         *,
         governance_mask: str = GOVERNANCE_MASK_NONE,
+        hardened: bool = False,
+        phase: str = "",  # noqa: ARG002
     ) -> RunHandle:
         if governance_mask != GOVERNANCE_MASK_NONE:
             raise RuntimeError(
                 "Governance masking needs the docker backend: there is nothing "
                 "to mask the lab's own tree with on the host lane."
             )
+        extra: dict[str, Any] = {}
+        if hardened:
+            # No container here to drop capabilities in, but the secrets are
+            # the part that travels: a host lane that inherited os.environ
+            # would hand the audited repository's commands the operator's
+            # whole shell. `cwd` stays the lab root, which is what every
+            # command's own `cd {workspace}` prefix is relative to.
+            extra["env"] = sanitized_run_environment()
+            extra["cwd"] = str(get_settings().repo_root)
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            **extra,
         )
         return _SubprocessHandle(process)
 
@@ -438,6 +510,8 @@ class DockerRunExecutor:
         command: list[str],
         *,
         governance_mask: str = GOVERNANCE_MASK_NONE,
+        hardened: bool = False,
+        phase: str = "",
     ) -> RunHandle:
         settings = get_settings()
         host_repo_root = settings.host_repo_root or str(settings.repo_root)
@@ -456,6 +530,12 @@ class DockerRunExecutor:
         extra: dict[str, Any] = {}
         if mask_files:
             extra["mounts"] = self._mask_mounts(run_id, host_repo_root, mask_files)
+        # The agent lane is unchanged: full `.env`, the gateway alias, its
+        # network. The hardened lane is the one running code the lab did not
+        # write, and it gets neither the secrets nor, on `validate`, the
+        # network.
+        if hardened:
+            extra.update(hardened_container_options(phase))
         container = client.containers.run(
             image=settings.runner_image,
             command=command,
@@ -464,7 +544,9 @@ class DockerRunExecutor:
             working_dir="/app",
             volumes={host_repo_root: {"bind": "/app", "mode": "rw"}},
             tmpfs=tmpfs,
-            environment=build_run_environment(),
+            environment=(
+                sanitized_run_environment() if hardened else build_run_environment()
+            ),
             extra_hosts={settings.docker_host_alias: "host-gateway"},
             labels={"harness-lab.run-id": run_id},
             **extra,

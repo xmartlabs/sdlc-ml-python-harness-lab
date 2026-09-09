@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from harness_lab_app.config import get_settings
 from harness_lab_app.models import CaseType
+from harness_lab_app.runner_capabilities import shell_for_command
 
 # GNU `timeout` exists in the runner container (Linux) but not on a macOS host
 # worker (subprocess backend). Make case commands portable across both.
@@ -190,9 +191,12 @@ def build_validation_spec(
         if not _looks_executable(raw):
             continue
         rendered = _portable_timeout(raw.format(workspace=workspace, run_id=run_id))
-        # sh -c (not -lc): a login shell resets PATH and would drop the runner
-        # image's /opt/venv/bin, so `python` would miss the installed deps.
-        commands.append(["sh", "-c", rendered])
+        # `-c` and not `-lc`: a login shell resets PATH and would drop the
+        # runner image's /opt/venv/bin, so `python` would miss the installed
+        # deps. Only argv[0] varies. `/bin/sh` in that image is dash, so a
+        # command that uses bash syntax — `[[`, `<(`, `pipefail` — has to be
+        # handed to bash; everything that ran under sh before still does.
+        commands.append([shell_for_command(rendered), "-c", rendered])
     strategy = _strategy_for(case, commands)
     # Pro validation shells out to docker; the runner/validation container has
     # no socket, so those commands must execute where the socket lives (the
