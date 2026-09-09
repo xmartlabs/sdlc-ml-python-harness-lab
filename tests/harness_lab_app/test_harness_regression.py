@@ -23,21 +23,18 @@ def test_load_canonical_suite() -> None:
     definition = suite.load_default_suite(REPO_ROOT)
     assert definition.suite_id == "harness-regression-v1"
     assert definition.execution.sequential is True
-    assert {c.id for c in definition.cases} == {
-        "cli-textstats-v1",
-        "systematic-debugging-v1",
-        "documentation-update-v1",
-        "pallets__flask-4992",
-    }
+    # Only cases that exist in the lab: a suite naming a case that was never
+    # authored failed silently at launch.
+    assert {c.id for c in definition.cases} == {"cli-textstats-v1", "tetris-v2"}
     assert definition.gates.pathological_loop_threshold == 3
 
 
 def test_planned_runs_expansion() -> None:
     definition = suite.load_default_suite(REPO_ROOT)
     plan = suite.planned_runs(definition)
-    # (3 + 3 + 3 + 1) repetitions x 2 arms = 20 child runs.
-    assert len(plan) == 20
-    assert suite.child_runs_per_arm(definition) == 10
+    # (3 + 3) repetitions x 2 arms = 12 child runs.
+    assert len(plan) == 12
+    assert suite.child_runs_per_arm(definition) == 6
     arms = {(p.case_id, p.arm) for p in plan}
     assert ("cli-textstats-v1", "baseline") in arms
     assert ("cli-textstats-v1", "candidate") in arms
@@ -220,17 +217,14 @@ def test_hard_gates_pathological_loop_fails() -> None:
 def test_hard_gates_regression_fails() -> None:
     definition = suite.load_default_suite(REPO_ROOT)
     baseline, candidate = _passing_case_maps()
-    candidate["documentation-update-v1"] = metrics.aggregate(
-        [_rm("documentation-update-v1", "candidate", passed=False)]
+    candidate["tetris-v2"] = metrics.aggregate(
+        [_rm("tetris-v2", "candidate", passed=False)]
     )
     results = gates.evaluate_hard_gates(
         definition, baseline, candidate, controlled_ok=True
     )
     assert gates.all_hard_pass(results) is False
-    assert any(
-        r.name == "no_regression:documentation-update-v1" and not r.passed
-        for r in results
-    )
+    assert any(r.name == "no_regression:tetris-v2" and not r.passed for r in results)
 
 
 def test_hard_gates_controlled_mismatch_fails() -> None:

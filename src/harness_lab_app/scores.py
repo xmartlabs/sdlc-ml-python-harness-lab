@@ -91,6 +91,23 @@ _OUTCOME = [
         description="Fraction of validation checks that passed.",
     ),
     _d(
+        name="rubric_score",
+        category=OUTCOME,
+        kind=NUMERIC,
+        provenance=JUDGEMENT,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="llm_judge",
+        minimum=0.0,
+        maximum=10.0,
+        description=(
+            "The LLM judge's level on the case's own rubric (0-10). An opinion "
+            "on the record so it can be compared across arms and caught when "
+            "it disagrees with itself — never the success metric. Absent when "
+            "a human scored the run: that is a different kind of judgement."
+        ),
+    ),
+    _d(
         name="expected_files_modified",
         category=OUTCOME,
         kind=NUMERIC,
@@ -133,7 +150,37 @@ _EFFICIENCY = [
         version="v1",
         source="efficiency",
         minimum=0.0,
-        description="Input plus output tokens across the run.",
+        description=(
+            "Uncached input plus output tokens across the run. Excludes the "
+            "prompt cache, which is where a harness is actually paid for — "
+            "read `billed_tokens` for that."
+        ),
+    ),
+    _d(
+        name="billed_tokens",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="efficiency",
+        minimum=0.0,
+        description=(
+            "Every token the provider billed: input, output, and the prompt "
+            "cache written and re-read on each turn. The number that moves "
+            "when a harness puts 25 skills in the system prompt."
+        ),
+    ),
+    _d(
+        name="cache_read_tokens",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="efficiency",
+        minimum=0.0,
+        description="Prompt-cache tokens re-read across the run's turns.",
     ),
     _d(
         name="cost_usd",

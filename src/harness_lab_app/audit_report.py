@@ -132,6 +132,54 @@ def _checkout_section(target: Any) -> list[str]:
     return lines
 
 
+def _harness_audit_section(session: Session, target_id: str) -> list[str]:
+    """What the auditor model said the repository's harness amounts to.
+
+    Labelled as a judgement, like every LLM-written line in the lab. The
+    section quotes only the structured half of the audit — the summary, the
+    verdict, the gaps — and the lab's own runtime decision, which is a fact.
+    """
+    from harness_lab_app.models import RepositoryAudit
+
+    row = session.exec(
+        select(RepositoryAudit).where(RepositoryAudit.target_id == target_id)
+    ).first()
+    lines = ["## The harness, as read by the auditor", ""]
+    if row is None or row.status != "done":
+        lines.append(
+            "Not generated. The guided audit's second step asks a model to "
+            "describe the harness the repository ships; nothing here is "
+            "claimed until it has."
+        )
+        return lines
+    findings = row.findings_json or {}
+    evidence = row.evidence_json or {}
+    runtime = evidence.get("runtime") or {}
+    lines.append(
+        f"Read at `{row.commit[:12]}` by `{row.auditor_model}` — a judgement, "
+        "not a measurement."
+    )
+    lines.append("")
+    if findings.get("parse_error"):
+        lines.append(
+            "The auditor did not return the structure asked for; its reading "
+            "is kept on the repository's page but not summarised here."
+        )
+    else:
+        if findings.get("summary"):
+            lines.append(findings["summary"])
+            lines.append("")
+        lines.append(
+            f"- Harness verdict: **{findings.get('harness_verdict', 'unknown')}**."
+        )
+        for gap in findings.get("gaps") or []:
+            lines.append(f"- Gap: {gap}")
+    ecosystems = ", ".join(runtime.get("ecosystems") or []) or "not detected"
+    can = "can" if runtime.get("runner_can_execute") else "cannot"
+    lines.append(f"- Runtime (fact): {ecosystems}; the runner image {can} execute it.")
+    return lines
+
+
 def _gate_check_section(session: Session, target_id: str) -> list[str]:
     """Did the repository pass its own gate before any agent touched it?
 
@@ -273,6 +321,8 @@ def build_report(session: Session, target: Any, readiness: dict[str, Any]) -> st
         *_checkout_section(target),
         "",
         *_readiness_section(readiness),
+        "",
+        *_harness_audit_section(session, target.target_id),
         "",
         *_gate_check_section(session, target.target_id),
         "",

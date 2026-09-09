@@ -29,19 +29,63 @@ from harness_lab_app.models import CaseType
 # GNU `timeout` exists in the runner container (Linux) but not on a macOS host
 # worker (subprocess backend). Make case commands portable across both.
 _TIMEOUT_RE = re.compile(r"\btimeout\s+(\d+)\s+")
+# The same prefix after rewriting, so the budget can be read back out.
+_TIMEOUT_BUDGET_RE = re.compile(r"\btimeout\s+(?:-k\s+\d+\s+)?(\d+)\s+")
+
+# `timeout N` sends SIGTERM and then waits forever. A child that survives
+# SIGTERM therefore survives `timeout` — which is exactly what hung the fourth
+# run of experiment `...-on--2`: SDL2 converts SIGTERM into an SDL_QUIT *event*,
+# so a pygame program with a second event loop consumed the quit and kept
+# running. `-k` escalates to SIGKILL, which nothing can catch.
+_KILL_GRACE_SECONDS = 5
+
+# Backstop for a command that carries no `timeout` prefix of its own, or whose
+# `timeout` is itself wedged. Generous: a real test suite is allowed to be slow.
+DEFAULT_VALIDATION_DEADLINE_SECONDS = 900
+_WATCHDOG_MARGIN_SECONDS = 30
 
 
 def _portable_timeout(command: str) -> str:
-    """Rewrite a `timeout <N>` prefix so it runs where GNU timeout is absent.
+    """Rewrite a `timeout <N>` prefix so it escalates, and so it runs on macOS.
 
-    Prefers `gtimeout` (brew coreutils); otherwise drops the wrapper — the smoke
-    commands self-exit (e.g. tetris under BENCH_SMOKE), so the guard is optional.
+    Two jobs in one pass. It adds `-k` so the wrapper can actually kill what it
+    started, and it prefers `gtimeout` (brew coreutils) where GNU timeout is
+    absent; with neither available the wrapper is dropped, since the smoke
+    commands self-exit (e.g. tetris under BENCH_SMOKE) and the guard is a
+    backstop rather than the mechanism.
     """
-    if shutil.which("timeout"):
-        return command
-    if shutil.which("gtimeout"):
-        return _TIMEOUT_RE.sub(lambda m: f"gtimeout {m.group(1)} ", command)
-    return _TIMEOUT_RE.sub("", command)
+    binary = "timeout" if shutil.which("timeout") else None
+    if binary is None and shutil.which("gtimeout"):
+        binary = "gtimeout"
+    if binary is None:
+        return _TIMEOUT_RE.sub("", command)
+    return _TIMEOUT_RE.sub(
+        lambda m: f"{binary} -k {_KILL_GRACE_SECONDS} {m.group(1)} ", command
+    )
+
+
+def command_deadline_seconds(
+    rendered: str, default: int = DEFAULT_VALIDATION_DEADLINE_SECONDS
+) -> int:
+    """How long the caller may block on one validation command before killing it.
+
+    A command that states its own `timeout N` budget gets that plus room for the
+    kill escalation; anything else gets the default. This is the outer guard —
+    the one that fires when `timeout` itself cannot help, because the wrapper
+    was dropped for portability or because the process is stuck in the kernel.
+    """
+    match = _TIMEOUT_BUDGET_RE.search(rendered)
+    if match:
+        return int(match.group(1)) + _KILL_GRACE_SECONDS + _WATCHDOG_MARGIN_SECONDS
+    return default
+
+
+# Exit codes that mean "we did not get an answer", not "the answer was wrong":
+# 124 is GNU timeout's own status, 137 and 143 are SIGKILL and SIGTERM (128+n),
+# and -1 is this process failing to launch the command at all. ADR-0046 kept
+# infrastructure out of an experiment's verdict; these keep it out of a run's
+# capability score, which is where it entered in experiment `...-on--2`.
+INCONCLUSIVE_EXIT_CODES = frozenset({-1, 124, 137, 143})
 
 
 if TYPE_CHECKING:
@@ -61,14 +105,25 @@ def collect_cost(run_dir: Path) -> dict[str, Any]:
         return {"available": False}
     input_tokens = usage.get("input_tokens")
     output_tokens = usage.get("output_tokens")
+    cache_read = usage.get("cache_read_tokens")
+    cache_creation = usage.get("cache_creation_tokens")
     total = None
     if input_tokens is not None or output_tokens is not None:
         total = (input_tokens or 0) + (output_tokens or 0)
+    # `total_tokens` keeps its historical meaning (ADR-0034: a name never changes
+    # meaning). What a harness really costs is the prompt cache it re-reads on
+    # every turn, so the billed figure is a separate number beside it.
+    billed = None
+    if total is not None or cache_read is not None or cache_creation is not None:
+        billed = (total or 0) + (cache_read or 0) + (cache_creation or 0)
     return {
         "available": True,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total,
+        "cache_read_tokens": cache_read,
+        "cache_creation_tokens": cache_creation,
+        "billed_tokens": billed,
         "cost_usd": usage.get("cost_usd"),
         "time_minutes": usage.get("time_minutes"),
     }
@@ -155,6 +210,12 @@ def parse_objective(results: list[dict[str, Any]], strategy: str) -> dict[str, A
     """Assemble the objective dimension from per-command execution results.
 
     Each result is ``{"command": str, "exit_code": int, "output": str}``.
+
+    A check is **conclusive** when it actually produced a verdict. One that
+    timed out, was killed, or never launched did not measure the agent's work,
+    and ``passed`` distinguishes the three outcomes accordingly: ``False`` when
+    something conclusively failed, ``None`` when nothing failed but something
+    could not be measured, ``True`` only when every check ran and passed.
     """
     checks = []
     swebench_line: str | None = None
@@ -166,6 +227,7 @@ def parse_objective(results: list[dict[str, Any]], strategy: str) -> dict[str, A
             {
                 "name": result.get("command", ""),
                 "passed": exit_code == 0,
+                "conclusive": exit_code not in INCONCLUSIVE_EXIT_CODES,
                 "exit_code": exit_code,
                 "detail": _swebench_summary(output)
                 or _pytest_summary(output)
@@ -179,18 +241,67 @@ def parse_objective(results: list[dict[str, Any]], strategy: str) -> dict[str, A
             "checks": [],
             "summary": "No objective validation defined (manual only).",
         }
-    passed = all(check["passed"] for check in checks)
+    inconclusive = [check for check in checks if not check["conclusive"]]
+    if any(not check["passed"] for check in checks if check["conclusive"]):
+        # A real failure stands on its own; a sibling timeout does not excuse it.
+        passed: bool | None = False
+    elif inconclusive:
+        passed = None
+    else:
+        passed = True
     # Prefer the SWE-bench F2P/P2P verdict as the headline when present.
     summary = (
         swebench_line
         or f"{sum(c['passed'] for c in checks)}/{len(checks)} checks passed"
     )
+    if inconclusive:
+        summary += (
+            f"; {len(inconclusive)} inconclusive (timed out, killed, or never launched)"
+        )
     return {
         "strategy": strategy,
         "passed": passed,
         "checks": checks,
         "summary": summary,
     }
+
+
+def describe_objective_for_judge(objective: dict[str, Any] | None) -> str:
+    """Render the objective dimension as evidence an LLM judge can reason about.
+
+    The judge used to receive only the headline — literally ``"0/1 checks
+    passed"``. That is why all four runs of experiment `...-on--2` collapsed to
+    1/10: a smoke command that timed out and an assertion that returned the
+    wrong number reach the judge as the same eight words, so it cannot tell "the
+    game does not work" from "we never found out". Give it the commands, their
+    exit codes and their output tails instead, and say which ones settled
+    nothing.
+    """
+    objective = objective or {}
+    checks = objective.get("checks") or []
+    summary = str(objective.get("summary") or "").strip()
+    if not checks:
+        return summary
+    lines = [summary] if summary else []
+    for check in checks:
+        if check.get("conclusive") is False:
+            verdict = "INCONCLUSIVE"
+        else:
+            verdict = "PASS" if check.get("passed") else "FAIL"
+        lines.append(f"- [{verdict}] exit={check.get('exit_code')} {check.get('name')}")
+        detail = str(check.get("detail") or "").strip()
+        if detail:
+            lines.append(f"      {detail[:_JUDGE_DETAIL_CLIP]}")
+    if any(check.get("conclusive") is False for check in checks):
+        lines.append(
+            "An INCONCLUSIVE check timed out, was killed, or never launched. It "
+            "is evidence about the harness, not about the agent's code: it "
+            "neither confirms nor refutes any rubric level."
+        )
+    return "\n".join(lines)
+
+
+_JUDGE_DETAIL_CLIP = 600
 
 
 def compute_composite(

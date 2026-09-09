@@ -88,6 +88,13 @@ def export_run_traces(session: Session, run_id: str) -> ExportResult | None:
 
     Returns None when auto-export is off. Failures are recorded as a run event
     and swallowed: observability degrading must never change a run's outcome.
+
+    They are recorded at ``warn``, never ``error``. The run has already exited
+    and its scores are already written by the time this fires, so an
+    unreachable Langfuse costs a trace and nothing else — but an ERROR line in
+    the run log reads as a broken run, and it lands in the same filter as the
+    failures that really are about the work. An operator on a laptop away from
+    the host must be able to tell the two apart at a glance.
     """
     service = ObservabilityService(session)
     if not service.config.enabled or not service.config.auto_export:
@@ -98,7 +105,7 @@ def export_run_traces(session: Session, run_id: str) -> ExportResult | None:
         session.add(
             RunEvent(
                 run_id=run_id,
-                level="error",
+                level="warn",
                 message=f"Langfuse export failed: {exc!r}",
             )
         )
@@ -112,7 +119,7 @@ def export_run_traces(session: Session, run_id: str) -> ExportResult | None:
     session.add(
         RunEvent(
             run_id=run_id,
-            level="info" if result.ok else "error",
+            level="info" if result.ok else "warn",
             message=message[:500],
         )
     )

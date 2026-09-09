@@ -136,6 +136,36 @@ def test_native_run_is_measured_against_the_target_governance(tmp_path, monkeypa
     assert "governance_warning" not in usage
 
 
+def test_bare_run_is_measured_against_nothing(tmp_path, monkeypatch):
+    """A bare run had no governance surface, so its denominator is empty.
+
+    The lab's own documents must not appear: the runner masked them, and a
+    coverage ratio over documents the agent could not open would read as a
+    model ignoring rules it was never given (ADR-0049).
+    """
+    runs_dir = tmp_path / "data" / "runs"
+    patch_settings(monkeypatch, runs_dir, make_lab_root(tmp_path))
+    write_run(
+        runs_dir,
+        "bare-1",
+        metadata={"harness": "claude", "harness_source": "bare"},
+        log_lines=["message=evaluated permission=read pattern=main.py"],
+        workspace={"main.py": "print('tetris')\n"},
+    )
+
+    engine = make_engine()
+    with Session(engine) as session:
+        usage = AttributionService(session).index_run("bare-1").harness_usage
+
+    assert usage["governance_docs_available"] == []
+    assert usage["governance_docs_read"] == []
+    assert usage["governance_coverage"] == "0/0"
+    assert usage["governance_source"] == "bare"
+    assert usage["harness_source"] == "bare"
+    # A missing archive is not a degraded record here — empty is the truth.
+    assert "governance_warning" not in usage
+
+
 def test_injected_run_is_measured_against_the_injected_harness(tmp_path, monkeypatch):
     """`injected` is the same workspace *after* the lab projected its harness in.
 

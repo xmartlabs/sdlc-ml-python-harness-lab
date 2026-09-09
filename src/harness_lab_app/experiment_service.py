@@ -26,6 +26,7 @@ from harness_lab_app.models import (
     ExperimentCondition,
     ExperimentMode,
     ExperimentStatus,
+    HarnessSource,
     Run,
     RunConfig,
     RunState,
@@ -74,6 +75,26 @@ class ExperimentNotFoundError(ExperimentError):
 
 class ExperimentDesignError(ExperimentError):
     """The design contradicts the mode it declares."""
+
+
+#: `harness_source` of an arm that sees no governance at all (ADR-0049).
+BARE = "bare"
+
+#: Prompt variants whose body directs the agent through the lab's harness. A
+#: bare arm carrying one is being told to follow what it cannot read.
+HARNESS_FAMILY_VARIANTS = frozenset({"harness", "swe_harness", "sdlc_full"})
+
+#: Axes a bare arm cannot meaningfully vary — see the subsumption rule in
+#: :func:`validate_design`.
+_BARE_SUBSUMED = frozenset(
+    {
+        "prompt_variant",
+        "skills_disabled",
+        "skills_extra",
+        "skills_invoke",
+        "skills_under_test",
+    }
+)
 
 
 def _varying_fields(conditions: list[dict[str, Any]]) -> set[str]:
@@ -131,7 +152,10 @@ def _skills_move_together(conditions: list[dict[str, Any]]) -> bool:
 
 
 def validate_design(
-    mode: ExperimentMode, conditions: list[dict[str, Any]]
+    mode: ExperimentMode,
+    conditions: list[dict[str, Any]],
+    *,
+    in_family: bool = False,
 ) -> list[str]:
     """Reject a design that cannot answer the question its mode implies.
 
@@ -234,6 +258,32 @@ def validate_design(
             harness_axes = (harness_axes - {"skills_extra", "skills_invoke"}) | {
                 "skills_under_test"
             }
+        # A bare arm is one axis, not four (ADR-0049). It has no prompt family
+        # to hold fixed and no catalog to hold fixed: the runner masks every
+        # governance directory, so whatever `prompt_variant` and `skills_*` say
+        # about it are declarations that keep the condition hash honest, not
+        # levers that moved. Subsume them — but only the ones that do not also
+        # vary among the arms that *do* have a harness, because those are
+        # genuine confounds and must still be reported.
+        bare_arms = [
+            condition
+            for condition in conditions
+            if (condition.get("overrides") or {}).get("harness_source") == BARE
+        ]
+        if bare_arms and "harness_source" in harness_axes:
+            rest = [condition for condition in conditions if condition not in bare_arms]
+            among_rest = _varying_fields(rest) if len(rest) > 1 else set()
+            harness_axes -= _BARE_SUBSUMED - among_rest
+        for condition in bare_arms:
+            variant = str(
+                (condition.get("overrides") or {}).get("prompt_variant") or ""
+            )
+            if variant in HARNESS_FAMILY_VARIANTS or variant.startswith("sdlc"):
+                warnings.append(
+                    f"Arm '{condition.get('label', '?')}' is bare but runs the "
+                    f"'{variant}' prompt, which tells the agent to follow a "
+                    "harness it cannot see. Give the bare arm the plain variant."
+                )
         if len(harness_axes) > 1:
             warnings.append(
                 "More than one harness factor varies at once "
@@ -246,16 +296,26 @@ def validate_design(
         # in both arms whatever the skill catalog says. This is a property of
         # the venue, not of which prompts the arms happen to carry, which is why
         # it is stated here rather than only when the prompts match.
+        # `skills_invoke` alone moves no directory — both arms see the same
+        # catalog and one is asked to open it — so "only the skill directories
+        # differ" would be false for an activation experiment. A rung of a
+        # ladder (ADR-0051) is exempt as well: it is single-factor *by design*,
+        # read beside the rung that measured the governance body, so the
+        # objection that it might be mistaken for a harness comparison does
+        # not apply.
         skill_axes = harness_axes & {
             "skills_disabled",
             "skills_extra",
-            "skills_invoke",
             "skills_under_test",
         }
-        if skill_axes and all(
-            (condition.get("overrides") or {}).get("harness_source", "lab_root")
-            == "lab_root"
-            for condition in conditions
+        if (
+            skill_axes
+            and not in_family
+            and all(
+                (condition.get("overrides") or {}).get("harness_source", "lab_root")
+                == "lab_root"
+                for condition in conditions
+            )
         ):
             warnings.append(
                 "Every arm runs against the lab's own root, so only the skill "
@@ -291,12 +351,12 @@ def repetition_warning(repetitions: int) -> str | None:
         return (
             "1 repetition — exploratory only. Agents are stochastic; a single "
             "trial per arm cannot separate a real difference from run-to-run "
-            "variance."
+            "variance. Use 2 for a judgement."
         )
     if repetitions < 5:
         return (
-            f"{repetitions} repetitions — exploratory comparison. Use 5 or more "
-            "before treating a delta as a finding."
+            f"{repetitions} repetitions — a judgement, not a validation. Use 5 "
+            "or more before treating a delta as settled."
         )
     return None
 
@@ -371,12 +431,14 @@ class ExperimentService:
         per_condition: dict[str, list[dict[str, Any]]] = {
             condition.label: [] for condition in conditions
         }
-        verdicts: dict[str, dict[str, bool | None]] = {
+        # Per arm, per case: every scored outcome. Reduced to one verdict per
+        # cell for the paired case matrix *after* the loop — the cell used to
+        # keep whichever repetition came last, so a 1-of-5 pass and a 5-of-5
+        # pass rendered identically.
+        outcomes: dict[str, dict[str, list[bool]]] = {
             condition.label: {} for condition in conditions
         }
         # Per arm, per case: how many runs were scored and how many passed.
-        # `verdicts` keeps one outcome per cell for the paired case matrix;
-        # with repetitions that is the last run's, which is not a rate.
         case_counts: dict[str, dict[str, dict[str, int]]] = {
             condition.label: {} for condition in conditions
         }
@@ -447,19 +509,26 @@ class ExperimentService:
                 usage["runs"] += 1
                 usage["invoked"] += int(float(invoked) > 0)
                 usage["requested"] = usage["requested"] or bool(config.skills_invoke)
-                for name in sorted(
-                    (set(config.skills_extra) | set(config.skills_invoke))
+                # A bare arm sees no catalog whatever its overrides say — the
+                # runner masks every skill directory (ADR-0049) — so it is about
+                # no skill, and `treatment_not_activated` must never fire on it.
+                names = (
+                    set()
+                    if config.harness_source == HarnessSource.bare
+                    else (set(config.skills_extra) | set(config.skills_invoke))
                     # Minus what this run itself cannot see, mirroring the
                     # scorer: an arm is not measured against a hidden skill.
                     | (
                         set(removed_elsewhere.get(label, []))
                         - set(config.skills_disabled)
                     )
-                ):
+                )
+                for name in sorted(names):
                     if name not in usage["skills"]:
                         usage["skills"].append(name)
             passed = values.get("task_validation_pass")
-            verdicts[label][case_id] = passed
+            if passed is not None:
+                outcomes[label].setdefault(case_id, []).append(bool(passed))
             cell = case_counts[label].setdefault(
                 case_id, {"runs": 0, "scored_runs": 0, "successes": 0}
             )
@@ -493,6 +562,13 @@ class ExperimentService:
         }
 
         control = next((c for c in conditions if c.role == ConditionRole.control), None)
+        # One verdict per cell: a case counts as passed for an arm only when
+        # every scored repetition passed. Strict on purpose — "fixed" should
+        # mean the treatment made the case reliably pass, not once.
+        verdicts: dict[str, dict[str, bool | None]] = {
+            label: {case_id: all(runs) for case_id, runs in cells.items()}
+            for label, cells in outcomes.items()
+        }
         comparisons: list[dict[str, Any]] = []
         # Discovery has no control arm by construction (ADR-0028), and neither
         # does subject validation (ADR-0040). Neither must acquire one here: a
@@ -568,6 +644,7 @@ class ExperimentService:
             "repetitions": experiment.repetitions,
             "case_repetitions": dict(experiment.case_repetitions),
             "suite_id": experiment.suite_id,
+            "family_id": experiment.family_id,
             "verdict": answer,
             "validity": validity,
             "run_health": run_health,
@@ -731,7 +808,9 @@ class ExperimentService:
         # experiment, so they are persisted and read back beside the verdict.
         # The warnings below them are about this moment (no cases yet, too few
         # repetitions) and are answered by the verdict's own caveats later.
-        design_notes = validate_design(data.mode, conditions)
+        design_notes = validate_design(
+            data.mode, conditions, in_family=bool(data.family_id.strip())
+        )
         design_notes.extend(
             note.strip() for note in data.design_notes if note and note.strip()
         )
@@ -768,6 +847,7 @@ class ExperimentService:
                 if case_id in data.case_ids
             },
             suite_id=data.suite_id,
+            family_id=data.family_id.strip(),
             design_notes=design_notes,
             notes=data.notes,
         )

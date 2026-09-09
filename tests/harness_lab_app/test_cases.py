@@ -39,22 +39,65 @@ def test_case_service_create_clone_and_deactivate(session):
     assert deactivated.status == CaseStatus.inactive
 
 
-def test_seed_tetris_case_uses_benchmark_yaml(session):
+def test_seeding_imports_every_authored_benchmark(session):
     service = CaseService(session)
-    tetris = service.seed_tetris_case()
+    seeded = service.seed_benchmark_cases()
 
-    assert tetris.case_id == "tetris-v1"
-    assert "incremental" in tetris.prompt_variants
-    assert tetris.sync_state == CaseSyncState.imported_from_yaml
+    ids = sorted(case.case_id for case in seeded)
+    assert "tetris-v2" in ids
+    assert "cli-textstats-v1" in ids
+    # The retired pilot never comes back through the seed.
+    assert "tetris-v1" not in ids
+    assert all(case.sync_state == CaseSyncState.imported_from_yaml for case in seeded)
+    assert all(
+        sorted(case.prompt_variants) == ["default", "harness"] for case in seeded
+    )
 
 
-def test_list_case_run_ids_reads_runs_yaml(session):
+def test_reseeding_refreshes_stale_prompt_variants(session):
+    """A re-seed rebuilds the variant map from task.yaml (ADR-0047).
+
+    Without this the database keeps offering variants the benchmark no longer
+    declares, and the wizard hands the operator a prompt that resolves to
+    nothing.
+    """
+    service = CaseService(session)
+    tetris = next(c for c in service.seed_benchmark_cases() if c.case_id == "tetris-v2")
+    tetris.prompt_variants = {"naive": "benchmarks/tetris-v2/prompt_naive.md"}
+    tetris.name = "Tetris (renamed by the operator)"
+    session.add(tetris)
+    session.commit()
+
+    refreshed = next(
+        c for c in service.seed_benchmark_cases() if c.case_id == "tetris-v2"
+    )
+
+    assert sorted(refreshed.prompt_variants) == ["default", "harness"]
+    # Operator-owned display fields survive the refresh.
+    assert refreshed.name == "Tetris (renamed by the operator)"
+
+
+def test_list_case_run_ids_reads_runs_yaml(session, tmp_path, monkeypatch):
+    """A benchmark that ships a runs.yaml registry exposes its ids; one that
+    does not (every active case today) exposes none."""
+    from types import SimpleNamespace
+
+    from harness_lab_app import case_service as module
+
+    (tmp_path / "curated-v1").mkdir()
+    (tmp_path / "curated-v1" / "runs.yaml").write_text(
+        "runs:\n  - run_id: curated-v1-K-001\n  - run_id: curated-v1-K-002\n"
+    )
+    monkeypatch.setattr(
+        module, "get_settings", lambda: SimpleNamespace(benchmarks_dir=tmp_path)
+    )
     service = CaseService(session)
 
-    run_ids = service.list_case_run_ids("tetris-v1")
-
-    assert "tetris-v1-K-001" in run_ids
-    assert len(run_ids) > 0
+    assert service.list_case_run_ids("curated-v1") == [
+        "curated-v1-K-001",
+        "curated-v1-K-002",
+    ]
+    assert service.list_case_run_ids("tetris-v2") == []
 
 
 def test_sync_case_to_yaml_writes_task_file(tmp_path: Path, session, monkeypatch):

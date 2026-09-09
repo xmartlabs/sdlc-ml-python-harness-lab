@@ -43,6 +43,7 @@ def polish_case_description(
             f"Issue title: {title}\n\nIssue body:\n{statement[:8000]}",
             timeout=60,
             temperature=0.2,
+            trace_kind="summary",
         ).strip()
     except llm_transport.TransportError:
         return None

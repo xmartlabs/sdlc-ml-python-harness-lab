@@ -92,7 +92,8 @@ export type RunRecord = {
   // "yes" = proposed changes, "no" = ran but proposed none, "pending" = not run.
   improvements?: "yes" | "no" | "pending";
   // Verdict of the automated checks: false means the produced code was run and
-  // failed. null when they have not run or the case has no objective criterion.
+  // failed. null when they have not run, the case has no objective criterion, or
+  // every check was inconclusive (timed out / killed) and so measured nothing.
   // Without this a run that does not even start is indistinguishable in the
   // list from one merely waiting for its manual score.
   objective_passed?: boolean | null;
@@ -155,6 +156,10 @@ export type RunEventRecord = {
 export type ValidationCheck = {
   name: string;
   passed: boolean;
+  // false when the command timed out, was killed, or never launched: the check
+  // says something about the lab, not about the agent's code. Absent on rows
+  // written before validation started recording it.
+  conclusive?: boolean;
   exit_code: number | null;
   detail: string;
 };
@@ -163,6 +168,8 @@ export type ValidationRecord = {
   run_id: string;
   objective: {
     strategy?: string;
+    // true = every conclusive check passed; false = at least one really failed;
+    // null = nothing was measured (no criterion, or every check inconclusive).
     passed?: boolean | null;
     summary?: string;
     checks?: ValidationCheck[];
@@ -235,6 +242,77 @@ export type GovernanceSurface = {
   fingerprint: string;
   truncated: boolean;
   warning: string;
+};
+
+/** The LLM reading of a finished experiment: prose over the summary's evidence. */
+export type ExperimentAuditRecord = {
+  experiment_id: string;
+  auditor_model: string;
+  status: "running" | "done" | "failed";
+  markdown: string;
+  evidence_json?: Record<string, unknown>;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * The LLM reading of a repository's harness, before the lab runs anything.
+ *
+ * `findings` is the structured half (what the model was asked to return as
+ * JSON) and `markdown` the rendered report. `next_step` is decided by the lab
+ * from the deterministic evidence, never by the model: which runtimes the
+ * runner ships and whether any harness file exists are facts, not judgements.
+ */
+export type RepositoryAuditNextStep = "continue" | "no_harness" | "unsupported_runtime";
+
+export type RepositoryAuditComponent = {
+  kind: "rules_file" | "skill" | "agent" | "command" | "hook" | "ci" | "docs" | "other";
+  name: string;
+  assessment: string;
+};
+
+export type RepositoryAuditUseCase = {
+  title: string;
+  why: string;
+  validation_hint: string;
+};
+
+export type RepositoryAuditFindings = {
+  summary: string;
+  harness_verdict: "complete" | "partial" | "none" | "unknown";
+  harness_components: RepositoryAuditComponent[];
+  language_notes: string;
+  standards: string[];
+  gaps: string[];
+  use_cases: RepositoryAuditUseCase[];
+  parse_error?: string;
+};
+
+export type RepositoryAuditRuntime = {
+  ecosystems: string[];
+  supported: string[];
+  unsupported: string[];
+  runner_can_execute: boolean;
+};
+
+export type RepositoryAuditRecord = {
+  target_id: string;
+  commit: string;
+  auditor_model: string;
+  status: "running" | "done" | "failed";
+  markdown: string;
+  findings_json: RepositoryAuditFindings | Record<string, never>;
+  evidence_json: {
+    runtime?: RepositoryAuditRuntime;
+    harness_present?: boolean;
+    next_step?: RepositoryAuditNextStep;
+    next_step_reason?: string;
+    [key: string]: unknown;
+  };
+  error: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type AuditRecord = {
@@ -383,8 +461,13 @@ export type StagedSkillPromoteResult = {
  * edits the target from outside. `native` and `injected` both put it *inside*
  * the target — with the repo's own conventions, or with ours projected on top.
  * That pair is the comparison; `lab_root` vs `native` would mix two changes.
+ *
+ * `bare` needs no target (ADR-0049): the agent works in an empty workspace and
+ * the runner masks the lab's governance, so it sees the prompt and nothing
+ * else. It is the control a lab-native case needs — a `lab_root` arm with its
+ * skills hidden still carries CLAUDE.md, the hooks and `.github/`.
  */
-export type HarnessSource = "lab_root" | "native" | "injected";
+export type HarnessSource = "lab_root" | "native" | "injected" | "bare";
 
 /** What the lab knows about itself. Every figure carries its denominator. */
 export type OverviewRate = { rate: number | null; n: number; note: string };
@@ -461,12 +544,16 @@ export type ExperimentRecord = {
   /** What is under test when it is not the harness. Empty under every other mode. */
   subject: string;
   status: "draft" | "running" | "complete" | "abandoned";
+  /** The ladder or other family this experiment is read as part of (ADR-0051). */
+  family_id?: string | null;
   case_ids: string[];
   prompt_variants: string[];
   repetitions: number;
   notes: string;
   condition_count?: number;
   run_count?: number;
+  /** Every run has stopped (derived from the runs, not from `status`). */
+  finished?: boolean;
   warnings?: string[];
 };
 
@@ -541,6 +628,12 @@ export type VerdictHighlight = {
   /** A control/treatment pair — present for a mode that compares two arms. */
   control?: number | null;
   treatment?: number | null;
+  /**
+   * Which way is good for this metric, from the score registry. Absent on
+   * summaries computed by an older backend, which rendered the pair bare and
+   * left the reader to supply the direction from the label.
+   */
+  direction?: "higher_is_better" | "lower_is_better" | "neutral";
   /**
    * One arm on its own — present under `subject_validation`, where the label is
    * the arm and there is nothing to compare it against.
@@ -624,6 +717,8 @@ export type ExperimentSummary = {
   repetitions: number;
   case_repetitions?: Record<string, number>;
   suite_id?: string | null;
+  /** The ladder or other family this experiment is read as part of (ADR-0051). */
+  family_id?: string | null;
   verdict?: VerdictBlock;
   conditions: ConditionSummary[];
   comparisons: {

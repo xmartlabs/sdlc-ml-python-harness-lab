@@ -306,8 +306,13 @@ export function Cases({
           <p className="lede">Create, inspect, and sync case definitions from one place.</p>
         </div>
         <div className="toolbar">
-          <button className="primary" onClick={onSeedTetris} type="button">
-            Seed Tetris
+          <button
+            className="primary"
+            onClick={onSeedTetris}
+            title="Import or refresh every benchmarks/*/task.yaml case"
+            type="button"
+          >
+            Seed benchmark cases
           </button>
         </div>
       </header>

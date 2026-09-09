@@ -34,9 +34,10 @@ except ImportError:
     sys.exit("PyYAML not found. Run with: uv run python scripts/create_run.py ...")
 
 REPO_ROOT = Path(__file__).parent.parent
-RUNS_FILES = {
-    "tetris-v1": REPO_ROOT / "benchmarks/tetris/runs.yaml",
-}
+# Curated benchmark lanes with a runs.yaml registry. Empty since tetris-v1 was
+# retired: every active case lives in the DB and is created from the web UI or
+# `make ladder`; a benchmark that ships its own matrix registers itself here.
+RUNS_FILES: dict[str, Path] = {}
 REPORT_TEMPLATE = REPO_ROOT / "templates/run-report-template.md"
 DATA_DIR = REPO_ROOT / "data/runs"
 

@@ -76,6 +76,40 @@ Every trace is tagged from the run's metadata — `harness:opencode`,
 `executor:qwen3-coder-30b`, `benchmark:tetris-v1`, `method:...`, `prompt:...` —
 which is how you pull "every claude run on this benchmark" out of the project.
 
+## What the lab's own LLM calls look like
+
+Runs are not the only thing the lab asks a model to do. The repository harness
+audit, the AI case draft, the experiment reading and the judges are all
+single-shot completions made in-process, and each one now leaves its own trace —
+so you can open the exact prompt the auditor was given without waiting for a run
+or digging through a worker log.
+
+Every one of them goes through the same function (`llm_transport.chat`,
+ADR-0043), so the tracing is done there rather than at each caller. A call is
+traced only when it names a kind:
+
+| Kind | What made the call |
+| --- | --- |
+| `repository_audit` | The harness audit of a pinned repository (ADR-0054). Metadata carries `target_id` and the commit read. |
+| `case_draft` | The case assistant drafting from a description. Metadata carries `target_id` when the draft is against a repository. |
+| `experiment_audit` | The prose reading of a finished experiment (ADR-0053). Metadata carries `experiment_id`. |
+| `judge` | The rubric and SWE-bench Pro judges. Metadata carries `run_id` — a judgement is the one score nobody can re-derive from the artifacts, so being able to open its prompt matters. |
+| `summary` | Case-description polish. |
+
+Each call is one trace with one `generation`, tagged `llm-call` and its kind, so
+they filter apart from run traces. Calls of the same kind share a session, which
+is how you read every repository audit in one place. The prompt and the answer
+are redacted and clipped before they leave the process — a harness-audit prompt
+carries a whole `CLAUDE.md`.
+
+**A failed call is traced too**, at `ERROR` level with the exception as the
+status message and no output. An audit that fell over is exactly what you open
+Langfuse to look at.
+
+Tracing never changes what a call returns. The export is wrapped, its own
+timeout is two seconds rather than the fifteen a run export gets, and a Langfuse
+that cannot be reached costs the answer nothing.
+
 ## Exporting by hand
 
 Auto-export runs at the end of every run and again after validation. Everything
@@ -125,7 +159,8 @@ right side of that trade.
 ## Limits
 
 - **Traces appear when a run ends**, not while it runs. Watching a run live is
-  the run detail page's job.
+  the run detail page's job. The lab's own single-shot calls (audits, drafts,
+  judges) are the exception: each is traced as it happens.
 - **Per-call tokens exist only where the artifacts record them.** claude runs
   carry per-generation input/cache tokens; their per-generation `output_tokens`
   are streaming snapshots that undercount the finished message (marked

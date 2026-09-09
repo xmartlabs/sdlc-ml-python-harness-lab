@@ -10,7 +10,7 @@ from sqlmodel.pool import StaticPool
 
 from harness_lab_app import case_service, tasks
 from harness_lab_app.executors import SubprocessRunExecutor
-from harness_lab_app.models import RunState
+from harness_lab_app.models import HarnessSource, RunState
 from harness_lab_app.run_failures import is_unmeasured
 from harness_lab_app.run_service import RunService
 from harness_lab_app.schemas import RunConfigCreate, RunCreate
@@ -48,7 +48,12 @@ def make_engine():
     return engine
 
 
-def create_pending_run(engine, run_id: str, command: list[str] | None = None):
+def create_pending_run(
+    engine,
+    run_id: str,
+    command: list[str] | None = None,
+    harness_source: HarnessSource = HarnessSource.lab_root,
+):
     with Session(engine) as session:
         service = RunService(session)
         service.create_run(
@@ -58,6 +63,7 @@ def create_pending_run(engine, run_id: str, command: list[str] | None = None):
                     case_id="tetris-v1",
                     prompt_variant="sdlc",
                     executor_model="stub-executor",
+                    harness_source=harness_source,
                 ),
             )
         )
@@ -88,9 +94,11 @@ class FakeExecutor:
     def __init__(self, handle: FakeHandle):
         self.handle = handle
         self.started_with: tuple[str, list[str]] | None = None
+        self.start_kwargs: dict = {}
 
-    def start(self, run_id: str, command: list[str]) -> FakeHandle:
+    def start(self, run_id: str, command: list[str], **kwargs) -> FakeHandle:
         self.started_with = (run_id, command)
+        self.start_kwargs = kwargs
         return self.handle
 
 
@@ -125,6 +133,28 @@ def test_execute_run_success_reaches_awaiting_manual_score():
         ]
     assert "hello" in messages
     assert "done" in messages
+
+
+def test_a_lab_root_run_asks_the_executor_to_mask_nothing():
+    """The lab's harness *is* the treatment there — hiding it would be the bug."""
+    engine = make_engine()
+    create_pending_run(engine, "task-mask-none")
+    executor = FakeExecutor(FakeHandle([("info", "done")]))
+
+    _execute_run_body("task-mask-none", executor, db_engine=engine)
+
+    assert executor.start_kwargs == {}
+
+
+def test_a_bare_run_asks_the_executor_to_mask_everything():
+    """A bare arm is bare only because the container hides the lab (ADR-0049)."""
+    engine = make_engine()
+    create_pending_run(engine, "task-mask-all", harness_source=HarnessSource.bare)
+    executor = FakeExecutor(FakeHandle([("info", "done")]))
+
+    _execute_run_body("task-mask-all", executor, db_engine=engine)
+
+    assert executor.start_kwargs == {"governance_mask": "all"}
 
 
 def test_execute_run_failure_records_tail():

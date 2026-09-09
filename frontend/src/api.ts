@@ -3,6 +3,7 @@ import type {
   AttentionFeed,
   AttributionRecord,
   AuditRecord,
+  ExperimentAuditRecord,
   ImprovementsDoc,
   CaseCreatePayload,
   CaseCandidates,
@@ -65,7 +66,8 @@ import type {
   TargetCreatePayload,
   TargetRecord,
   TargetResolveResult,
-  ValidationRecord
+  ValidationRecord,
+  RepositoryAuditRecord
 } from "./types";
 
 export class ApiError extends Error {
@@ -260,6 +262,15 @@ export const api = {
   getAttention: () => request<AttentionFeed>("/api/attention"),
   getEvidenceSummary: () => request<EvidenceSummary>("/api/evidence-summary"),
   listExperiments: () => request<ExperimentRecord[]>("/api/experiments"),
+  getExperimentAudit: (id: string) =>
+    request<ExperimentAuditRecord>(`/api/experiments/${id}/audit`),
+  runExperimentAudit: (id: string, auditorModel?: string) => {
+    const query = auditorModel ? `?auditor_model=${encodeURIComponent(auditorModel)}` : "";
+    return request<{ status: string; experiment_id: string }>(
+      `/api/experiments/${id}/audit${query}`,
+      { method: "POST" }
+    );
+  },
   getExperiment: (id: string) =>
     request<
       ExperimentRecord & {
@@ -384,6 +395,20 @@ export const api = {
     request<{ target_id: string; markdown: string }>(
       `/api/targets/${targetId}/audit-report`
     ),
+  // The LLM harness audit of a pinned repository: what harness it ships, in
+  // which language, and what could be tried on it. Runs in the worker; poll
+  // the GET until status leaves "running".
+  getRepositoryAudit: (targetId: string) =>
+    request<RepositoryAuditRecord>(`/api/targets/${targetId}/repository-audit`),
+  runRepositoryAudit: (targetId: string, auditorModel?: string) => {
+    const query = auditorModel
+      ? `?auditor_model=${encodeURIComponent(auditorModel)}`
+      : "";
+    return request<{ status: string; target_id: string }>(
+      `/api/targets/${targetId}/repository-audit${query}`,
+      { method: "POST" }
+    );
+  },
   getTargetReadiness: (targetId: string) =>
     request<ReadinessReport>(`/api/targets/${targetId}/readiness`),
   // The engineer's own clone: the lab watches for it, it never makes it.
@@ -504,7 +529,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
-  seedTetris: () => request<CaseRecord>("/api/cases/seed/tetris", { method: "POST" }),
+  seedBenchmarks: () => request<CaseRecord[]>("/api/cases/seed", { method: "POST" }),
 
   listRuns: () => request<RunRecord[]>("/api/runs"),
   getLeaderboard: () => request<LeaderboardRunRow[]>("/api/leaderboard"),

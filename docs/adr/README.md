@@ -75,6 +75,15 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0044 — A single-prompt case can carry the full-harness pair](0044-a-single-prompt-case-can-carry-the-full-harness-pair.md)
 - [0045 — A checkout the lab can be given, not only watched](0045-a-checkout-the-lab-can-be-given-not-only-watched.md)
 - [0046 — An experiment reports validity before it reports a verdict](0046-an-experiment-reports-validity-before-it-reports-a-verdict.md)
+- [0047 — A case exposes two prompt variants: the task, and the task plus the harness](0047-a-case-exposes-two-prompt-variants-the-task-and-the-task-plus-the-harness.md)
+- [0048 — A check that did not measure is not a failure](0048-a-check-that-did-not-measure-is-not-a-failure.md)
+- [0049 — A bare arm is a masked runner, not a lab-root run](0049-a-bare-arm-is-a-masked-runner-not-a-lab-root-run.md)
+- [0050 — A case ships its own tests](0050-a-case-ships-its-own-tests.md)
+- [0051 — The harness ladder is one family of single-factor experiments](0051-the-harness-ladder-is-one-family-of-single-factor-experiments.md)
+- [0052 — The installed manifest is the harness version axis](0052-the-installed-manifest-is-the-harness-version-axis.md)
+- [0053 — An experiment is read back as prose](0053-an-experiment-is-read-back-as-prose.md)
+- [0054 — A repository is audited before the lab runs anything on it](0054-a-repository-is-audited-before-the-lab-runs-anything-on-it.md)
+- [0055 — The projection reads its adapter files from outside the mask](0055-the-projection-reads-its-adapter-files-from-outside-the-mask.md)
 
 ## Why ADRs exist
 

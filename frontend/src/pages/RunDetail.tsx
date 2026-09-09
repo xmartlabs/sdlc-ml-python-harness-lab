@@ -474,6 +474,11 @@ export function RunDetail({
   // ("resolved=True F2P=1/1 P2P=18/18") written by swebench_validate.py.
   const isSwebench = validation?.objective?.summary?.startsWith("resolved=") ?? false;
 
+  // null means "nothing was measured". That is two different situations: a case
+  // with no objective criterion at all (manual scoring), or checks that ran and
+  // could not conclude — a timeout is a fact about the lab, not about the code.
+  const hasChecks = (validation?.objective?.checks?.length ?? 0) > 0;
+
   const objectiveBadge = (passed: boolean | null | undefined) => {
     if (isSwebench) {
       if (passed === true) return <span className="badge ok">SWE-bench: RESOLVED</span>;
@@ -481,6 +486,7 @@ export function RunDetail({
     }
     if (passed === true) return <span className="badge ok">objective: pass</span>;
     if (passed === false) return <span className="badge error">objective: fail</span>;
+    if (hasChecks) return <span className="badge warn">objective: inconclusive</span>;
     return <span className="badge">objective: manual</span>;
   };
 
@@ -953,17 +959,19 @@ export function RunDetail({
             </div>
             {validation.objective?.checks && validation.objective.checks.length > 0 ? (
               <div className="run-console">
-                {validation.objective.checks.map((check, index) => (
-                  <div
-                    className={`run-console-line ${check.passed ? "info" : "error"}`}
-                    key={index}
-                  >
-                    <span>{check.passed ? "✓" : "✗"}</span>
-                    <span>
-                      {check.name} (exit {check.exit_code ?? "?"}) {check.detail}
-                    </span>
-                  </div>
-                ))}
+                {validation.objective.checks.map((check, index) => {
+                  const inconclusive = check.conclusive === false;
+                  const tone = inconclusive ? "warn" : check.passed ? "info" : "error";
+                  const mark = inconclusive ? "⊘" : check.passed ? "✓" : "✗";
+                  return (
+                    <div className={`run-console-line ${tone}`} key={index}>
+                      <span title={inconclusive ? "did not measure" : undefined}>{mark}</span>
+                      <span>
+                        {check.name} (exit {check.exit_code ?? "?"}) {check.detail}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             ) : null}
           </>
@@ -1074,7 +1082,9 @@ export function RunDetail({
                 <strong>
                   {attribution.harness_usage.governance_source === "target_workspace"
                     ? "target repository's own"
-                    : "lab repository's"}
+                    : attribution.harness_usage.governance_source === "bare"
+                      ? "empty"
+                      : "lab repository's"}
                 </strong>{" "}
                 governance surface, under{" "}
                 <code>harness_source={attribution.harness_usage.harness_source}</code>
@@ -1082,6 +1092,13 @@ export function RunDetail({
                   ? ` · fingerprint ${attribution.harness_usage.governance_fingerprint.slice(0, 12)}`
                   : ""}
                 .
+              </p>
+            ) : null}
+            {attribution.harness_usage?.governance_source === "bare" ? (
+              <p className="muted small">
+                A bare run had no governance to read: the runner masked the lab's
+                CLAUDE.md, hooks, subagents and <code>.github/</code>, so read
+                coverage is not a measure of anything here (ADR-0049).
               </p>
             ) : null}
             {attribution.harness_usage?.governance_warning ? (

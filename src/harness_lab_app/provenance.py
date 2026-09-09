@@ -395,7 +395,16 @@ def build_condition(
         "case_hash": case_hash,
         "skills_ablation": ablation_active,
         "lab_git_commit": _git(repo_root, "rev-parse", "HEAD"),
-        "harness_git_dirty": _harness_git_dirty(repo_root, exclude=dirty_exclude),
+        # Only meaningful when the lab tree *is* the harness under test. Every
+        # other source runs the agent from the workspace with the lab's
+        # governance masked in the container (ADR-0049), so git reports the
+        # masked paths as deleted and every such run would record itself dirty.
+        # None says "not applicable", which is the honest answer.
+        "harness_git_dirty": (
+            _harness_git_dirty(repo_root, exclude=dirty_exclude)
+            if harness_source in ("", "lab_root")
+            else None
+        ),
         "runner_image": runner_image,
     }
 

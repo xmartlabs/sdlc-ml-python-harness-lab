@@ -88,6 +88,39 @@ run without manual score, Re-validate retro-scores parked runs, SWE-aware
 Validation panel + post-run retry polling in RunDetail. K-001 can be completed
 by pressing Re-validate once the worker restarts with this code.
 
+Repository harness audit landed 2026-09-09 (ADR-0054, branch
+`feat/end-to-end-testing-updates`): the guided audit is now four steps —
+point/pin → **Harness audit** → one case → run an experiment. Step 2 is an
+LLM reading (`repository_audit_service.py`, `RepositoryAudit` row, worker task
+`audit_repository`, `GET/POST /api/targets/{id}/repository-audit`) of the tree at
+the pin: rules files, skill/agent heads, commands, `.claude/settings.json` hooks,
+pre-commit/husky, CI, Makefile targets, manifests, README → fixed JSON
+(summary, harness_verdict, components, language, standards, gaps, 3-5 use cases)
+rendered to Spanish markdown by the lab. The wizard gate (`next_step` in
+`evidence_json`) is deterministic: `unsupported_runtime` (no Python/Node by
+marker or extension census) ends the audit; `no_harness` ends the primary flow
+with one secondary "continue anyway"; `continue` goes on. Step 4 offers
+`native` alone (subject validation) or `native` vs `injected` (ml-python-base);
+`bare` is not offered inside a target (ADR-0049). Client report gains a
+"harness, as read by the auditor" section. Pending: a live audit against a real
+gateway/Claude CLI from the UI.
+
+Injected-arm fix + LLM-call tracing landed 2026-09-09 (ADR-0055, branch
+`feat/end-to-end-testing-updates`). Every `injected` run died in provisioning
+with "Adapter file is missing the generated-skills sentinels": ADR-0049 masks
+the lab's `CLAUDE.md` inside the runner, and `inject_harness` reads that same
+file to splice into. Fix: `project_harness(..., adapter_root=)`, the worker
+stages the registry's adapter files into `data/runs/<id>/harness_source/`
+(`tasks._stage_harness_adapters`), `bench_run.inject_harness` prefers it, and
+`_require_spliceable` refuses a masked/unsynced source by name before copying.
+Separately, `llm_transport.chat` now takes `trace_kind`/`trace_metadata` and
+emits one Langfuse trace per in-process completion via
+`observability/call_export.py`: kinds `repository_audit`, `case_draft`,
+`experiment_audit`, `judge`, `summary`, tagged `llm-call`, one session per kind,
+2s export timeout, failures traced at ERROR. Langfuse export events on a run were
+also downgraded from `error` to `warn` — an unreachable Langfuse costs a trace,
+not a run. Not yet exercised against a live Langfuse.
+
 ## Constraints and decisions in force
 
 - The database is the source of truth for cases and runs (ADR-0025). The CLI lane
@@ -170,6 +203,20 @@ versions + rolled `harness_hash`), `model_condition` (temp/context/alias),
 `runner_image`. Verified on a real run: K-002 metadata carried a full manifest.
 
 ## Open threads / next steps
+
+- `make check` on `feat/end-to-end-testing-updates` fails 2 pre-existing tests in
+  `test_prompt_variants.py`: `benchmarks/cli-textstats/prompt_harness.md` and
+  `benchmarks/tetris-v2/prompt_harness.md` drifted from preamble + default (a
+  blank line). `make prompts` regenerates them; not touched by the audit work.
+- Run the repository harness audit live (needs a gateway or Claude CLI credential
+  and the worker up) and read a real report: prompt length on a repository with
+  25 skills, and whether the JSON contract holds on the default auditor model.
+- Re-run the `native` vs `injected` experiment now that ADR-0055 unblocks the
+  treatment arm; the earlier attempt lost its comparison to that crash and its
+  `native` arm read only 2 of 18 governance docs on 1 repetition (exploratory).
+- Consider a launch-time preflight that refuses an `injected` arm whose adapter
+  files are not spliceable, so a crash like ADR-0055's cannot burn a paid control
+  arm before the treatment fails.
 
 - **Landed (ADR-0043):** Claude-native LLM transport — a Claude subscription alone
   runs the lab end to end; the audit, improvement synthesis, SWE-Pro judge, case

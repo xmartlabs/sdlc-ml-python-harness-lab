@@ -179,7 +179,14 @@ def test_a_successful_export_is_recorded_in_the_run_log(db, monkeypatch):
     assert "4 spans" in event.message
 
 
-def test_a_failed_export_is_reported_but_never_raised(db, monkeypatch):
+def test_a_failed_export_is_a_warning_not_an_error(db, monkeypatch):
+    """An unreachable Langfuse costs a trace, not a run.
+
+    The run has exited and its scores are written before this fires, so an
+    ERROR line here would put a lost trace in the same filter as a failed
+    validation — and an operator working away from the Langfuse host would
+    read a green run as a broken one.
+    """
     _enable(monkeypatch)
     monkeypatch.setattr(
         module, "export_run", lambda *_a, **_k: _result(ok=False, reason="Langfuse 503")
@@ -188,7 +195,7 @@ def test_a_failed_export_is_reported_but_never_raised(db, monkeypatch):
     export_run_traces(db, RUN_ID)
 
     event = db.exec(select(RunEvent)).one()
-    assert event.level == "error"
+    assert event.level == "warn"
     assert "Langfuse 503" in event.message
 
 
@@ -202,7 +209,7 @@ def test_an_exporter_that_raises_still_leaves_the_run_alone(db, monkeypatch):
 
     assert export_run_traces(db, RUN_ID) is None
     event = db.exec(select(RunEvent)).one()
-    assert event.level == "error"
+    assert event.level == "warn"
     assert "kaboom" in event.message
 
 

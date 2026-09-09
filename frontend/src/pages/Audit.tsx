@@ -5,6 +5,7 @@ import { api, ApiError } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { FolderPicker } from "../components/FolderPicker";
+import { Markdown } from "../components/Markdown";
 import { ModelPicker } from "../components/ModelPicker";
 import { ReadinessReportView } from "../components/ReadinessReportView";
 import { Spinner } from "../components/Spinner";
@@ -21,18 +22,29 @@ import type {
   LocalSourceListing,
   ModelOption,
   ReadinessReport,
+  RepositoryAuditRecord,
+  RunConfigPayload,
   TargetRecord
 } from "../types";
 
 const STEPS = [
   { key: "clone", label: "Point at the repository" },
-  { key: "readiness", label: "What this repository already has" },
-  { key: "case", label: "One case that passes" }
+  { key: "audit", label: "Harness audit" },
+  { key: "case", label: "One case" },
+  { key: "experiment", label: "Run an experiment" }
 ] as const;
 
 type StepKey = (typeof STEPS)[number]["key"];
 
 type CaseTab = "ai" | "history" | "manual" | "existing";
+
+// The comparison an experiment runs. A bare arm (empty workspace, governance
+// masked) only exists in the lab venue — it cannot be put inside somebody
+// else's repository (ADR-0049), so the honest control here is the repository
+// as it is, not nothing.
+type Comparison = "native_only" | "native_vs_injected";
+
+const REPETITION_OPTIONS = [1, 2, 3, 5];
 
 /**
  * Where step 1's checkout comes from.
@@ -124,7 +136,11 @@ export function Audit() {
   // is going nowhere can say what it is looking at.
   const [waitTicks, setWaitTicks] = useState(0);
 
-  // Step 2 — what the repository brings on its own.
+  // Step 2 — the LLM's reading of the repository's harness, then what it
+  // already has on its own.
+  const [repositoryAudit, setRepositoryAudit] = useState<RepositoryAuditRecord | null>(
+    null
+  );
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
   const [gate, setGate] = useState<GateCheckRecord | null>(null);
   const [gateError, setGateError] = useState("");
@@ -132,6 +148,10 @@ export function Audit() {
   // Step 3 — one case, from whichever of the four sources fits.
   const [caseTab, setCaseTab] = useState<CaseTab>("ai");
   const [caseId, setCaseId] = useState("");
+  // The cases picked for the experiment. `caseId` tracks the most recently
+  // created or selected one, for the tabs' own "in the catalog" badges;
+  // `caseIds` is the set step 4 actually runs.
+  const [caseIds, setCaseIds] = useState<string[]>([]);
   const [manualCaseId, setManualCaseId] = useState("");
   const [caseName, setCaseName] = useState("");
   const [instruction, setInstruction] = useState("");
@@ -141,6 +161,11 @@ export function Audit() {
   const [aiDropped, setAiDropped] = useState<DroppedCommand[]>([]);
   const [candidates, setCandidates] = useState<CaseCandidates | null>(null);
   const [existingCases, setExistingCases] = useState<CaseRecord[]>([]);
+
+  // Step 4 — one experiment, against this repository alone or against it and
+  // the lab harness both.
+  const [comparison, setComparison] = useState<Comparison>("native_vs_injected");
+  const [repetitions, setRepetitions] = useState(1);
   // claude runs on its CLI default, so it is the harness that needs the least
   // configuration to answer "does this case pass here at all?".
   const [harness, setHarness] = useState<(typeof HARNESS_OPTIONS)[number]>("claude");
@@ -333,7 +358,7 @@ export function Audit() {
 
   // A gate check runs in a worker, so the record is polled until it settles.
   useEffect(() => {
-    if (step !== "readiness" || !targetId || !gateRunning) {
+    if (step !== "audit" || !targetId || !gateRunning) {
       return;
     }
     let cancelled = false;
@@ -356,17 +381,74 @@ export function Audit() {
     };
   }, [gateRunning, step, targetId]);
 
-  // The catalog is only needed by the last step's fourth tab, so it is fetched
-  // when that step opens rather than on every visit to the page.
+  /**
+   * Read whatever harness audit already exists the moment this step opens.
+   *
+   * A 404 means nobody has generated one yet — a fact to render quietly, not
+   * an error to surface, so it is handled here rather than through `run()`.
+   */
   useEffect(() => {
-    if (step !== "case") {
+    if (step !== "audit" || !targetId) {
+      return;
+    }
+    let cancelled = false;
+    api
+      .getRepositoryAudit(targetId)
+      .then((record) => {
+        if (!cancelled) {
+          setRepositoryAudit(record);
+        }
+      })
+      .catch((loadError: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        if (loadError instanceof ApiError && loadError.status === 404) {
+          setRepositoryAudit(null);
+          return;
+        }
+        // Transient: the "Generate the audit" button asks again.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [step, targetId]);
+
+  // The audit runs in the worker, so the record is polled until it settles.
+  useEffect(() => {
+    if (step !== "audit" || !targetId || repositoryAudit?.status !== "running") {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      api
+        .getRepositoryAudit(targetId)
+        .then((record) => {
+          if (!cancelled) {
+            setRepositoryAudit(record);
+          }
+        })
+        .catch(() => {
+          // Transient: the next tick asks again.
+        });
+    }, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [repositoryAudit?.status, step, targetId]);
+
+  // The catalog is needed by step 3's fourth tab and by step 4's case picker,
+  // so it is fetched when either opens rather than on every visit to the page.
+  useEffect(() => {
+    if (step !== "case" && step !== "experiment") {
       return;
     }
     api
       .listCases()
       .then(setExistingCases)
       .catch(() => {
-        // The other three tabs do not need the catalog.
+        // Both steps degrade gracefully with an empty catalog.
       });
   }, [step]);
 
@@ -559,6 +641,19 @@ export function Audit() {
       setGate(await api.getGateCheck(targetId));
     });
 
+  /**
+   * Ask the worker to read the repository's harness and write a report.
+   *
+   * Whether the wizard can continue past this step is decided from
+   * `evidence_json.next_step`, computed by the lab from deterministic facts —
+   * not from anything the model itself concludes.
+   */
+  const runAudit = () =>
+    run("repo-audit", async () => {
+      await api.runRepositoryAudit(targetId);
+      setRepositoryAudit(await api.getRepositoryAudit(targetId));
+    });
+
   const adoptInferred = (payload: {
     validation_commands?: string[];
     setup_commands?: string[];
@@ -588,6 +683,26 @@ export function Audit() {
         throw startError;
       }
     });
+
+  /**
+   * Record a case as both "the one the tabs point at" and "one to run".
+   *
+   * `caseId` drives the tabs' own "already in the catalog" badges; `caseIds`
+   * is the set step 4 actually runs, so every source that lands on a case —
+   * drafted, derived, hand-written, or reused — adds to both.
+   */
+  const selectCase = (id: string) => {
+    setCaseId(id);
+    setCaseIds((current) => (current.includes(id) ? current : [...current, id]));
+  };
+
+  // Step 4's checkbox list adds and drops cases from the set the experiment
+  // runs; unlike `selectCase` it does not touch `caseId`, which the case
+  // step's own tabs still read for their "already in the catalog" badges.
+  const toggleCaseId = (id: string) =>
+    setCaseIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+    );
 
   const draftCase = () =>
     run("draft", async () => {
@@ -647,7 +762,7 @@ export function Audit() {
         const candidate = attempt === 0 ? baseId : `${baseId}-${attempt + 1}`;
         try {
           const created = await api.createCase(payload(candidate));
-          setCaseId(created.case_id);
+          selectCase(created.case_id);
           setNotice(`Case '${created.case_id}' created. Run it against the repository.`);
           return;
         } catch (createError) {
@@ -675,14 +790,14 @@ export function Audit() {
       const payload = candidateToCase(candidate, target);
       try {
         const created = await api.createCase(payload);
-        setCaseId(created.case_id);
+        selectCase(created.case_id);
       } catch (createError) {
         // An earlier session already accepted this candidate. That is the
         // outcome the button was after, so it reads as success.
         if (!isDuplicateId(createError)) {
           throw createError;
         }
-        setCaseId(payload.case_id);
+        selectCase(payload.case_id);
         setNotice(`'${payload.case_id}' already existed — reusing it.`);
       }
       setCaseName(candidate.subject.slice(0, 100));
@@ -691,7 +806,7 @@ export function Audit() {
     });
 
   const selectExistingCase = (record: CaseRecord) => {
-    setCaseId(record.case_id);
+    selectCase(record.case_id);
     setCaseName(record.name || record.case_id);
     setInstruction(record.prompt_variants?.default ?? record.description ?? "");
     setCommandText((record.validation_commands ?? []).join("\n"));
@@ -702,32 +817,107 @@ export function Audit() {
   };
 
   /**
-   * One run, one case, this repository at the pinned commit.
-   *
-   * It is a subject validation and not a comparison: there is no control arm
-   * here, so the only thing it can say is whether the case passes at all.
+   * Create under the first free id derived from `base`, stepping past any
+   * that collide. Both experiment kinds below race the same catalog, so the
+   * retry lives once instead of twice.
    */
-  const validate = () =>
-    run("validate", async () => {
-      const base = slugify(`validate-${targetId}-${caseId}`).slice(0, 56);
+  const createExperimentUnderFreeId = async (
+    base: string,
+    create: (experimentId: string) => Promise<{ experiment_id: string }>
+  ) => {
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
+      try {
+        return await create(candidate);
+      } catch (createError) {
+        if (!isDuplicateId(createError)) {
+          throw createError;
+        }
+        lastError = createError;
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Unable to find a free experiment id.");
+  };
+
+  /**
+   * Queue the experiment step 4 configured.
+   *
+   * `native_only` is a subject validation with a single arm — it answers
+   * whether the selected cases pass here at all. `native_vs_injected` is a
+   * harness evaluation: the only thing that varies between its two arms is
+   * whether the lab harness is injected into the same workspace at the same
+   * commit, so the comparison isolates the harness and nothing else.
+   */
+  const runExperiment = () =>
+    run("run-experiment", async () => {
       const executor = executorModel.trim() === "" ? null : executorModel.trim();
-      let lastError: unknown = null;
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
-        try {
-          const created = await api.createExperiment({
-            experiment_id: candidate,
-            name: `First pass: ${target?.name ?? targetId}`,
-            question: `Does '${caseId}' pass against ${target?.name ?? targetId} at the pinned commit?`,
-            mode: "subject_validation",
-            subject: target?.name ?? targetId,
-            case_ids: [caseId],
-            repetitions: 1,
+      const launchConfig: RunConfigPayload = {
+        case_id: caseIds[0] ?? "",
+        prompt_variant: "default",
+        harness,
+        planner_model: null,
+        executor_model: executor,
+        score_mode: "manual",
+        max_steps: maxSteps,
+        resume: false,
+        dry_run: false,
+        target_repo_id: targetId,
+        target_ref: pinnedCommit,
+        harness_source: "native"
+      };
+
+      if (comparison === "native_only") {
+        const created = await createExperimentUnderFreeId(
+          slugify(`validate-${targetId}`).slice(0, 56),
+          (experimentId) =>
+            api.createExperiment({
+              experiment_id: experimentId,
+              name: `First pass: ${target?.name ?? targetId}`,
+              question: `Do the selected cases pass against ${target?.name ?? targetId} at the pinned commit?`,
+              mode: "subject_validation",
+              subject: target?.name ?? targetId,
+              case_ids: caseIds,
+              repetitions,
+              conditions: [
+                {
+                  label: "this repository",
+                  role: "treatment",
+                  description: "The repository as it is, at the pinned commit.",
+                  overrides: {
+                    target_repo_id: targetId,
+                    target_ref: pinnedCommit,
+                    harness_source: "native",
+                    harness,
+                    executor_model: executor
+                  }
+                }
+              ]
+            })
+        );
+        await api.launchExperiment(created.experiment_id, launchConfig);
+        setExperimentId(created.experiment_id);
+        setNotice("Run queued. It reads the pinned commit, with no control arm.");
+        return;
+      }
+
+      const created = await createExperimentUnderFreeId(
+        slugify(`audit-${targetId}`).slice(0, 56),
+        (experimentId) =>
+          api.createExperiment({
+            experiment_id: experimentId,
+            name: `Harness audit: ${target?.name ?? targetId}`,
+            question: `Does the injected lab harness improve over ${target?.name ?? targetId}'s own setup?`,
+            mode: "harness_evaluation",
+            case_ids: caseIds,
+            repetitions,
             conditions: [
               {
-                label: "this repository",
-                role: "treatment",
-                description: "The repository as it is, at the pinned commit.",
+                label: "native",
+                role: "control",
+                description: "The repository's own governance, with nothing injected.",
                 overrides: {
                   target_repo_id: targetId,
                   target_ref: pinnedCommit,
@@ -735,42 +925,43 @@ export function Audit() {
                   harness,
                   executor_model: executor
                 }
+              },
+              {
+                label: "injected",
+                role: "treatment",
+                description: "The lab harness (ml-python-base) injected into the workspace.",
+                overrides: {
+                  target_repo_id: targetId,
+                  target_ref: pinnedCommit,
+                  harness_source: "injected",
+                  harness,
+                  executor_model: executor
+                }
               }
             ]
-          });
-          await api.launchExperiment(created.experiment_id, {
-            case_id: caseId,
-            prompt_variant: "default",
-            harness,
-            planner_model: null,
-            executor_model: executor,
-            score_mode: "manual",
-            max_steps: maxSteps,
-            resume: false,
-            dry_run: false,
-            target_repo_id: targetId,
-            target_ref: pinnedCommit,
-            harness_source: "native"
-          });
-          setExperimentId(created.experiment_id);
-          setNotice("One run queued. It reads the pinned commit, with no control arm.");
-          return;
-        } catch (createError) {
-          if (!isDuplicateId(createError)) {
-            throw createError;
-          }
-          lastError = createError;
-        }
-      }
-      throw lastError instanceof Error
-        ? lastError
-        : new Error("Unable to find a free experiment id.");
+          })
+      );
+      await api.launchExperiment(created.experiment_id, launchConfig);
+      setExperimentId(created.experiment_id);
+      setNotice(
+        "Comparison queued: this repository as it is, against the lab harness " +
+          "injected into the same workspace."
+      );
     });
 
   const stepIndex = STEPS.findIndex((item) => item.key === step);
-  // Nothing after step 1 means anything without a pin: readiness reads the
-  // pinned commit, and a case derived from a moving branch measures the branch.
-  const reached = (key: StepKey) => key === "clone" || pinnedCommit !== "";
+  // Nothing after step 1 means anything without a pin: the audit and
+  // readiness both read the pinned commit, and a case derived from a moving
+  // branch measures the branch. Step 4 additionally needs a case to run.
+  const reached = (key: StepKey) => {
+    if (key === "clone") {
+      return true;
+    }
+    if (key === "experiment") {
+      return pinnedCommit !== "" && caseIds.length > 0;
+    }
+    return pinnedCommit !== "";
+  };
 
   const caseFields = (
     <div className="form-grid">
@@ -816,16 +1007,35 @@ export function Audit() {
     </div>
   );
 
+  // Step 4's picker: every case already in the catalog, plus any case picked
+  // in step 3 that has not made it into `existingCases` yet (fetched only
+  // once, when a step that needs it opens).
+  const experimentCaseRows: CaseRecord[] = [
+    ...existingCases,
+    ...caseIds
+      .filter((id) => !existingCases.some((record) => record.case_id === id))
+      .map(
+        (id): CaseRecord => ({
+          case_id: id,
+          name: id,
+          type: "",
+          status: "",
+          sync_state: "",
+          description: ""
+        })
+      )
+  ];
+
   return (
     <section className="page audit">
       <header className="page-header">
         <div>
           <h1>Set up a repository for audit</h1>
           <p className="lede">
-            Three steps: you point the lab at the repository and it freezes a commit,
-            the lab reads what the repository already brings, and then one case runs
-            against it. It ends when that case passes — not with a verdict about the
-            repository.
+            Four steps: you point the lab at the repository and it freezes a commit,
+            an LLM reads what harness it ships and what it could be tried on, you
+            settle on one case, and then an experiment runs it — either alone or
+            against the lab's own harness injected into the same workspace.
           </p>
         </div>
       </header>
@@ -1312,12 +1522,12 @@ export function Audit() {
                   <button
                     className="secondary"
                     onClick={() => {
-                      setStep("readiness");
+                      setStep("audit");
                       void loadReadiness();
                     }}
                     type="button"
                   >
-                    What this repository already has
+                    Harness audit
                     <IconArrowRight size={15} />
                   </button>
                 ) : null}
@@ -1327,8 +1537,188 @@ export function Audit() {
         </div>
       ) : null}
 
-      {step === "readiness" ? (
+      {step === "audit" ? (
         <>
+          <div className="panel">
+            <div className="panel-head">
+              <h2>What harness this repository ships</h2>
+              {repositoryAudit ? (
+                <span
+                  className={`badge ${
+                    repositoryAudit.status === "running"
+                      ? "neutral"
+                      : repositoryAudit.status === "done"
+                        ? "ok"
+                        : "error"
+                  }`}
+                >
+                  {repositoryAudit.status}
+                </span>
+              ) : null}
+            </div>
+            <p className="muted">
+              The lab reads the repository at the pinned commit — rules files, skills,
+              agents, commands, hooks, CI, build files, README — and an LLM writes a
+              short report: which harness parts exist, the language, and what could be
+              tried here. Whether the wizard can continue past this step is decided
+              from that evidence, not by the model.
+            </p>
+
+            {!repositoryAudit ? <p className="muted small">Not generated yet.</p> : null}
+
+            {repositoryAudit?.status === "running" ? (
+              <Spinner label="Reading the repository with the auditor" />
+            ) : null}
+
+            {repositoryAudit?.status === "failed" ? (
+              <ErrorBanner message={repositoryAudit.error ?? "The audit failed"} />
+            ) : null}
+
+            {repositoryAudit?.status === "done" ? (
+              <>
+                <div className="fact-row">
+                  <div>
+                    <span className="muted small">Commit</span>
+                    <code>{repositoryAudit.commit.slice(0, 8)}</code>
+                  </div>
+                  <div>
+                    <span className="muted small">Language</span>
+                    <code>
+                      {repositoryAudit.evidence_json.runtime?.ecosystems.join(", ") ||
+                        "not detected"}
+                    </code>
+                  </div>
+                  <div>
+                    <span className="muted small">Harness</span>
+                    <code>
+                      {"harness_verdict" in repositoryAudit.findings_json
+                        ? repositoryAudit.findings_json.harness_verdict
+                        : "unknown"}
+                    </code>
+                  </div>
+                  <div>
+                    <span className="muted small">Model</span>
+                    <code>{repositoryAudit.auditor_model}</code>
+                  </div>
+                </div>
+
+                <Markdown>{repositoryAudit.markdown}</Markdown>
+
+                {repositoryAudit.evidence_json.next_step === "unsupported_runtime" ? (
+                  <div className="callout callout--warning">
+                    <IconAlert size={16} />
+                    <div>
+                      <p>
+                        <strong>The lab cannot run cases here.</strong>{" "}
+                        {repositoryAudit.evidence_json.next_step_reason}
+                      </p>
+                      <p className="muted small">
+                        This is the end of the wizard for this repository — the runner
+                        cannot execute anything in its runtime. The readiness and gate
+                        check below still work; neither one runs an agent.
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+
+                {repositoryAudit.evidence_json.next_step === "no_harness" ? (
+                  <>
+                    <div className="callout callout--warning">
+                      <IconAlert size={16} />
+                      <div>
+                        <p>
+                          <strong>No harness to evaluate.</strong>{" "}
+                          {repositoryAudit.evidence_json.next_step_reason}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="panel-actions">
+                      <button
+                        className="secondary"
+                        onClick={() => setStep("case")}
+                        type="button"
+                      >
+                        Continue anyway — compare it against the lab harness
+                      </button>
+                    </div>
+                  </>
+                ) : null}
+
+                {repositoryAudit.evidence_json.next_step === "continue" ? (
+                  <>
+                    <div className="callout callout--ok">
+                      <IconCheck size={16} />
+                      <div>
+                        <p>
+                          <strong>This repository can be evaluated here.</strong>{" "}
+                          {repositoryAudit.evidence_json.next_step_reason}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="panel-actions">
+                      <button
+                        className="primary"
+                        onClick={() => setStep("case")}
+                        type="button"
+                      >
+                        Choose or create a case
+                        <IconArrowRight size={15} />
+                      </button>
+                    </div>
+                  </>
+                ) : null}
+
+                {"use_cases" in repositoryAudit.findings_json &&
+                repositoryAudit.findings_json.use_cases.length > 0 ? (
+                  <>
+                    <h3>Use cases the auditor proposes</h3>
+                    <ul className="check-list">
+                      {repositoryAudit.findings_json.use_cases.map((useCase) => (
+                        <li key={useCase.title}>
+                          <strong>{useCase.title}</strong>
+                          <p className="muted">{useCase.why}</p>
+                          <p className="small muted">Check: {useCase.validation_hint}</p>
+                          {repositoryAudit.evidence_json.next_step !==
+                          "unsupported_runtime" ? (
+                            <button
+                              className="secondary"
+                              onClick={() => {
+                                setAiDescription(
+                                  `${useCase.title}. ${useCase.why} Validate with: ` +
+                                    `${useCase.validation_hint}`
+                                );
+                                setCaseTab("ai");
+                                setStep("case");
+                              }}
+                              type="button"
+                            >
+                              Draft this as a case
+                            </button>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
+              </>
+            ) : null}
+
+            <div className="panel-actions">
+              <button
+                className="primary"
+                disabled={busy !== "" || repositoryAudit?.status === "running"}
+                onClick={() => void runAudit()}
+                type="button"
+              >
+                {busy === "repo-audit" || repositoryAudit?.status === "running"
+                  ? "Auditing…"
+                  : repositoryAudit?.status === "done"
+                    ? "Audit again"
+                    : "Generate the audit"}
+              </button>
+            </div>
+          </div>
+
           <div className="panel">
             <div className="panel-head">
               <h2>What this repository already has</h2>
@@ -1441,10 +1831,6 @@ export function Audit() {
                 type="button"
               >
                 {busy === "gate" || gateRunning ? "Running…" : "Run the gate check"}
-              </button>
-              <button className="primary" onClick={() => setStep("case")} type="button">
-                One case that passes
-                <IconArrowRight size={15} />
               </button>
             </div>
             <p className="muted small">
@@ -1696,104 +2082,198 @@ export function Audit() {
                 )}
               </>
             ) : null}
-          </div>
 
-          <div className="panel">
-            <div className="panel-head">
-              <h2>Run it against the repository</h2>
-              {caseId ? <span className="badge neutral">{caseId}</span> : null}
-            </div>
-            <p className="muted">
-              One run of <code>{caseId || "the case"}</code> against{" "}
-              <strong>{target?.name ?? targetId}</strong> at{" "}
-              <code>{pinnedCommit.slice(0, 8) || "the pin"}</code>, under{" "}
-              <code>
-                {harness}/{executorModel.trim() || "CLI default"}
-              </code>
-              . No control arm — it answers one question: does the case pass here at
-              all? <code>claude</code> needs a Claude credential in <code>.env</code>;{" "}
-              <code>opencode</code> needs a gateway model.
-            </p>
-            <div className="form-grid">
-              <label className="field">
-                <span>Harness</span>
-                <select
-                  onChange={(event) =>
-                    chooseHarness(
-                      event.target.value as (typeof HARNESS_OPTIONS)[number]
-                    )
-                  }
-                  value={harness}
-                >
-                  {HARNESS_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-                {HOST_HARNESSES.has(harness) ? (
-                  <span className="muted small">
-                    Runs the {harness} CLI with its native auth.{" "}
-                    {harness === "claude"
-                      ? "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host)."
-                      : "Needs host mode — run make app-host."}
-                  </span>
-                ) : null}
-              </label>
-              <div className="field">
-                <ModelPicker
-                  allowNone={HOST_HARNESSES.has(harness)}
-                  directErrors={directErrors}
-                  label="Executor model"
-                  nativeOptions={HARNESS_NATIVE_MODELS[harness]}
-                  noneLabel="CLI default"
-                  onChange={setExecutorModel}
-                  onReload={
-                    HOST_HARNESSES.has(harness) ? undefined : () => void loadModels(true)
-                  }
-                  options={modelOptions}
-                  reloading={reloadingModels}
-                  value={executorModel}
-                >
-                  <small className="muted">
-                    {HOST_HARNESSES.has(harness)
-                      ? `Pick a model the ${harness} CLI accepts, or leave it on its own default.`
-                      : "opencode has no default of its own — this run needs a model named here."}
-                  </small>
-                </ModelPicker>
-              </div>
-            </div>
             <div className="panel-actions">
               <button
                 className="primary"
-                disabled={
-                  busy !== "" ||
-                  !caseId ||
-                  !pinnedCommit ||
-                  (harness === "opencode" && executorModel.trim() === "")
-                }
-                onClick={() => void validate()}
+                disabled={caseIds.length === 0}
+                onClick={() => setStep("experiment")}
                 type="button"
               >
-                {busy === "validate" ? "Queueing…" : "Validate"}
+                Run an experiment
                 <IconArrowRight size={15} />
               </button>
             </div>
-            {experimentId ? (
-              <div className="panel-actions">
-                <Link
-                  className="button-link"
-                  to={`/evaluate/experiments?experiment=${experimentId}`}
-                >
-                  Watch the run
-                </Link>
-                <Link className="button-link" to={`/evidence/repositories/${targetId}`}>
-                  Open this repository's workbench
-                </Link>
-              </div>
-            ) : null}
+            <p className="muted small">
+              Selected for the experiment: {caseIds.length > 0 ? caseIds.join(", ") : "none yet"}
+            </p>
           </div>
         </>
+      ) : null}
+
+      {step === "experiment" ? (
+        <div className="panel">
+          <div className="panel-head">
+            <h2>Run an experiment against this repository</h2>
+            {experimentId ? <span className="badge neutral">{experimentId}</span> : null}
+          </div>
+
+          <div className="check-list">
+            {experimentCaseRows.map((record) => (
+              <label className="checkbox" key={record.case_id}>
+                <input
+                  checked={caseIds.includes(record.case_id)}
+                  onChange={() => toggleCaseId(record.case_id)}
+                  type="checkbox"
+                />
+                <span>
+                  {record.name || record.case_id}
+                  {record.type ? <span className="badge pick-tag">{record.type}</span> : null}
+                  {record.origin_target_id === targetId ? (
+                    <span className="badge pick-tag">from this repository</span>
+                  ) : null}
+                </span>
+              </label>
+            ))}
+          </div>
+
+          <div className="form-grid">
+            <label className="checkbox full">
+              <input
+                checked={comparison === "native_only"}
+                name="comparison"
+                onChange={() => setComparison("native_only")}
+                type="radio"
+              />
+              <span>
+                <strong>This repository only — one arm</strong>
+                <p className="muted small">
+                  No control arm: it answers whether the case passes here at all.
+                </p>
+              </span>
+            </label>
+            <label className="checkbox full">
+              <input
+                checked={comparison === "native_vs_injected"}
+                name="comparison"
+                onChange={() => setComparison("native_vs_injected")}
+                type="radio"
+              />
+              <span>
+                <strong>This repository vs the lab harness (ml-python-base)</strong>
+                <p className="muted small">
+                  Control: the repository's own governance, nothing injected.
+                  Treatment: the lab's harness (the synced ml-python-base release)
+                  injected into the same workspace at the same commit. The only thing
+                  that varies is the harness.
+                </p>
+              </span>
+            </label>
+          </div>
+          <p className="muted small">
+            A <em>bare</em> arm (empty workspace, governance masked) only exists in the
+            lab venue — it cannot be put inside somebody else's repository (ADR-0049).
+            The honest control here is the repository as it is.
+          </p>
+
+          <div className="form-grid">
+            <label className="field">
+              <span>Repetitions</span>
+              <select
+                onChange={(event) => setRepetitions(Number(event.target.value))}
+                value={repetitions}
+              >
+                {REPETITION_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+              <span className="muted small">
+                1 is exploratory; 5 or more per arm is what a comparison needs to be
+                trusted.
+              </span>
+            </label>
+            <label className="field">
+              <span>Harness</span>
+              <select
+                onChange={(event) =>
+                  chooseHarness(event.target.value as (typeof HARNESS_OPTIONS)[number])
+                }
+                value={harness}
+              >
+                {HARNESS_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+              {HOST_HARNESSES.has(harness) ? (
+                <span className="muted small">
+                  Runs the {harness} CLI with its native auth.{" "}
+                  {harness === "claude"
+                    ? "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host)."
+                    : "Needs host mode — run make app-host."}
+                </span>
+              ) : null}
+            </label>
+            <div className="field">
+              <ModelPicker
+                allowNone={HOST_HARNESSES.has(harness)}
+                directErrors={directErrors}
+                label="Executor model"
+                nativeOptions={HARNESS_NATIVE_MODELS[harness]}
+                noneLabel="CLI default"
+                onChange={setExecutorModel}
+                onReload={
+                  HOST_HARNESSES.has(harness) ? undefined : () => void loadModels(true)
+                }
+                options={modelOptions}
+                reloading={reloadingModels}
+                value={executorModel}
+              >
+                <small className="muted">
+                  {HOST_HARNESSES.has(harness)
+                    ? `Pick a model the ${harness} CLI accepts, or leave it on its own default.`
+                    : "opencode has no default of its own — this run needs a model named here."}
+                </small>
+              </ModelPicker>
+            </div>
+            <label className="field">
+              <span>Max steps</span>
+              <select
+                onChange={(event) => setMaxSteps(Number(event.target.value))}
+                value={maxSteps}
+              >
+                {MAX_STEP_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="panel-actions">
+            <button
+              className="primary"
+              disabled={
+                busy !== "" ||
+                caseIds.length === 0 ||
+                !pinnedCommit ||
+                (harness === "opencode" && executorModel.trim() === "")
+              }
+              onClick={() => void runExperiment()}
+              type="button"
+            >
+              {busy === "run-experiment" ? "Queueing…" : "Create and launch"}
+              <IconArrowRight size={15} />
+            </button>
+          </div>
+          {experimentId ? (
+            <div className="panel-actions">
+              <Link
+                className="button-link"
+                to={`/evaluate/experiments?experiment=${experimentId}`}
+              >
+                Watch the run
+              </Link>
+              <Link className="button-link" to={`/evidence/repositories/${targetId}`}>
+                Open this repository's workbench
+              </Link>
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </section>
   );

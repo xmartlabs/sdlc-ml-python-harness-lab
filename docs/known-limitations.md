@@ -255,6 +255,17 @@ test is the repository the lab runs from**. In that mode, selecting a harness in
 UI picks which CLI is invoked, not which governance surface is loaded — every CLI
 reads this repo's own `.github/` governance.
 
+A lab-native case can now be run against *nothing* as well:
+`harness_source=bare` gives the agent an empty workspace and masks the lab's
+governance inside the runner container, which is what a genuine control arm needs
+([ADR-0049](adr/0049-a-bare-arm-is-a-masked-runner-not-a-lab-root-run.md)). It
+needs the docker backend — on the host lane there is nothing to mask with. Two
+gaps stay open there: the SWE lane's `swe_default` claude arm runs from the
+workspace without declaring a condition, so it still inherits the lab's
+`CLAUDE.md` from the parent directory; and `attribution._normalize_event_path`
+strips the `/app/` prefix, so an in-target run's read of its *own* rulebook never
+matches its surface while a read of the lab's does.
+
 Runs against a registered target repository are different
 ([ADR-0029](adr/0029-target-repositories-pinned-per-run.md),
 [ADR-0031](adr/0031-harness-source-is-a-run-condition.md)): there `harness_source`

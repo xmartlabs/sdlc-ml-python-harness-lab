@@ -167,10 +167,11 @@ export default function App() {
 
   const seedTetris = () => {
     void api
-      .seedTetris()
-      .then((createdCase) => {
-        setCases((current) => [createdCase, ...current.filter((item) => item.case_id !== createdCase.case_id)]);
-        setSelectedCaseId(createdCase.case_id);
+      .seedBenchmarks()
+      .then((seeded) => {
+        const ids = new Set(seeded.map((item) => item.case_id));
+        setCases((current) => [...seeded, ...current.filter((item) => !ids.has(item.case_id))]);
+        setSelectedCaseId(seeded[0]?.case_id ?? "");
       })
       .catch(() => {
         setCases((current) => [previewCase, ...current.filter((item) => item.case_id !== previewCase.case_id)]);

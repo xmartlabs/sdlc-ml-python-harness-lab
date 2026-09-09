@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -149,3 +150,60 @@ def test_apply_subjective_capped_when_objective_failed(patched_settings):
         )
 
         assert validation.composite == 1.0
+
+
+class HangingHandle:
+    """A command that produces output and then never ends, until stopped.
+
+    The shape of the fourth run of experiment `...-on--2`: SDL2 turned the
+    SIGTERM from `timeout` into an SDL_QUIT event, a second event loop swallowed
+    it, and neither `iter_lines()` nor `wait()` had a deadline of its own.
+    """
+
+    def __init__(self) -> None:
+        self._stopped = threading.Event()
+        self.stop_calls = 0
+
+    def iter_lines(self) -> Iterator[tuple[str, str]]:
+        yield ("info", "starting")
+        self._stopped.wait(timeout=10)
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+        self._stopped.set()
+
+    def wait(self) -> int:
+        # A terminated shell reports its own status; it says nothing about
+        # whether the agent's code works.
+        return 0
+
+
+class HangingExecutor:
+    def __init__(self) -> None:
+        self.handle = HangingHandle()
+
+    def start(self, run_id: str, command: list[str]) -> HangingHandle:
+        return self.handle
+
+
+def test_a_wedged_validation_command_is_killed_and_recorded_inconclusive(
+    patched_settings, monkeypatch
+):
+    monkeypatch.setattr(vs_module, "command_deadline_seconds", lambda _label: 0.2)
+    executor = HangingExecutor()
+    engine = make_engine()
+    with Session(engine) as session:
+        seed_case_and_run(session, "run-hang", patched_settings / "run-hang")
+        validation = ValidationService(session, executor=executor).validate_run(
+            "run-hang"
+        )
+
+    assert executor.handle.stop_calls == 1, "the watchdog never fired"
+    objective = validation.objective
+    # Not False: the check settled nothing, so it must not read as "the code
+    # does not work" (ADR-0046 — infrastructure is not capability).
+    assert objective["passed"] is None
+    check = objective["checks"][0]
+    assert check["conclusive"] is False
+    assert check["exit_code"] == 124
+    assert "deadline exceeded" in check["detail"]

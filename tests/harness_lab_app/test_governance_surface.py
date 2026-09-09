@@ -97,6 +97,44 @@ def test_lab_root_reads_the_labs_repository(tmp_path):
     assert surface.files == [".github/standards.md", "CLAUDE.md"]
 
 
+def test_bare_reads_only_what_the_workspace_holds(tmp_path):
+    """A bare run's surface is whatever it wrote itself — usually nothing."""
+    run_dir = tmp_path / "runs" / "bare-1"
+    make_workspace(run_dir, {"main.py": "print('tetris')\n"})
+
+    surface = resolve_surface(
+        lab_root=make_lab(tmp_path),
+        run_dir=run_dir,
+        harness="claude",
+        harness_source="bare",
+    )
+
+    assert surface.source == "bare"
+    assert surface.files == []
+    assert surface.warning == ""
+
+
+def test_bare_without_an_archive_is_empty_not_the_lab(tmp_path):
+    """The one source with no fallback: there never was a lab surface for it.
+
+    Falling back would score the run against CLAUDE.md and `.github/` — the
+    documents the runner masked so it provably could not read them.
+    """
+    lab_root = make_lab(tmp_path)
+
+    surface = resolve_surface(
+        lab_root=lab_root,
+        run_dir=tmp_path / "runs" / "gone",
+        harness="claude",
+        harness_source="bare",
+    )
+
+    assert surface.source == "bare"
+    assert surface.files == []
+    assert surface.root != str(lab_root)
+    assert surface.warning == ""
+
+
 def test_missing_workspace_falls_back_but_warns(tmp_path):
     """A degraded record, and it has to look like one."""
     surface = resolve_surface(
