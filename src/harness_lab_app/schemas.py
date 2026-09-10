@@ -550,6 +550,10 @@ class CaseDraftResponse(BaseModel):
     description: str = ""
     case_type: str = CaseType.single_prompt
     step_prompts: list[str] = Field(default_factory=list)
+    # What the judge grades against. A case with commands and no rubric is
+    # refused at save time (ADR-0057), so a draft that arrives without one is
+    # a draft that cannot be saved as it is.
+    scoring_rubric: str = ""
     # What the model wrote that was screened out, so the person sees the gap
     # here rather than after the runs have spent their budget.
     dropped_commands: list[DroppedCommand] = Field(default_factory=list)

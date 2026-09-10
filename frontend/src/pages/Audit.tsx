@@ -22,8 +22,11 @@ import type {
   LocalSourceListing,
   ModelOption,
   ReadinessReport,
+  RepositoryAuditCase,
   RepositoryAuditCaseStatus,
+  RepositoryAuditProposedCase,
   RepositoryAuditRecord,
+  RepositoryAuditUseCase,
   RunConfigPayload,
   TargetRecord
 } from "../types";
@@ -78,6 +81,19 @@ const CASE_STATUS_BADGE: Record<RepositoryAuditCaseStatus, string> = {
   blocked: "badge warn",
 };
 
+const SHAPE_LABEL: Record<string, string> = {
+  in_place: "governs this repository",
+  installable: "installed into another project",
+  both: "governs this repository and installs into others",
+  unknown: "undetermined"
+};
+
+const MEASURES_LABEL: Record<string, string> = {
+  harness_claim: "measures a harness claim",
+  harness_development: "measures work on the harness",
+  unknown: "unclassified"
+};
+
 const COVERAGE_LABEL: Record<"none" | "partial" | "full", string> = {
   none: "none",
   partial: "partial",
@@ -111,7 +127,10 @@ function candidateToCase(candidate: CaseCandidate, target: TargetRecord) {
     prompt_variants: { default: candidate.suggested_prompt },
     step_prompts: [],
     success_criteria: {},
-    scoring_rubric: "",
+    scoring_rubric:
+      `Score 10 when ${target.name}'s own gate passes at this commit and the ` +
+      "change stays within the scope the candidate describes; partial credit " +
+      "when the gate passes but the scope is exceeded; 0 when the gate fails.",
     constraints: [],
     // The repository's own tests, not a rubric the lab invented for it.
     validation_commands: target.validation_commands,
@@ -178,6 +197,7 @@ export function Audit() {
   const [caseName, setCaseName] = useState("");
   const [instruction, setInstruction] = useState("");
   const [commandText, setCommandText] = useState("");
+  const [scoringRubric, setScoringRubric] = useState("");
   const [maxSteps, setMaxSteps] = useState(10);
   const [aiDescription, setAiDescription] = useState("");
   const [aiDropped, setAiDropped] = useState<DroppedCommand[]>([]);
@@ -726,6 +746,65 @@ export function Audit() {
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
     );
 
+  /**
+   * Carry one proposed use case into the case form, structured.
+   *
+   * The button used to flatten the title, the reason and the hint into one
+   * sentence and hand it to the case drafter to recover a command from. That
+   * threw away work the audit had already done: the hint had been split into a
+   * command and a note, and the command classified against the runner. A
+   * runnable case therefore arrives with its command in the command field and
+   * its rubric started from the auditor's own words — editable, but never
+   * empty.
+   */
+  const seedCaseFromUseCase = (
+    useCase: RepositoryAuditUseCase,
+    planned?: RepositoryAuditCase
+  ) => {
+    const command = planned?.validation_command ?? "";
+    const note = planned?.validation_note ?? useCase.validation_hint;
+    // The id the AI tab would have derived from the subject. The "By hand" tab
+    // used to be reached only by typing, so it never derived one, and a case
+    // seeded from the audit arrived with the field empty and the button greyed.
+    setManualCaseId(slugify(`${targetId}-${useCase.title}`));
+    setCaseName(useCase.title.slice(0, 100));
+    setInstruction(`${useCase.title}. ${useCase.why}`);
+    if (command) {
+      setCommandText(command);
+      setCaseTab("manual");
+    } else {
+      // Nothing to run: the drafter's job is to turn the written check into a
+      // command, which is exactly what it is for.
+      setAiDescription(`${useCase.title}. ${useCase.why} Validate with: ${note}`);
+      setCaseTab("ai");
+    }
+    setScoringRubric(
+      `${useCase.why}\n\nScore 10 when this is true and the check passes; ` +
+        `0 when it is not.${note ? `\n\nWhat to look for: ${note}` : ""}`
+    );
+    setStep("case");
+  };
+
+  /**
+   * A proposed case (ADR-0058) carries its task and observable; the runner
+   * match that decides its command is keyed by title like every use case.
+   */
+  const seedCaseFromProposal = (proposal: RepositoryAuditProposedCase) => {
+    const cases = repositoryAudit?.evidence_json.case_plan?.cases;
+    const planned = cases?.find((row) => row.title === proposal.title);
+    seedCaseFromUseCase(
+      {
+        title: proposal.title,
+        why: proposal.observable || proposal.task,
+        validation_hint: proposal.validation_hint
+      },
+      planned
+    );
+    if (proposal.task) {
+      setInstruction(proposal.task);
+    }
+  };
+
   const draftCase = () =>
     run("draft", async () => {
       setAiDropped([]);
@@ -743,6 +822,9 @@ export function Audit() {
       // The server already screened the commands: what is left is one shell
       // command per line, which is the only shape this textarea preserves.
       setCommandText((draft.validation_commands ?? []).join("\n"));
+      // A case with commands and no rubric is refused at save time
+      // (ADR-0057); the draft always carries one, model-written or defaulted.
+      setScoringRubric(draft.scoring_rubric ?? "");
       if (draft.max_steps) {
         setMaxSteps(draft.max_steps);
       }
@@ -773,7 +855,7 @@ export function Audit() {
         prompt_variants: { default: instruction },
         step_prompts: [],
         success_criteria: {},
-        scoring_rubric: "",
+        scoring_rubric: scoringRubric.trim(),
         constraints: [],
         validation_commands: commands,
         max_steps: maxSteps,
@@ -1011,6 +1093,15 @@ export function Audit() {
           placeholder={"make test\npytest tests/test_serializer.py"}
           rows={4}
           value={commandText}
+        />
+      </label>
+      <label className="full">
+        <span>Scoring rubric — what a judge should look for (optional)</span>
+        <textarea
+          onChange={(event) => setScoringRubric(event.target.value)}
+          placeholder="Score 10 when the check passes and the change stays inside the declared files; 0 when it does not."
+          rows={3}
+          value={scoringRubric}
         />
       </label>
       <label>
@@ -1720,7 +1811,208 @@ export function Audit() {
                   </>
                 ) : null}
 
-                {"use_cases" in repositoryAudit.findings_json &&
+                {repositoryAudit.findings_json.shape ||
+                repositoryAudit.evidence_json.health_at_pin ? (
+                  <div className="fact-row">
+                    {repositoryAudit.findings_json.shape ? (
+                      <div>
+                        <span className="muted small">Harness shape</span>
+                        <code>
+                          {SHAPE_LABEL[repositoryAudit.findings_json.shape.shape] ??
+                            repositoryAudit.findings_json.shape.shape}
+                          {repositoryAudit.findings_json.shape.install_entry
+                            ? ` · ${repositoryAudit.findings_json.shape.install_entry}${
+                                repositoryAudit.findings_json.shape.install_entry_exists
+                                  ? ""
+                                  : " (not found)"
+                              }`
+                            : ""}
+                        </code>
+                      </div>
+                    ) : null}
+                    {repositoryAudit.findings_json.shape?.unit_of_work ? (
+                      <div>
+                        <span className="muted small">Unit of work</span>
+                        <code>{repositoryAudit.findings_json.shape.unit_of_work}</code>
+                      </div>
+                    ) : null}
+                    {repositoryAudit.evidence_json.health_at_pin ? (
+                      <div>
+                        <span className="muted small">Suite at the pin</span>
+                        <code>
+                          {repositoryAudit.evidence_json.health_at_pin.status}
+                          {repositoryAudit.evidence_json.health_at_pin.counts
+                            ? ` · ${repositoryAudit.evidence_json.health_at_pin.counts.passed} passed, ${repositoryAudit.evidence_json.health_at_pin.counts.failed} failed`
+                            : ""}
+                          {repositoryAudit.evidence_json.health_at_pin.reason
+                            ? ` — ${repositoryAudit.evidence_json.health_at_pin.reason}`
+                            : ""}
+                        </code>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {repositoryAudit.findings_json.component_map &&
+                repositoryAudit.findings_json.component_map.length > 0 ? (
+                  <>
+                    <h3>Component map</h3>
+                    <p className="muted small">
+                      What each harness component claims, what would show it helped,
+                      and whether this lab can evaluate it. Evaluability is the lab's
+                      verdict from declared services, not the auditor's opinion.
+                    </p>
+                    <div className="table-scroll">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>Component</th>
+                            <th>Claims</th>
+                            <th>Observable</th>
+                            <th>Lab counterpart</th>
+                            <th>Needs</th>
+                            <th>Evaluable</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {repositoryAudit.findings_json.component_map.map((row) => (
+                            <tr key={`${row.kind}-${row.name}`}>
+                              <td>
+                                <span className="badge">{row.kind}</span>{" "}
+                                <code>{row.name}</code>
+                                {row.source_path ? (
+                                  <div className="muted small">{row.source_path}</div>
+                                ) : null}
+                              </td>
+                              <td>{row.claim}</td>
+                              <td>{row.observable}</td>
+                              <td>
+                                {row.lab_counterpart ? (
+                                  <code>{row.lab_counterpart}</code>
+                                ) : (
+                                  <span className="muted">—</span>
+                                )}
+                              </td>
+                              <td>{row.needs.join(", ")}</td>
+                              <td>
+                                <span
+                                  className={row.evaluable_here ? "badge ok" : "badge warn"}
+                                  title={row.evaluable_reason || undefined}
+                                >
+                                  {row.evaluable_here ? "yes" : "no"}
+                                </span>
+                                {!row.evaluable_here && row.evaluable_reason ? (
+                                  <div className="muted small">{row.evaluable_reason}</div>
+                                ) : null}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {repositoryAudit.findings_json.warnings &&
+                    repositoryAudit.findings_json.warnings.length > 0 ? (
+                      <details>
+                        <summary className="muted small">
+                          {repositoryAudit.findings_json.warnings.length} contract warning(s)
+                        </summary>
+                        <ul className="check-list">
+                          {repositoryAudit.findings_json.warnings.map((warning) => (
+                            <li key={warning} className="small muted">
+                              {warning}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+                  </>
+                ) : null}
+
+                {repositoryAudit.findings_json.cases &&
+                repositoryAudit.findings_json.cases.length > 0 ? (
+                  <>
+                    <h3>Cases the auditor proposes</h3>
+                    <ul className="check-list">
+                      {repositoryAudit.findings_json.cases.map((proposal) => {
+                        const cases = repositoryAudit.evidence_json.case_plan?.cases;
+                        const planned = cases?.find((row) => row.title === proposal.title);
+                        const dropped = proposal.dropped_reason !== "";
+                        return (
+                          <li key={proposal.title}>
+                            <strong>{proposal.title}</strong>{" "}
+                            <span className="badge">
+                              {MEASURES_LABEL[proposal.measures] ?? proposal.measures}
+                            </span>
+                            {planned && !dropped ? (
+                              <>
+                                {" "}
+                                <span className={CASE_STATUS_BADGE[planned.status]}>
+                                  {CASE_STATUS_LABEL[planned.status]}
+                                </span>
+                              </>
+                            ) : null}
+                            <p className="small muted">
+                              Exercises:{" "}
+                              {proposal.exercises.length > 0
+                                ? proposal.exercises.map((name) => (
+                                    <code key={name}>{name} </code>
+                                  ))
+                                : "—"}
+                            </p>
+                            {dropped ? (
+                              <p className="small warn">Dropped: {proposal.dropped_reason}</p>
+                            ) : (
+                              <>
+                                {proposal.observable ? (
+                                  <p className="muted">{proposal.observable}</p>
+                                ) : null}
+                                <p className="small muted">
+                                  Check:{" "}
+                                  {planned?.validation_command ? (
+                                    <code>{planned.validation_command}</code>
+                                  ) : (
+                                    (planned?.validation_note ?? proposal.validation_hint)
+                                  )}
+                                </p>
+                                {proposal.conditions && proposal.conditions.length > 0 ? (
+                                  <p className="small muted">
+                                    Derived arms:{" "}
+                                    {proposal.conditions.map((arm) => (
+                                      <span
+                                        key={arm.label}
+                                        className="badge"
+                                        title={JSON.stringify(arm.overrides)}
+                                      >
+                                        {arm.label}
+                                      </span>
+                                    ))}
+                                  </p>
+                                ) : null}
+                                {proposal.conditions_note ? (
+                                  <p className="small muted">{proposal.conditions_note}</p>
+                                ) : null}
+                                {planned ? (
+                                  <p className="small muted">{planned.reason}</p>
+                                ) : null}
+                                {planned?.status !== "blocked" ? (
+                                  <button
+                                    className="secondary"
+                                    onClick={() => seedCaseFromProposal(proposal)}
+                                    type="button"
+                                  >
+                                    Draft this as a case
+                                  </button>
+                                ) : null}
+                              </>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </>
+                ) : null}
+
+                {repositoryAudit.findings_json.use_cases &&
                 repositoryAudit.findings_json.use_cases.length > 0 ? (
                   <>
                     <h3>Use cases the auditor proposes</h3>
@@ -1729,8 +2021,15 @@ export function Audit() {
                         // The lab's own verdict on this one case. Absent on audits
                         // recorded before cases were matched against capabilities,
                         // which then read exactly as they did before.
+                        //
+                        // Matched by title, not by position: the plan is built
+                        // from the same list, but a badge that lines up only by
+                        // accident is a badge that will one day describe the
+                        // wrong case, and nothing on screen would say so.
+                        const cases = repositoryAudit.evidence_json.case_plan?.cases;
                         const planned =
-                          repositoryAudit.evidence_json.case_plan?.cases[index];
+                          cases?.find((row) => row.title === useCase.title) ??
+                          cases?.[index];
                         return (
                           <li key={useCase.title}>
                             <strong>{useCase.title}</strong>
@@ -1749,9 +2048,21 @@ export function Audit() {
                               </>
                             ) : null}
                             <p className="muted">{useCase.why}</p>
-                            <p className="small muted">Check: {useCase.validation_hint}</p>
+                            <p className="small muted">
+                              Check:{" "}
+                              {planned?.validation_command ? (
+                                <code>{planned.validation_command}</code>
+                              ) : (
+                                (planned?.validation_note ?? useCase.validation_hint)
+                              )}
+                            </p>
                             {planned ? (
                               <p className="small muted">{planned.reason}</p>
+                            ) : null}
+                            {planned?.validation_repair ? (
+                              <p className="small warn">
+                                {planned.validation_repair}
+                              </p>
                             ) : null}
                             {(
                               planned
@@ -1762,12 +2073,15 @@ export function Audit() {
                               <button
                                 className="secondary"
                                 onClick={() => {
-                                  setAiDescription(
-                                    `${useCase.title}. ${useCase.why} Validate with: ` +
-                                      `${useCase.validation_hint}`
-                                  );
-                                  setCaseTab("ai");
-                                  setStep("case");
+                                  // The audit already separated the command
+                                  // from the prose around it. Flattening the
+                                  // two back into one sentence and asking a
+                                  // model to recover the command is how a case
+                                  // ends up validated by something nobody
+                                  // wrote — so the command travels as a
+                                  // command, and the rubric starts from what
+                                  // the auditor said the case is for.
+                                  seedCaseFromUseCase(useCase, planned);
                                 }}
                                 type="button"
                               >

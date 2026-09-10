@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
 
     from harness_lab_app.executors import RunExecutor, RunHandle
+    from harness_lab_app.models import TargetRepository
 
 _FAILURE_TAIL_LINES = 30
 
@@ -449,6 +450,7 @@ def _stream_run(
     stall_seconds: int = 0,
     model_wait_seconds: int = 0,
     max_stream_errors: int = 0,
+    harness: str = "",
 ) -> StreamOutcome:
     """Persist run output as RunEvents; watch for the four ways a run goes bad.
 
@@ -466,6 +468,13 @@ def _stream_run(
     request in flight. ``max_stream_errors`` covers the third case, where the
     provider is answering — with failures — and opencode would retry until the
     budget ran out. Zero disables any of the three.
+
+    ``harness`` selects whose words those are. The markers used to be
+    opencode's, applied to every run, so a ``claude`` run never once looked
+    like it was waiting on a model and every quiet gateway was charged to the
+    agent as a stall. A harness :mod:`harness_lab_app.run_failures` does not
+    know resolves the ambiguity the safe way: unattributable silence is a lab
+    failure, never an agent one.
     """
     lines: Queue[tuple[str, str] | None] = Queue()
     reader = threading.Thread(target=_drain, args=(handle, lines), daemon=True)
@@ -525,16 +534,16 @@ def _stream_run(
         session.add(RunEvent(run_id=run_id, level=level, message=message))
         session.commit()
         tail.append(message)
-        awaiting_model = run_failures.awaits_model_response(message)
-        if run_failures.is_model_request(message):
+        awaiting_model = run_failures.awaits_model_response(message, harness)
+        if run_failures.is_model_request(message, harness):
             model_requests += 1
-        if run_failures.is_stream_error(message):
+        if run_failures.is_stream_error(message, harness):
             stream_errors += 1
             failed_requests += 1
             last_error = message
             if stop_reason is None and 0 < max_stream_errors <= stream_errors:
                 stop_reason = "endpoint"
-        elif not run_failures.is_retry_noise(message):
+        elif not run_failures.is_retry_noise(message, harness):
             # Real work happened, so whatever failed before was survivable.
             stream_errors = 0
     return StreamOutcome(
@@ -644,6 +653,39 @@ def _never_answered_failure(outcome: StreamOutcome, tail: str) -> str:
     return _with_tail(message, tail, "Last output:")
 
 
+def _wait_bounded(
+    handle: RunHandle, deadline_seconds: float, grace_seconds: float = 30.0
+) -> int:
+    """Join the run's process, but never for longer than the deadline.
+
+    The watchdog decides *why* a run must end; this guarantees the worker gets
+    to act on that decision. `handle.wait()` on its own is unbounded — a
+    container that ignores SIGTERM, or a docker daemon that stops answering,
+    parks the worker thread on a run that is already over and no verdict is
+    ever written. The validation lane has had a deadline on its wait since
+    ADR-0048; the agent lane did not, which is the whole of this gap.
+    """
+    result: list[int] = []
+
+    def _join() -> None:
+        with contextlib.suppress(Exception):
+            result.append(handle.wait())
+
+    joiner = threading.Thread(target=_join, daemon=True)
+    joiner.start()
+    joiner.join(timeout=max(1.0, deadline_seconds))
+    if result:
+        return result[0]
+    # Still running past its own timeout plus a grace period: ask once more,
+    # then stop waiting. `grace_seconds` is how long a stopped process is given
+    # to report its real exit code; after that, -1 — the lab's "no exit code
+    # was observed", which is not the same as "it exited cleanly".
+    with contextlib.suppress(Exception):
+        handle.stop()
+    joiner.join(timeout=max(0.0, grace_seconds))
+    return result[0] if result else -1
+
+
 def _watchdog_failure(outcome: StreamOutcome, settings: Any, tail: str) -> str:
     """The failure reason for a run the watchdog stopped.
 
@@ -739,8 +781,9 @@ def _execute_run_body(
                 getattr(settings, "run_stall_seconds", 0),
                 getattr(settings, "run_model_wait_seconds", 0),
                 getattr(settings, "run_max_stream_errors", 0),
+                harness=str(config_payload.harness or ""),
             )
-            exit_code = handle.wait()
+            exit_code = _wait_bounded(handle, settings.run_timeout_seconds + 60)
             if outcome.stop_reason == "cancelled":
                 service.mark_cancelled(run_id, exit_code)
             elif outcome.stop_reason is not None:
@@ -780,6 +823,9 @@ def _execute_run_body(
             # that failed still spent tokens and produced a diff, and excluding
             # it would make cost aggregates describe only the runs that worked.
             _record_scores(session, run_id)
+            # Every terminal run, whatever its verdict: an experiment closes on
+            # its last run stopping, not on its last run succeeding.
+            _close_experiment_for_run(session, run_id)
             # Last, and outside every branch: a failed run is exactly the one
             # an operator wants to open in Langfuse.
             _export_langfuse_traces(session, run_id)
@@ -837,6 +883,51 @@ def _check_harness_provenance(session: Session, run_id: str) -> None:
         session.commit()
     except Exception:  # a provenance check must never fail the run
         return
+
+
+def _close_experiment_for_run(session: Session, run_id: str) -> None:
+    """Complete the run's experiment once every one of its runs has stopped.
+
+    Nothing used to close an experiment: `ExperimentStatus.complete` was in the
+    enum and assigned nowhere, so `running` outlived the last run by however
+    long nobody looked. Completion also queues the reading, which was manual —
+    and therefore, in practice, often never done.
+
+    Best-effort: a run's own outcome never depends on this.
+    """
+    from harness_lab_app.experiment_service import ExperimentService
+
+    try:
+        run = RunService(session).get_run(run_id)
+        experiment_id = str(run.experiment_id or "")
+        if not experiment_id:
+            return
+        if ExperimentService(session).try_complete(experiment_id) is None:
+            return  # not this run's doing, or already closed
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                message=f"Experiment {experiment_id} complete: every run has stopped",
+            )
+        )
+        session.commit()
+        # Only when there is something to call: without a transport the audit
+        # would queue, fail and record an error that says nothing about the
+        # experiment.
+        if llm_transport.available_transport() != "none":
+            from harness_lab_app.celery_app import enqueue_experiment_audit
+
+            enqueue_experiment_audit(experiment_id, None)
+    except Exception as exc:  # closing an experiment must never fail a run
+        with contextlib.suppress(Exception):
+            session.add(
+                RunEvent(
+                    run_id=run_id,
+                    level="error",
+                    message=f"Could not close the experiment: {exc!r}",
+                )
+            )
+            session.commit()
 
 
 def _index_attribution(session: Session, run_id: str) -> None:
@@ -1036,7 +1127,24 @@ def _llm_judge_rubric(
 
     rubric = _rubric_text(case)
     if not rubric:
-        return  # no scale to grade against → manual fallback
+        # Recorded, not silent. Both talos cases carried an empty rubric, so
+        # all four of their runs parked in `awaiting_manual_score` with no
+        # trace of why — which read as a scoring backlog when it was a case
+        # defect. `case_service` now refuses to create such a case; this is
+        # the backstop for the ones already in the database.
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="error",
+                message=(
+                    f"Not auto-scored: case {case.case_id} has no scoring "
+                    "rubric, so there is no scale to grade against. Score it "
+                    "manually, or give the case a rubric and re-validate."
+                ),
+            )
+        )
+        session.commit()
+        return
     run_dir = get_settings().data_runs_dir / run_id
     task = _read_run_text(run_dir / "prompt.md") or case.description
     diff = _read_run_text(run_dir / "diff.patch")
@@ -1051,6 +1159,7 @@ def _llm_judge_rubric(
         diff=diff,
         objective_summary=objective_summary,
         report=report,
+        files_modified=_files_modified_for_judge(run_dir, run_id),
         gateway=gateway,
         model=model,
     )
@@ -1058,6 +1167,29 @@ def _llm_judge_rubric(
     _record_autoscore(
         session, run_service, run_id, result["score"], notes.strip(), source="llm_judge"
     )
+
+
+def _files_modified_for_judge(run_dir: Path, run_id: str) -> list[str]:
+    """The paths the run's tool log says the agent wrote, workspace-relative.
+
+    A second witness beside the diff: the two talos arms each created a test
+    file the diff did not show, and the judge concluded from the diff alone
+    that no test had been added. Relative so no local filesystem path reaches
+    the model. Best-effort — a run without ``usage.json`` has no list.
+    """
+    try:
+        usage = json.loads((run_dir / "usage.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    marker = f"/workspace/{run_id}/"
+    out: list[str] = []
+    for raw in usage.get("files_modified") or []:
+        path = str(raw)
+        if marker in path:
+            path = path.split(marker, 1)[1]
+        if path and path not in out:
+            out.append(path)
+    return out
 
 
 def _read_run_text(path: Path) -> str:
@@ -1188,6 +1320,9 @@ def validate_run(run_id: str) -> None:
         # effort; re-scoring overwrites in place, so a re-validate refreshes
         # them rather than accumulating contradictions.
         _record_scores(session, run_id)
+        # A re-validate is often what finally scores the run an experiment was
+        # waiting on, so this is the second place an experiment can close.
+        _close_experiment_for_run(session, run_id)
         # Re-export so the validation verdict and the new score reach the trace
         # too; deterministic ids mean this updates rather than duplicates.
         _export_langfuse_traces(session, run_id)
@@ -1225,42 +1360,7 @@ def gate_check_target(gate_check_id: str) -> None:
             session.commit()
             return
 
-        executor = get_executor()
-        results: list[dict[str, Any]] = []
-        for index, command in enumerate(spec["commands"]):
-            try:
-                # The gate check runs the audited repository's own commands
-                # with no agent and no model, so it takes the hardened lane:
-                # no lab secrets, and no network once past provisioning.
-                handle = executor.start(
-                    f"{gate_check_id}-{index}",
-                    command["argv"],
-                    hardened=True,
-                    phase=command["phase"],
-                )
-                output = "\n".join(message for _level, message in handle.iter_lines())
-                exit_code = handle.wait()
-            except Exception as exc:  # an executor failure is a result, not a crash
-                results.append(
-                    {
-                        "phase": command["phase"],
-                        "command": command["label"],
-                        "exit_code": -1,
-                        "output": f"executor error: {exc!r}",
-                    }
-                )
-                break
-            results.append(
-                {
-                    "phase": command["phase"],
-                    "command": command["label"],
-                    "exit_code": exit_code,
-                    "output": output,
-                }
-            )
-            if exit_code != 0:
-                break
-
+        results = _run_spec_commands(get_executor(), gate_check_id, spec["commands"])
         verdict = summarize(results)
         row.status = "done"
         row.passed = verdict["passed"]
@@ -1269,6 +1369,129 @@ def gate_check_target(gate_check_id: str) -> None:
         row.updated_at = utc_now()
         session.add(row)
         session.commit()
+
+
+def _run_spec_commands(
+    executor: RunExecutor,
+    prefix: str,
+    commands: list[dict[str, Any]],
+    *,
+    stop_on_failed_check: bool = True,
+) -> list[dict[str, Any]]:
+    """Run a provision/setup/validate spec, stopping at the first failure.
+
+    Shared by the gate check and the case dry run: both ask "what does this
+    repository do with no agent involved?", and a check run in a workspace
+    whose setup failed measures the setup — so provisioning and setup always
+    stop the sequence.
+
+    The two differ on a failed *check*. The gate check stops, because after one
+    red gate the rest is not interesting. A dry run keeps going, because its
+    question is whether **any** of the case's checks can fail on the clean
+    tree, and stopping at the first answer would leave the others unasked.
+    """
+    results: list[dict[str, Any]] = []
+    for index, command in enumerate(commands):
+        try:
+            # Untrusted repository code with no agent and no model: the
+            # hardened lane, so no lab secrets and no network past provisioning.
+            handle = executor.start(
+                f"{prefix}-{index}",
+                command["argv"],
+                hardened=True,
+                phase=command["phase"],
+            )
+            output = "\n".join(message for _level, message in handle.iter_lines())
+            exit_code = handle.wait()
+        except Exception as exc:  # an executor failure is a result, not a crash
+            results.append(
+                {
+                    "phase": command["phase"],
+                    "command": command["label"],
+                    "exit_code": -1,
+                    "output": f"executor error: {exc!r}",
+                }
+            )
+            break
+        results.append(
+            {
+                "phase": command["phase"],
+                "command": command["label"],
+                "exit_code": exit_code,
+                "output": output,
+            }
+        )
+        if exit_code != 0 and (stop_on_failed_check or command["phase"] != "validate"):
+            break
+    return results
+
+
+def _dry_run_case_body(
+    session: Session, case_id: str, executor: RunExecutor
+) -> dict[str, Any]:
+    """Run a case's own checks against its target's clean, pinned tree.
+
+    The empirical half of case formation: a check that passes here passed
+    before the agent started, so its green says nothing about the agent. Two
+    talos cases were exactly that, and both reported numbers about themselves.
+
+    Stored on the case rather than in a table of its own — there is no Alembic
+    here, and a verdict about a case belongs to that case.
+    """
+    from harness_lab_app.gate_check_service import (
+        GateCheckError,
+        build_case_dry_run_spec,
+        dry_run_verdict,
+        workspace_for,
+    )
+
+    case = CaseService(session).get_case(case_id)
+    target_id = (case.origin_target_id or case.subject_repo or "").strip()
+    record: dict[str, Any] = {
+        "at": utc_now().isoformat(),
+        "case_id": case_id,
+        "target_id": target_id,
+    }
+    try:
+        if not target_id:
+            raise GateCheckError(
+                "This case names no repository, so there is no clean tree to "
+                "run its checks against."
+            )
+        target = TargetService(session).get_target(target_id)
+        spec = build_case_dry_run_spec(
+            case, target, f"{workspace_for(target_id)}-dry-{case_id}"
+        )
+    except Exception as exc:
+        record.update(verdict="inconclusive", error=str(exc), checks=[])
+        _store_dry_run(session, case_id, record)
+        return record
+
+    results = _run_spec_commands(
+        executor, f"dry-{case_id}", spec["commands"], stop_on_failed_check=False
+    )
+    record.update(commit=spec["commit"], **dry_run_verdict(results))
+    _store_dry_run(session, case_id, record)
+    return record
+
+
+def _store_dry_run(session: Session, case_id: str, record: dict[str, Any]) -> None:
+    """Persist a dry-run verdict on the case, as JSON in `metadata_json`."""
+    case = CaseService(session).get_case(case_id)
+    metadata = dict(case.metadata_json or {})
+    metadata["dry_run"] = json.dumps(record, default=str)
+    case.metadata_json = metadata
+    case.updated_at = utc_now()
+    session.add(case)
+    session.commit()
+
+
+@celery_app.task(name="harness_lab_app.tasks.dry_run_case", acks_late=True)
+def dry_run_case(case_id: str) -> None:
+    """Run one case's checks against the clean tree (worker-side: needs docker)."""
+    init_db()
+    with Session(engine) as session:
+        _dry_run_case_body(session, case_id, get_executor())
 
 
 @celery_app.task(name="harness_lab_app.tasks.audit_run", acks_late=True)
@@ -1332,17 +1555,20 @@ def _audit_experiment_body(
     experiment_id: str,
     auditor_model: str | None = None,
     gateway: Callable[[str, str, str], str] | None = None,
+    sleep: Callable[[float], None] | None = None,
 ) -> None:
     """Read a finished experiment back as prose; store text and evidence.
 
-    Separated from the Celery task so a test can inject the gateway. Failure is
-    recorded on the row, never raised: an experiment without a reading is still
-    an experiment, and the page falls back to the cards.
+    Separated from the Celery task so a test can inject the gateway (and the
+    retry's sleep). Failure is recorded on the row, never raised: an experiment
+    without a reading is still an experiment, and the page falls back to the
+    cards.
     """
     from harness_lab_app.experiment_audit_service import (
         EXPERIMENT_AUDIT_SYSTEM_PROMPT,
         ExperimentAuditService,
         build_evidence,
+        call_with_retry,
         render_audit_prompt,
     )
 
@@ -1366,8 +1592,17 @@ def _audit_experiment_body(
                 trace_metadata={"experiment_id": experiment_id},
             )
         )
-        markdown = call(
-            model, EXPERIMENT_AUDIT_SYSTEM_PROMPT, render_audit_prompt(evidence)
+        prompt = render_audit_prompt(evidence)
+        # Retried, because a transport error is a fact about the network and
+        # not about the experiment. The `audit-talos` reading died on one and
+        # was never asked again.
+        attempt = lambda: call(  # noqa: E731 - one expression, named for retry
+            model, EXPERIMENT_AUDIT_SYSTEM_PROMPT, prompt
+        )
+        markdown = (
+            call_with_retry(attempt, sleep=sleep)
+            if sleep is not None
+            else call_with_retry(attempt)
         ).strip()
         if not markdown:
             raise RuntimeError("the auditor returned an empty reading")
@@ -1389,27 +1624,42 @@ def _audit_repository_body(
     target_id: str,
     auditor_model: str | None = None,
     gateway: Callable[[str, str, str], str] | None = None,
+    health: dict[str, Any] | None = None,
 ) -> None:
     """Read a pinned repository's harness and store the auditor's reading.
 
-    Separated from the Celery task so a test can inject the gateway. Failure
-    is recorded on the row, never raised: a repository without a reading is
-    still a repository, and the wizard says the audit failed instead of
-    hanging on "running".
+    Two model passes with the lab's facts between them (ADR-0058): the first
+    maps every harness component to what it claims; the lab annotates which
+    are evaluable here and which counterparts exist; the second theorises
+    cases from that map, and the lab derives the experiment arms.
+
+    Separated from the Celery task so a test can inject the gateway and the
+    health verdict. Failure is recorded on the row, never raised: a
+    repository without a reading is still a repository, and the wizard says
+    the audit failed instead of hanging on "running".
     """
+    from harness_lab_app.audit_contract import (
+        annotate_cases,
+        annotate_map,
+        parse_case_proposals,
+        parse_component_map,
+    )
     from harness_lab_app.repository_audit_service import (
-        REPOSITORY_AUDIT_SYSTEM_PROMPT,
+        CASE_PROPOSALS_PROMPT,
+        COMPONENT_MAP_PROMPT,
         RepositoryAuditService,
         apply_case_plan,
+        evidence_chars,
         gather_evidence,
-        parse_findings,
         plan_cases,
         render_audit_prompt,
+        render_case_prompt,
         render_markdown,
     )
     from harness_lab_app.runner_capabilities import (
         capabilities_from_dicts,
         runner_capabilities,
+        service_capabilities,
     )
 
     service = RepositoryAuditService(session)
@@ -1421,30 +1671,83 @@ def _audit_repository_body(
     service.mark_running(target_id, model)
     try:
         target = TargetService(session).get_target(target_id)
-        evidence = gather_evidence(target)
-        call = gateway or (
-            lambda m, sys_, user: llm_transport.chat(
+        health_verdict = health if health is not None else _health_at_pin(target)
+        evidence = gather_evidence(target, health_at_pin=health_verdict)
+        _log_audit_event(
+            session,
+            target_id,
+            f"Evidence: {evidence_chars(evidence)} chars; suite at pin: "
+            f"{evidence.get('health_at_pin', {}).get('status', 'unmeasured')}",
+        )
+
+        def call(m: str, sys_: str, user: str, *, pass_number: int) -> str:
+            if gateway is not None:
+                return gateway(m, sys_, user)
+            return llm_transport.chat(
                 m,
                 sys_,
                 user,
                 timeout=_AUDIT_TIMEOUT_SECONDS,
                 temperature=0.2,
                 trace_kind="repository_audit",
-                trace_metadata={"target_id": target_id, "commit": evidence["commit"]},
+                trace_metadata={
+                    "target_id": target_id,
+                    "commit": evidence["commit"],
+                    "pass": pass_number,
+                },
             )
+
+        raw_map = call(
+            model, COMPONENT_MAP_PROMPT, render_audit_prompt(evidence), pass_number=1
         )
-        raw = call(model, REPOSITORY_AUDIT_SYSTEM_PROMPT, render_audit_prompt(evidence))
-        if not (raw or "").strip():
+        if not (raw_map or "").strip():
             raise RuntimeError("the auditor returned an empty reading")
-        findings = parse_findings(raw)
-        # The model proposed the cases; this decides, per case, whether the
-        # runner can settle it. The repository's dominant language never gets
-        # to answer that question for a case that needs no execution.
+        findings = parse_component_map(raw_map)
+        raw = raw_map
+        services = service_capabilities()
+        evidence["services"] = services
+        if "parse_error" not in findings:
+            findings = annotate_map(
+                findings,
+                lab_skill_names=[
+                    row["name"]
+                    for row in evidence.get("lab_harness", {}).get("skills", [])
+                ],
+                services=services,
+                installer_paths=list(evidence.get("installers") or {}),
+            )
+            raw_cases = call(
+                model,
+                CASE_PROPOSALS_PROMPT,
+                render_case_prompt(evidence, findings),
+                pass_number=2,
+            )
+            raw = f"{raw_map}\n\n---\n\n{raw_cases}"
+            proposals = parse_case_proposals(raw_cases)
+            if "parse_error" in proposals:
+                findings["cases"] = []
+                findings["warnings"].append(f"cases: {proposals['parse_error']}")
+            else:
+                proposals = annotate_cases(proposals, findings)
+                findings["cases"] = proposals["cases"]
+                findings["warnings"].extend(proposals.get("warnings") or [])
+        # The kept cases, matched against the runner as every case is: the
+        # capability match decides whether the hint can be settled, per case.
         capabilities = (
             capabilities_from_dicts(evidence.get("runtime", {}).get("capabilities"))
             or runner_capabilities()
         )
-        plan = plan_cases(findings.get("use_cases") or [], capabilities)
+        kept = [
+            {
+                "title": case["title"],
+                "why": case.get("observable", ""),
+                "validation_hint": case.get("validation_hint", ""),
+                "required_runtime_version": case.get("required_runtime_version", ""),
+            }
+            for case in findings.get("cases") or []
+            if not case.get("dropped_reason")
+        ]
+        plan = plan_cases(kept, capabilities)
         evidence = apply_case_plan(evidence, plan)
         _log_case_plan(session, target_id, evidence, plan)
         markdown = render_markdown(findings, evidence, model=model, raw=raw)
@@ -1457,6 +1760,43 @@ def _audit_repository_body(
         )
     except Exception as exc:  # the reading is optional; the record says why
         service.store_error(target_id, f"{type(exc).__name__}: {exc}")
+
+
+def _health_at_pin(target: TargetRepository) -> dict[str, Any]:
+    """The repository's own suite at the pin, through the hardened lane.
+
+    Never raises: an audit whose health check could not run is an audit with
+    ``unmeasured`` health, which is a fact about the lab, not a reason to
+    have no reading at all.
+    """
+    from harness_lab_app.gate_check_service import build_health_spec, health_at_pin
+
+    try:
+        spec = build_health_spec(target)
+        if not spec["commands"]:
+            return health_at_pin([], measured=False)
+        results = _run_spec_commands(
+            get_executor(), f"audit-health-{target.target_id}", spec["commands"]
+        )
+        return health_at_pin(results, measured=True)
+    except Exception as exc:
+        return {
+            "status": "unmeasured",
+            "reason": f"health check could not run: {type(exc).__name__}: {exc}",
+            "checks": [],
+        }
+
+
+def _log_audit_event(session: Session, target_id: str, message: str) -> None:
+    from harness_lab_app.models import RunEvent
+
+    try:
+        session.add(
+            RunEvent(run_id=f"audit-{target_id}", level="info", message=message[:500])
+        )
+        session.commit()
+    except Exception:  # observability never breaks the thing it observes
+        session.rollback()
 
 
 def _log_case_plan(

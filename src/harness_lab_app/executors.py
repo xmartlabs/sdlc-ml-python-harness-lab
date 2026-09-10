@@ -18,6 +18,7 @@ import threading
 from queue import Empty, Queue
 from typing import TYPE_CHECKING, Any, Protocol
 
+from harness_lab_app import governance_paths
 from harness_lab_app.config import get_settings
 
 if TYPE_CHECKING:
@@ -102,13 +103,23 @@ GOVERNANCE_MASK_ANCESTORS = "ancestors"  # native/injected: hide the lab, keep .
 GOVERNANCE_MASK_ALL = "all"  # bare: hide everything
 
 # Directories an AI tool auto-loads. Masked at every level above `none`.
+#
+# The bare-root entries (`skills`, `hooks`) and the alternative ADR roots come
+# from `governance_paths`, which is also what `governance._GLOBS` counts as the
+# reading surface. A tripwire in `test_executors.py` asserts the two agree: a
+# document the surface counts but the mask misses is a document a `bare` run
+# can read, and the arm that exists to see nothing would see something. These
+# paths address the *lab's* tree at `/app`; a target repository's own root
+# `skills/` lives under `/app/workspace/<run_id>/` and is never masked.
 RUNNER_GOVERNANCE_DIRS = (
     ".claude",
     ".agents",
     ".opencode",
     ".codex",
     "memory",
-    "docs/adr",
+    *(root.rstrip("/") for root in governance_paths.BARE_SKILL_ROOTS),
+    *(root.rstrip("/") for root in governance_paths.BARE_HOOK_ROOTS),
+    *(root.rstrip("/") for root in governance_paths.ADR_ROOTS),
 )
 
 # Governed *source* directories: nothing auto-loads them, but `bench_run.py`

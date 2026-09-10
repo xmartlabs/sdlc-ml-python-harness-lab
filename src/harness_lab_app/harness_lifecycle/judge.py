@@ -16,7 +16,7 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
 # The auditor's default model — "the same LLM that does the analysis".
 DEFAULT_JUDGE_MODEL = "gpt-5.4-mini"
@@ -59,6 +59,13 @@ RUBRIC_SYSTEM_PROMPT = (
     "check timed out, was killed, or never ran: it is a fact about the lab, not "
     "about the agent, so it neither confirms nor refutes anything — do not read "
     "it as a failure, and do not award a [check] level on it. "
+    "Checks and the file list are authoritative on EXISTENCE: a PASS check that "
+    "executed a path proves that file exists and behaves as the check asserts, "
+    "and a file in the agent's file list was written even if the diff omits it "
+    "(the diff can miss newly created files). Never conclude a file is missing "
+    "when a PASS check ran it or the file list names it. A check's OUTPUT "
+    "describes the repository the agent was working in; grade the agent's "
+    "work, not the repository's pre-existing behaviour that the output reports. "
     "Treat the agent's claims as claims, not results: a report asserting a "
     "feature that the diff does not implement earns nothing. When the evidence "
     "cannot distinguish two levels, take the lower one and say why. Name the "
@@ -70,6 +77,7 @@ RUBRIC_SYSTEM_PROMPT = (
 _DIFF_CLIP = 24000
 _TEXT_CLIP = 8000
 _RUBRIC_CLIP = 12000
+_FILES_CLIP = 60
 
 
 def build_judge_message(
@@ -144,6 +152,7 @@ def build_rubric_message(
     diff: str,
     objective_summary: str = "",
     report: str = "",
+    files_modified: Sequence[str] = (),
 ) -> str:
     """Render rubric + task + evidence as one prompt. Pure assembly.
 
@@ -160,6 +169,12 @@ def build_rubric_message(
             "## Automated checks already run (facts, not opinions — but an "
             "INCONCLUSIVE check is a fact about the lab, not about the code)"
             f"\n\n{objective_summary.strip()[:_TEXT_CLIP]}"
+        )
+    if files_modified:
+        listed = "\n".join(f"- {path}" for path in list(files_modified)[:_FILES_CLIP])
+        blocks.append(
+            "## Files the agent wrote or modified (from the run's tool log — "
+            f"facts; the diff below may omit newly created ones)\n\n{listed}"
         )
     diff = diff.strip()
     blocks.append(
@@ -181,6 +196,7 @@ def judge_rubric_score(
     gateway: Callable[[str, str, str], str],
     objective_summary: str = "",
     report: str = "",
+    files_modified: Sequence[str] = (),
     model: str = DEFAULT_JUDGE_MODEL,
 ) -> dict:
     """One gateway call → ``{score, rationale}``. Raises on an unparseable reply."""
@@ -190,5 +206,6 @@ def judge_rubric_score(
         diff=diff,
         objective_summary=objective_summary,
         report=report,
+        files_modified=files_modified,
     )
     return parse_judge_score(gateway(model, RUBRIC_SYSTEM_PROMPT, user))

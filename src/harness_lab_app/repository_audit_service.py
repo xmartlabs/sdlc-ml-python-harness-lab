@@ -33,7 +33,9 @@ from sqlmodel import Session, select
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
+from harness_lab_app import governance_paths as gp
 from harness_lab_app.models import RepositoryAudit, TargetRepository, utc_now
 from harness_lab_app.readiness_service import RULES_FILES, classify, detect_ecosystems
 from harness_lab_app.runner_capabilities import (
@@ -61,24 +63,35 @@ class RepositoryAuditError(ValueError):
 # opening (name, description, when to use), an agent by its head.
 _RULES_CHARS = 4000
 _MAX_RULES_FILES = 3
-_SKILL_CHARS = 700
+# The body, not the frontmatter. At 700 characters the auditor saw a skill's
+# name and description and nothing of what it makes the agent do — which is
+# the only part a claim can be read from (ADR-0058).
+_SKILL_CHARS = 6000
 _MAX_SKILLS = 25
 _AGENT_CHARS = 400
 _MAX_AGENTS = 12
 _README_CHARS = 2500
 _MANIFEST_CHARS = 1500
 _MAX_LISTED = 40
+# What a hook *does* is the difference between a mechanism and a file name.
+_HOOK_CHARS = 3000
+_MAX_HOOK_TEXTS = 12
+# An installer says whether the harness governs this tree or another one.
+_INSTALLER_CHARS = 4000
+_MAX_INSTALLERS = 6
+_ARCH_CHARS = 6000
+_ARCHITECTURE_DOCS = (
+    "docs/ARCHITECTURE.md",
+    "ARCHITECTURE.md",
+    "docs/architecture.md",
+    "docs/Architecture.md",
+)
+_INSTALLER_NAMES = ("settings.template.json",)
 
-# Skill directories, in the order the lab's own tooling prefers them.
-_SKILL_ROOTS = (".claude/skills/", ".github/skills/", ".agents/skills/")
-_AGENT_ROOTS = (".claude/agents/", ".github/agents/")
-
-# Where an agent harness declares hooks: Claude Code's settings, the scripts
-# they usually call, and the ordinary git-side hooks a team may run instead.
-_CLAUDE_SETTINGS = (".claude/settings.json",)
-_CLAUDE_HOOK_DIR = ".claude/hooks/"
-_PRE_COMMIT = ".pre-commit-config.yaml"
-_HUSKY_DIR = ".husky/"
+# Where a harness lives is `governance_paths`' answer, not this module's, so
+# the evidence collector and the readiness classifier cannot disagree — they
+# used to, and a repository whose skills sit in a root `skills/` rather than
+# `.claude/skills/` was reported as having no harness at all.
 
 _MAKE_TARGET = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_./-]*):(?!=)", re.MULTILINE)
 
@@ -229,7 +242,7 @@ def hooks_evidence(paths: list[str], read: Callable[[str], str]) -> dict[str, An
     """Every place a hook could be declared, and what was found there."""
     path_set = set(paths)
     events: list[str] = []
-    for name in _CLAUDE_SETTINGS:
+    for name in gp.CLAUDE_SETTINGS:
         if name not in path_set:
             continue
         try:
@@ -240,41 +253,40 @@ def hooks_evidence(paths: list[str], read: Callable[[str], str]) -> dict[str, An
         if isinstance(hooks, dict):
             events.extend(sorted(str(key) for key in hooks))
     scripts = sorted(
-        path[len(_CLAUDE_HOOK_DIR) :]
+        gp.relative_name(path, gp.HOOK_ROOTS)
         for path in paths
-        if path.startswith(_CLAUDE_HOOK_DIR) and not path.endswith("/")
+        if gp.is_hook_script(path)
     )
     husky = sorted(
-        path[len(_HUSKY_DIR) :]
+        path[len(gp.HUSKY_DIR) :]
         for path in paths
-        if path.startswith(_HUSKY_DIR) and "/" not in path[len(_HUSKY_DIR) :]
+        if path.startswith(gp.HUSKY_DIR) and "/" not in path[len(gp.HUSKY_DIR) :]
     )
+    hook_paths = sorted(path for path in paths if gp.is_hook_script(path))
     return {
         "claude_settings_events": events,
         "claude_hook_scripts": scripts[:_MAX_LISTED],
-        "pre_commit": _PRE_COMMIT in path_set,
+        # The scripts themselves, keyed by the same relative name the list
+        # uses, so a reader can go from "there is a hook" to "this is what it
+        # refuses" without another lookup.
+        "scripts_text": {
+            gp.relative_name(path, gp.HOOK_ROOTS): _capped(read(path), _HOOK_CHARS)
+            for path in hook_paths[:_MAX_HOOK_TEXTS]
+        },
+        "pre_commit": gp.PRE_COMMIT_CONFIG in path_set,
         "husky": husky[:_MAX_LISTED],
     }
 
 
 def _skill_paths(paths: list[str]) -> list[str]:
-    found = [
-        path
-        for path in paths
-        if path.endswith("/SKILL.md") and path.startswith(_SKILL_ROOTS)
-    ]
-    return sorted(found)[:_MAX_SKILLS]
+    return sorted(path for path in paths if gp.is_skill_path(path))[:_MAX_SKILLS]
 
 
 def _agent_paths(paths: list[str]) -> list[str]:
-    found = [
-        path
-        for path in paths
-        if path.endswith(".md")
-        and path.startswith(_AGENT_ROOTS)
-        and path.count("/") == 2
-    ]
-    return sorted(found)[:_MAX_AGENTS]
+    # Any depth. Requiring exactly one level below the root silently dropped
+    # `.claude/agents/review/deep.md`, and nesting says nothing about whether
+    # a file addresses an agent.
+    return sorted(path for path in paths if gp.is_agent_path(path))[:_MAX_AGENTS]
 
 
 def _capped(text: str, limit: int) -> str:
@@ -312,6 +324,89 @@ def _first_readme(paths: list[str]) -> str:
         if name in paths:
             return name
     return ""
+
+
+def _installer_paths(paths: list[str]) -> list[str]:
+    """Scripts and templates that install the harness somewhere else.
+
+    A harness that ships ``*install*.sh`` or a ``settings.template.json`` is
+    telling you its shape: it is copied into a target project and governs work
+    *there*. Reading those is how the audit can say so instead of treating a
+    bare checkout as the harness in action.
+    """
+    found: list[str] = []
+    for path in sorted(paths):
+        if "node_modules/" in path or path.startswith(".git/"):
+            continue
+        name = path.rsplit("/", 1)[-1]
+        if (
+            name in _INSTALLER_NAMES
+            or path in gp.CLAUDE_SETTINGS
+            or (name.endswith(".sh") and "install" in name.lower())
+        ):
+            found.append(path)
+    return found[:_MAX_INSTALLERS]
+
+
+def _architecture_doc(paths: list[str]) -> str:
+    path_set = set(paths)
+    return next((name for name in _ARCHITECTURE_DOCS if name in path_set), "")
+
+
+_FRONTMATTER = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
+
+
+def _frontmatter_field(text: str, key: str) -> str:
+    match = _FRONTMATTER.match((text or "").lstrip())
+    if not match:
+        return ""
+    for line in match.group(1).splitlines():
+        name, sep, value = line.partition(":")
+        if sep and name.strip() == key:
+            return value.strip().strip("'\"")
+    return ""
+
+
+def lab_skill_catalogue(root: Path | None = None) -> list[dict[str, str]]:
+    """The lab harness's own skills, by name and description.
+
+    Read from the governed source of truth (``.github/skills/`` and the synced
+    ``.github/skills-external/``), which is what ``inject_harness`` projects
+    into an injected arm. The auditor may only name a counterpart from this
+    list; a name outside it is cleared at annotation.
+    """
+    base = root if root is not None else _lab_root()
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    candidates = sorted(
+        [
+            *(base / ".github" / "skills").glob("*.md"),
+            *(base / ".github" / "skills-external").glob("*/SKILL.md"),
+        ]
+    )
+    for path in candidates:
+        if path.name.lower() == "readme.md":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        name = _frontmatter_field(text, "name") or (
+            path.parent.name if path.name == "SKILL.md" else path.stem
+        )
+        if name in seen:
+            continue
+        seen.add(name)
+        rows.append(
+            {"name": name, "description": _frontmatter_field(text, "description")[:300]}
+        )
+    return rows
+
+
+def _lab_root() -> Path:
+    from harness_lab_app.config import get_settings
+
+    return get_settings().repo_root
 
 
 def harness_present(governance: dict[str, list[str]], hooks: dict[str, Any]) -> bool:
@@ -398,6 +493,8 @@ def collect_evidence(
     read: Callable[[str], str],
     *,
     capabilities: dict[str, RunnerCapability] | None = None,
+    lab_catalogue: list[dict[str, str]] | None = None,
+    health_at_pin: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Everything the auditor is shown, plus the lab's own verdicts.
 
@@ -426,6 +523,10 @@ def collect_evidence(
         if name in path_set:
             manifests[name] = _capped(read(name), _MANIFEST_CHARS)
     readme_name = _first_readme(paths)
+    installers = {
+        path: _capped(read(path), _INSTALLER_CHARS) for path in _installer_paths(paths)
+    }
+    arch_name = _architecture_doc(paths)
 
     return {
         "target_id": target.target_id,
@@ -455,12 +556,25 @@ def collect_evidence(
         else {},
         "manifests": manifests,
         "readme": _capped(read(readme_name), _README_CHARS) if readme_name else "",
+        "architecture_doc": (
+            {"path": arch_name, "text": _capped(read(arch_name), _ARCH_CHARS)}
+            if arch_name
+            else {}
+        ),
+        "installers": installers,
+        # The lab's own harness, so a counterpart can be named and checked.
+        "lab_harness": {"skills": list(lab_catalogue or [])},
+        # The repository's suite at the pin, run with no agent. ``unmeasured``
+        # when nothing could be run — never a guess (ADR-0048).
+        "health_at_pin": dict(health_at_pin or {"status": "unmeasured", "checks": []}),
         "setup_commands": list(target.setup_commands or []),
         "validation_commands": list(target.validation_commands or []),
     }
 
 
-def gather_evidence(target: TargetRepository) -> dict[str, Any]:
+def gather_evidence(
+    target: TargetRepository, *, health_at_pin: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Read the pinned tree through the blobless mirror and build the evidence.
 
     The pin is required, not defaulted: an audit of a moving branch describes
@@ -491,7 +605,14 @@ def gather_evidence(target: TargetRepository) -> dict[str, Any]:
         paths,
         lambda p: read_file(mirror, commit, p),
         capabilities=runner_capabilities(),
+        lab_catalogue=lab_skill_catalogue(),
+        health_at_pin=health_at_pin,
     )
+
+
+def evidence_chars(evidence: dict[str, Any]) -> int:
+    """How much the model is shown, so cost per audit is visible in the log."""
+    return len(json.dumps(evidence, ensure_ascii=False, default=str))
 
 
 # --------------------------------------------------------------------------
@@ -543,10 +664,13 @@ REPOSITORY_AUDIT_SYSTEM_PROMPT = (
     '- "use_cases": lista de 3 a 5 objetos {"title", "why", "validation_hint", '
     '"required_runtime_version"}: tareas concretas y acotadas que un agente podría '
     "hacer EN ESTE repositorio y que servirían para medir si el harness ayuda. "
-    "title corto; why una frase; validation_hint el comando o test que diría si "
-    "salió bien — si lo que decide el caso es una revisión y no un comando "
-    "(que exista un AGENTS.md, que un kit tenga README, que se respete una regla), "
-    "escribí esa comprobación en prosa y no inventes un comando. "
+    "title corto; why una frase; validation_hint es UNA de dos cosas y nunca las "
+    "dos mezcladas: (a) un único comando de shell desnudo, relativo a la raíz "
+    "del repositorio, sin prosa alrededor y sin backticks — por ejemplo "
+    "bash tests/run.sh — o (b) si lo que decide el caso es una revisión y no un "
+    "comando (que exista un AGENTS.md, que un kit tenga README, que se respete "
+    'una regla), una sola frase que empiece con "Comprobar que" y ningún '
+    "comando inventado. "
     "required_runtime_version solo si el repositorio declara una versión concreta "
     'del runtime (por ejemplo "3.2" para bash); si no la declara, "". Si el runtime '
     "no es ejecutable por el laboratorio, igual proponé casos pero decilo en why.\n\n"
@@ -562,6 +686,119 @@ def render_audit_prompt(evidence: dict[str, Any]) -> str:
         "Evidencia del repositorio (JSON). Todo lo que afirmes tiene que salir "
         "de acá.\n\n```json\n"
         + json.dumps(evidence, indent=1, ensure_ascii=False, default=str)
+        + "\n```"
+    )
+
+
+COMPONENT_MAP_PROMPT = (
+    "Sos el auditor de un laboratorio que evalúa harnesses de agentes de código. "
+    "Te dan la evidencia de UN repositorio a un commit fijo: el contenido de las "
+    "reglas (CLAUDE.md/AGENTS.md), el cuerpo de cada skill, cada agente, el texto "
+    "de los hooks, los instaladores y plantillas de settings, el documento de "
+    "arquitectura, el README, el Makefile, los manifiestos, la salud de la suite "
+    "al commit (health_at_pin) y el catálogo de skills del harness del laboratorio "
+    "(lab_harness.skills). Tu trabajo NO es proponer tareas: es leer qué AFIRMA "
+    "cada componente del harness y cómo se vería si cumpliera.\n\n"
+    "Respondé ÚNICAMENTE con un objeto JSON (sin texto antes ni después, sin "
+    "bloque de código) con exactamente estas claves:\n"
+    '- "summary": 2 a 4 frases. Qué es el repositorio, en qué lenguaje, qué '
+    "harness tiene y cuál es su tesis si la enuncia.\n"
+    '- "harness_verdict": "complete" | "partial" | "none".\n'
+    '- "language_notes": 1 a 2 frases sobre lenguaje, toolchain y cómo se testea.\n'
+    '- "standards": lista corta de strings — convenciones que las reglas imponen.\n'
+    '- "gaps": lista corta de strings — qué le falta al harness para ser efectivo '
+    "o medible.\n"
+    '- "shape": objeto {"shape", "install_entry", "unit_of_work"}. shape es '
+    '"in_place" si el harness gobierna el trabajo en este mismo repositorio, '
+    '"installable" si se copia a otro proyecto y gobierna el trabajo allá (hay '
+    'instaladores o plantillas de settings), "both" si ambas. install_entry es la '
+    'ruta del instalador tal cual aparece en installers, o "". unit_of_work es '
+    "una frase: qué entra y qué sale (por ejemplo 'un ticket de Jira → un PR "
+    "revisable').\n"
+    '- "component_map": lista de objetos, UNO por cada componente que la evidencia '
+    'muestra, con claves {"kind", "name", "source_path", "claim", "trigger", '
+    '"observable", "lab_counterpart", "needs"}:\n'
+    '  kind: "skill" | "hook" | "rule" | "agent" | "command" (command = un script '
+    "determinista que el harness invoca, como lib/classify.sh).\n"
+    "  name: el nombre tal cual aparece (nombre de la skill, archivo del hook, "
+    "CLAUDE.md…). source_path: la ruta de donde lo leíste.\n"
+    "  claim: UNA frase con lo que el componente dice que hace, citando su propio "
+    "texto. trigger: cuándo se dispara. observable: qué artefacto o comportamiento "
+    "mostraría que se disparó y ayudó — algo que un comando o una lectura pueda "
+    "comprobar.\n"
+    "  lab_counterpart: el name de la skill de lab_harness.skills que hace el "
+    'mismo trabajo, o "" si ninguna. Sólo nombres de esa lista.\n'
+    "  needs: lista con lo que la afirmación requiere fuera del checkout, sólo de: "
+    '"jira", "github", "docker", "network", "target_repo", "browser", "none". '
+    "target_repo = necesita un proyecto objetivo donde instalarse. NO digas si el "
+    "laboratorio puede evaluarlo; decí qué necesita.\n\n"
+    "Reglas: usá SOLO la evidencia dada; nombrá las cosas exactamente como "
+    "aparecen; una fila por componente, sin agrupar; sé breve; no incluyas "
+    "secretos ni rutas absolutas."
+)
+
+CASE_PROPOSALS_PROMPT = (
+    "Sos el auditor de un laboratorio que evalúa harnesses de agentes de código. "
+    "Ya leíste el repositorio y produjiste un mapa de componentes; el laboratorio "
+    "lo anotó: cada componente dice evaluable_here (true/false) y por qué. También "
+    "tenés health_at_pin: si la suite del repositorio pasa al commit sin que nadie "
+    "la toque. Ahora proponé los CASOS que medirían si el harness cumple lo que "
+    "afirma.\n\n"
+    "Respondé ÚNICAMENTE con un objeto JSON (sin texto antes ni después, sin "
+    'bloque de código): {"cases": [...]} con 3 a 6 objetos, cada uno con claves '
+    '{"title", "exercises", "measures", "task", "observable", "validation_hint", '
+    '"required_runtime_version"}:\n'
+    "- exercises: lista de names del component_map que el caso ejercita. Preferí "
+    "componentes con evaluable_here = true; un caso cuyos componentes no son "
+    "evaluables se descarta, pero podés proponerlo si es el más importante y "
+    "querés que quede registrado por qué no se mide.\n"
+    '- measures: "harness_claim" si el caso prueba lo que el harness DICE que hace '
+    '(su tesis, sus skills, sus gates); "harness_development" si prueba trabajar '
+    "SOBRE el código del harness (arreglar su suite, agregar un test). Ambos "
+    "valen; nunca los confundas, y si es development decilo en title.\n"
+    "- task: la instrucción que recibiría el agente, concreta, con rutas reales "
+    "del repositorio.\n"
+    "- observable: qué tendría que existir o pasar al final para decir que el "
+    "componente cumplió su claim.\n"
+    "- validation_hint: UNA de dos cosas: (a) un único comando de shell desnudo, "
+    "relativo a la raíz del repositorio, sin prosa ni backticks — por ejemplo "
+    "bash tests/run.sh — o (b) una frase que empiece con 'Comprobar que' si se "
+    "decide leyendo. Si health_at_pin.status es 'fail', NO uses la suite completa "
+    "como condición de éxito salvo que task sea arreglarla: una suite roja antes "
+    "de empezar no puede medir al agente.\n"
+    '- required_runtime_version: sólo si el repositorio declara una (ej. "3.2" '
+    'para bash); si no, "".\n\n'
+    "Reglas: usá SOLO el mapa y la evidencia; nombrá los componentes exactamente "
+    "como aparecen en component_map; no propongas tareas genéricas ('correr la "
+    "suite', 'comprobar que existe AGENTS.md') salvo como harness_development "
+    "explícito."
+)
+
+# The name the first version of the audit used; kept so nothing that imported
+# it breaks, and pointing at the first pass because that is where its former
+# job (the summary, the verdict, the standards) now lives.
+REPOSITORY_AUDIT_SYSTEM_PROMPT = COMPONENT_MAP_PROMPT
+
+
+def render_case_prompt(evidence: dict[str, Any], annotated: dict[str, Any]) -> str:
+    """The second pass's user message: the annotated map plus what matters."""
+    payload = {
+        "target_id": evidence.get("target_id"),
+        "name": evidence.get("name"),
+        "commit": evidence.get("commit"),
+        "summary": annotated.get("summary", ""),
+        "shape": annotated.get("shape", {}),
+        "component_map": annotated.get("component_map", []),
+        "health_at_pin": evidence.get("health_at_pin", {}),
+        "validation_commands": evidence.get("validation_commands", []),
+        "makefile_targets": evidence.get("makefile_targets", []),
+        "governance": evidence.get("governance", {}),
+        "readme": evidence.get("readme", ""),
+    }
+    return (
+        "Mapa anotado y evidencia (JSON). Todo lo que propongas tiene que salir "
+        "de acá.\n\n```json\n"
+        + json.dumps(payload, indent=1, ensure_ascii=False, default=str)
         + "\n```"
     )
 
@@ -672,6 +909,114 @@ def _is_available(capabilities: dict[str, RunnerCapability], runtime: str) -> bo
     return capability is not None and capability.available
 
 
+# A hint the model wrapped in backticks, possibly with prose around it. The
+# contract asks for a bare command, but a model that has just been shown a
+# repository full of markdown writes `bash tests/run.sh` about a third of the
+# time, and the executability heuristic then reads the backticks as prose and
+# files a perfectly runnable case as "settled by reading".
+_BACKTICKED = re.compile(r"`([^`\n]{2,200})`")
+
+
+def _is_command(text: str) -> bool:
+    """Whether this line would run, by either of the two things that decide it."""
+    from harness_lab_app.validation import is_executable_command
+
+    return bool(is_executable_command(text) or declared_runtime_for_binary(text))
+
+
+def repair_hint_command(command: str) -> tuple[str, str]:
+    """A hint's command as the case lane would accept it, and what changed.
+
+    The audit and the case lane disagreed about one word. The audit asks the
+    model for a command "relative to the repository root", which is the right
+    thing to ask; validation executes from the *lab's* root, where a bare
+    relative path resolves to something else entirely. Left alone, the wizard
+    proposed `bash tests/test_*.sh`, called it runnable, and then refused to
+    save it — correct, and far too late to be useful.
+
+    Anchoring is a translation between two names for the same directory, so it
+    is applied silently. A repair that changes *what runs* — a glob handed to
+    an interpreter runs only the first matching file — is applied too, because
+    proposing a case that measures one script out of fifty-five is worse, but
+    it is named in the returned note and shown before anything executes.
+    """
+    from harness_lab_app.case_validation import anchor_workspace, check_command
+
+    anchored = anchor_workspace(command)
+    notes: list[str] = []
+    if anchored != command:
+        notes.append(_ANCHOR_NOTE)
+    problem = check_command(anchored)
+    repaired = anchored
+    if problem is not None and problem.suggestion:
+        repaired = problem.suggestion
+        notes.append(_REPAIR_NOTES.get(problem.reason, _GENERIC_REPAIR_NOTE))
+    return repaired, " ".join(notes)
+
+
+_ANCHOR_NOTE = (
+    "Se ancló a `{workspace}`: la validación corre desde la raíz del "
+    "laboratorio, no desde el repositorio."
+)
+_GENERIC_REPAIR_NOTE = (
+    "Se corrigió para que pueda fallar: como estaba escrito no habría medido "
+    "lo que dice medir."
+)
+#: The Spanish the reader sees, keyed by the English reason the rule states.
+#: The rules live in `case_validation` and are code; this page is prose.
+_REPAIR_NOTES: dict[str, str] = {}
+
+
+def _load_repair_notes() -> None:
+    from harness_lab_app import case_validation
+
+    _REPAIR_NOTES.update(
+        {
+            case_validation.REASON_GLOB_RUNS_ONE_FILE: (
+                "Se convirtió en un bucle: entregarle un glob a un intérprete "
+                "corre sólo el primer archivo que coincide y le pasa el resto "
+                "como argumentos, así que una suite entera se mediría por un "
+                "solo script."
+            ),
+            case_validation.REASON_LOOP_SWALLOWS_FAILURES: (
+                "Se le agregó `|| exit 1`: un bucle devuelve el estado de su "
+                "último comando, así que cualquier cantidad de fallas antes de "
+                "un éxito se reportaba como verde."
+            ),
+        }
+    )
+
+
+_load_repair_notes()
+
+
+def normalize_hint(hint: str) -> tuple[str, str]:
+    """Split a ``validation_hint`` into ``(command, note)``.
+
+    Exactly one of the two is non-empty. A hint is a command when it *is* one,
+    or when its first backticked span is one; anything else is a note. The
+    surrounding prose is kept as the note either way, so nothing the model
+    wrote is discarded — it just stops being mistaken for something to run.
+
+    "Is a command" is the run-time heuristic, widened by exactly one rule: a
+    line whose leading binary names a runtime is a command even when that
+    binary is absent from the heuristic's own vocabulary. `jq --version` is a
+    command; so is `docker build .`, which then goes on to be *blocked* rather
+    than quietly filed as something a reader settles.
+    """
+    text = (hint or "").strip()
+    if not text:
+        return "", ""
+    if "`" not in text and _is_command(text):
+        return text, ""
+    for match in _BACKTICKED.finditer(text):
+        candidate = match.group(1).strip()
+        if _is_command(candidate):
+            note = (text[: match.start()] + " " + text[match.end() :]).strip(" .:—-")
+            return candidate, " ".join(note.split())
+    return "", text
+
+
 def classify_case(
     use_case: dict[str, Any], capabilities: dict[str, RunnerCapability]
 ) -> dict[str, Any]:
@@ -698,14 +1043,30 @@ def classify_case(
     a command or a prose note. Using a second, kinder heuristic here would let
     the audit promise a check the runner then silently skips.
     """
-    from harness_lab_app.validation import is_executable_command
-
     hint = str(use_case.get("validation_hint") or "").strip()
+    # The hint is normalized *before* anything is decided from it: `bash
+    # tests/run.sh` wrapped in backticks is a command, and reading it as prose
+    # filed a runnable case as static — which is how a repository full of real
+    # verifiable commands ended up with an execution coverage of "none".
+    command, note = normalize_hint(hint)
+    # What the case lane would actually accept, and what had to change for it
+    # to. Computed here so the wizard proposes a command that saves, instead of
+    # showing "runnable" and then a 422.
+    command, repair = repair_hint_command(command) if command else ("", "")
     required_version = clean_version(use_case.get("required_runtime_version"))
     row = {
         "title": use_case.get("title", ""),
         "why": use_case.get("why", ""),
         "validation_hint": hint,
+        # The two halves, separated: `validation_command` is what a case would
+        # run, `validation_note` is what a reader would check by hand. A case
+        # drafted from this row takes the command as a command instead of
+        # flattening the whole hint back into prose.
+        "validation_command": command,
+        "validation_note": note,
+        # Non-empty when the hint as written would not have measured what it
+        # claimed. Shown beside the case, before anything runs.
+        "validation_repair": repair,
         "runtime": "",
         "runtime_version": "",
         "required_runtime_version": required_version,
@@ -723,18 +1084,24 @@ def classify_case(
         )
         return row
 
-    named = declared_runtime_for_binary(hint)
+    # The blocked check reads the backticked span even when it is not
+    # executable: `docker build .` names a runtime the runner will never have,
+    # and calling that "settled by reading" promises a check nothing will run.
+    quoted = _BACKTICKED.search(hint)
+    named = declared_runtime_for_binary(
+        command or (quoted.group(1).strip() if quoted else hint)
+    )
     if named and not _is_available(capabilities, named):
         return _blocked(named)
 
-    if not is_executable_command(hint):
+    if not command:
         row["reason"] = (
             "Se resuelve leyendo el repositorio, no ejecutando nada: no depende "
             "de ningún runtime del runner."
         )
         return row
 
-    runtime = runtime_for_command(hint)
+    runtime = runtime_for_command(command)
     row["runtime"] = runtime
     if not _is_available(capabilities, runtime):
         return _blocked(runtime)
@@ -903,12 +1270,23 @@ def render_markdown(
             for row in components:
                 kind = _KIND_LABEL.get(row["kind"], row["kind"])
                 lines.append(f"- **{kind}** `{row['name']}` — {row['assessment']}")
+        elif findings.get("component_map"):
+            counts = Counter(row["kind"] for row in findings["component_map"])
+            lines.append(
+                ", ".join(
+                    f"{n} {_KIND_LABEL.get(kind, kind)}{'s' if n != 1 else ''}"
+                    for kind, n in sorted(counts.items())
+                )
+                + " — el detalle está en el mapa de componentes."
+            )
         else:
             lines.append("No se detectó ningún componente escrito para un agente.")
         lines.append("")
         lines += ["## Lenguaje y runtime", ""]
         if findings.get("language_notes"):
             lines += [findings["language_notes"], ""]
+        lines += _render_shape_and_health(findings, evidence)
+        lines += _render_component_map(findings)
         standards = findings.get("standards") or []
         if standards:
             lines += ["## Estándares de uso", ""]
@@ -919,6 +1297,7 @@ def render_markdown(
             lines += ["## Brechas", ""]
             lines += [f"- {item}" for item in gaps]
             lines.append("")
+        lines += _render_cases(findings, evidence)
         use_cases = findings.get("use_cases") or []
         if use_cases:
             planned = (evidence.get("case_plan") or {}).get("cases") or []
@@ -962,6 +1341,129 @@ def render_markdown(
         "",
     ]
     return "\n".join(lines)
+
+
+_SHAPE_LABEL = {
+    "in_place": "gobierna este repositorio",
+    "installable": "se instala en otro proyecto",
+    "both": "gobierna este repositorio y se instala en otros",
+    "unknown": "sin determinar",
+}
+_HEALTH_LABEL = {"pass": "verde", "fail": "roja", "unmeasured": "sin medir"}
+_MEASURES_LABEL = {
+    "harness_claim": "mide una afirmación del harness",
+    "harness_development": "mide trabajar sobre el harness",
+    "unknown": "sin clasificar",
+}
+
+
+def _render_shape_and_health(
+    findings: dict[str, Any], evidence: dict[str, Any]
+) -> list[str]:
+    shape = findings.get("shape") or {}
+    health = evidence.get("health_at_pin") or {}
+    if not shape and not health:
+        return []
+    lines = ["## Forma del harness", ""]
+    if shape:
+        lines.append(
+            f"- Forma: **{_SHAPE_LABEL.get(shape.get('shape', 'unknown'), '?')}**."
+        )
+        if shape.get("unit_of_work"):
+            lines.append(f"- Unidad de trabajo: {shape['unit_of_work']}.")
+        if shape.get("install_entry"):
+            exists = "existe" if shape.get("install_entry_exists") else "no encontrado"
+            lines.append(f"- Instalador: `{shape['install_entry']}` ({exists}).")
+    if health:
+        status = _HEALTH_LABEL.get(health.get("status", "unmeasured"), "?")
+        counts = health.get("counts") or {}
+        detail = (
+            f" — {counts['passed']} pasan, {counts['failed']} fallan" if counts else ""
+        )
+        reason = f" ({health['reason']})" if health.get("reason") else ""
+        lines.append(f"- Suite al pin: **{status}**{detail}{reason}.")
+    lines.append("")
+    return lines
+
+
+def _render_component_map(findings: dict[str, Any]) -> list[str]:
+    rows = findings.get("component_map") or []
+    if not rows:
+        return []
+    lines = [
+        "## Mapa de componentes",
+        "",
+        "| componente | afirma | observable | contraparte | necesita | evaluable |",
+        "|---|---|---|---|---|---|",
+    ]
+    for row in rows:
+        kind = _KIND_LABEL.get(row.get("kind", ""), row.get("kind", ""))
+        needs = ", ".join(row.get("needs") or ["none"])
+        evaluable = "sí" if row.get("evaluable_here") else "no"
+        if not row.get("evaluable_here") and row.get("evaluable_reason"):
+            evaluable += f" — {row['evaluable_reason']}"
+        counterpart = row.get("lab_counterpart") or "—"
+        source = f" `{row['source_path']}`" if row.get("source_path") else ""
+        lines.append(
+            f"| **{kind}** `{row['name']}`{source} | {_cell(row.get('claim'))} "
+            f"| {_cell(row.get('observable'))} | {counterpart} | {needs} | {evaluable} |"
+        )
+    lines.append("")
+    warnings = findings.get("warnings") or []
+    if warnings:
+        lines += ["_Avisos del contrato:_", ""]
+        lines += [f"- {item}" for item in warnings]
+        lines.append("")
+    return lines
+
+
+def _render_cases(findings: dict[str, Any], evidence: dict[str, Any]) -> list[str]:
+    cases = findings.get("cases") or []
+    if not cases:
+        return []
+    planned = (evidence.get("case_plan") or {}).get("cases") or []
+    kept_index = 0
+    lines = ["## Casos propuestos", ""]
+    for index, case in enumerate(cases, start=1):
+        measures = _MEASURES_LABEL.get(case.get("measures", "unknown"), "?")
+        exercises = (
+            ", ".join(f"`{name}`" for name in case.get("exercises") or []) or "—"
+        )
+        lines.append(
+            f"{index}. **{case['title']}** — {measures}. Ejercita: {exercises}."
+        )
+        if case.get("dropped_reason"):
+            lines.append(f"   - _Descartado:_ {case['dropped_reason']}")
+            continue
+        if case.get("observable"):
+            lines.append(f"   - _Observable:_ {case['observable']}")
+        if case.get("validation_hint"):
+            lines.append(f"   - _Validación:_ `{case['validation_hint']}`")
+        arms = case.get("conditions") or []
+        if arms:
+            rendered = "; ".join(
+                f"`{arm['label']}`"
+                + (
+                    f" {json.dumps(arm['overrides'], ensure_ascii=False)}"
+                    if arm["overrides"]
+                    else ""
+                )
+                for arm in arms
+            )
+            lines.append(f"   - _Brazos derivados:_ {rendered}")
+        if case.get("conditions_note"):
+            lines.append(f"   - _Nota:_ {case['conditions_note']}")
+        plan_row = planned[kept_index] if kept_index < len(planned) else None
+        kept_index += 1
+        if plan_row:
+            label = _CASE_STATUS_LABEL.get(plan_row["status"], plan_row["status"])
+            lines.append(f"   - _{label}._ {plan_row['reason']}")
+    lines.append("")
+    return lines
+
+
+def _cell(text: object) -> str:
+    return str(text or "").replace("|", "\\|").replace("\n", " ")
 
 
 def _capabilities_line(runtime: dict[str, Any]) -> str:

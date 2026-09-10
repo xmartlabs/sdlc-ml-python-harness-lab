@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import yaml
 from sqlmodel import Session, select
 
+from harness_lab_app.case_validation import check_case
 from harness_lab_app.config import get_settings
 from harness_lab_app.models import Case, CaseStatus, CaseSyncState, CaseType, utc_now
 from harness_lab_app.skill_import import safe_relpath
@@ -75,6 +76,19 @@ _CONDUCTOR_PREAMBLE = (
 
 class CaseExistsError(ValueError):
     """A case with that id is already in the catalog."""
+
+
+class CaseValidationError(ValueError):
+    """The case's validation commands would not measure anything.
+
+    Distinct from every other ``ValueError`` the service raises (all of which
+    mean "no such case", and answer 404) because this one is a 422: the request
+    reached a real case and was refused on its content.
+    """
+
+    def __init__(self, problems: list[str]) -> None:
+        super().__init__(" ".join(problems))
+        self.problems = problems
 
 
 def resolve_prompt_variant_text(case: Case, variant: str) -> str | None:
@@ -167,6 +181,26 @@ class CaseService:
                 return child
         return None
 
+    def _validated(self, data: CaseCreate) -> None:
+        """Refuse a case whose checks could not measure the agent's work.
+
+        The lab used to store whatever arrived. Two cases written from a talos
+        audit then ran four experiments between them and produced numbers about
+        themselves: a loop that returned only its last script's status, a check
+        whose path resolved against the lab's own repository, a predicate that
+        could not fail, and an empty rubric that parked every run unscored.
+        None of that is visible in a result — it looks exactly like a
+        measurement — so it has to be refused where it is written.
+        """
+        problems = check_case(
+            list(data.validation_commands or []),
+            data.scoring_rubric or "",
+            dict(data.success_criteria or {}),
+            str(getattr(data.type, "value", data.type) or ""),
+        )
+        if problems:
+            raise CaseValidationError(problems)
+
     def create_case(self, data: CaseCreate) -> Case:
         # Named refusal, not an IntegrityError 500: "already exists" is an
         # ordinary answer (the audit flow re-offers candidates a past session
@@ -177,6 +211,7 @@ class CaseService:
         ).first()
         if existing is not None:
             raise CaseExistsError(f"Case already exists: {data.case_id}")
+        self._validated(data)
         case = Case(**data.model_dump())
         self.session.add(case)
         self.session.commit()
@@ -185,6 +220,9 @@ class CaseService:
 
     def update_case(self, case_id: str, data: CaseCreate) -> Case:
         case = self.get_case(case_id)
+        # Enforced on edit too: a case that passed once can be edited into the
+        # same shapes, and an edit is exactly when somebody is trying to fix one.
+        self._validated(data)
         payload = data.model_dump()
         for field_name, value in payload.items():
             setattr(case, field_name, value)

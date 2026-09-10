@@ -152,6 +152,10 @@ def test_an_entry_that_cannot_be_stated_is_skipped(monkeypatch, sources_root: Pa
 
 def test_a_directory_that_cannot_be_read_says_so(sources_root: Path):
     """A 403 of the filesystem's own is an answer; a 500 is not."""
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("permission checks don't work for root")
     locked = sources_root / "locked"
     locked.mkdir()
     locked.chmod(0o000)

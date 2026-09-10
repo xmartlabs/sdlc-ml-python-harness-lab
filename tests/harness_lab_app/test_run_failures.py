@@ -15,6 +15,7 @@ from harness_lab_app.run_failures import (
     awaits_model_response,
     classify_failure,
     failure_label,
+    is_model_request,
     is_retry_noise,
     is_stream_error,
     is_unmeasured,
@@ -102,20 +103,63 @@ def test_labels_are_short_enough_for_a_table_cell():
 
 def test_a_request_in_flight_is_told_apart_from_a_tool_call():
     """The one distinction the whole fix rests on, against real log lines."""
-    assert awaits_model_response(STREAM_START_LINE) is True
-    assert awaits_model_response(RUNTIME_SELECTED_LINE) is True
-    assert awaits_model_response(TOOL_CALL_LINE) is False
+    assert awaits_model_response(STREAM_START_LINE, "opencode") is True
+    assert awaits_model_response(RUNTIME_SELECTED_LINE, "opencode") is True
+    assert awaits_model_response(TOOL_CALL_LINE, "opencode") is False
     # The trap: "stream error" is the opposite of a request in flight, and it
     # contains the word the marker matches on.
-    assert awaits_model_response(STREAM_ERROR_LINE) is False
+    assert awaits_model_response(STREAM_ERROR_LINE, "opencode") is False
 
 
 def test_failed_requests_are_recognized_and_retry_noise_is_not_progress():
-    assert is_stream_error(STREAM_ERROR_LINE) is True
-    assert is_stream_error(STREAM_START_LINE) is False
+    assert is_stream_error(STREAM_ERROR_LINE, "opencode") is True
+    assert is_stream_error(STREAM_START_LINE, "opencode") is False
     # Between two failed attempts opencode prints only its own setup. Counting
     # that as progress would reset the error count forever and the run would
     # retry until its budget ran out — exactly what K-029 did.
-    assert is_retry_noise(STREAM_START_LINE) is True
-    assert is_retry_noise(RUNTIME_SELECTED_LINE) is True
-    assert is_retry_noise(TOOL_CALL_LINE) is False
+    assert is_retry_noise(STREAM_START_LINE, "opencode") is True
+    assert is_retry_noise(RUNTIME_SELECTED_LINE, "opencode") is True
+    assert is_retry_noise(TOOL_CALL_LINE, "opencode") is False
+
+
+# --- Per-harness vocabulary --------------------------------------------------
+
+CLAUDE_AWAITING_LINE = "# awaiting model (Bash)"
+CLAUDE_TOOL_LINE = "→ Bash(bash tests/run.sh)"
+
+
+def test_the_claude_lane_can_say_it_is_waiting_on_the_model():
+    """Without this the claude lane had no way to be waiting at all.
+
+    Every silence was charged to the agent as a stall, so a gateway that
+    accepted a request and never answered came back as a failed attempt by the
+    model — four talos runs spanning 122 minutes were recorded that way.
+    """
+    assert awaits_model_response(CLAUDE_AWAITING_LINE, "claude") is True
+    assert awaits_model_response(CLAUDE_TOOL_LINE, "claude") is False
+
+
+def test_one_harness_never_reads_another_harness_markers():
+    """opencode's literals said nothing about a claude run, and vice versa."""
+    assert awaits_model_response(STREAM_START_LINE, "claude") is False
+    assert awaits_model_response(CLAUDE_AWAITING_LINE, "opencode") is False
+
+
+def test_an_unknown_harness_never_has_its_silence_charged_to_the_agent():
+    """A silence nobody can attribute is unmeasured, not an agent failure."""
+    assert awaits_model_response(CLAUDE_TOOL_LINE, "some-new-cli") is True
+    assert awaits_model_response("anything at all", None) is True
+    # And it claims no request and no error it cannot see.
+    assert is_model_request(CLAUDE_AWAITING_LINE, "some-new-cli") is False
+    assert is_stream_error(STREAM_ERROR_LINE, "some-new-cli") is False
+
+
+def test_the_watchdog_verdict_for_a_quiet_gateway_is_a_lab_failure():
+    """The two halves of the module must agree end to end.
+
+    `awaiting_model` chooses `model_silent`, which `tasks._model_silence_failure`
+    renders with the "No model response:" prefix, which this taxonomy files as
+    `lab` and the leaderboard therefore excludes.
+    """
+    assert classify_failure("No model response: the endpoint accepted") == "lab"
+    assert is_unmeasured("No model response: the endpoint accepted") is True

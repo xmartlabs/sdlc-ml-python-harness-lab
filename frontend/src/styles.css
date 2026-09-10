@@ -3724,6 +3724,12 @@ button.ghost {
   font-size: 0.82rem;
 }
 
+/* A repaired command: the lab changed what the auditor proposed, and says so
+   where the case is still being chosen rather than after it is refused. */
+.small.warn {
+  color: var(--warning);
+}
+
 .mono {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   font-size: 0.82rem;

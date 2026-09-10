@@ -13,6 +13,7 @@ import json
 import sys
 from pathlib import Path
 
+from harness_lab_app import run_failures
 from harness_lab_app.attribution import (
     HARNESS_READING_SURFACE,
     build_attribution_from_events,
@@ -103,8 +104,19 @@ def test_render_claude_event_readable_lines():
     assert tool.startswith("→ Bash(pytest -q more")
     result = bench_run.render_claude_event(SAMPLE_EVENTS[-1])
     assert "turns=7" in result and "cost=$0.0123" in result
-    # tool_result / user events are dropped from the readable log.
-    assert bench_run.render_claude_event(_event("user", message={})) is None
+    # A `user` event is a tool result going back to the model — the one moment
+    # claude announces that a request is in flight. The run watchdog reads this
+    # marker to tell a quiet gateway from a wedged tool call; without it every
+    # silence in a claude run was charged to the agent as a stall.
+    assert (
+        bench_run.render_claude_event(_event("user", message={}))
+        == "# awaiting model\n"
+    )
+    assert run_failures.CLAUDE_AWAITING_MARKER in bench_run.render_claude_event(
+        _event("user", message={})
+    )
+    # Everything else is still dropped from the readable log.
+    assert bench_run.render_claude_event(_event("stream_event", message={})) is None
     # Non-JSON passes through untouched (e.g. stderr mixed in).
     assert bench_run.render_claude_event("plain line\n") == "plain line\n"
 

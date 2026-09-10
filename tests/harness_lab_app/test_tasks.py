@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,7 @@ def create_pending_run(
     run_id: str,
     command: list[str] | None = None,
     harness_source: HarnessSource = HarnessSource.lab_root,
+    harness: str = "opencode",
 ):
     with Session(engine) as session:
         service = RunService(session)
@@ -63,6 +65,7 @@ def create_pending_run(
                     case_id="tetris-v1",
                     prompt_variant="sdlc",
                     executor_model="stub-executor",
+                    harness=harness,
                     harness_source=harness_source,
                 ),
             )
@@ -892,3 +895,104 @@ def test_a_harness_that_died_leaves_no_capability_score(
     assert exit_code == 2
     assert failure is not None
     assert scored == []
+
+
+# --------------------------------------------------------------------------
+# Whose silence is it — the per-harness watchdog vocabulary
+# --------------------------------------------------------------------------
+
+
+def test_a_quiet_gateway_in_a_claude_run_is_not_the_agent_stalling(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The four talos runs, and why 122 minutes were charged to the model.
+
+    The watchdog's markers were opencode's literals applied to every run, so a
+    `--harness claude` run could never look like it was waiting on a model. Its
+    every silence became `Run stalled:` — kind `stalled`, which the leaderboard
+    counts as an attempt the agent failed. The claude adapter now prints
+    `# awaiting model` the moment a tool result goes back to the model, and the
+    verdict follows the evidence.
+    """
+    engine = make_engine()
+    create_pending_run(engine, "task-claude-quiet", harness="claude")
+
+    class FakeSettings(RunSettings):
+        run_timeout_seconds = 3600
+        run_stall_seconds = 1  # a tool call would be killed in one second
+        run_model_wait_seconds = 2  # the model gets two
+        run_max_stream_errors = 0
+
+    monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
+
+    program = (
+        "import time\nprint('# awaiting model (Bash)', flush=True)\ntime.sleep(30)\n"
+    )
+
+    _execute_run_body("task-claude-quiet", _script_executor(program), db_engine=engine)
+
+    _state, _exit_code, failure = get_run_state(engine, "task-claude-quiet")
+    assert failure is not None
+    assert failure.startswith("No model response:"), failure
+    assert is_unmeasured(failure) is True
+
+
+def test_a_harness_the_lab_has_never_seen_does_not_get_its_silence_blamed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Adding a CLI must not silently start inventing agent stalls.
+
+    A harness whose log vocabulary nothing here knows produces silences nobody
+    can attribute, and an unattributable silence is unmeasured — never a result
+    about the agent.
+    """
+    engine = make_engine()
+    create_pending_run(engine, "task-unknown-quiet", harness="some-new-cli")
+
+    class FakeSettings(RunSettings):
+        run_timeout_seconds = 3600
+        run_stall_seconds = 1
+        run_model_wait_seconds = 2
+        run_max_stream_errors = 0
+
+    monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
+
+    program = "import time\nprint('doing something', flush=True)\ntime.sleep(30)\n"
+
+    _execute_run_body("task-unknown-quiet", _script_executor(program), db_engine=engine)
+
+    _state, _exit_code, failure = get_run_state(engine, "task-unknown-quiet")
+    assert failure is not None
+    assert failure.startswith("No model response:"), failure
+    assert is_unmeasured(failure) is True
+
+
+def test_the_worker_stops_waiting_on_a_process_that_will_not_end():
+    """`handle.wait()` alone is unbounded, so a wedged handle parked the worker.
+
+    The watchdog decides *why* a run must end; this is what guarantees the
+    worker gets to act on that decision and write the verdict.
+    """
+
+    class WedgedHandle:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        def iter_lines(self):
+            yield from ()
+
+        def stop(self) -> None:
+            self.stopped = True
+
+        def wait(self) -> int:
+            time.sleep(30)
+            return 0
+
+    handle = WedgedHandle()
+    started = time.monotonic()
+    exit_code = tasks._wait_bounded(handle, 1.0, grace_seconds=0.5)
+    elapsed = time.monotonic() - started
+
+    assert exit_code == -1, "no exit code was observed, and none may be invented"
+    assert handle.stopped is True
+    assert elapsed < 10.0, "the worker was still parked on a run that was over"

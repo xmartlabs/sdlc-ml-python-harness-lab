@@ -33,14 +33,32 @@ import shlex
 import shutil
 import time
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # Runtimes `Dockerfile.runner` installs, and the language each one executes.
 # bash is not installed by any line of that file: it arrives with the Debian
 # base of `python:3.11-slim` (5.2.37 at the time of writing), which is why
 # adding Shell support needed no image change. `/bin/sh` there is dash, so a
 # command using bash syntax must be run under `bash -c`, not `sh -c`.
-DECLARED_RUNTIMES: tuple[str, ...] = ("python", "node", "bash", "sh", "git")
+# `make` is here because `make test` is what most repositories call their gate,
+# and the readiness step proposes it from a Makefile `test:` target — an
+# inference the image has to be able to honour.
+# `jq` is a capability, not a convenience: a shell repository's test harness
+# reaches for it the way a Python one reaches for pytest, and a case that needs
+# it must be *blocked* rather than filed as runnable and then failing with a
+# configuration error that reads like the agent's fault.
+DECLARED_RUNTIMES: tuple[str, ...] = (
+    "python",
+    "node",
+    "bash",
+    "sh",
+    "git",
+    "jq",
+    "make",
+)
 
 # The binary each runtime is probed through, in the order the probe prints.
 _PROBE_BINARIES: dict[str, str] = {
@@ -49,13 +67,15 @@ _PROBE_BINARIES: dict[str, str] = {
     "bash": "bash",
     "sh": "sh",
     "git": "git",
+    "jq": "jq",
+    "make": "make",
 }
 
 # One POSIX line, no dependencies, safe to run under dash. Each available
 # runtime prints `<runtime>\t<path>\t<first line of --version>`; anything
 # missing prints nothing at all, which is the answer.
 PROBE_SCRIPT = (
-    "for r in python3 node bash sh git; do "
+    "for r in python3 node bash sh git jq make; do "
     'p=$(command -v "$r") || continue; '
     'v=$("$p" --version 2>&1 | head -n 1); '
     'printf \'%s\\t%s\\t%s\\n\' "$r" "$p" "$v"; '
@@ -255,8 +275,11 @@ _COMMAND_RUNTIME: dict[str, str] = {
     "bash": "bash",
     "sh": "sh",
     "make": "make",
-    "just": "make",
+    # `just` is a different binary the image does not ship. Mapping it to
+    # "make" would report a case as runnable and then fail to launch it.
+    "just": "just",
     "git": "git",
+    "jq": "jq",
     "go": "go",
     "cargo": "rust",
     "mvn": "java",
@@ -405,3 +428,91 @@ def compare_runtime_version(required: str, available: str) -> str:
     if len(wanted) > len(present):
         return "partial"
     return "exact" if present[: len(wanted)] == wanted else "partial"
+
+
+# --------------------------------------------------------------------------
+# Services — what a harness's claims may need beyond a runtime (ADR-0058)
+# --------------------------------------------------------------------------
+
+SERVICE_NEEDS = ("jira", "github", "docker", "network", "target_repo", "browser")
+"""The closed vocabulary a component's ``needs`` is written in. ``none`` is
+not a service and is always satisfied."""
+
+
+def service_capabilities(
+    *,
+    execution_backend: str | None = None,
+    env: Callable[[str], str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Which external needs this lab can satisfy, declared and never probed.
+
+    Declared, like the runtime table's default: the answer must be the same in
+    a unit test, in the API process and in the worker, and a probe that hits
+    Jira to find out whether Jira is reachable is a network call inside an
+    audit. Each row says what decided it, so a reader can fix the setting
+    instead of arguing with the verdict.
+
+    ``target_repo`` is ``False`` until the lab has a mechanism to install one
+    repository's harness into another. It is the one an installable harness
+    needs, and saying so honestly is the audit's job.
+    """
+    backend = (
+        execution_backend if execution_backend is not None else _execution_backend()
+    )
+    read = env or _env_value
+    github = bool(read("GITHUB_TOKEN") or read("GH_TOKEN"))
+    jira = bool(read("JIRA_API_TOKEN") or read("ATLASSIAN_API_TOKEN"))
+    browser = read("BROWSER_AVAILABLE").strip().lower() in {"1", "true", "yes"}
+    docker = backend != "subprocess"
+    return {
+        "docker": {
+            "available": docker,
+            "source": "declared",
+            "reason": f"execution backend is {backend or 'docker'}",
+        },
+        "network": {
+            "available": True,
+            "source": "declared",
+            "reason": "the agent lane keeps egress; the validation lane does not",
+        },
+        "github": {
+            "available": github,
+            "source": "declared",
+            "reason": "GITHUB_TOKEN or GH_TOKEN in .env"
+            if github
+            else "no GITHUB_TOKEN in .env",
+        },
+        "jira": {
+            "available": jira,
+            "source": "declared",
+            "reason": "JIRA_API_TOKEN or ATLASSIAN_API_TOKEN in .env"
+            if jira
+            else "no JIRA_API_TOKEN in .env",
+        },
+        "browser": {
+            "available": browser,
+            "source": "declared",
+            "reason": "BROWSER_AVAILABLE=1 in .env"
+            if browser
+            else "no BROWSER_AVAILABLE in .env",
+        },
+        "target_repo": {
+            "available": False,
+            "source": "declared",
+            "reason": "the lab cannot yet install one repository's harness into another",
+        },
+    }
+
+
+def _execution_backend() -> str:
+    from harness_lab_app.config import get_settings
+
+    return str(getattr(get_settings(), "execution_backend", "docker") or "docker")
+
+
+def _env_value(name: str) -> str:
+    import os
+
+    from harness_lab_app.config import read_env_file_value
+
+    return os.environ.get(name) or read_env_file_value(name)

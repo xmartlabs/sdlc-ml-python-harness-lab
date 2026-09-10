@@ -73,11 +73,11 @@ def test_create_run_persists_skills_disabled():
         run = service.create_run(
             RunCreate(
                 run_id="abl-1",
-                config=_config(skills_disabled=["brainstorming"]),
+                config=_config(skills_disabled=["bootstrap_project"]),
             )
         )
         config = service.get_run_config(run.run_config_id)
-        assert config.skills_disabled == ["brainstorming"]
+        assert config.skills_disabled == ["bootstrap_project"]
         assert "--disable-skill" in run.command
 
 

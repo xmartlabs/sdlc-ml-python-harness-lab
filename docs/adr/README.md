@@ -85,6 +85,8 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0054 — A repository is audited before the lab runs anything on it](0054-a-repository-is-audited-before-the-lab-runs-anything-on-it.md)
 - [0055 — The projection reads its adapter files from outside the mask](0055-the-projection-reads-its-adapter-files-from-outside-the-mask.md)
 - [0056 — Cases are matched against runner capabilities, not the repository's language](0056-cases-are-matched-against-runner-capabilities.md)
+- [0057 — A case is validated before it is allowed to measure anything](0057-a-case-is-validated-before-it-can-measure-anything.md)
+- [0058 — The repository audit maps harness components to claims and derives cases and conditions from them](0058-the-audit-maps-harness-components-to-claims.md)
 
 ## Why ADRs exist
 

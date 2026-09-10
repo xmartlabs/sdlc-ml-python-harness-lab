@@ -25,7 +25,10 @@ from typing import TYPE_CHECKING, Any
 
 from harness_lab_app.config import get_settings
 from harness_lab_app.models import CaseType
-from harness_lab_app.runner_capabilities import shell_for_command
+from harness_lab_app.runner_capabilities import (
+    declared_runtime_for_binary,
+    shell_for_command,
+)
 
 # GNU `timeout` exists in the runner container (Linux) but not on a macOS host
 # worker (subprocess backend). Make case commands portable across both.
@@ -188,7 +191,12 @@ def build_validation_spec(
     )
     commands: list[list[str]] = []
     for raw in target_commands or case.validation_commands or []:
-        if not _looks_executable(raw):
+        if not is_executable_command(raw):
+            # The same predicate the case editor refuses on, so a command the
+            # lab accepted is a command the lab runs. This used to be the
+            # narrower `_looks_executable`, and the gap was silent: a stored
+            # command it did not recognise disappeared without a check, a note
+            # or a line in the log.
             continue
         rendered = _portable_timeout(raw.format(workspace=workspace, run_id=run_id))
         # `-c` and not `-lc`: a login shell resets PATH and would drop the
@@ -221,15 +229,22 @@ def parse_objective(results: list[dict[str, Any]], strategy: str) -> dict[str, A
     something conclusively failed, ``None`` when nothing failed but something
     could not be measured, ``True`` only when every check ran and passed.
     """
-    checks = []
+    checks: list[dict[str, Any]] = []
     swebench_line: str | None = None
     for result in results:
         exit_code = result.get("exit_code")
         output = result.get("output", "")
         swebench_line = _swebench_summary(output) or swebench_line
+        command = str(result.get("command", "") or "")
         checks.append(
             {
-                "name": result.get("command", ""),
+                # `name` is what the UI and the audit have always read; the
+                # command is the same string, under the key that says so.
+                # Emitting both keeps old rows readable and stops a consumer
+                # having to guess which one carries the text (it used to find
+                # `command: None` and report a check it could not name).
+                "name": command,
+                "command": command,
                 "passed": exit_code == 0,
                 "conclusive": exit_code not in INCONCLUSIVE_EXIT_CODES,
                 "exit_code": exit_code,
@@ -360,13 +375,56 @@ def is_executable_command(command: str) -> bool:
     Public face of the heuristic ``build_validation_spec`` applies, so anything
     that produces validation commands ahead of a run (the AI case assistant,
     imports) can refuse an entry at the same line the runner would drop it.
+
+    Two things decide it: the shape heuristic below, and the runtime table in
+    :mod:`harness_lab_app.runner_capabilities`. The second was added because
+    the first knows a fixed vocabulary that the capability table had already
+    outgrown — ``git -C /app diff --quiet`` is a real check that tetris-v2 has
+    shipped since it was written, and ``build_validation_spec`` was silently
+    dropping it. A command whose leading binary names a runtime is a command,
+    whether or not ``_EXEC_HINTS`` has heard of that binary; whether the runner
+    *has* that runtime is a separate question, answered by the capability match.
     """
-    return _looks_executable(command)
+    return _looks_executable(command) or bool(declared_runtime_for_binary(command))
+
+
+# Files that are never a program. A hint that names one in backticks is a
+# reader's check ("does this SKILL.md exist"), and a validation entry that IS
+# one would be handed to `sh -c` and exit 126 — a failure about the case, read
+# as a failure of the agent. `{workspace}/skills/x/SKILL.md` was once classified
+# runnable because the placeholder short-circuited every other question.
+_DOCUMENT_SUFFIXES = (
+    ".md",
+    ".markdown",
+    ".rst",
+    ".txt",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".csv",
+    ".lock",
+    ".html",
+    ".css",
+)
+
+
+def names_a_document(command: str) -> bool:
+    """Whether a command is nothing but a path to a file that cannot run."""
+    try:
+        tokens = shlex.split(command.strip())
+    except ValueError:
+        return False
+    return len(tokens) == 1 and tokens[0].lower().endswith(_DOCUMENT_SUFFIXES)
 
 
 def _looks_executable(command: str) -> bool:
     stripped = command.strip()
     if not stripped:
+        return False
+    if names_a_document(stripped):
         return False
     if "{workspace}" in stripped or "{run_id}" in stripped:
         return True

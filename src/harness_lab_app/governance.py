@@ -22,6 +22,8 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from harness_lab_app import governance_paths as gp
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -55,18 +57,18 @@ _SINGLE_FILES = (
 )
 
 # Directories whose markdown is governance. Each entry is (directory, glob).
+# The roots come from `governance_paths` so this surface, the readiness
+# classifier and the audit evidence agree on where a harness lives. A target
+# team that keeps its skills in a root `skills/` gave its agent those skills;
+# judging the run against a surface that omitted them measured the lab.
 _GLOBS = (
     (".github", "*.md"),
     ("memory", "*.md"),
-    (".claude/skills", "*/SKILL.md"),
-    (".claude/agents", "*.md"),
-    (".claude/commands", "*.md"),
-    (".github/skills", "*/SKILL.md"),
-    (".github/skills-external", "*/SKILL.md"),
-    (".github/agents", "*.md"),
-    (".agents/skills", "*/SKILL.md"),
     (".agents/rules", "*.md"),
-    ("docs/adr", "*.md"),
+    *((root.rstrip("/"), "*/SKILL.md") for root in gp.SKILL_ROOTS),
+    *((root.rstrip("/"), "**/*.md") for root in gp.AGENT_ROOTS),
+    *((root.rstrip("/"), "**/*.md") for root in gp.COMMAND_ROOTS),
+    *((root.rstrip("/"), "*.md") for root in gp.ADR_ROOTS),
 )
 
 # How many files a surface may enumerate. A repository with a thousand markdown

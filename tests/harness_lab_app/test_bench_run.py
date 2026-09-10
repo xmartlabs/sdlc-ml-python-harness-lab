@@ -575,3 +575,134 @@ def test_a_lab_root_run_still_regenerates_its_skill_views(tmp_path, monkeypatch)
     assert calls["build_effective_skills"] == 1
     # And it runs from the lab root, which is the whole point of the condition.
     assert seen["cwd"] is None
+
+
+# --------------------------------------------------------------------------
+# "Needs a clone" and "is SWE-bench" are different questions
+# --------------------------------------------------------------------------
+
+
+def test_a_target_paired_case_needs_a_clone_but_is_not_swe_bench():
+    """The conflation that invalidated both talos experiments.
+
+    `source: "git_target"` is stamped on every case paired with an external
+    repository (ADR-0029/0030) — a documentation review, a shell test suite,
+    anything. It was read as "this is SWE-bench", so from step 2 onward those
+    runs were told to resolve a GitHub issue, shown an empty list of target
+    failing tests, and instructed to run `python -m pytest` in a repository
+    with no Python. Both arms, both experiments.
+    """
+    spec = {"source": "git_target", "repo": "acme/talos", "case_type": "repo_task"}
+
+    assert bench_run.spec_provisions_repo(spec) is True
+    assert bench_run.spec_is_swe_bench(spec) is False
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"case_type": "swe_bench_instance", "repo": "pallets/flask"},
+        {"case_type": "swe_pro", "repo": "a/b"},
+        {"repo": "astropy/astropy", "fail_to_pass": ["tests/test_x.py::test_y"]},
+    ],
+)
+def test_a_real_swe_case_is_still_recognised(spec):
+    assert bench_run.spec_is_swe_bench(spec) is True
+
+
+def test_nothing_at_all_is_not_swe_bench():
+    assert bench_run.spec_is_swe_bench(None) is False
+    assert bench_run.spec_is_swe_bench({}) is False
+
+
+def test_a_swe_spec_naming_no_failing_tests_stops_the_run(tmp_path):
+    """A SWE-bench task IS its failing tests; without them there is no objective.
+
+    The prompt used to render an empty bullet list under "Target failing
+    test(s):" and a bare `python -m pytest` under "Run them with:" —
+    instructions to run nothing. That must fail loudly instead of reaching the
+    agent.
+    """
+    with pytest.raises(bench_run.SweSpecError):
+        bench_run.generate_swe_continuation_prompt(
+            "flask-K-001",
+            2,
+            tmp_path,
+            {"case_type": "swe_bench_instance", "fail_to_pass": []},
+            None,
+        )
+
+
+def test_a_swe_continuation_still_names_its_tests(tmp_path):
+    path = bench_run.generate_swe_continuation_prompt(
+        "flask-K-001",
+        2,
+        tmp_path,
+        {"case_type": "swe_bench_instance", "fail_to_pass": ["tests/t.py::test_a"]},
+        None,
+    )
+    text = path.read_text()
+
+    assert "Target failing test(s):" in text
+    assert "tests/t.py::test_a" in text
+
+
+def test_the_generic_continuation_says_nothing_about_failing_tests(tmp_path):
+    """What a target-paired non-SWE case gets instead, at step 2."""
+    path = bench_run.generate_generic_continuation_prompt("talos-K-001", 2, tmp_path)
+    text = path.read_text()
+
+    assert "Target failing test" not in text
+    assert "SWE-bench" not in text
+    assert "python -m pytest" not in text
+
+
+def test_usage_json_records_which_prompt_each_step_was_given(tmp_path):
+    """The leak showed up in no stored number. Now it shows up in one."""
+    path = bench_run.write_usage_json(
+        tmp_path, {"steps": 2, "prompt_kinds": ["case", "generic"]}
+    )
+    stored = json.loads(path.read_text())
+
+    assert stored["prompt_kinds"] == ["case", "generic"]
+
+
+def test_a_usage_skeleton_names_the_field_even_when_empty(tmp_path):
+    stored = json.loads(bench_run.write_usage_json(tmp_path, None).read_text())
+
+    assert "prompt_kinds" in stored
+
+
+def test_finalize_workspace_includes_files_the_agent_created(tmp_path):
+    """`git diff <ref>` lists tracked files only. Two talos arms each wrote a
+    new test file and shipped an empty patch; the judge scored one of them 0
+    for a file a PASS check had just executed."""
+    import subprocess
+
+    workspace = tmp_path / "workspace" / "talos-K-001"
+    workspace.mkdir(parents=True)
+    git = lambda *args: subprocess.run(  # noqa: E731
+        ["git", "-C", str(workspace), *args], check=True, capture_output=True, text=True
+    )
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    (workspace / "lib.sh").write_text("echo old\n")
+    (workspace / ".gitignore").write_text("build/\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "provisioned")
+    # The agent: edits a tracked file, creates a new one, and leaves build output.
+    (workspace / "lib.sh").write_text("echo new\n")
+    (workspace / "tests").mkdir()
+    (workspace / "tests" / "test_new.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (workspace / "build").mkdir()
+    (workspace / "build" / "out.bin").write_text("x")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    bench_run.finalize_workspace(out_dir, workspace, "talos-K-001")
+
+    patch = (out_dir / "diff.patch").read_text()
+    assert "+echo new" in patch
+    assert "tests/test_new.sh" in patch and "+exit 0" in patch
+    assert "build/out.bin" not in patch

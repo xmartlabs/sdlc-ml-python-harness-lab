@@ -51,6 +51,16 @@ def enqueue_gate_check(gate_check_id: str) -> None:
     )
 
 
+def enqueue_case_dry_run(case_id: str) -> None:
+    """Publish a case's dry run against its target's clean tree (worker-side)."""
+    celery_app.send_task(
+        "harness_lab_app.tasks.dry_run_case",
+        args=[case_id],
+        queue="runs",
+        retry=False,
+    )
+
+
 def enqueue_experiment_audit(
     experiment_id: str, auditor_model: str | None = None
 ) -> None:

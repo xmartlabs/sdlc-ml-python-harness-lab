@@ -15,10 +15,12 @@ from harness_lab_app.experiment_audit_service import (
     EXPERIMENT_AUDIT_SYSTEM_PROMPT,
     ExperimentAuditService,
     build_evidence,
+    call_with_retry,
     render_audit_prompt,
     runs_finished,
 )
 from harness_lab_app.experiment_service import ExperimentService
+from harness_lab_app.llm_transport import GatewayHTTPError, TransportError
 from harness_lab_app.models import (
     Attribution,
     Case,
@@ -244,3 +246,78 @@ def test_a_failed_reading_is_recorded_not_raised(session):
     assert audit is not None
     assert audit.status == "failed"
     assert "gateway down" in (audit.error or "")
+
+
+# --------------------------------------------------------------------------
+# Retry — a transport error is a fact about the network, not the experiment
+# --------------------------------------------------------------------------
+
+
+def test_a_transport_error_is_retried_and_the_reading_still_lands(session):
+    """The `audit-talos` reading died on one TransportError and was never asked
+    again, leaving a `failed` row beside a finished experiment nobody had read.
+    """
+    _, runs = _launch(session)
+    for run in runs:
+        _finish(session, run, passed=True, cost=0.5)
+    attempts: list[int] = []
+
+    def gateway(model: str, system: str, user: str) -> str:
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise TransportError("connection reset")
+        return "## Veredicto\nEmpate.\n"
+
+    _audit_experiment_body(
+        session, "read-me", "judge-x", gateway=gateway, sleep=lambda _s: None
+    )
+
+    audit = ExperimentAuditService(session).get("read-me")
+    assert audit is not None
+    assert audit.status == "done"
+    assert len(attempts) == 3
+
+
+def test_a_gateway_that_never_answers_fails_with_its_attempt_count(session):
+    _, runs = _launch(session)
+    for run in runs:
+        _finish(session, run, passed=True, cost=0.5)
+
+    def gateway(*_args) -> str:
+        raise TransportError("connection reset")
+
+    _audit_experiment_body(
+        session, "read-me", "judge-x", gateway=gateway, sleep=lambda _s: None
+    )
+
+    audit = ExperimentAuditService(session).get("read-me")
+    assert audit is not None
+    assert audit.status == "failed"
+    assert "3 attempts" in (audit.error or "")
+
+
+def test_a_bad_request_is_not_asked_three_times(session):
+    """A 4xx says the request is wrong; repeating it only makes that slower."""
+    calls: list[int] = []
+
+    def call() -> str:
+        calls.append(1)
+        raise GatewayHTTPError(400, "unknown model")
+
+    with pytest.raises(GatewayHTTPError):
+        call_with_retry(call, sleep=lambda _s: None)
+
+    assert len(calls) == 1
+
+
+def test_a_server_error_is_retried(session):
+    calls: list[int] = []
+
+    def call() -> str:
+        calls.append(1)
+        if len(calls) < 2:
+            raise GatewayHTTPError(503, "overloaded")
+        return "ok"
+
+    assert call_with_retry(call, sleep=lambda _s: None) == "ok"
+    assert len(calls) == 2

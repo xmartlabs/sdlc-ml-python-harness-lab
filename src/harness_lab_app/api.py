@@ -35,6 +35,7 @@ from harness_lab_app.case_draft_service import generate_case_draft
 from harness_lab_app.case_service import (
     CaseExistsError,
     CaseService,
+    CaseValidationError,
     resolve_prompt_variant_text,
 )
 from harness_lab_app.celery_app import (
@@ -1768,6 +1769,10 @@ def create_app() -> FastAPI:
         except CaseExistsError as exc:
             # 409, so a client can treat "already there" as the non-event it is.
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except CaseValidationError as exc:
+            # 422 with one message per offending command: the person is still on
+            # the form and each message names the command and the fix.
+            raise HTTPException(status_code=422, detail=exc.problems) from exc
 
     @app.patch("/api/cases/{case_id}")
     def update_case(
@@ -1777,8 +1782,34 @@ def create_app() -> FastAPI:
         # unknown id is an ordinary 404, not a 500 traceback in the panel.
         try:
             return CaseService(session).update_case(case_id, data)
+        except CaseValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.problems) from exc
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/dry-run")
+    def dry_run_case(case_id: str, session: Session = Depends(get_session)):
+        """Run this case's own checks against the clean, pinned tree.
+
+        A check that passes here passed before the agent started, so its green
+        says nothing about the agent. The verdict lands on the case as
+        `metadata_json["dry_run"]`; `verdict == "tautological"` means the case
+        cannot tell work from no work and has to be re-authored.
+        """
+        from harness_lab_app.celery_app import enqueue_case_dry_run
+        from harness_lab_app.validation import is_executable_command
+
+        try:
+            case = CaseService(session).get_case(case_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not [c for c in case.validation_commands if is_executable_command(c)]:
+            raise HTTPException(
+                status_code=422,
+                detail="This case has no runnable validation commands to dry-run.",
+            )
+        enqueue_case_dry_run(case_id)
+        return {"status": "queued", "case_id": case_id}
 
     @app.delete("/api/cases/{case_id}")
     def delete_case(case_id: str, session: Session = Depends(get_session)):

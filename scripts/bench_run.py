@@ -832,6 +832,10 @@ def generate_generic_continuation_prompt(
     return path
 
 
+class SweSpecError(RuntimeError):
+    """A SWE-bench run whose spec does not name the tests that define it."""
+
+
 def generate_swe_continuation_prompt(
     run_id: str,
     step_n: int,
@@ -849,6 +853,16 @@ def generate_swe_continuation_prompt(
     runs), so path references drop the workspace/<run_id>/ prefix.
     """
     f2p = spec.get("fail_to_pass") or []
+    if not f2p:
+        # A SWE-bench task IS its failing tests. Without them this prompt used
+        # to render an empty bullet list under "Target failing test(s):" and a
+        # bare `python -m pytest` under "Run them with:" — instructions to run
+        # nothing, in a repository that may have no Python at all. That is a
+        # broken spec, and it must stop the run rather than reach the agent.
+        raise SweSpecError(
+            "SWE-bench continuation asked for a spec that names no "
+            "fail_to_pass tests; there is no objective to continue toward."
+        )
     repo_ref = "the current directory" if in_repo_cwd else f"`workspace/{run_id}/`"
     repo_mount = "$(pwd)" if in_repo_cwd else f"$(pwd)/workspace/{run_id}"
     if spec.get("case_type") == "swe_pro":
@@ -1167,12 +1181,38 @@ def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
             "the preserved workspace, so this run produced no artifact."
         )
 
+    diff_lines = write_diff_patch(out_dir, dest)
+
+    shutil.rmtree(workspace)
+    if WORKSPACE_ROOT.exists() and not any(WORKSPACE_ROOT.iterdir()):
+        WORKSPACE_ROOT.rmdir()
+    print(f"  Removed workspace/{run_id}/")
+    return diff_lines
+
+
+def write_diff_patch(out_dir: Path, dest: Path) -> int:
+    """Write ``diff.patch`` for an archived workspace and return its line count.
+
+    Separate from the archive step so a run recorded with a wrong patch can
+    have it rewritten from its archive without re-running anything.
+    """
     diff_path = out_dir / "diff.patch"
     if (dest / ".git").exists():
         # Repo task: the meaningful diff is the agent's changes vs the
         # provisioned commit (base_commit + test files), not diff-vs-empty.
         # Diff against that commit, not HEAD: agents sometimes `git commit`
         # their fix inside the workspace, which would make diff-vs-HEAD empty.
+        #
+        # Intent-to-add first: `git diff <ref>` shows tracked files only, so a
+        # run whose whole deliverable was a NEW file shipped an empty patch —
+        # two talos arms each wrote tests/test_install_and_hooks.sh, the judge
+        # was told "(no diff produced)", and scored one of them 0 for "not
+        # adding the test" that a PASS check had just executed. `-N` stages
+        # nothing; it only lets the diff see the file. `.gitignore` still
+        # applies, so build output stays out.
+        _run_git(
+            ["git", "-C", str(dest), "add", "--intent-to-add", "--all"], cwd=REPO_ROOT
+        )
         provisioned = _run_git(
             [
                 "git",
@@ -1205,11 +1245,6 @@ def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
     diff_path.write_text(result.stdout)
     diff_lines = result.stdout.count("\n")
     print(f"  diff.patch: {diff_lines} lines")
-
-    shutil.rmtree(workspace)
-    if WORKSPACE_ROOT.exists() and not any(WORKSPACE_ROOT.iterdir()):
-        WORKSPACE_ROOT.rmdir()
-    print(f"  Removed workspace/{run_id}/")
     return diff_lines
 
 
@@ -1245,6 +1280,40 @@ def spec_provisions_repo(spec: dict | None) -> bool:
     if (spec or {}).get("source") == "git_target":
         return True
     return "/" in (spec or {}).get("repo", "")
+
+
+def spec_is_swe_bench(spec: dict | None) -> bool:
+    """Whether this run is a SWE-bench task, as opposed to merely needing a clone.
+
+    Separate from :func:`spec_provisions_repo` because the two questions have
+    different answers and conflating them cost two whole experiments. That
+    function asks *"does a repository have to be cloned first?"*, and
+    ``source: "git_target"`` answers yes for **every** case paired with an
+    external target (ADR-0029/0030) — a documentation review, a shell test
+    suite, anything. It was also being read as *"is this SWE-bench?"*, so from
+    step 2 onward every target-paired run was handed a continuation prompt
+    telling it to resolve a GitHub issue, listing an empty set of target
+    failing tests, and instructing it to run ``python -m pytest`` in a
+    repository that has no Python. Both talos experiments ran that way, in both
+    arms, and the arm with more governance to reconcile reacted worse — which
+    read as a treatment effect.
+
+    A SWE-bench task is one that says so: a SWE case type, or a spec carrying
+    the failing tests that define the objective. Nothing else.
+    """
+    data = spec or {}
+    case_type = str(data.get("case_type") or "")
+    # Both spellings: `_write_case_spec` stamps the enum value
+    # (`swe_bench_instance`) for the bare lane and the short name (`swe_pro`)
+    # for the pro one, and a spec written by hand may use either.
+    if case_type in {
+        "swe_bench",
+        "swe_pro",
+        "swe_bench_instance",
+        "swe_pro_instance",
+    }:
+        return True
+    return bool(data.get("fail_to_pass"))
 
 
 def _provision_git_target(
@@ -1557,6 +1626,14 @@ def render_claude_event(raw_line: str) -> str | None:
     events file: assistant text passes through, tool calls become one-line
     `→ Tool(arg)` markers, tool results are dropped (noise), and the final
     result event becomes a compact stats line.
+
+    The one exception to "tool results are dropped": each emits a compact
+    `# awaiting model` marker. A tool result going back to the model is exactly
+    the moment a request is in flight, and it is the only such moment claude
+    announces. Without it the run watchdog cannot tell a claude run waiting on
+    a silent gateway from one wedged inside a tool call, so it charged every
+    silence to the agent. `run_failures.CLAUDE_AWAITING_MARKER` is the reader;
+    the two must move together.
     """
     try:
         event = json.loads(raw_line)
@@ -1593,7 +1670,20 @@ def render_claude_event(raw_line: str) -> str | None:
             f"# result: {event.get('subtype', '?')} turns={event.get('num_turns', '?')} "
             f"cost={cost_s} duration_ms={event.get('duration_ms', '?')}\n"
         )
-    return None  # user/tool_result events: noise for the readable log
+    if etype == "user":
+        # A `user` event is a tool result going back to the model. Its blocks
+        # carry a tool_use_id rather than a name, so the marker names the tool
+        # only when the harness happened to include one.
+        names = sorted(
+            {
+                str(block.get("name"))
+                for block in (event.get("message") or {}).get("content", [])
+                if block.get("type") == "tool_result" and block.get("name")
+            }
+        )
+        label = ", ".join(names)
+        return f"# awaiting model ({label})\n" if label else "# awaiting model\n"
+    return None  # anything else: noise for the readable log
 
 
 def stamp_event_line(line: str, now_iso: str | None = None) -> str:
@@ -1975,6 +2065,9 @@ def write_usage_json(out_dir: Path, usage: dict | None) -> Path:
         "detected_model": None,
         "detected_session": None,
         "stop_reason": None,
+        # Which prompt template each step was given ("case", "swe",
+        # "case_step", "continuation", "generic"), in order.
+        "prompt_kinds": None,
     }
     if usage:
         skeleton.update(usage)
@@ -2205,6 +2298,11 @@ def main(argv: list[str] | None = None) -> int:
     # Everything downstream that used to test `case_spec is not None` was really
     # asking this question.
     provisions_repo = spec_provisions_repo(case_spec)
+    # A different question, and the reason the two are named apart: the first
+    # decides whether a repository is cloned, the second decides which prompts
+    # and which stop criterion the run gets. Reading one as the other gave
+    # every target-paired case a SWE-bench continuation prompt.
+    is_swe_bench = spec_is_swe_bench(case_spec)
     # The harness condition (ADR-0031, ADR-0049) is read here — before anything
     # acts on it — because it decides three things that happen in three
     # different places: whether the lab's own skill views may be regenerated,
@@ -2649,6 +2747,11 @@ def main(argv: list[str] | None = None) -> int:
     # between two arms is only readable against how each of them terminated:
     # an arm that ran out of budget did not spend more, it was cut off.
     stop_reason: str | None = None
+    # Which template wrote each step's prompt, in order. Recorded in usage.json
+    # so a later audit can see from the artifacts alone which framing a run was
+    # given — the SWE-bench leak showed up in no stored number and turned up
+    # only by opening a step prompt by hand.
+    prompt_kinds: list[str] = []
 
     if args.score_mode == "none":
         print("  score-mode=none: skipping execution.")
@@ -2674,18 +2777,29 @@ def main(argv: list[str] | None = None) -> int:
             if max_steps > 1:
                 if step_n == 1:
                     step_prompt_path = prompt_path
-                elif provisions_repo and case_spec is not None:
+                    prompt_kind = "case"
+                elif is_swe_bench:
                     # SWE-bench lane: keep the agent on the issue (the generic
                     # continuation prompt is game-build framed and derails it).
-                    step_prompt_path = generate_swe_continuation_prompt(
-                        args.run,
-                        step_n,
-                        steps_dir,
-                        case_spec,
-                        last_swe_eval,
-                        in_repo_cwd=agent_cwd is not None,
-                        invoke_skills=args.invoke_skill,
-                    )
+                    # Gated on the case being SWE-bench, not on it needing a
+                    # clone: those are different questions, and answering the
+                    # second one here handed this prompt to every case paired
+                    # with an external repository.
+                    try:
+                        step_prompt_path = generate_swe_continuation_prompt(
+                            args.run,
+                            step_n,
+                            steps_dir,
+                            case_spec or {},
+                            last_swe_eval,
+                            in_repo_cwd=agent_cwd is not None,
+                            invoke_skills=args.invoke_skill,
+                        )
+                        prompt_kind = "swe"
+                    except SweSpecError as error:
+                        print(f"  ❌ {error}")
+                        stop_reason = "harness_error"
+                        break
                 elif step_n - 1 < len(case_step_prompts):
                     # The case author wrote this step; neither canned
                     # continuation prompt (Tetris / SWE-bench) applies. The list
@@ -2697,6 +2811,7 @@ def main(argv: list[str] | None = None) -> int:
                         case_step_prompts[step_n - 1],
                         invoke_skills=args.invoke_skill,
                     )
+                    prompt_kind = "case_step"
                 elif runs_path is not None:
                     # Curated benchmark lane only: this prompt is Tetris/pygame
                     # framed (main.py, an SDL smoke test, game milestones), so
@@ -2708,6 +2823,7 @@ def main(argv: list[str] | None = None) -> int:
                         workspace_dir=WORKSPACE_ROOT / args.run,
                         invoke_skills=args.invoke_skill,
                     )
+                    prompt_kind = "continuation"
                     # Also copy step prompt to clipboard so user can paste if needed
                     copy_to_clipboard(step_prompt_path.read_text())
                 else:
@@ -2717,11 +2833,14 @@ def main(argv: list[str] | None = None) -> int:
                     step_prompt_path = generate_generic_continuation_prompt(
                         args.run, step_n, steps_dir, invoke_skills=args.invoke_skill
                     )
+                    prompt_kind = "generic"
                 step_log = steps_dir / f"step-{step_n}.log"
                 print(f"\n  --- Step {step_n}/{max_steps} ---")
             else:
                 step_prompt_path = prompt_path
+                prompt_kind = "case"
                 step_log = opencode_log
+            prompt_kinds.append(prompt_kind)
 
             prompt_text = step_prompt_path.read_text()
             cmd = build_harness_cmd(args.harness, executor_model, None, prompt_text)
@@ -2760,10 +2879,10 @@ def main(argv: list[str] | None = None) -> int:
                 stop_reason = "harness_error"
                 break
 
-            if provisions_repo and case_spec is not None:
+            if is_swe_bench:
                 # SWE-bench lane: the stop criterion is objective — evaluate the
                 # F2P/P2P subset now and stop the loop the moment it resolves.
-                swe_eval = swe_step_evaluation(workspace, case_spec)
+                swe_eval = swe_step_evaluation(workspace, case_spec or {})
                 if swe_eval is not None:
                     last_swe_eval = swe_eval
                     print(
@@ -2798,7 +2917,11 @@ def main(argv: list[str] | None = None) -> int:
                 last_workspace_fp = fp
 
                 step_text = step_log.read_text()
-                if not provisions_repo and detect_stop_signal(step_text):
+                # Every lane but SWE-bench, which has an objective stop of its
+                # own. This used to exclude any run that provisioned a
+                # repository, so a target-paired case could not signal
+                # completion at all and paid for its whole step budget.
+                if not is_swe_bench and detect_stop_signal(step_text):
                     print(f"  Agent signaled completion at step {step_n}.")
                     stop_reason = "completion_signal"
                     break
@@ -2864,6 +2987,8 @@ def main(argv: list[str] | None = None) -> int:
             usage["steps"] = completed_steps
         if stop_reason:
             usage["stop_reason"] = stop_reason
+        if prompt_kinds:
+            usage["prompt_kinds"] = list(prompt_kinds)
         write_usage_json(out_dir, usage or None)
         if args.fresh:
             # Managed web run: the API owns scoring (POST /score), so Phase 5
@@ -2967,6 +3092,12 @@ def main(argv: list[str] | None = None) -> int:
         merged_usage["steps"] = completed_steps
     if stop_reason:
         merged_usage["stop_reason"] = stop_reason
+    if prompt_kinds:
+        # One entry per executed step, naming the template that wrote its
+        # prompt. The SWE-bench leak was invisible in every stored number and
+        # turned up only by opening a step prompt by hand; this makes the class
+        # of defect readable straight off the artifacts.
+        merged_usage["prompt_kinds"] = list(prompt_kinds)
 
     usage_path = write_usage_json(out_dir, merged_usage or None)
     if merged_usage:

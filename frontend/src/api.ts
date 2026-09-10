@@ -489,6 +489,17 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   getCase: (caseId: string) => request<CaseRecord>(`/api/cases/${caseId}`),
+  /**
+   * Run this case's own checks against the clean, pinned tree.
+   *
+   * A check that passes here passed before the agent started, so its green says
+   * nothing about the agent. The verdict lands on the case as
+   * `metadata_json.dry_run`.
+   */
+  dryRunCase: (caseId: string) =>
+    request<{ status: string; case_id: string }>(`/api/cases/${caseId}/dry-run`, {
+      method: "POST"
+    }),
   getCasePromptContent: (caseId: string, variant: string) =>
     request<{ variant: string; content: string }>(
       `/api/cases/${caseId}/prompt-content?variant=${encodeURIComponent(variant)}`

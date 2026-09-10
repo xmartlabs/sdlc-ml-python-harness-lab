@@ -13,7 +13,8 @@ from pathlib import Path
 
 from sqlmodel import Session
 
-from harness_lab_app import llm_transport
+from harness_lab_app import case_validation, llm_transport
+from harness_lab_app.case_validation import check_command
 from harness_lab_app.config import read_env_file_value
 from harness_lab_app.models import CaseType
 from harness_lab_app.schemas import (
@@ -21,7 +22,6 @@ from harness_lab_app.schemas import (
     CaseDraftResponse,
     DroppedCommand,
 )
-from harness_lab_app.validation import is_executable_command
 
 # Drafting a case is a bounded generation, not a judgement over long logs, so
 # it rides the summary tier of whichever transport is active (ADR-0043):
@@ -44,14 +44,10 @@ _AUTHORABLE_CASE_TYPES = frozenset(
 # second retry rarely changes the outcome and doubles the wait.
 MAX_ATTEMPTS = 2
 
-REASON_MULTILINE = (
-    "spans several lines; the case stores one shell command per line, so a "
-    "heredoc or script body would be split and each line run on its own"
-)
-REASON_NOT_RUNNABLE = (
-    "does not look like a runnable command: it must start with a known binary "
-    "(python3, node, pytest, sh, make, npm…) or reference {workspace}"
-)
+#: Re-exported so the two names this module has always published keep working.
+#: The rules themselves live in `case_validation`, next to the rest of them.
+REASON_MULTILINE = case_validation.REASON_MULTILINE
+REASON_NOT_RUNNABLE = case_validation.REASON_NOT_RUNNABLE
 
 _SYSTEM_PROMPT = (
     "You are an expert test designer for autonomous AI coding agents in a benchmark harness. "
@@ -67,7 +63,9 @@ _SYSTEM_PROMPT = (
     "- Every command must start with one of: python3, python, pytest, node, npm, npx, sh, bash, make, uv, go, cargo, timeout — or reference {workspace}.\n"
     "- Every command must reference {workspace} (the agent's working directory) when it touches files.\n"
     "- If the agent must produce a test file, have the instruction ask for it and run it (`pytest {workspace}/test_x.py -q`, `node {workspace}/x.test.js`) instead of writing the test inline.\n"
-    "- Prefer 2 to 6 focused commands over one giant one; each must be able to fail.\n\n"
+    "- Prefer 2 to 6 focused commands over one giant one; each must be able to fail.\n"
+    '- A loop must propagate the failure: write `for f in {workspace}/tests/test_*.sh; do bash "$f" || exit 1; done`, never `...; do bash "$f"; done` — the second returns only the LAST command\'s status, so any number of failures ahead of one pass is reported as a pass.\n'
+    "- Every command must be able to fail on the untouched repository. A check whose predicate is a literal you wrote (`any(p in text for p in patterns)` with no file read), a bare `echo`, `true`, or `test -e {workspace}` is not a check: it reports a pass whatever the agent did, and it will be refused.\n\n"
     "Return a strict JSON object with these exact keys:\n"
     '- "subject": concise string naming the tool/feature under test (e.g. "caveman: token-efficient Python module implementation")\n'
     '- "instruction": clear, precise, comprehensive prompt the agent will receive in its workspace to perform the task\n'
@@ -75,6 +73,7 @@ _SYSTEM_PROMPT = (
     '- "max_steps": integer step budget (5, 10, 15, 20, or 25, default 15)\n'
     '- "case_id": lowercase kebab-case identifier for this case, 3 to 40 characters, no spaces (e.g. "json-config-merger")\n'
     '- "description": one or two sentences saying what the case measures, for a person browsing the catalog. Not the instruction.\n'
+    '- "scoring_rubric": 2 to 5 lines the LLM judge grades the run against, on a 0-10 scale: what a 10 looks like (every validation command passes AND the specific behaviours the instruction asked for are present), what partial credit is, and what a 0 looks like. Name the behaviours; do not restate the commands.\n'
     '- "case_type": one of "single_prompt" (one instruction, the agent works until done), "multi_step" (the work is driven turn by turn from a written plan), "build_from_scratch" (an empty workspace, the agent creates the project), "bugfix" (existing code is broken and must be repaired), "repo_task" (a change inside an existing repository)\n'
     '- "step_prompts": ONLY for "multi_step" — the prompt for step 2 onward, one string per step, in order. "instruction" is step 1, so do not repeat it here. Use [] for every other case type.\n\n'
     "Sizing rules that tie those together:\n"
@@ -185,24 +184,29 @@ def _raw_commands(parsed: dict) -> list[str]:
 def screen_commands(raw: list[str]) -> tuple[list[str], list[DroppedCommand]]:
     """Split the model's commands into what the lab would run and what it would drop.
 
-    Mirrors the two ways a command dies downstream. The case stores one shell
-    command per line and the wizard's textarea is split on newlines, so a
-    multi-line entry (a heredoc, a script body) does not survive as a unit —
-    its first line runs alone (`node - <<'EOF'` with an empty stdin exits 0,
-    a pass that measures nothing) and the rest is dropped one line at a time.
-    And ``build_validation_spec`` skips anything ``is_executable_command``
-    rejects, without saying so. Both are refused here instead, with a reason
-    the person can act on while the field is still on screen.
+    Mirrors every way a command dies downstream, and defers to the same rules
+    :mod:`harness_lab_app.case_validation` enforces at creation — so a draft the
+    lab would refuse to store never reaches the field in the first place, and
+    the drafter's one corrective round-trip is spent on the real complaint.
+
+    The oldest two: the case stores one shell command per line and the wizard's
+    textarea is split on newlines, so a multi-line entry (a heredoc, a script
+    body) does not survive as a unit — its first line runs alone (`node - <<'EOF'`
+    with an empty stdin exits 0, a pass that measures nothing) and the rest is
+    dropped one line at a time; and ``build_validation_spec`` skips anything
+    that does not look executable, without saying so.
     """
     accepted: list[str] = []
     dropped: list[DroppedCommand] = []
     for command in raw:
-        if "\n" in command:
-            dropped.append(DroppedCommand(command=command, reason=REASON_MULTILINE))
-        elif not is_executable_command(command):
-            dropped.append(DroppedCommand(command=command, reason=REASON_NOT_RUNNABLE))
-        else:
+        problem = check_command(command)
+        if problem is None:
             accepted.append(command)
+        else:
+            reason = problem.reason
+            if problem.suggestion:
+                reason = f"{reason} — try: {problem.suggestion}"
+            dropped.append(DroppedCommand(command=command, reason=reason))
     return accepted, dropped
 
 
@@ -346,6 +350,9 @@ def generate_case_draft(req: CaseDraftRequest) -> CaseDraftResponse:
 
     subject = str(parsed.get("subject") or "Validation case").strip()
     instruction = str(parsed.get("instruction") or req.description).strip()
+    scoring_rubric = str(parsed.get("scoring_rubric") or "").strip() or default_rubric(
+        subject
+    )
     case_type = _case_type(parsed.get("case_type"))
     step_prompts = _step_prompts(parsed.get("step_prompts"), case_type)
     # The plan decides the floor: a budget below 1 + len(step_prompts) would
@@ -363,4 +370,21 @@ def generate_case_draft(req: CaseDraftRequest) -> CaseDraftResponse:
         description=str(parsed.get("description") or "").strip(),
         case_type=case_type,
         step_prompts=step_prompts,
+        scoring_rubric=scoring_rubric,
+    )
+
+
+def default_rubric(subject: str) -> str:
+    """The rubric a draft carries when the model wrote none.
+
+    Deliberately plain: it says what a 10 and a 0 are in terms the judge can
+    apply to any case, so the draft saves (ADR-0057) and the person can
+    sharpen it. Silence here was how four talos runs parked unscored.
+    """
+    return (
+        f"Score 10 when every validation command passes and the work does what "
+        f"the instruction asks for ({subject}), with no unrelated changes. "
+        "Score partial credit when the commands pass but part of the requested "
+        "behaviour is missing or the change is sloppy. Score 0 when any "
+        "validation command fails or the requested work is absent."
     )

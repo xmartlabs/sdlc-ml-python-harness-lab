@@ -8,6 +8,9 @@ Those two sentences are the whole model. Everything below is how they are implem
 Decision record: [ADR-0056](adr/0056-cases-are-matched-against-runner-capabilities.md),
 amending the gate from [ADR-0054](adr/0054-a-repository-is-audited-before-the-lab-runs-anything-on-it.md).
 
+Whether a case *can* run is this page. Whether it would measure anything if it did is
+[forming a case that measures the agent](guide-case-formation.md).
+
 ## Four concepts
 
 | Concept | The question it answers | Where it lives |

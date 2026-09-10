@@ -467,15 +467,34 @@ Setup runs once per repository, at **Evaluate → Audit a repository**:
    ([ADR-0042](adr/0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md),
    [ADR-0045](adr/0045-a-checkout-the-lab-can-be-given-not-only-watched.md)).
    Nothing after this reads the remote.
-2. **Harness audit** — an auditor model reads the tree at the pinned commit and
-   says what harness it ships, in which language, and what could be tried on it
-   ([ADR-0054](adr/0054-a-repository-is-audited-before-the-lab-runs-anything-on-it.md)).
-   The verdict under the report is the lab's own, from the evidence: an unsupported
-   runtime ends the audit, a missing harness ends the primary flow, and only a
-   supported runtime with a harness goes on. Below it, the deterministic readiness
-   checklist — validation gates, setup, rules files, skills, agents, commands, ADRs,
-   CI — where anything not observed says **Not detected**, and the **gate check**,
-   which runs the repository's own commands at the pin with no agent.
+2. **Harness audit** — an auditor model reads the tree at the pinned commit in two
+   passes ([ADR-0054](adr/0054-a-repository-is-audited-before-the-lab-runs-anything-on-it.md),
+   [ADR-0058](adr/0058-the-audit-maps-harness-components-to-claims.md)). The first
+   pass maps every **harness component** — skill, hook, rules file, agent, or a
+   deterministic command the harness invokes — to what it *claims*, when it *fires*,
+   what would be *observable* if it helped, which lab skill does the *same job*, and
+   what the claim *needs* outside the checkout (`jira`, `github`, `docker`,
+   `network`, `target_repo`, `browser`). It also says the harness's **shape**:
+   `in_place` (it governs work on this repository) or `installable` (it is copied
+   into another project), with the installer it found and the unit of work
+   (*a ticket → a PR*). Between passes the lab fills in what the model may not
+   decide: **evaluable here** from declared service capabilities, whether the
+   counterpart is a real lab skill, whether the installer exists — and it runs the
+   repository's own suite at the pin, so a red suite is a fact the second pass has
+   to work with. The second pass proposes cases that name the components they
+   exercise and say whether they measure a **harness claim** or **work on the
+   harness**; a case naming a component the lab cannot evaluate is kept on the page
+   as *dropped*, with the reason. For each kept case the lab derives the experiment
+   arms mechanically — `native-on`, `native-off` (`skills_disabled`) and
+   `lab-counterpart` (`skills_extra`) when the case exercises skills, the
+   `native`/`injected` pair otherwise — so the arms shown are arms the runner can
+   execute unchanged. The verdict under the report is still the lab's own, from the
+   evidence: an unsupported runtime ends the audit, a missing harness ends the
+   primary flow, and only a supported runtime with a harness goes on. Below it, the
+   deterministic readiness checklist — validation gates, setup, rules files, skills,
+   agents, commands, ADRs, CI — where anything not observed says **Not detected**,
+   and the **gate check**, which runs the repository's own commands at the pin with
+   no agent.
 3. **One case** — drafted by the assistant (from a description, or from a use case
    the audit proposed), mined from the repository's own history
    ([ADR-0032](adr/0032-cases-are-derived-from-a-targets-own-history.md)), written by

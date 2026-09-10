@@ -85,6 +85,7 @@ def _capabilities(**over) -> dict[str, RunnerCapability]:
         "bash": RunnerCapability("bash", True, "5.2.37", "/usr/bin/bash", "probed"),
         "sh": RunnerCapability("sh", True, "", "/bin/sh", "probed"),
         "git": RunnerCapability("git", True, "2.39.5", "/usr/bin/git", "probed"),
+        "jq": RunnerCapability("jq", True, "1.7.1", "/usr/bin/jq", "probed"),
     }
     table.update(over)
     return table
@@ -172,6 +173,89 @@ def test_a_bash_case_is_runnable_because_the_runner_has_bash():
     assert case["status"] == svc.CASE_RUNNABLE
     assert case["runtime"] == "bash"
     assert case["runtime_version"] == "5.2.37"
+
+
+# --------------------------------------------------------------------------
+# The hint contract — a command or a note, never both
+# --------------------------------------------------------------------------
+
+
+def test_a_command_wrapped_in_prose_is_read_as_a_command():
+    """The talos audit's own hints looked like this, and were filed as static.
+
+    A model shown a repository full of markdown writes the command in
+    backticks. The executability heuristic reads the backticks and says "prose",
+    so a repository of real, verifiable bash commands reported an execution
+    coverage of "none" and every case it proposed came back unrunnable.
+    """
+    case = svc.classify_case(
+        _case("The suite passes", "Ejecutar `bash tests/run.sh` y confirmar que pasa"),
+        _capabilities(),
+    )
+
+    assert case["status"] == svc.CASE_RUNNABLE
+    # Anchored on the way out: the audit asks the model for a command relative
+    # to the repository root, and `{workspace}` is what that root is called at
+    # validation time. Without the translation the wizard called this runnable
+    # and then refused to save it.
+    assert case["validation_command"] == "bash {workspace}/tests/run.sh"
+    assert "{workspace}" in case["validation_repair"]
+    # Nothing the model wrote is thrown away; it just stops being run.
+    assert "confirmar que pasa" in case["validation_note"]
+
+
+def test_a_bare_command_carries_no_note():
+    command, note = svc.normalize_hint("bash tests/run.sh")
+
+    assert (command, note) == ("bash tests/run.sh", "")
+
+
+def test_a_written_check_stays_a_written_check():
+    command, note = svc.normalize_hint("Comprobar que existe un AGENTS.md en la raíz")
+
+    assert command == ""
+    assert note.startswith("Comprobar")
+
+
+def test_a_hint_that_only_mentions_a_file_is_not_a_command():
+    """`AGENTS.md` in backticks is a filename, not something to execute."""
+    case = svc.classify_case(
+        _case("Rules are present", "Comprobar que existe `AGENTS.md`"), _capabilities()
+    )
+
+    assert case["status"] == svc.CASE_STATIC
+    assert case["validation_command"] == ""
+
+
+def test_a_backticked_command_the_runner_lacks_is_blocked_not_static():
+    case = svc.classify_case(
+        _case("The image builds", "Correr `docker build .` y ver que termina"),
+        _capabilities(),
+    )
+
+    assert case["status"] == svc.CASE_BLOCKED
+    assert case["runtime"] == "docker"
+
+
+def test_a_posix_tool_the_image_ships_is_runnable():
+    """`jq` is a capability, not a convenience.
+
+    Every talos test died with a configuration error because the runner image
+    had no jq. A case that needs it must be answerable — and, when it is
+    missing, blocked rather than promised.
+    """
+    case = svc.classify_case(_case("jq is present", "jq --version"), _capabilities())
+
+    assert case["status"] == svc.CASE_RUNNABLE
+    assert case["runtime"] == "jq"
+
+    without_jq = {
+        name: capability for name, capability in _capabilities().items() if name != "jq"
+    }
+    assert (
+        svc.classify_case(_case("jq is present", "jq --version"), without_jq)["status"]
+        == svc.CASE_BLOCKED
+    )
 
 
 def test_a_command_naming_a_runtime_the_lab_will_never_have_is_blocked_not_static():
@@ -567,3 +651,65 @@ def test_only_the_validate_phase_loses_its_network(
     assert options.get("network_mode") == expected
     assert options["cap_drop"] == ["ALL"]
     assert options["security_opt"] == ["no-new-privileges"]
+
+
+def test_a_glob_handed_to_an_interpreter_becomes_the_loop_it_meant():
+    """The talos audit's own first hint, from a clean database.
+
+    `bash tests/test_*.sh` reads as "run the suite" and means "run whichever
+    file sorts first, with the other fifty-four as its arguments" — verified
+    against two real scripts: the second never executes. Proposing that as a
+    runnable case would measure one script and call it a suite.
+    """
+    case = svc.classify_case(
+        _case("Ejecutar la suite de tests Shell", "bash tests/test_*.sh"),
+        _capabilities(),
+    )
+
+    assert case["status"] == svc.CASE_RUNNABLE
+    assert (
+        case["validation_command"]
+        == 'for t in {workspace}/tests/test_*.sh; do bash "$t" || exit 1; done'
+    )
+    # Repaired, and said so — before anything runs.
+    assert "bucle" in case["validation_repair"]
+
+
+def test_a_command_that_needs_no_repair_says_nothing():
+    case = svc.classify_case(_case("Gate", "make test"), _capabilities())
+
+    assert case["validation_command"] == "make test"
+    assert case["validation_repair"] == ""
+
+
+def test_the_audit_only_proposes_commands_the_case_editor_would_accept():
+    """The two lanes must not disagree: `runnable` then 422 is the worst answer."""
+    from harness_lab_app.case_validation import check_command
+
+    hints = [
+        "bash tests/test_*.sh",
+        "bash benchmark/run.sh",
+        "bash benchmark/model/run-model.sh",
+        'for t in tests/test_*.sh; do bash "$t"; done',
+        "make test",
+    ]
+    for hint in hints:
+        row = svc.classify_case(_case("t", hint), _capabilities())
+        command = row["validation_command"]
+        if not command:
+            continue
+        assert check_command(command) is None, (hint, command)
+
+
+def test_a_hint_listing_files_to_check_is_static_not_a_command():
+    """A backticked path is the thing to look at, not the thing to run."""
+    case = svc.classify_case(
+        _case(
+            "Comprobar el pipeline de skills",
+            "Comprobar que existen `skills/talos-spec/SKILL.md` y `skills/talos-plan/SKILL.md`.",
+        ),
+        _capabilities(),
+    )
+
+    assert case["status"] == svc.CASE_STATIC
+    assert case["validation_command"] == ""
