@@ -10,7 +10,8 @@ descriptive facts are the facts, and the model's job is to say them in order.
 from __future__ import annotations
 
 import json
-from typing import Any
+import time
+from typing import TYPE_CHECKING, Any
 
 from sqlmodel import Session, select
 
@@ -19,6 +20,9 @@ from harness_lab_app.experiment_service import ExperimentService
 from harness_lab_app.models import ExperimentAudit, RunState, Validation, utc_now
 from harness_lab_app.run_service import RunService
 from harness_lab_app.score_service import ScoreService
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # States a run can be in once it has stopped executing. A run awaiting its
 # manual score has a validation and cost record; it is finished for the
@@ -82,6 +86,47 @@ EXPERIMENT_AUDIT_SYSTEM_PROMPT = (
 )
 
 
+#: How many times the reading's single gateway call is attempted, and how long
+#: it waits between attempts. A transport error is a fact about the network,
+#: not about the experiment: the `audit-talos` reading died on one and was
+#: never retried, leaving a `failed` row beside a finished experiment nobody
+#: had read. A 4xx from the gateway is *not* retried — the request itself is
+#: wrong, and asking again three times only makes that slower.
+AUDIT_ATTEMPTS = 3
+AUDIT_BACKOFF_SECONDS: tuple[float, ...] = (5.0, 20.0)
+
+
+def call_with_retry(
+    call: Callable[[], str],
+    *,
+    attempts: int = AUDIT_ATTEMPTS,
+    backoff: tuple[float, ...] = AUDIT_BACKOFF_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Run the reading's gateway call, retrying only what a retry can fix.
+
+    Raises the last error with the attempt count attached, so a stored failure
+    says whether the gateway was asked once or three times.
+    """
+    from harness_lab_app.llm_transport import GatewayHTTPError, TransportError
+
+    last: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            return call()
+        except GatewayHTTPError as exc:
+            if 400 <= exc.code < 500:
+                raise  # the request is wrong; repeating it will not fix it
+            last = exc
+        except TransportError as exc:
+            last = exc
+        if attempt < attempts:
+            index = min(attempt - 1, len(backoff) - 1) if backoff else -1
+            sleep(backoff[index] if index >= 0 else 0.0)
+    assert last is not None
+    raise type(last)(f"{last} (after {attempts} attempts)") from last
+
+
 def runs_finished(session: Session, experiment_id: str) -> tuple[bool, int, int]:
     """(every run stopped, finished count, total count) for an experiment."""
     runs = ExperimentService(session).runs(experiment_id)
@@ -120,7 +165,9 @@ def build_evidence(session: Session, experiment_id: str) -> dict[str, Any]:
         effort = (validation.effort if validation else None) or {}
         failed_checks = [
             {
-                "command": str(check.get("name") or check.get("command") or "")[-120:],
+                # `command` first: rows written before validation emitted it
+                # only carry `name`, and both hold the same string since.
+                "command": str(check.get("command") or check.get("name") or "")[-120:],
                 "exit_code": check.get("exit_code"),
                 "conclusive": check.get("conclusive", True),
                 "detail": str(check.get("detail") or "").strip()[-_DETAIL_CLIP:],

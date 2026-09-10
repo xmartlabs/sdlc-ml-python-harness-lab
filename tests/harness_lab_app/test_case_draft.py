@@ -417,3 +417,36 @@ def test_a_missing_case_id_is_derived_from_the_subject():
     ):
         res = generate_case_draft(CaseDraftRequest(description="retry policy"))
     assert res.case_id == "retry-policy-http-client"
+
+
+def test_a_draft_carries_the_rubric_the_model_wrote():
+    fake = (
+        '{"subject": "s", "instruction": "i", "validation_commands": ["test -s {workspace}/x"], '
+        '"scoring_rubric": "10 when x exists and says hello; 0 otherwise."}'
+    )
+    with patch("harness_lab_app.case_draft_service._call_model", return_value=fake):
+        res = generate_case_draft(
+            CaseDraftRequest(description="d", model="m", selected_skills=[])
+        )
+    assert res.scoring_rubric == "10 when x exists and says hello; 0 otherwise."
+
+
+def test_a_draft_without_a_rubric_gets_one_that_can_be_saved():
+    """A case with commands and no rubric is refused at save time (ADR-0057);
+    a draft the wizard cannot save is not a draft."""
+    from harness_lab_app.case_validation import check_case
+
+    fake = '{"subject": "notion export", "instruction": "i", "validation_commands": ["test -s {workspace}/x"]}'
+    with patch("harness_lab_app.case_draft_service._call_model", return_value=fake):
+        res = generate_case_draft(
+            CaseDraftRequest(description="d", model="m", selected_skills=[])
+        )
+    assert "notion export" in res.scoring_rubric
+    assert "Score 10" in res.scoring_rubric and "Score 0" in res.scoring_rubric
+    assert check_case(res.validation_commands, res.scoring_rubric, {}) == []
+
+
+def test_the_draft_prompt_asks_for_a_rubric():
+    from harness_lab_app.case_draft_service import _SYSTEM_PROMPT
+
+    assert '"scoring_rubric"' in _SYSTEM_PROMPT

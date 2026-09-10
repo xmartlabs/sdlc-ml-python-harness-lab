@@ -79,10 +79,45 @@ def is_unmeasured(reason: str | None) -> bool:
 # --- Live log-line semantics -------------------------------------------------
 #
 # The watchdog in `harness_lab_app.tasks` has to decide, while the run is still
-# going, *why* it has gone quiet — and its only evidence is the last line
-# opencode printed. Two of the three answers are lab failures, so the markers
+# going, *why* it has gone quiet — and its only evidence is the last line the
+# harness printed. Two of the three answers are lab failures, so the markers
 # that separate them live here beside the taxonomy they feed rather than inline
 # in the watchdog loop.
+#
+# The markers are **per harness**, because they are that harness's own words.
+# They used to be opencode's literals applied to every run, which meant a
+# `--harness claude` run never once looked like it was waiting on the model: a
+# gateway that accepted a request and never answered was charged to the agent
+# as a stall, and appeared on the leaderboard as an attempt the model failed.
+# Four talos runs spanning 122 minutes were recorded that way.
+#
+# A harness this table does not know gets the conservative answer — see
+# `_UNKNOWN`. Silence there is never charged to the agent, because a stall we
+# cannot distinguish from a hung endpoint is not evidence about the agent.
+
+
+class HarnessSignals:
+    """What one harness's log lines mean, for the watchdog that reads them."""
+
+    def __init__(
+        self,
+        *,
+        request: tuple[str, ...] = (),
+        wait: tuple[str, ...] = (),
+        stream_error: tuple[str, ...] = (),
+        retry_noise: tuple[str, ...] = (),
+        silence_awaits_model: bool = False,
+    ) -> None:
+        self.request = request
+        self.wait = wait
+        self.stream_error = stream_error
+        self.retry_noise = retry_noise
+        #: True when this harness prints nothing at the moment it hands a
+        #: request to the provider, so a quiet run cannot be told apart from a
+        #: waiting one. The watchdog then treats silence as waiting on the
+        #: model — a lab failure — rather than inventing an agent stall.
+        self.silence_awaits_model = silence_awaits_model
+
 
 # Emitted once per request opencode hands to the provider, retries included.
 # The trailing space is load-bearing: `message="stream error"` is the opposite
@@ -91,42 +126,79 @@ def is_unmeasured(reason: str | None) -> bool:
 # measured nothing, whatever its exit code says.
 _MODEL_REQUEST_MARKER = "message=stream "
 
-# Emitted when opencode hands a request to the provider. Nothing follows until
-# the first token comes back, so a run sitting on one of these is waiting on the
-# model, not stuck in a tool call.
-_MODEL_WAIT_MARKERS = (_MODEL_REQUEST_MARKER, "llm runtime selected")
+#: What `scripts/bench_run.py::render_claude_event` prints the moment a tool
+#: result goes back to the model, i.e. the moment a request is in flight. It
+#: exists so the claude lane can answer the same question opencode's log
+#: already answered; the two must move together.
+CLAUDE_AWAITING_MARKER = "# awaiting model"
 
-# A provider request that failed outright. opencode retries these forever, so a
-# run of them is the signature of one that will spend its whole time budget
-# going nowhere (run tetris-v1-K-029: 123 of these in 70 minutes, every one
-# "Cannot connect to API", recorded in the end as a 2-hour timeout).
-_STREAM_ERROR_MARKER = 'message="stream error"'
+_HARNESS_SIGNALS: dict[str, HarnessSignals] = {
+    "opencode": HarnessSignals(
+        request=(_MODEL_REQUEST_MARKER,),
+        # Nothing follows these until the first token comes back, so a run
+        # sitting on one of them is waiting on the model, not stuck in a tool.
+        wait=(_MODEL_REQUEST_MARKER, "llm runtime selected"),
+        # A provider request that failed outright. opencode retries these
+        # forever, so a run of them is the signature of one that will spend its
+        # whole time budget going nowhere (run tetris-v1-K-029: 123 of these in
+        # 70 minutes, every one "Cannot connect to API", recorded in the end as
+        # a 2-hour timeout).
+        stream_error=('message="stream error"',),
+        # What opencode prints while setting up the *next* attempt after a
+        # failure. None of it is progress, so none of it may reset the
+        # consecutive-error count.
+        retry_noise=(
+            "message=stream ",
+            "llm runtime selected",
+            "message=process ",
+            "message=loop ",
+        ),
+    ),
+    "claude": HarnessSignals(
+        request=(CLAUDE_AWAITING_MARKER,),
+        wait=(CLAUDE_AWAITING_MARKER, "# claude session init"),
+        stream_error=("# stream error",),
+        retry_noise=(CLAUDE_AWAITING_MARKER, "# claude session init"),
+    ),
+}
 
-# What opencode prints while setting up the *next* attempt after a failure.
-# None of it is progress, so none of it may reset the consecutive-error count.
-_RETRY_NOISE_MARKERS = (
-    "message=stream ",
-    "llm runtime selected",
-    "message=process ",
-    "message=loop ",
-)
+#: Any harness this module has not been taught. It names no marker, so every
+#: silence is a silence nobody can attribute — and an unattributable silence is
+#: unmeasured, not the agent's fault.
+_UNKNOWN = HarnessSignals(silence_awaits_model=True)
 
 
-def awaits_model_response(line: str) -> bool:
+def signals_for(harness: str | None) -> HarnessSignals:
+    """The log-line vocabulary of one harness, or the conservative default."""
+    return _HARNESS_SIGNALS.get((harness or "").strip().lower(), _UNKNOWN)
+
+
+def known_harnesses() -> tuple[str, ...]:
+    """Harnesses whose log lines this module can read."""
+    return tuple(sorted(_HARNESS_SIGNALS))
+
+
+def awaits_model_response(line: str, harness: str | None = None) -> bool:
     """True when this line leaves a model request in flight."""
-    return any(marker in line for marker in _MODEL_WAIT_MARKERS)
+    marks = signals_for(harness)
+    if any(marker in line for marker in marks.wait):
+        return True
+    # A harness that never announces a request cannot be shown to be waiting,
+    # and cannot be shown not to be. `silence_awaits_model` is which way that
+    # ignorance is resolved.
+    return marks.silence_awaits_model and not marks.wait
 
 
-def is_model_request(line: str) -> bool:
+def is_model_request(line: str, harness: str | None = None) -> bool:
     """True when this line hands a fresh request to the provider."""
-    return _MODEL_REQUEST_MARKER in line
+    return any(marker in line for marker in signals_for(harness).request)
 
 
-def is_stream_error(line: str) -> bool:
+def is_stream_error(line: str, harness: str | None = None) -> bool:
     """True when this line reports a provider request that failed."""
-    return _STREAM_ERROR_MARKER in line
+    return any(marker in line for marker in signals_for(harness).stream_error)
 
 
-def is_retry_noise(line: str) -> bool:
+def is_retry_noise(line: str, harness: str | None = None) -> bool:
     """True when this line is a retry being set up rather than work getting done."""
-    return any(marker in line for marker in _RETRY_NOISE_MARKERS)
+    return any(marker in line for marker in signals_for(harness).retry_noise)

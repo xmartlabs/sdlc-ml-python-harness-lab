@@ -39,7 +39,7 @@ class FakeExecutor:
         self.lines = lines or []
         self.calls: list[tuple[str, list[str]]] = []
 
-    def start(self, run_id: str, command: list[str]) -> FakeHandle:
+    def start(self, run_id: str, command: list[str], **kwargs) -> FakeHandle:
         self.calls.append((run_id, command))
         return FakeHandle(self.lines, self.exit_code)
 
@@ -182,7 +182,7 @@ class HangingExecutor:
     def __init__(self) -> None:
         self.handle = HangingHandle()
 
-    def start(self, run_id: str, command: list[str]) -> HangingHandle:
+    def start(self, run_id: str, command: list[str], **kwargs) -> HangingHandle:
         return self.handle
 
 
@@ -207,3 +207,21 @@ def test_a_wedged_validation_command_is_killed_and_recorded_inconclusive(
     assert check["conclusive"] is False
     assert check["exit_code"] == 124
     assert "deadline exceeded" in check["detail"]
+
+
+def test_a_stored_check_names_the_command_under_the_key_that_says_so():
+    """`command` and `name` carry the same string.
+
+    Consumers used to read `command` off a stored check and find None, so an
+    audit reported a failing check it could not name.
+    """
+    from harness_lab_app.validation import parse_objective
+
+    objective = parse_objective(
+        [{"command": "sh -c 'pytest -q'", "exit_code": 1, "output": "boom"}],
+        strategy="commands",
+    )
+
+    check = objective["checks"][0]
+    assert check["command"] == "sh -c 'pytest -q'"
+    assert check["name"] == check["command"]

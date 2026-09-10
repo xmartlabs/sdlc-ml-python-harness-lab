@@ -136,3 +136,58 @@ def test_the_tetris_v2_rubric_is_provable_by_its_own_tests():
     ).read_text()
     rows = [line for line in text.splitlines() if re.match(r"^\| \d+ \|", line)]
     assert not any("[manual]" in row for row in rows)
+
+
+def test_the_judge_is_told_checks_and_the_file_list_decide_existence():
+    """Native wrote tests/test_install_and_hooks.sh, a PASS check executed it,
+    the diff (tracked files only) omitted it, and the judge scored 0 for "the
+    test was not added". The prompt now says what decides existence."""
+    from harness_lab_app.harness_lifecycle.judge import RUBRIC_SYSTEM_PROMPT
+
+    assert "Never conclude a file is missing" in RUBRIC_SYSTEM_PROMPT
+    assert "PASS check that executed a path proves" in RUBRIC_SYSTEM_PROMPT
+    # And the sibling failure: grading the repository's pre-existing behaviour
+    # that a check's output happened to describe, instead of the agent's work.
+    assert "not the repository's pre-existing behaviour" in RUBRIC_SYSTEM_PROMPT
+
+
+def test_the_rubric_message_lists_the_files_the_agent_wrote():
+    from harness_lab_app.harness_lifecycle.judge import build_rubric_message
+
+    message = build_rubric_message(
+        task="t",
+        rubric="r",
+        diff="",
+        files_modified=["tests/test_install_and_hooks.sh", "hooks/armed-gate.sh"],
+    )
+    assert "## Files the agent wrote or modified" in message
+    assert "- tests/test_install_and_hooks.sh" in message
+    assert message.index("## Files the agent wrote") < message.index("## Agent diff")
+    assert "## Files the agent wrote" not in build_rubric_message(
+        task="t", rubric="r", diff=""
+    )
+
+
+def test_files_for_the_judge_are_workspace_relative_and_deduplicated(tmp_path):
+    import json
+
+    from harness_lab_app.tasks import _files_modified_for_judge
+
+    run_dir = tmp_path / "talos-K-002"
+    run_dir.mkdir()
+    (run_dir / "usage.json").write_text(
+        json.dumps(
+            {
+                "files_modified": [
+                    "/app/workspace/talos-K-002/tests/test_install_and_hooks.sh",
+                    "/app/workspace/talos-K-002/tests/test_install_and_hooks.sh",
+                    "hooks/armed-gate.sh",
+                ]
+            }
+        )
+    )
+    assert _files_modified_for_judge(run_dir, "talos-K-002") == [
+        "tests/test_install_and_hooks.sh",
+        "hooks/armed-gate.sh",
+    ]
+    assert _files_modified_for_judge(tmp_path / "missing", "x") == []

@@ -1,6 +1,6 @@
 # ADR-0054: A repository is audited before the lab runs anything on it
 
-- **Status:** Accepted
+- **Status:** Accepted — superseded in part by [ADR-0056](0056-cases-are-matched-against-runner-capabilities.md)
 - **Date:** 2026-09-09
 - **Deciders:** Marcos Soto
 - **Related:** [ADR-0042](0042-the-lab-reads-a-repository-through-the-engineers-own-checkout.md),
@@ -37,6 +37,15 @@ assessment each, language notes, standards, gaps, and three to five use cases wi
 validation hint. The report is rendered by the lab from that JSON, so every audit has
 the same sections in the same order. An answer that is not JSON is stored with a
 `parse_error` and shown as what the model said, never re-interpreted.
+
+> **Superseded in part by ADR-0056.** The runtime half of this gate asked one question
+> about the whole repository — is its dominant language one the runner ships — and used
+> the answer for every case in it. ADR-0056 keeps the gate and the "facts, not the
+> model" rule, and moves the execution decision to a per-case match against runner
+> capabilities. `unsupported_runtime` still exists and still stops a Go or COBOL tree;
+> what changed is that it is now decided from the capability table and may be reopened,
+> once, when the proposed cases turn out to be runnable or static. Everything else
+> below stands.
 
 **The gate is decided from facts, not by the model.** `next_step` lives in the
 evidence and takes three values: `unsupported_runtime` when no ecosystem the runner

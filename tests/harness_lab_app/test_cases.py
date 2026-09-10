@@ -120,6 +120,7 @@ def test_sync_case_to_yaml_writes_task_file(tmp_path: Path, session, monkeypatch
             description="A custom case",
             prompt_variants={"default": "Do the thing"},
             validation_commands=["pytest -q"],
+            scoring_rubric="10 when the suite passes, 0 when it does not.",
             max_steps=4,
         )
     )

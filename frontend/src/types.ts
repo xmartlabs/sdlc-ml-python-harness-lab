@@ -70,6 +70,8 @@ export interface CaseDraftResponse {
   case_id?: string;
   description?: string;
   case_type?: string;
+  /** What the judge grades against; model-written or defaulted, never empty. */
+  scoring_rubric?: string;
   step_prompts?: string[];
 }
 
@@ -278,22 +280,148 @@ export type RepositoryAuditUseCase = {
   validation_hint: string;
 };
 
+/**
+ * The lab's verdict on one proposed case, decided deterministically.
+ *
+ * The model proposes the case; a capability match decides whether the runner
+ * can settle it. `static` is the reason a Shell repository is still evaluable:
+ * a case answered by reading the tree depends on no runtime at all.
+ */
+export type RepositoryAuditCaseStatus = "runnable" | "blocked" | "static";
+
+export type RepositoryAuditCase = {
+  title: string;
+  why: string;
+  validation_hint: string;
+  /**
+   * The hint, split. A `validation_hint` is either a command or a written
+   * check; the model often writes the command inside backticks with prose
+   * around it, so the lab separates the two rather than making every consumer
+   * guess. `validation_command` is empty for a static case, `validation_note`
+   * for a bare command. Absent on audits stored before the split.
+   */
+  validation_command?: string;
+  validation_note?: string;
+  /**
+   * What had to change for the command to measure what it claims — anchoring a
+   * repository path to `{workspace}`, or turning a glob handed to an
+   * interpreter into the loop it meant. Empty when nothing was repaired.
+   */
+  validation_repair?: string;
+  /** Empty for a static case: it needs none. */
+  runtime: string;
+  /** What the runner measured, when it could. */
+  runtime_version: string;
+  /** What the repository declares it targets, when it declares one. */
+  required_runtime_version: string;
+  compatibility: "exact" | "partial" | "unknown";
+  status: RepositoryAuditCaseStatus;
+  reason: string;
+};
+
+export type RepositoryAuditCasePlan = {
+  cases: RepositoryAuditCase[];
+  runnable: number;
+  blocked: number;
+  static: number;
+  coverage: "none" | "partial" | "full";
+};
+
+/**
+ * One harness component and what the auditor read into it (ADR-0058).
+ *
+ * `claim`, `trigger`, `observable`, `lab_counterpart` and `needs` are the
+ * model's. `evaluable_here`, `evaluable_reason` and `counterpart_valid` are
+ * the lab's, decided from declared service capabilities and the lab's own
+ * skill catalogue — a fact the model cannot override.
+ */
+export type RepositoryAuditMapRow = {
+  kind: "skill" | "hook" | "rule" | "agent" | "command" | "unknown";
+  name: string;
+  source_path: string;
+  claim: string;
+  trigger: string;
+  observable: string;
+  lab_counterpart: string;
+  needs: string[];
+  evaluable_here: boolean;
+  evaluable_reason: string;
+  counterpart_valid: boolean;
+};
+
+export type RepositoryAuditShape = {
+  shape: "in_place" | "installable" | "both" | "unknown";
+  install_entry: string;
+  install_entry_exists: boolean;
+  unit_of_work: string;
+};
+
+/** An experiment arm the lab derived from a kept case — never model-written. */
+export type RepositoryAuditDerivedCondition = {
+  label: string;
+  role: "control" | "treatment";
+  overrides: Record<string, unknown>;
+};
+
+export type RepositoryAuditProposedCase = {
+  title: string;
+  /** Names from the component map this case exercises. */
+  exercises: string[];
+  measures: "harness_claim" | "harness_development" | "unknown";
+  task: string;
+  observable: string;
+  validation_hint: string;
+  required_runtime_version: string;
+  /** Empty while the case is kept; otherwise why the lab will not run it. */
+  dropped_reason: string;
+  conditions?: RepositoryAuditDerivedCondition[];
+  conditions_note?: string;
+};
+
 export type RepositoryAuditFindings = {
   summary: string;
   harness_verdict: "complete" | "partial" | "none" | "unknown";
-  harness_components: RepositoryAuditComponent[];
   language_notes: string;
   standards: string[];
   gaps: string[];
-  use_cases: RepositoryAuditUseCase[];
   parse_error?: string;
+  /** Audits recorded before ADR-0058. */
+  harness_components?: RepositoryAuditComponent[];
+  use_cases?: RepositoryAuditUseCase[];
+  /** Audits recorded under ADR-0058. */
+  component_map?: RepositoryAuditMapRow[];
+  shape?: RepositoryAuditShape;
+  cases?: RepositoryAuditProposedCase[];
+  warnings?: string[];
+};
+
+export type RepositoryAuditHealth = {
+  status: "pass" | "fail" | "unmeasured";
+  reason?: string;
+  counts?: { passed: number; failed: number } | null;
+};
+
+export type RepositoryAuditRuntimeCapability = {
+  runtime: string;
+  available: boolean;
+  /** Empty when the runtime was declared by the image recipe but never probed. */
+  version: string;
+  executable: string;
+  source: "declared" | "probed";
 };
 
 export type RepositoryAuditRuntime = {
   ecosystems: string[];
   supported: string[];
   unsupported: string[];
+  /**
+   * Whether the runner can execute the repository's *dominant* language. It no
+   * longer decides whether the repository can be evaluated — `case_plan` does,
+   * per case. Kept because it is still the honest answer to its own question.
+   */
   runner_can_execute: boolean;
+  /** Absent on audits recorded before capabilities were part of the evidence. */
+  capabilities?: RepositoryAuditRuntimeCapability[];
 };
 
 export type RepositoryAuditRecord = {
@@ -305,6 +433,8 @@ export type RepositoryAuditRecord = {
   findings_json: RepositoryAuditFindings | Record<string, never>;
   evidence_json: {
     runtime?: RepositoryAuditRuntime;
+    case_plan?: RepositoryAuditCasePlan;
+    health_at_pin?: RepositoryAuditHealth;
     harness_present?: boolean;
     next_step?: RepositoryAuditNextStep;
     next_step_reason?: string;

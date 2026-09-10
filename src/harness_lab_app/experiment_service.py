@@ -13,6 +13,7 @@ question it claims to. That is the whole of the difference here (ADR-0033):
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -675,6 +676,37 @@ class ExperimentService:
             "case_outcomes": case_counts,
         }
 
+    def try_complete(self, experiment_id: str) -> Experiment | None:
+        """Mark a running experiment complete once every run has stopped.
+
+        `ExperimentStatus.complete` existed in the enum and was assigned by no
+        line of this codebase, so an experiment stayed `running` forever — long
+        after its last run had finished, its audit had been read and its
+        conclusions written. "Running" then meant nothing, and the attention
+        feed could not tell work in flight from work nobody had closed.
+
+        Returns the experiment when this call is what completed it, and None
+        otherwise — so a caller can act exactly once (queue the reading) rather
+        than on every run that finishes.
+        """
+        from harness_lab_app.experiment_audit_service import runs_finished
+
+        try:
+            experiment = self.get_experiment(experiment_id)
+        except ExperimentNotFoundError:
+            return None
+        if experiment.status != ExperimentStatus.running:
+            return None  # draft, abandoned, or already complete
+        finished, _done, _total = runs_finished(self.session, experiment_id)
+        if not finished:
+            return None
+        experiment.status = ExperimentStatus.complete
+        experiment.updated_at = datetime.now(UTC)
+        self.session.add(experiment)
+        self.session.commit()
+        self.session.refresh(experiment)
+        return experiment
+
     def abandon_experiment(self, experiment_id: str) -> Experiment:
         """Take an experiment out of the working set without erasing anything.
 
@@ -774,6 +806,41 @@ class ExperimentService:
                 f"do not: {', '.join(unvalidated)}. Without one the runs execute, "
                 "produce no verdict, and the experiment reports nothing — add a "
                 "command that exits non-zero when the subject fails."
+            )
+
+    def _refuse_tautological_cases(self, case_ids: list[str]) -> None:
+        """Refuse to launch a case whose checks already passed on the clean tree.
+
+        A dry run (``POST /api/cases/{id}/dry-run``) executes the case's own
+        checks against the pinned commit with no agent work applied. When they
+        all pass there, the case cannot tell work from no work — every run it
+        produces will report a green that means nothing, at full cost. Two of
+        the talos cases were exactly that, and four experiment arms were spent
+        on them before anybody read the stored detail.
+
+        Silent for a case that was never dry-run: this refuses a *known* defect
+        rather than demanding a ceremony.
+        """
+        tautological: list[str] = []
+        for case_id in case_ids:
+            case = self.session.exec(
+                select(Case).where(Case.case_id == case_id)
+            ).first()
+            if case is None:
+                continue
+            raw = (case.metadata_json or {}).get("dry_run") or ""
+            try:
+                record = json.loads(raw) if raw else {}
+            except (TypeError, ValueError):
+                continue
+            if isinstance(record, dict) and record.get("verdict") == "tautological":
+                tautological.append(case_id)
+        if tautological:
+            raise ExperimentError(
+                "These cases passed their own checks on the clean tree, before "
+                f"any agent touched it: {', '.join(tautological)}. Their green "
+                "measures the case, not the agent — re-author the checks so at "
+                "least one fails on the untouched repository, then dry-run again."
             )
 
     def create_experiment(self, data: ExperimentCreate) -> tuple[Experiment, list[str]]:
@@ -973,6 +1040,8 @@ class ExperimentService:
         # same guarantee.
         defined = runs_service._defined_variants(experiment.case_ids)
         undefined: list[str] = []
+
+        self._refuse_tautological_cases(experiment.case_ids)
 
         configs: list[tuple[str, RunConfigCreate]] = []
         for case_id in experiment.case_ids:

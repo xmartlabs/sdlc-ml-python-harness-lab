@@ -1,0 +1,38 @@
+{
+  "summary": "talos es un harness en bash y jq que toma un ticket y produce un PR listo para revisión humana. El modelo juzga en dieciséis skills; el código certifica con gates, flip, evidence, classify y seal.",
+  "harness_verdict": "complete",
+  "language_notes": "Shell (bash 3.2) y jq. Se testea con `for t in tests/test_*.sh; do bash \"$t\"; done` y `bash benchmark/run.sh`.",
+  "standards": [
+    "Nada del repositorio se autocertifica; todo lo confiable deriva del pin.",
+    "La ausencia no es un pass: cada artefacto faltante tiene su propio estado.",
+    "La suite apunta a bash 3.2 y se corre con bash, no con sh ni zsh."
+  ],
+  "gaps": [
+    "El instalador copia settings y hooks a otro proyecto; el checkout solo no expone las skills en .claude/skills.",
+    "Tres skills dependen de Jira o GitHub y no se pueden ejercitar sin credenciales."
+  ],
+  "shape": {
+    "shape": "installable",
+    "install_entry": "scripts/talos-install.sh",
+    "unit_of_work": "a Jira ticket → a reviewable pull request"
+  },
+  "component_map": [
+    {"kind": "rule", "name": "CLAUDE.md", "source_path": "CLAUDE.md", "claim": "Las reglas operativas: nada se autocertifica, la ausencia no es un pass, los buckets no halagan, las afirmaciones deben coincidir con los mecanismos.", "trigger": "al abrir el repositorio con Claude Code", "observable": "el agente lee docs/ARCHITECTURE.md primero y corre la suite con bash", "lab_counterpart": "", "needs": ["none"]},
+    {"kind": "rule", "name": "AGENTS.md", "source_path": "AGENTS.md", "claim": "Repite las reglas para agentes que no leen CLAUDE.md.", "trigger": "al abrir el repositorio con un agente compatible", "observable": "mismo comportamiento que CLAUDE.md", "lab_counterpart": "", "needs": ["none"]},
+    {"kind": "hook", "name": "armed-gate.sh", "source_path": "hooks/armed-gate.sh", "claim": "Bloquea comandos de push y PR hasta que el run está armado.", "trigger": "PreToolUse en Bash", "observable": "un `git push` sin run armado es rechazado por el hook", "lab_counterpart": "", "needs": ["none"]},
+    {"kind": "hook", "name": "test-guard.sh", "source_path": "hooks/test-guard.sh", "claim": "Impide editar tests fuera de la fase que los declara.", "trigger": "PreToolUse en Write/Edit y Bash", "observable": "una edición a tests/ fuera de fase es rechazada", "lab_counterpart": "", "needs": ["none"]},
+    {"kind": "command", "name": "classify.sh", "source_path": "lib/classify.sh", "claim": "La única derivación del veredicto; una cap que no dispara acá convierte el artefacto en una mentira.", "trigger": "invocado por talos-verify y talos-report", "observable": "un run con un gate rojo clasifica partial aunque el modelo diga éxito", "lab_counterpart": "", "needs": ["none"]},
+    {"kind": "skill", "name": "talos-ticket", "source_path": "skills/talos-ticket/SKILL.md", "claim": "Lee el ticket de Jira y lo deja como prosa admitida.", "trigger": "primera fase de /talos-run", "observable": "existe .talos-state/ticket.md con el texto del ticket", "lab_counterpart": "", "needs": ["jira"]},
+    {"kind": "skill", "name": "talos-spec", "source_path": "skills/talos-spec/SKILL.md", "claim": "Escribe el contenido normativo de SPEC.md desde el ticket solamente, sin acceso al repositorio.", "trigger": "segunda fase de /talos-run", "observable": "SPEC.md existe y no cita rutas del repositorio", "lab_counterpart": "brainstorming", "needs": ["none"]},
+    {"kind": "skill", "name": "talos-adversarial", "source_path": "skills/talos-adversarial/SKILL.md", "claim": "Revisa SPEC.md con contexto restringido y produce Go/No-Go.", "trigger": "tercera fase de /talos-run", "observable": "existe un veredicto Go/No-Go con razones", "lab_counterpart": "requesting-code-review", "needs": ["none"]},
+    {"kind": "skill", "name": "talos-plan", "source_path": "skills/talos-plan/SKILL.md", "claim": "Descompone SPEC.md en tareas ordenadas; cada tarea compila y deja la suite verde.", "trigger": "cuarta fase de /talos-run", "observable": "plan.json existe; cada tarea lista sus archivos; la suite queda verde tras cada una", "lab_counterpart": "writing-plans", "needs": ["none"]},
+    {"kind": "skill", "name": "talos-implement", "source_path": "skills/talos-implement/SKILL.md", "claim": "Implementa exactamente una tarea de plan.json y la commitea, staging sólo sus archivos declarados.", "trigger": "quinta fase de /talos-run", "observable": "un commit por tarea, con sólo los archivos declarados", "lab_counterpart": "subagent-driven-development", "needs": ["none"]},
+    {"kind": "skill", "name": "talos-verify", "source_path": "skills/talos-verify/SKILL.md", "claim": "Corre el gate stack declarado; delega en lib/gates.sh que garantiza que ningún gate requerido se salta.", "trigger": "sexta fase de /talos-run", "observable": "gates.json con cada gate requerido y su resultado", "lab_counterpart": "verify_changes", "needs": ["none"]},
+    {"kind": "skill", "name": "talos-qa", "source_path": "skills/talos-qa/SKILL.md", "claim": "Mira la app corriendo como QA y escribe una reproducción que el evidence harness certifica. Nunca ve el repositorio.", "trigger": "después del último implement, antes del verify final", "observable": "una reproducción red→green certificada por evidence.sh", "lab_counterpart": "test-driven-development", "needs": ["docker", "browser"]},
+    {"kind": "skill", "name": "talos-evidence", "source_path": "skills/talos-evidence/SKILL.md", "claim": "Produce evidencia reproducible para comportamientos que el gate stack no ve.", "trigger": "cuando una fila de cobertura es manual", "observable": "evidence/<cid>/ con red y green", "lab_counterpart": "", "needs": ["docker"]},
+    {"kind": "skill", "name": "talos-pr", "source_path": "skills/talos-pr/SKILL.md", "claim": "Abre el PR draft con el reporte.", "trigger": "séptima fase de /talos-run", "observable": "un PR draft en GitHub", "lab_counterpart": "finishing-a-development-branch", "needs": ["github"]},
+    {"kind": "skill", "name": "talos-ci-watch", "source_path": "skills/talos-ci-watch/SKILL.md", "claim": "Monitorea CI y aplica fixes mecánicos.", "trigger": "con un PR abierto y un run armado", "observable": "CI verde o un comentario con la causa", "lab_counterpart": "", "needs": ["github", "network"]},
+    {"kind": "skill", "name": "talos-report", "source_path": "skills/talos-report/SKILL.md", "claim": "Escribe el reporte final desde los artefactos, sin interpretar.", "trigger": "última fase de /talos-run", "observable": "report.md derivado de classify.sh", "lab_counterpart": "generate_implementation_docs", "needs": ["none"]},
+    {"kind": "skill", "name": "talos-run", "source_path": "skills/talos-run/SKILL.md", "claim": "Orquesta las fases en orden.", "trigger": "invocación explícita", "observable": ".talos-state con una fase por directorio", "lab_counterpart": "plan_and_execute_feature", "needs": ["none"]}
+  ]
+}

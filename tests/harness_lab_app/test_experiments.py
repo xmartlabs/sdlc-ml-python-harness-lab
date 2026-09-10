@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from harness_lab_app.case_service import CaseService
+from harness_lab_app.case_service import CaseService, CaseValidationError
 from harness_lab_app.experiment_service import (
     ExperimentDesignError,
     ExperimentError,
@@ -112,7 +112,7 @@ def test_varying_two_harness_factors_warns_without_blocking():
             _condition(
                 "treatment",
                 harness_source=HarnessSource.injected,
-                skills_disabled=["brainstorming"],
+                skills_disabled=["bootstrap_project"],
             ),
         ],
     )
@@ -136,7 +136,7 @@ def test_a_bare_control_is_one_axis_not_four():
                 ConditionRole.control,
                 harness_source=HarnessSource.bare,
                 prompt_variant="default",
-                skills_disabled=["brainstorming", "writing-plans"],
+                skills_disabled=["bootstrap_project", "writing-plans"],
             ),
             _condition(
                 "full-harness",
@@ -158,9 +158,9 @@ def test_a_governance_only_pair_is_also_one_axis():
                 "bare",
                 ConditionRole.control,
                 harness_source=HarnessSource.bare,
-                skills_disabled=["brainstorming"],
+                skills_disabled=["bootstrap_project"],
             ),
-            _condition("governance-only", skills_disabled=["brainstorming"]),
+            _condition("governance-only", skills_disabled=["bootstrap_project"]),
         ],
     )
 
@@ -193,7 +193,7 @@ def test_the_partial_ablation_warning_stops_firing_once_an_arm_is_bare():
                 "bare",
                 ConditionRole.control,
                 harness_source=HarnessSource.bare,
-                skills_disabled=["brainstorming"],
+                skills_disabled=["bootstrap_project"],
             ),
             _condition("governed", skills_disabled=[]),
         ],
@@ -217,7 +217,7 @@ def test_the_governed_arms_keep_their_own_axes_beside_a_bare_one():
             _condition(
                 "harness prompt",
                 prompt_variant="harness",
-                skills_disabled=["brainstorming"],
+                skills_disabled=["bootstrap_project"],
             ),
         ],
     )
@@ -624,6 +624,7 @@ def validated_case(lab):
             type=CaseType.repo_task,
             prompt_variants={"default": "Read the page and save it to notes.txt"},
             validation_commands=["test -s {workspace}/notes.txt"],
+            scoring_rubric="10 when notes.txt holds the page, 0 when it is empty.",
         )
     )
     return lab
@@ -639,20 +640,24 @@ def test_subject_validation_refuses_a_case_that_never_says_what_success_is(lab):
 
     Without an executable command the runs still execute, produce no verdict,
     and the pass rate this mode exists to report is simply absent — with no
-    error anywhere to explain why. Refusing at creation is the whole point.
+    error anywhere to explain why. Refusing at creation is the whole point, and
+    the case editor now refuses it one layer earlier still: a prose "command"
+    never reaches the database, so the experiment gate is the second line of
+    defence rather than the first.
     """
-    CaseService(lab.session).create_case(
-        CaseCreate(
-            case_id="vibes-only",
-            name="Vibes",
-            type=CaseType.repo_task,
-            prompt_variants={"default": "Do the thing"},
-            # Prose, not a command: `build_validation_spec` drops it silently.
-            validation_commands=["the file should look right"],
+    with pytest.raises(CaseValidationError, match="runnable command"):
+        CaseService(lab.session).create_case(
+            CaseCreate(
+                case_id="vibes-only",
+                name="Vibes",
+                type=CaseType.repo_task,
+                prompt_variants={"default": "Do the thing"},
+                # Prose, not a command: `build_validation_spec` used to drop it
+                # silently, and the run reported nothing about it either way.
+                validation_commands=["the file should look right"],
+                scoring_rubric="10 when it looks right.",
+            )
         )
-    )
-    with pytest.raises(ExperimentError, match="executable validation command"):
-        lab.create_experiment(_subject_payload(case_ids=["vibes-only"]))
 
 
 def test_subject_validation_creates_without_a_control(validated_case):
@@ -1619,7 +1624,7 @@ def test_the_case_matrix_reads_every_repetition_not_the_last(session):
                 ExperimentConditionCreate(
                     label="control",
                     role=ConditionRole.control,
-                    overrides={"skills_disabled": ["brainstorming"]},
+                    overrides={"skills_disabled": ["bootstrap_project"]},
                 ),
                 ExperimentConditionCreate(
                     label="treatment",
@@ -1679,3 +1684,81 @@ def test_a_family_id_travels_with_the_experiment(session):
 
     assert experiment.family_id == "ladder-x"
     assert service.summarize(experiment.experiment_id)["family_id"] == "ladder-x"
+
+
+# --------------------------------------------------------------------------
+# Closing — an experiment stops being "running" when its runs stop
+# --------------------------------------------------------------------------
+
+
+def _finish(session, run_id: str, state: RunState) -> None:
+    run = RunService(session).get_run(run_id)
+    run.state = state
+    session.add(run)
+    session.commit()
+
+
+def test_an_experiment_completes_once_every_run_has_stopped(lab, session):
+    """`ExperimentStatus.complete` was in the enum and assigned by nothing.
+
+    Both talos experiments were still `running` long after their last run had
+    finished, which made "running" mean nothing in the attention feed.
+    """
+    lab.create_experiment(_payload(repetitions=1))
+    runs = lab.launch(
+        "migration-safety",
+        RunConfigCreate(
+            case_id="add-endpoint",
+            prompt_variant="default",
+            executor_model="stub-model",
+        ),
+    )
+
+    _finish(session, runs[0].run_id, RunState.completed)
+    assert lab.try_complete("migration-safety") is None, "one run is still going"
+    assert lab.get_experiment("migration-safety").status == ExperimentStatus.running
+
+    _finish(session, runs[1].run_id, RunState.completed)
+    completed = lab.try_complete("migration-safety")
+
+    assert completed is not None
+    assert completed.status == ExperimentStatus.complete
+    # Idempotent: only the call that closed it reports having closed it, so a
+    # caller queues the reading exactly once.
+    assert lab.try_complete("migration-safety") is None
+
+
+def test_a_failed_run_still_closes_its_experiment(lab, session):
+    """Closing is about runs having stopped, not about them having succeeded."""
+    lab.create_experiment(_payload(repetitions=1))
+    runs = lab.launch(
+        "migration-safety",
+        RunConfigCreate(
+            case_id="add-endpoint",
+            prompt_variant="default",
+            executor_model="stub-model",
+        ),
+    )
+    _finish(session, runs[0].run_id, RunState.failed)
+    _finish(session, runs[1].run_id, RunState.awaiting_manual_score)
+
+    assert lab.try_complete("migration-safety") is not None
+    assert lab.get_experiment("migration-safety").status == ExperimentStatus.complete
+
+
+def test_an_abandoned_experiment_is_never_reopened_as_complete(lab, session):
+    lab.create_experiment(_payload(repetitions=1))
+    runs = lab.launch(
+        "migration-safety",
+        RunConfigCreate(
+            case_id="add-endpoint",
+            prompt_variant="default",
+            executor_model="stub-model",
+        ),
+    )
+    for run in runs:
+        _finish(session, run.run_id, RunState.completed)
+    lab.abandon_experiment("migration-safety")
+
+    assert lab.try_complete("migration-safety") is None
+    assert lab.get_experiment("migration-safety").status == ExperimentStatus.abandoned

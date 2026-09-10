@@ -1,0 +1,40 @@
+{
+  "cases": [
+    {
+      "title": "Ticket en prosa → SPEC.md y plan.json",
+      "exercises": ["talos-spec", "talos-plan"],
+      "measures": "harness_claim",
+      "task": "Dado un ticket en prosa en .talos-state/ticket.md, escribir SPEC.md sin leer el repositorio y descomponerlo en plan.json con tareas que nombren sus archivos.",
+      "observable": "SPEC.md no cita rutas del repositorio; plan.json tiene al menos dos tareas con archivos declarados.",
+      "validation_hint": "bash -c 'test -s {workspace}/.talos-state/SPEC.md && jq -e \".tasks | length >= 2\" {workspace}/.talos-state/plan.json'",
+      "required_runtime_version": "3.2"
+    },
+    {
+      "title": "Bug plantado → evidencia red→green",
+      "exercises": ["talos-evidence", "classify.sh"],
+      "measures": "harness_claim",
+      "task": "Con un bug plantado en lib/section.sh, producir evidencia reproducible de que el bug existía y dejó de existir.",
+      "observable": "evidence/<cid>/ contiene una corrida roja y una verde y classify.sh emite complete.",
+      "validation_hint": "bash {workspace}/lib/classify.sh --check",
+      "required_runtime_version": "3.2"
+    },
+    {
+      "title": "Abrir el PR draft",
+      "exercises": ["talos-pr"],
+      "measures": "harness_claim",
+      "task": "Abrir un PR draft con el reporte.",
+      "observable": "Existe un PR draft.",
+      "validation_hint": "Comprobar que existe un PR draft en GitHub",
+      "required_runtime_version": ""
+    },
+    {
+      "title": "Arreglar los 39 fallos de la suite (desarrollo de talos)",
+      "exercises": ["CLAUDE.md"],
+      "measures": "harness_development",
+      "task": "Corregir los fallos de tests/test_evidence.sh y tests/test_seal.sh al pin.",
+      "observable": "La suite completa queda verde.",
+      "validation_hint": "for t in {workspace}/tests/test_*.sh; do bash \"$t\" || exit 1; done",
+      "required_runtime_version": "3.2"
+    }
+  ]
+}

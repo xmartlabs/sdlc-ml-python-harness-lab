@@ -18,8 +18,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # node 20 is required by opencode and the conductor plugin.
 # libatomic1: pnpm honours a target repo's `packageManager` pin by fetching
 # its standalone binary, which links against libatomic — absent from -slim.
+# make: `make test` is the single most common validation command there is, and
+# `readiness_service.infer_commands` proposes it for any repository with a
+# `test:` target — against an image that did not have make, so the adopted gate
+# would have exited 127. Just the binary, not build-essential.
+# jq: the Shell ecosystem (ADR-0056) is only as runnable as the POSIX tooling
+# this image ships. A shell repository's test harness reaches for jq the way a
+# Python one reaches for pytest; without it every such suite dies with a
+# configuration error that looks like the agent's fault. Installing it inside
+# the *agent* container does not help — validation runs in a fresh one.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git libatomic1 \
+    && apt-get install -y --no-install-recommends ca-certificates curl git jq make libatomic1 \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*

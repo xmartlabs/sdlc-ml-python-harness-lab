@@ -191,6 +191,7 @@ def _seed_case(session) -> Case:
             type=CaseType.repo_task,
             prompt_variants={"default": "Add an endpoint with tests"},
             validation_commands=["pytest {workspace}"],
+            scoring_rubric="10 when the endpoint exists and its tests pass.",
         )
     )
 

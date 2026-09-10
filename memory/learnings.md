@@ -3,6 +3,53 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## The gate that stops a repository runs before anything can argue with it (2026-09-09)
+
+Shell repositories were ending the audit wizard with "the runner ships only Python and
+Node toolchains" while the runner had been executing bash all along: `python:3.11-slim`
+ships **bash 5.2.37** with its Debian base, so adding Shell support needed no line in
+`Dockerfile.runner`. Verified with `docker run --rm python:3.11-slim bash --version`.
+Check the base image before assuming a toolchain is missing — the block was a
+classification table, not a capability. (`/bin/sh` there is dash, which is a separate
+fact with teeth: a command using `[[`, `<(` or `pipefail` must be handed to `bash -c`
+or it fails for a reason that has nothing to do with the code under test.)
+
+The structural half is the ordering. In `tasks.py::_audit_repository_body`,
+`collect_evidence()` — and therefore `next_step` — runs **before** the LLM has proposed
+a single case, so per-case classification cannot feed the gate in one pass. Wanting it
+to is what makes this look like a rewrite. It is two stages instead: a deterministic
+pre-LLM gate that asks the capability table, and a post-LLM plan permitted exactly one
+transition, `unsupported_runtime → continue`. One direction only, or a model's proposal
+would be reopening a door a fact closed (ADR-0035).
+
+Three smaller ones found on the way:
+
+- **The validation lane was receiving the entire lab `.env`** — `GATEWAY_TOKEN`, GitHub
+  tokens, Langfuse keys — through `build_run_environment()`, while running an audited
+  repository's own `make test`. Shared helpers spread by being convenient; the lane
+  that runs untrusted code and the lane that calls a model had drifted into one
+  environment builder.
+- **`network_mode="none"` needs a phase, not a flag.** Cutting the validation lane's
+  egress outright breaks `git clone`, `npm ci` and `uv sync`. The existing
+  `provision`/`setup`/`validate` tag is what makes "no network, but only while running
+  their code" expressible at all.
+- **A test whose verdict depends on the developer's machine is not a test.** Two new
+  shell tests failed locally for host reasons — `get_executor()` resolving to Docker,
+  which cannot see a macOS `/var/folders` temp path, and `_portable_timeout` correctly
+  dropping its `timeout` prefix on a box with no coreutils `timeout`. Both were the
+  test reaching outside the repository, not the code being wrong: pin the executor and
+  shorten the deadline through `command_deadline_seconds` instead.
+
+**Why it matters:** the bug was one conflated question — *what is this repository
+written in* answering *what does this case need to run* — and it cost a whole class of
+repositories. Neither half was wrong on its own.
+
+**How to apply:** when a single boolean gates a whole flow, check whether it is
+answering one question or two. Then look at *when* it is computed: a gate that runs
+before the information that would correct it needs a second stage, and that stage must
+be allowed to move in one direction only. See
+[ADR-0056](../docs/adr/0056-cases-are-matched-against-runner-capabilities.md).
+
 ## A file can be both the thing you hide and the thing you read (2026-09-09)
 
 Every `injected` arm was dying in provisioning with a message that pointed at the
@@ -979,6 +1026,128 @@ Also: `_autoscore_run` only scored `awaiting_manual_score` runs, so a re-validat
 never re-judged; it now re-scores a run whose previous score came from the judge
 or an objective verdict (never a human's). See ADR-0053.
 
+## A badly formed case reports a number about itself (2026-09-09)
+
+Two cases written from the talos audit ran four experiment arms and produced nothing
+about talos, and nothing about the lab's own template either. Every defect was silent:
+
+- **A shell `for` loop exits with its last command's status.**
+  `for t in {workspace}/tests/test_*.sh; do bash "$t"; done` reported
+  `task_validation_pass = 1` while the same run's stored detail read
+  `rc=2 CONFIG ERROR`. Fifty-four failures ahead of one pass is a green check. The
+  fix is `|| exit 1` **inside** the loop body.
+- **A repo-relative path with no `{workspace}` resolves against the lab's own root.**
+  `bash benchmark/model/run-model.sh` exited 127 in both arms. The file existed; the
+  path did not. Exit 127 in a validation check is almost always this.
+- **`source: "git_target"` is not a case type.** `bench_run.py` decided "is this
+  SWE-bench?" by calling `spec_provisions_repo()`, which answers *"does a repository
+  have to be cloned?"* — true for **every** case paired with an external target. So
+  from step 2 both talos cases were told to resolve a GitHub issue, shown an empty
+  list of target failing tests, and told to run `python -m pytest` in a repository
+  with no Python. Both arms. The injected arm reacted worse (6.6× turns, 9× cost,
+  zero diffs), which would have been reported as a treatment effect.
+- **A run parked in `awaiting_manual_score` with an empty rubric is a case defect, not
+  a scoring backlog.** `_llm_judge_rubric` returns at `if not rubric` — silently — and
+  the run looks like something a human just has not got to.
+- **Runner capabilities include POSIX tools, not only interpreters.** Every talos test
+  died because the image shipped no `jq`, and the agent's own `apt-get install jq`
+  lived in the *agent's* container, which the later validation container does not
+  inherit.
+- **A repository's harness may not be in a dotted directory.** talos keeps sixteen
+  skills in `skills/` and four hooks in `hooks/`; four drifted path taxonomies all
+  named only `.claude/`-style roots, so the audit reported "no harness at all" — worse
+  than "unknown", because it reads as a finding.
+
+**Why it matters:** none of these show up as an error. A false green occupies the same
+field, in the same colour, as a real one, and it averages into every aggregate above
+it. The lab was shaping every result it produced, on a repository it had audited once —
+and the whole point is to audit repositories it has never seen.
+
+**How to apply:** when a check is written, ask what would make it fail, and then make
+the lab ask the same thing — statically for the shapes that are always wrong, and
+empirically by running the check against the clean tree before any agent touches it. A
+check that passes on the untouched repository has told you nothing. And when one
+predicate is used to answer two questions, name the second one: the SWE-bench leak was
+a single `elif` reusing a function whose docstring already said it answered something
+else. See [ADR-0057](../docs/adr/0057-a-case-is-validated-before-it-can-measure-anything.md)
+and [the case-formation guide](../docs/guide-case-formation.md).
+
+## A source edit is not a deploy: api and worker do not reload (2026-09-10)
+
+The wizard kept proposing `bash tests/test_*.sh` and refusing to save it after the
+fix that repairs exactly that hint had landed. Nothing was wrong with the fix. The
+`api` (uvicorn, no `--reload`) and `worker` (celery) containers bind-mount `.:/app`,
+so the files on disk were current — and the *processes* were seven minutes older
+than the edit. `docker compose exec worker python -c "import …"` is no help here:
+it starts a fresh interpreter that reads the disk, not the memory of PID 1.
+Compare `/proc/1` start time with the source mtime instead.
+
+**Why it matters:** two rounds of the same defect look like the fix does not work,
+and "do we have to iterate like this on every repository?" is the right question
+to ask when a lab keeps contradicting itself. The answer was operational, not a
+design gap — but it read as one.
+
+**How to apply:** after editing anything under `src/`, `docker compose restart api
+worker` (the runner image needs `docker compose build runner` only when
+`Dockerfile.runner` changes). A stored audit keeps the case plan the old worker
+computed; re-run the audit once after restarting. Do not read a stale process as a
+failed fix.
+
+## A case that measures nothing costs the same as one that does (2026-09-10)
+
+`audit-talos-4` spent $4 and 43 minutes on two arms that both scored 0, and the
+gates all worked: the case they gated was "run talos's own suite", a suite that
+was already red at the pin (39 failures in `lib/evidence.sh` / `test_seal.sh`),
+under a `|| exit 1` loop the repository itself never uses. Nothing measured the
+harness's thesis — model judges, code certifies — because the audit asked *what
+could an agent do here* over 700 characters of each skill and the paths (not
+the text) of the hooks. Three lessons, now enforced (ADR-0058):
+
+- **Ask the auditor for claims, not tasks.** The unit is a harness component
+  with `claim / trigger / observable / lab_counterpart / needs`; cases name the
+  components they exercise. `use_cases` produced smoke tests for every repository.
+- **Run the suite at the pin before the model speaks.** `health_at_pin` is one
+  hardened validation-lane run; it would have flagged the red suite before any
+  case existed, and it is the only deterministic signal the auditor gets.
+- **A harness can be installable.** talos copies itself into a target project
+  (`scripts/talos-install.sh`); a bare checkout has its skills under `skills/`,
+  invisible to Claude Code, and no settings. A "native" arm on such a checkout
+  is a bare run, and an "injected" arm that overwrites its `CLAUDE.md` while
+  leaving `AGENTS.md` is a contradictory one. `shape: installable` + the
+  `target_repo` need make the audit say "not measurable here" instead.
+
+Costs to remember: two planner-tier passes per audit, and one container run
+for health. Still far cheaper than one experiment that cannot answer.
+
+## Three instrument defects inverted an experiment's reading (2026-09-10)
+
+`audit-talos` (1 case × 1 rep, native vs injected) reported 0 % success on both
+arms and rubric scores 0 vs 4. Both agents had in fact done the task; re-read
+with the instrument fixed, both are 2/2 checks and 8/10.
+
+- **`pytest {workspace}/tests/x.sh`** — the drafter wrote it, nothing refused it,
+  it exits 4 on every run. `case_validation` now refuses interpreter/file
+  mismatches (`pytest`/`python` on `.sh`, `bash` on `.py`, `node` on `.sh`) with
+  the right interpreter as the suggestion.
+- **`diff.patch` omitted new files.** `git diff <provisioned>` lists tracked
+  files only; a run whose whole deliverable is a new file shipped an empty patch,
+  and the judge scored the arm that *also* edited tracked files 0 for "not adding
+  the test" a PASS check had just executed. `write_diff_patch` now runs
+  `git add --intent-to-add --all` on the archive first; `.gitignore` still holds.
+  Old runs can be rewritten from their archive with the same function.
+- **The judge trusted the diff over the checks**, and graded the repository's
+  pre-existing behaviour that a check's *output* described (jq fail-open) as the
+  agent's shortfall. The prompt now states that a PASS check and the file list
+  decide existence, and that check output describes the repository; the judge
+  also receives `files_modified` from `usage.json`, workspace-relative.
+
+**How to apply:** when two arms tie at 0 with a cheap judge, read the checks
+and the archive before the verdict — an impossible check or an empty diff is the
+instrument, not the agent. After a fix, re-validate (`POST /api/runs/{id}/validate`)
+re-judges any run the judge scored before; a human score is never overwritten.
+The continuation loop (generic step-N prompts) still drives scope creep and cost —
+native spent a third step editing hooks the task said not to touch. Not fixed.
+
 <!-- Add new learnings above this line -->
 
 ## "Audit a third-party repo" fails at provisioning when setup_commands mismatch the language — 2026-08-31
@@ -1687,5 +1856,72 @@ whether it can also express "did not run". Then propagate that third value all t
 way out — evaluator (exclude, do not zero), judge prompt (refutes nothing), UI (warn,
 not error) — because any layer that flattens it back to false undoes the other three.
 See [ADR-0048](../docs/adr/0048-a-check-that-did-not-measure-is-not-a-failure.md).
+
+## A badly formed case reports a number about itself (2026-09-09)
+
+Two cases written from the talos audit ran four experiment arms and produced nothing
+about talos, and nothing about the lab's own template either. Every defect was silent:
+
+- **A shell `for` loop exits with its last command's status.**
+  `for t in {workspace}/tests/test_*.sh; do bash "$t"; done` reported
+  `task_validation_pass = 1` while the same run's stored detail read
+  `rc=2 CONFIG ERROR`. Fifty-four failures ahead of one pass is a green check. The
+  fix is `|| exit 1` **inside** the loop body.
+- **A repo-relative path with no `{workspace}` resolves against the lab's own root.**
+  `bash benchmark/model/run-model.sh` exited 127 in both arms. The file existed; the
+  path did not. Exit 127 in a validation check is almost always this.
+- **`source: "git_target"` is not a case type.** `bench_run.py` decided "is this
+  SWE-bench?" by calling `spec_provisions_repo()`, which answers *"does a repository
+  have to be cloned?"* — true for **every** case paired with an external target. So
+  from step 2 both talos cases were told to resolve a GitHub issue, shown an empty
+  list of target failing tests, and told to run `python -m pytest` in a repository
+  with no Python. Both arms. The injected arm reacted worse (6.6× turns, 9× cost,
+  zero diffs), which would have been reported as a treatment effect.
+- **A run parked in `awaiting_manual_score` with an empty rubric is a case defect, not
+  a scoring backlog.** `_llm_judge_rubric` returns at `if not rubric` — silently — and
+  the run looks like something a human just has not got to.
+- **Runner capabilities include POSIX tools, not only interpreters.** Every talos test
+  died because the image shipped no `jq`, and the agent's own `apt-get install jq`
+  lived in the *agent's* container, which the later validation container does not
+  inherit.
+- **A repository's harness may not be in a dotted directory.** talos keeps sixteen
+  skills in `skills/` and four hooks in `hooks/`; four drifted path taxonomies all
+  named only `.claude/`-style roots, so the audit reported "no harness at all" — worse
+  than "unknown", because it reads as a finding.
+
+**Why it matters:** none of these show up as an error. A false green occupies the same
+field, in the same colour, as a real one, and it averages into every aggregate above
+it. The lab was shaping every result it produced, on a repository it had audited once —
+and the whole point is to audit repositories it has never seen.
+
+**How to apply:** when a check is written, ask what would make it fail, and then make
+the lab ask the same thing — statically for the shapes that are always wrong, and
+empirically by running the check against the clean tree before any agent touches it. A
+check that passes on the untouched repository has told you nothing. And when one
+predicate is used to answer two questions, name the second one: the SWE-bench leak was
+a single `elif` reusing a function whose docstring already said it answered something
+else. See [ADR-0057](../docs/adr/0057-a-case-is-validated-before-it-can-measure-anything.md)
+and [the case-formation guide](../docs/guide-case-formation.md).
+
+## A source edit is not a deploy: api and worker do not reload (2026-09-10)
+
+The wizard kept proposing `bash tests/test_*.sh` and refusing to save it after the
+fix that repairs exactly that hint had landed. Nothing was wrong with the fix. The
+`api` (uvicorn, no `--reload`) and `worker` (celery) containers bind-mount `.:/app`,
+so the files on disk were current — and the *processes* were seven minutes older
+than the edit. `docker compose exec worker python -c "import …"` is no help here:
+it starts a fresh interpreter that reads the disk, not the memory of PID 1.
+Compare `/proc/1` start time with the source mtime instead.
+
+**Why it matters:** two rounds of the same defect look like the fix does not work,
+and "do we have to iterate like this on every repository?" is the right question
+to ask when a lab keeps contradicting itself. The answer was operational, not a
+design gap — but it read as one.
+
+**How to apply:** after editing anything under `src/`, `docker compose restart api
+worker` (the runner image needs `docker compose build runner` only when
+`Dockerfile.runner` changes). A stored audit keeps the case plan the old worker
+computed; re-run the audit once after restarting. Do not read a stale process as a
+failed fix.
 
 <!-- Add new learnings above this line -->

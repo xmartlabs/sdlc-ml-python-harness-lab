@@ -80,6 +80,42 @@ def test_a_governed_python_repository_can_continue():
     assert "Python" in evidence["next_step_reason"]
 
 
+GOVERNED_NODE = {
+    "package.json": json.dumps({"name": "checkout", "scripts": {"test": "vitest run"}}),
+    "README.md": "# Checkout\n",
+    "AGENTS.md": "# Rules\nRun npm test before finishing.\n",
+    "src/index.ts": "export const x = 1;\n",
+    "src/cart.ts": "export const y = 2;\n",
+    "tests/cart.test.ts": "it('works', () => {});\n",
+}
+
+
+def test_a_governed_node_repository_can_continue():
+    """Characterization: Node reaches `continue` exactly as it always has.
+
+    Pinned before the capability model went in, so a regression in how the
+    runner's abilities are computed shows up here as a Node repository that
+    stopped being executable rather than as a subtle wording change.
+    """
+    evidence = _evidence(GOVERNED_NODE)
+
+    assert evidence["harness_present"] is True
+    assert evidence["runtime"]["runner_can_execute"] is True
+    assert evidence["runtime"]["supported"] == ["Node.js"]
+    assert evidence["runtime"]["unsupported"] == []
+    assert evidence["next_step"] == svc.NEXT_STEP_CONTINUE
+    assert "Node.js" in evidence["next_step_reason"]
+
+
+def test_node_files_without_a_project_marker_still_count_as_node():
+    files = {"scripts/build.mjs": "", "scripts/lint.mjs": "", "AGENTS.md": "# R\n"}
+    evidence = _evidence(files)
+
+    assert evidence["runtime"]["supported"] == ["Node.js"]
+    assert evidence["runtime"]["detected_from_files_only"] is True
+    assert evidence["next_step"] == svc.NEXT_STEP_CONTINUE
+
+
 def test_the_evidence_carries_what_the_model_is_allowed_to_read():
     evidence = _evidence(GOVERNED_PYTHON)
 
@@ -101,6 +137,69 @@ def test_hooks_are_read_from_claude_settings_and_the_hooks_directory():
     assert evidence["hooks"]["claude_settings_events"] == ["SessionStart", "Stop"]
     assert evidence["hooks"]["claude_hook_scripts"] == ["session_start.sh"]
     assert evidence["hooks"]["pre_commit"] is False
+
+
+# A repository that keeps its harness at the root rather than under `.claude/`.
+# talos does exactly this, and the audit used to report it as having none.
+ROOT_LEVEL_SHELL = {
+    "AGENTS.md": "# Rules\nRun the suite before finishing.\n",
+    "CLAUDE.md": "# Rules\nSame, for Claude.\n",
+    "README.md": "# talos\n",
+    "Makefile": "test:\n\tbash tests/run.sh\n",
+    "skills/talos-admit/SKILL.md": "---\nname: talos-admit\n---\n",
+    "skills/talos-verify/SKILL.md": "---\nname: talos-verify\n---\n",
+    "hooks/pre-push": "#!/usr/bin/env bash\n",
+    "hooks/armed-gate.sh": "#!/usr/bin/env bash\n",
+    "hooks/talos-pr-policy.yml": "policy: {}\n",
+    "tests/test_parse.sh": "#!/usr/bin/env bash\n",
+    "lib/evidence.sh": "#!/usr/bin/env bash\n",
+}
+
+
+def test_a_root_level_harness_is_seen_the_same_as_a_dotted_one():
+    """`skills/` and `hooks/` at the root are a harness, not a blind spot.
+
+    The taxonomy used to name only `.claude/`-style roots, so a repository with
+    sixteen skills and four hooks was reported as having no harness at all —
+    an answer worse than "unknown", because it read as a finding.
+    """
+    evidence = _evidence(ROOT_LEVEL_SHELL)
+
+    assert evidence["governance"]["skills"] == ["talos-admit", "talos-verify"]
+    assert sorted(evidence["skills"]) == [
+        "skills/talos-admit/SKILL.md",
+        "skills/talos-verify/SKILL.md",
+    ]
+    # The policy YAML sits beside the hooks and is configuration, not a hook.
+    assert evidence["hooks"]["claude_hook_scripts"] == ["armed-gate.sh", "pre-push"]
+    assert evidence["harness_present"] is True
+
+
+def test_a_source_directory_named_skills_is_not_a_harness():
+    """`skills/` counts only when it carries the marker that says what it is."""
+    files = {
+        "pyproject.toml": "[project]\n",
+        "src/skills/__init__.py": "",
+        "skills/router.py": "",
+        "skills/README.md": "# Skills package\n",
+    }
+    evidence = _evidence(files)
+
+    assert evidence["governance"]["skills"] == []
+    assert evidence["harness_present"] is False
+
+
+def test_an_agent_definition_is_found_however_deeply_it_is_nested():
+    """Nesting says nothing about whether a file addresses an agent."""
+    files = {
+        "pyproject.toml": "[project]\n",
+        "CLAUDE.md": "# Rules\n",
+        ".claude/agents/review/deep.md": "# Deep reviewer\n",
+    }
+    evidence = _evidence(files)
+
+    assert evidence["governance"]["agents"] == ["review/deep"]
+    assert ".claude/agents/review/deep.md" in evidence["agents"]
 
 
 def test_a_python_repository_with_nothing_for_an_agent_has_no_harness():
@@ -311,11 +410,15 @@ def _seed(session, **over) -> TargetRepository:
 
 def test_the_task_stores_findings_markdown_and_evidence(session, monkeypatch):
     _seed(session)
-    monkeypatch.setattr(svc, "gather_evidence", lambda t: _evidence(GOVERNED_PYTHON, t))
+    monkeypatch.setattr(
+        svc, "gather_evidence", lambda t, **_kw: _evidence(GOVERNED_PYTHON, t)
+    )
     seen: dict[str, str] = {}
+    systems: list[str] = []
 
     def gateway(model: str, system: str, user: str) -> str:
         seen.update(model=model, system=system, user=user)
+        systems.append(system)
         return json.dumps(GOOD_ANSWER)
 
     _audit_repository_body(session, "payments", "auditor-x", gateway=gateway)
@@ -328,13 +431,16 @@ def test_the_task_stores_findings_markdown_and_evidence(session, monkeypatch):
     assert audit.findings_json["harness_verdict"] == "partial"
     assert audit.evidence_json["next_step"] == svc.NEXT_STEP_CONTINUE
     assert "## Veredicto del laboratorio" in audit.markdown
-    assert seen["system"] == svc.REPOSITORY_AUDIT_SYSTEM_PROMPT
+    # Two passes: the map first, the cases from the annotated map second.
+    assert systems == [svc.COMPONENT_MAP_PROMPT, svc.CASE_PROPOSALS_PROMPT]
     assert "CLAUDE.md" in seen["user"]
 
 
 def test_a_failing_auditor_leaves_a_failed_row_not_a_running_one(session, monkeypatch):
     _seed(session)
-    monkeypatch.setattr(svc, "gather_evidence", lambda t: _evidence(GOVERNED_PYTHON, t))
+    monkeypatch.setattr(
+        svc, "gather_evidence", lambda t, **_kw: _evidence(GOVERNED_PYTHON, t)
+    )
 
     def gateway(*_: str) -> str:
         raise RuntimeError("gateway down")
@@ -358,7 +464,9 @@ def test_an_unpinned_repository_fails_with_the_reason(session):
 
 def test_a_re_audit_replaces_the_row(session, monkeypatch):
     _seed(session)
-    monkeypatch.setattr(svc, "gather_evidence", lambda t: _evidence(GOVERNED_PYTHON, t))
+    monkeypatch.setattr(
+        svc, "gather_evidence", lambda t, **_kw: _evidence(GOVERNED_PYTHON, t)
+    )
     _audit_repository_body(
         session, "payments", gateway=lambda *_: json.dumps(GOOD_ANSWER)
     )
