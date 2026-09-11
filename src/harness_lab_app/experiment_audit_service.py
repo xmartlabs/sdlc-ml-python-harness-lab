@@ -37,7 +37,7 @@ TERMINAL_STATES = frozenset(
 )
 
 # The score rows that describe an arm to a reader, in the order they read best.
-_RUN_METRICS = (
+RUN_METRICS = (
     "task_validation_pass",
     "test_pass_rate",
     "rubric_score",
@@ -52,7 +52,7 @@ _RUN_METRICS = (
     "governance_read_coverage",
 )
 
-_DETAIL_CLIP = 400
+DETAIL_CLIP = 400
 
 EXPERIMENT_AUDIT_SYSTEM_PROMPT = (
     "Sos el auditor de un laboratorio que mide si un harness de agentes de código "
@@ -170,14 +170,14 @@ def build_evidence(session: Session, experiment_id: str) -> dict[str, Any]:
                 "command": str(check.get("command") or check.get("name") or "")[-120:],
                 "exit_code": check.get("exit_code"),
                 "conclusive": check.get("conclusive", True),
-                "detail": str(check.get("detail") or "").strip()[-_DETAIL_CLIP:],
+                "detail": str(check.get("detail") or "").strip()[-DETAIL_CLIP:],
             }
             for check in objective.get("checks") or []
             if not check.get("passed")
         ]
         values: dict[str, Any] = {}
         for score in scores.list_scores(run.run_id):
-            if score.name in _RUN_METRICS:
+            if score.name in RUN_METRICS:
                 value = (
                     score.value_num
                     if score.value_num is not None
@@ -224,7 +224,7 @@ def build_evidence(session: Session, experiment_id: str) -> dict[str, Any]:
                 "judge": {
                     "score": subjective.get("functional_score"),
                     "source": subjective.get("score_source"),
-                    "rationale": str(subjective.get("notes") or "")[:_DETAIL_CLIP],
+                    "rationale": str(subjective.get("notes") or "")[:DETAIL_CLIP],
                 },
                 "scores": values,
                 "usage": usage,

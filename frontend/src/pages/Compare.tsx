@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
+import { CompareAuditPanel } from "../components/CompareAuditPanel";
 import { EmptyState } from "../components/EmptyState";
 import { HelpPanel } from "../components/HelpPanel";
 import { StateBadge } from "../components/StateBadge";
@@ -11,6 +12,18 @@ import type { RunRecord, ScoreRecord, ValidationRecord } from "../types";
 type CompareProps = {
   runs: RunRecord[];
 };
+
+// States a run can be in once it has stopped executing. A run awaiting its
+// manual score has a validation and a cost record; it is finished as far as the
+// reading is concerned, even if nobody has graded it. Mirrors
+// `experiment_audit_service.TERMINAL_STATES`, which gates the same request
+// server-side.
+const TERMINAL_STATES = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "awaiting_manual_score"
+]);
 
 // The runner command is built by BenchRunAdapter with a stable flag layout, so
 // case / prompt / models can be recovered from it without a config endpoint.
@@ -242,6 +255,14 @@ export function Compare({ runs }: CompareProps) {
     [selectedIds, runs, validations, scoresByRun]
   );
 
+  // The reading describes an outcome, so it waits for every run to have one.
+  const allFinished = useMemo(
+    () =>
+      columns.length > 0 &&
+      columns.every((col) => TERMINAL_STATES.has(col.run.state)),
+    [columns]
+  );
+
   // Every registry metric present on any selected run, so a comparison never
   // silently drops a score one arm recorded and the other did not.
   const scoreRows: Metric[] = useMemo(() => {
@@ -401,6 +422,8 @@ export function Compare({ runs }: CompareProps) {
               </tbody>
             </table>
           </div>
+
+          <CompareAuditPanel allFinished={allFinished} runIds={selectedIds} />
 
           {scoreRows.length > 0 && (
             <p className="muted small">
