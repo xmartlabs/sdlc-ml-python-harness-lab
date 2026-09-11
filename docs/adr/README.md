@@ -87,6 +87,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0056 — Cases are matched against runner capabilities, not the repository's language](0056-cases-are-matched-against-runner-capabilities.md)
 - [0057 — A case is validated before it is allowed to measure anything](0057-a-case-is-validated-before-it-can-measure-anything.md)
 - [0058 — The repository audit maps harness components to claims and derives cases and conditions from them](0058-the-audit-maps-harness-components-to-claims.md)
+- [0059 — A design that cannot launch is not created](0059-a-design-that-cannot-launch-is-not-created.md)
 
 ## Why ADRs exist
 

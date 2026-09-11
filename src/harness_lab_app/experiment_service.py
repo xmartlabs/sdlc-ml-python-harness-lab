@@ -66,6 +66,21 @@ CONDITION_FIELDS = frozenset(
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 
 
+def _variant_refusal(gaps: list[str]) -> str:
+    """The refusal creation and launch owe alike: named cases, named arms.
+
+    Both call sites answer the same question — would this run be handed a
+    prompt the case never defined — so they say it with the same words.
+    """
+    return (
+        "The design asks for prompt variants the cases do not define, so "
+        "those runs would carry an empty prompt: "
+        + "; ".join(sorted(set(gaps)))
+        + ". Add the variant to the case, or pick variants every selected "
+        "case declares."
+    )
+
+
 class ExperimentError(ValueError):
     """An experiment could not be created or launched as asked."""
 
@@ -843,6 +858,45 @@ class ExperimentService:
                 "least one fails on the untouched repository, then dry-run again."
             )
 
+    def _check_declared_variants(self, data: ExperimentCreate) -> None:
+        """Refuse at creation a design whose cases do not define its prompts.
+
+        ``launch`` already refuses this, but it refuses *after* the experiment
+        is persisted: the design that cannot run leaves an experiment behind,
+        and the next attempt at the same question has to be filed under a
+        suffixed id. Which variant each arm fixes is knowable here, so the
+        refusal belongs here too — nothing is created that cannot launch
+        (ADR-0059).
+
+        Only fully-determined pairs are checked. When neither the condition nor
+        ``prompt_variants`` names a variant, the runs carry whatever the launch
+        payload supplies, which does not exist yet; ``launch`` keeps the check
+        for those. An unknown case is left to ``launch`` as well — a draft may
+        legitimately name a case that is not imported yet.
+        """
+        case_ids = [case_id for case_id in data.case_ids if case_id]
+        if not case_ids or not data.conditions:
+            return
+        defined = RunService(self.session)._defined_variants(case_ids)
+        gaps: list[str] = []
+        for case_id in case_ids:
+            available = defined.get(case_id)
+            if available is None:
+                continue
+            for condition in data.conditions:
+                # A condition's override wins over the experiment-level axis,
+                # exactly as it does when ``launch`` builds the run config.
+                fixed = (condition.overrides or {}).get("prompt_variant")
+                wanted = [fixed] if fixed else list(data.prompt_variants)
+                gaps.extend(
+                    f"case '{case_id}' / arm '{condition.label}' asks for "
+                    f"prompt variant '{variant}'"
+                    for variant in wanted
+                    if variant and variant not in available
+                )
+        if gaps:
+            raise ExperimentError(_variant_refusal(gaps))
+
     def create_experiment(self, data: ExperimentCreate) -> tuple[Experiment, list[str]]:
         experiment_id = data.experiment_id.strip()
         if not _SLUG.match(experiment_id):
@@ -871,6 +925,7 @@ class ExperimentService:
                     f"Condition '{condition['label']}' fixes unknown axis field(s): "
                     f"{', '.join(unknown)}. Valid: {', '.join(sorted(CONDITION_FIELDS))}."
                 )
+        self._check_declared_variants(data)
         # Objections about the *design*: they stay true for the life of the
         # experiment, so they are persisted and read back beside the verdict.
         # The warnings below them are about this moment (no cases yet, too few
@@ -1068,13 +1123,7 @@ class ExperimentService:
                         configs.append((condition.label, config))
 
         if undefined:
-            raise ExperimentError(
-                "The design asks for prompt variants the cases do not define, so "
-                "those runs would carry an empty prompt: "
-                + "; ".join(sorted(set(undefined)))
-                + ". Add the variant to the case, or pick variants every selected "
-                "case declares."
-            )
+            raise ExperimentError(_variant_refusal(undefined))
         if not configs:
             raise ExperimentError(f"Experiment '{experiment_id}' expands to no runs.")
 

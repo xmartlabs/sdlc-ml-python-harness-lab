@@ -323,10 +323,13 @@ export function NewEvaluation() {
     [cases, caseIds]
   );
 
-  // Union across the selected cases, exactly as batch mode does it: a case
-  // without the chosen variant contributes no runs for it, but an intersection
-  // goes empty as soon as one case is unusual.
-  const variantOptions = useMemo(() => {
+  /** Whether a case declares this variant — the shape `promptEntriesFor` reads. */
+  const declares = (item: CaseRecord, variant: string) =>
+    typeof item.prompt_variants?.[variant] === "string";
+
+  // Every variant *some* selected case declares. Not what the pickers offer —
+  // it exists to explain what a mixed selection costs.
+  const declaredVariants = useMemo(() => {
     const names = new Set<string>();
     for (const item of selectedCases) {
       for (const variant of Object.keys(item.prompt_variants ?? {})) {
@@ -336,6 +339,40 @@ export function NewEvaluation() {
     return [...names].sort();
   }, [selectedCases]);
 
+  // What the pickers offer: the variants EVERY selected case declares.
+  //
+  // The union is what batch mode uses, and it is right there — a batch drops
+  // the pairs a case cannot run and carries on. An experiment cannot: it runs
+  // one design across every case it selected, and `experiment_service.launch`
+  // refuses the whole launch if any case lacks the variant an arm asks for.
+  // Offering the union meant a lab case and three SWE-bench instances put
+  // 'default'/'harness' in the pickers, and the refusal arrived six screens
+  // later, after the experiment had already been created (ADR-0059).
+  const variantOptions = useMemo(() => {
+    if (selectedCases.length === 0) {
+      return [];
+    }
+    return declaredVariants.filter((variant) =>
+      selectedCases.every((item) => declares(item, variant))
+    );
+  }, [declaredVariants, selectedCases]);
+
+  // The selected cases grouped by the prompt family they belong to, phrased for
+  // an operator who has to fix the selection: which cases, declaring what.
+  const variantFamilies = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    for (const item of selectedCases) {
+      const key = Object.keys(item.prompt_variants ?? {}).sort().join(", ");
+      groups.set(key, [...(groups.get(key) ?? []), item.case_id]);
+    }
+    return [...groups.entries()].map(([variants, ids]) => {
+      const who =
+        ids.length > 2 ? `${ids.length} cases` : ids.map((id) => `'${id}'`).join(" and ");
+      const verb = ids.length === 1 ? "declares" : "declare";
+      return `${who} ${verb} ${variants || "no prompt at all"}`;
+    });
+  }, [selectedCases]);
+
   // Cases feeding the "View prompt" toggle next to bare/harness selects — one
   // entry per selected case that actually defines this variant, so a person
   // can see what they picked without leaving the form. `prompt_variants`
@@ -343,7 +380,7 @@ export function NewEvaluation() {
   // content itself is fetched from the API, which resolves either form.
   const promptEntriesFor = (variant: string) =>
     selectedCases
-      .filter((item) => typeof item.prompt_variants?.[variant] === "string")
+      .filter((item) => declares(item, variant))
       .map((item) => ({ caseId: item.case_id, label: item.name }));
 
   const stepOptions = useMemo(() => {
@@ -786,6 +823,22 @@ export function NewEvaluation() {
     if (caseIds.length === 0 && !useSuite) {
       problems.push("Choose at least one case.");
     }
+    // Cases from two prompt families cannot share one design: whatever variant
+    // is picked, the other family's cases would be handed an empty prompt and
+    // the backend refuses the launch. Said here, while the selection is on
+    // screen and fixable.
+    if (
+      !useSuite &&
+      caseIds.length > 0 &&
+      declaredVariants.length > 0 &&
+      variantOptions.length === 0
+    ) {
+      problems.push(
+        "The selected cases share no prompt variant, so any choice would hand " +
+          "some of them an empty prompt. Keep one prompt family: " +
+          `${variantFamilies.join("; ")}.`
+      );
+    }
     if (mode === "cross_repo" && crossRepoIds.length < 2) {
       problems.push("Cross-repo needs at least two repositories to vary.");
     }
@@ -858,6 +911,7 @@ export function NewEvaluation() {
   }, [
     caseIds,
     crossRepoIds,
+    declaredVariants,
     factor,
     factorKey,
     mode,
@@ -869,6 +923,8 @@ export function NewEvaluation() {
     enforceSkills,
     targetId,
     useSuite,
+    variantFamilies,
+    variantOptions,
     venue
   ]);
 
@@ -946,7 +1002,25 @@ export function NewEvaluation() {
           "arms, set them equal above."
       );
     }
-    // D. A bare arm told to follow what it cannot read. `governance` inherits
+    // D. The pickers are narrower than the case list suggests. Not a fault in
+    // the design — the intersection is what every case can actually run — but
+    // the operator picked those cases for a reason and should see that one
+    // family is deciding the prompt for all of them.
+    if (!useSuite && variantOptions.length > 0) {
+      const dropped = declaredVariants.filter(
+        (variant) => !variantOptions.includes(variant)
+      );
+      if (dropped.length > 0) {
+        notes.push(
+          `${dropped.map((variant) => `'${variant}'`).join(", ")} ` +
+            `${dropped.length === 1 ? "is" : "are"} declared by some of the ` +
+            "selected cases but not all of them, so the prompt pickers offer " +
+            `only ${variantOptions.map((variant) => `'${variant}'`).join(", ")}. ` +
+            "An experiment runs one design across every case it selects."
+        );
+      }
+    }
+    // E. A bare arm told to follow what it cannot read. `governance` inherits
     // the launch prompt on both sides, so a harness-family variant reaches the
     // masked arm as an instruction about documents that are not there.
     if (
@@ -964,11 +1038,13 @@ export function NewEvaluation() {
     return notes;
   }, [
     bareVariant,
+    declaredVariants,
     factorKey,
     harnessVariant,
     mode,
     promptVariant,
     skills,
+    useSuite,
     variantOptions,
     venue
   ]);
@@ -1327,8 +1403,9 @@ export function NewEvaluation() {
           factorKey === "activation" ? (
             variantOptions.length === 0 ? (
               <p className="muted small">
-                Pick cases below first — the bare and governed prompts come from
-                the variants those cases define.
+                {caseIds.length === 0 || declaredVariants.length === 0
+                  ? "Pick cases below first — the bare and governed prompts come from the variants those cases define."
+                  : "The selected cases share no prompt variant, so there is no pair that runs on all of them. Narrow the selection to one prompt family."}
               </p>
             ) : (
               <div className="field-row">
@@ -1746,7 +1823,8 @@ export function NewEvaluation() {
                 />
               )}
               <span className="muted small">
-                Union of the variants the selected cases define.
+                Variants every selected case defines — one case short of a
+                variant is enough for the launch to be refused.
               </span>
             </label>
           )}
