@@ -3,6 +3,7 @@ import type {
   AttentionFeed,
   AttributionRecord,
   AuditRecord,
+  CompareAuditRecord,
   ExperimentAuditRecord,
   ImprovementsDoc,
   CaseCreatePayload,
@@ -126,6 +127,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+/** Compare's selection as repeated `run_id` params, in the order they appear. */
+function compareQuery(runIds: string[]): string {
+  const params = new URLSearchParams();
+  for (const runId of runIds) params.append("run_id", runId);
+  return params.toString();
 }
 
 export const api = {
@@ -268,6 +276,19 @@ export const api = {
     const query = auditorModel ? `?auditor_model=${encodeURIComponent(auditorModel)}` : "";
     return request<{ status: string; experiment_id: string }>(
       `/api/experiments/${id}/audit${query}`,
+      { method: "POST" }
+    );
+  },
+  // Compare is ad-hoc: the run ids travel as repeated query params so the
+  // client never has to know how the server keys the selection.
+  getCompareAudit: (runIds: string[]) =>
+    request<CompareAuditRecord>(`/api/compare/audit?${compareQuery(runIds)}`),
+  runCompareAudit: (runIds: string[], auditorModel?: string) => {
+    const params = new URLSearchParams();
+    for (const runId of runIds) params.append("run_id", runId);
+    if (auditorModel) params.set("auditor_model", auditorModel);
+    return request<{ status: string; comparison_key: string }>(
+      `/api/compare/audit?${params.toString()}`,
       { method: "POST" }
     );
   },

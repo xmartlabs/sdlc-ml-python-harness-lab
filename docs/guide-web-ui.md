@@ -1252,6 +1252,21 @@ recorded appears with its provenance, and the winning cell follows each metric's
 *declared direction* rather than the sign — a lower cost wins, a lower pass rate does
 not.
 
+**Reading** ([ADR-0060](adr/0060-compare-can-ask-a-model-to-read-the-table.md)).
+Under the table, *Explain this comparison* asks an LLM to say what the numbers mean:
+whether anything improved, which cells were never measured rather than measured at
+zero, what was held constant and what varied between these runs, and why a hand-picked
+selection is not a causal claim. Six fixed sections, in English, over the same evidence
+the table renders plus the run context it cannot show — the configuration each run
+carried, its failed checks, the judge's rationale, and which governance docs and skills
+it actually opened.
+
+Nothing is generated until you press the button: an unread comparison is an empty box.
+Pressing it again replaces the reading rather than adding one. The reading is stored
+against the *set* of runs, so reordering the columns returns the same text and changing
+one empties the box again. It is a **judgement** and is badged as one. The button waits
+until every selected run has stopped.
+
 Line up runs of the same case across models or harness conditions:
 
 - Pick 2–4 runs; the **metrics table** shows case, models, prompt, objective

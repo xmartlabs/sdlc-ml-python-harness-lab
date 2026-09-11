@@ -73,6 +73,16 @@ def enqueue_experiment_audit(
     )
 
 
+def enqueue_compare_audit(run_ids: list[str], auditor_model: str | None = None) -> None:
+    """Publish the LLM reading of an ad-hoc run comparison (runs in the worker)."""
+    celery_app.send_task(
+        "harness_lab_app.tasks.audit_comparison",
+        args=[run_ids, auditor_model],
+        queue="runs",
+        retry=False,
+    )
+
+
 def enqueue_repository_audit(target_id: str, auditor_model: str | None = None) -> None:
     """Publish the LLM harness audit of a pinned repository (runs in the worker)."""
     celery_app.send_task(

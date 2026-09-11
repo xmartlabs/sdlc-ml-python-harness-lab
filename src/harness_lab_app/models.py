@@ -541,6 +541,34 @@ class ExperimentAudit(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class CompareAudit(SQLModel, table=True):
+    """A natural-language reading of an ad-hoc comparison, written by an LLM.
+
+    The Compare page lines up 2-4 runs side by side and highlights the winning
+    cell per row, but it never says what the table means: whether a column
+    actually improved on the baseline, which dashes are "not measured" rather
+    than zero, and which of the visible differences could account for a delta.
+    This is that reading.
+
+    Unlike an experiment, a comparison has no server-side identity -- it is a
+    selection of run ids a person made in the browser. `comparison_key` is a
+    hash of the sorted, de-duplicated set, so the same selection resolves to
+    the same row no matter what order the columns were added in, and asking
+    again overwrites the reading instead of accumulating rows.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    comparison_key: str = Field(index=True, unique=True)
+    run_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    auditor_model: str = ""
+    status: str = "running"  # running | done | failed
+    markdown: str = ""
+    evidence_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    error: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class RepositoryAudit(SQLModel, table=True):
     """The LLM reading of a repository's harness, before the lab runs anything.
 

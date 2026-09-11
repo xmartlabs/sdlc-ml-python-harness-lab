@@ -1619,6 +1619,74 @@ def audit_experiment(experiment_id: str, auditor_model: str | None = None) -> No
         _audit_experiment_body(session, experiment_id, auditor_model)
 
 
+def _audit_comparison_body(
+    session: Session,
+    run_ids: list[str],
+    auditor_model: str | None = None,
+    gateway: Callable[[str, str, str], str] | None = None,
+    sleep: Callable[[float], None] | None = None,
+) -> None:
+    """Read an ad-hoc comparison back as prose; store text and evidence.
+
+    Separated from the Celery task so a test can inject the gateway (and the
+    retry's sleep). Failure is recorded on the row, never raised: a comparison
+    without a reading is still a comparison, and the page falls back to the
+    table.
+    """
+    from harness_lab_app.compare_audit_service import (
+        COMPARE_AUDIT_SYSTEM_PROMPT,
+        CompareAuditService,
+        build_evidence,
+        comparison_key,
+        render_audit_prompt,
+    )
+    from harness_lab_app.experiment_audit_service import call_with_retry
+
+    service = CompareAuditService(session)
+    key = comparison_key(run_ids)
+    model = (
+        auditor_model
+        or os.environ.get("AUDITOR_MODEL")
+        or (llm_transport.default_audit_model())
+    )
+    service.mark_running(key, run_ids, model)
+    try:
+        evidence = build_evidence(session, run_ids)
+        call = gateway or (
+            lambda m, sys_, user: llm_transport.chat(
+                m,
+                sys_,
+                user,
+                timeout=_AUDIT_TIMEOUT_SECONDS,
+                temperature=0.2,
+                trace_kind="compare_audit",
+                trace_metadata={"comparison_key": key},
+            )
+        )
+        prompt = render_audit_prompt(evidence)
+        attempt = lambda: call(  # noqa: E731 - one expression, named for retry
+            model, COMPARE_AUDIT_SYSTEM_PROMPT, prompt
+        )
+        markdown = (
+            call_with_retry(attempt, sleep=sleep)
+            if sleep is not None
+            else call_with_retry(attempt)
+        ).strip()
+        if not markdown:
+            raise RuntimeError("the auditor returned an empty reading")
+        service.store_result(key, run_ids, markdown, evidence, model)
+    except Exception as exc:  # the reading is optional; the record says why
+        service.store_error(key, run_ids, f"{type(exc).__name__}: {exc}")
+
+
+@celery_app.task(name="harness_lab_app.tasks.audit_comparison", acks_late=True)
+def audit_comparison(run_ids: list[str], auditor_model: str | None = None) -> None:
+    """The LLM reading of a hand-picked run comparison (worker-side, one call)."""
+    init_db()
+    with Session(engine) as session:
+        _audit_comparison_body(session, run_ids, auditor_model)
+
+
 def _audit_repository_body(
     session: Session,
     target_id: str,

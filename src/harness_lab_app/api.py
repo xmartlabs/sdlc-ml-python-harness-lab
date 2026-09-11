@@ -12,6 +12,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -40,6 +41,7 @@ from harness_lab_app.case_service import (
 )
 from harness_lab_app.celery_app import (
     enqueue_audit,
+    enqueue_compare_audit,
     enqueue_container_cleanup,
     enqueue_experiment_audit,
     enqueue_gate_check,
@@ -51,6 +53,13 @@ from harness_lab_app.celery_app import (
     enqueue_validation,
 )
 from harness_lab_app.checkout_service import CheckoutError
+from harness_lab_app.compare_audit_service import (
+    MAX_RUNS,
+    MIN_RUNS,
+    CompareAuditService,
+    comparison_key,
+    runs_finished as comparison_runs_finished,
+)
 from harness_lab_app.config import get_settings, read_env_file_value
 from harness_lab_app.constants import EXAMPLE_LMSTUDIO_URL, EXAMPLE_OLLAMA_URL
 from harness_lab_app.db import get_engine, get_session, init_db
@@ -1202,6 +1211,74 @@ def create_app() -> FastAPI:
         ExperimentAuditService(session).mark_running(experiment_id, auditor_model or "")
         enqueue_experiment_audit(experiment_id, auditor_model)
         return {"status": "queued", "experiment_id": experiment_id}
+
+    def _resolve_comparison(session: Session, run_ids: list[str]) -> list[str]:
+        """The selection, validated: 2-4 distinct runs that all exist."""
+        ordered = list(dict.fromkeys(run_ids))
+        if len(ordered) != len(run_ids):
+            raise HTTPException(
+                status_code=400, detail="A run cannot be compared with itself."
+            )
+        if not MIN_RUNS <= len(ordered) <= MAX_RUNS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"A comparison reads {MIN_RUNS} to {MAX_RUNS} runs; "
+                    f"{len(ordered)} were given."
+                ),
+            )
+        runs = RunService(session)
+        for run_id in ordered:
+            try:
+                runs.get_run(run_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return ordered
+
+    @app.get("/api/compare/audit")
+    def get_compare_audit(
+        run_id: list[str] = Query(default=[]),
+        session: Session = Depends(get_session),
+    ):
+        """The stored reading for this exact selection, if one was ever asked for.
+
+        The 404 is the empty box: the page never generates on its own, so
+        "nothing here yet" is the normal state, not an error to surface.
+        """
+        ordered = _resolve_comparison(session, run_id)
+        audit = CompareAuditService(session).get(comparison_key(ordered))
+        if audit is None:
+            raise HTTPException(
+                status_code=404, detail="No reading for this comparison"
+            )
+        return audit
+
+    @app.post("/api/compare/audit")
+    def audit_compare(
+        run_id: list[str] = Query(default=[]),
+        auditor_model: str | None = None,
+        session: Session = Depends(get_session),
+    ):
+        """Queue the LLM reading of a hand-picked comparison.
+
+        Refused while any run is still executing: a reading of a run that has
+        not stopped would describe an outcome that does not exist yet, and it
+        would be persisted as though it did.
+        """
+        ordered = _resolve_comparison(session, run_id)
+        finished, done, total = comparison_runs_finished(session, ordered)
+        if not finished:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{done} of {total} run(s) have finished; the reading waits "
+                    "for the last one."
+                ),
+            )
+        key = comparison_key(ordered)
+        CompareAuditService(session).mark_running(key, ordered, auditor_model or "")
+        enqueue_compare_audit(ordered, auditor_model)
+        return {"status": "queued", "comparison_key": key}
 
     @app.get("/api/experiments/{experiment_id}/summary")
     def summarize_experiment(

@@ -259,6 +259,25 @@ export type ExperimentAuditRecord = {
 };
 
 /**
+ * The LLM reading of an ad-hoc comparison: prose over the Compare table.
+ *
+ * A comparison is a selection someone made in the browser, so it has no id of
+ * its own. `comparison_key` is a hash of the sorted run-id set: the same runs
+ * always resolve to the same reading, whatever order the columns were added in.
+ */
+export type CompareAuditRecord = {
+  comparison_key: string;
+  run_ids: string[];
+  auditor_model: string;
+  status: "running" | "done" | "failed";
+  markdown: string;
+  evidence_json?: Record<string, unknown>;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
  * The LLM reading of a repository's harness, before the lab runs anything.
  *
  * `findings` is the structured half (what the model was asked to return as
