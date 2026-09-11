@@ -1924,4 +1924,25 @@ worker` (the runner image needs `docker compose build runner` only when
 computed; re-run the audit once after restarting. Do not read a stale process as a
 failed fix.
 
+## A union is right for a batch and wrong for an experiment (2026-09-10)
+
+The New evaluation wizard built its prompt pickers from the union of the selected
+cases' variants, copying batch mode, where `_resolve_variants` legitimately drops the
+case/variant pairs a case cannot run. An experiment cannot drop them: it runs one
+declared design across every case it selected, and `ExperimentService.launch` refuses
+the whole launch if any case lacks the variant an arm asks for. Selecting one lab case
+(`default`/`harness`) beside three SWE-bench instances (`swe_default`) therefore put a
+prompt in the pickers that three quarters of the design could not run.
+
+**Why it matters:** the refusal read as an id problem. Creation and launch are two
+calls, so the refused design was already persisted, and the retry — same question, same
+derived id — was filed under a suffixed one. Every attempt cost a row and a slug, and
+the symptom pointed away from the cause.
+
+**How to apply:** when copying a rule from the batch path into the experiment path, ask
+whether the batch's freedom to drop a combination survives. Where it does not, the
+picker offers the intersection. And validate a design at creation for everything
+creation can already see — a refusal after the row exists is a refusal that leaves
+litter. See [ADR-0059](../docs/adr/0059-a-design-that-cannot-launch-is-not-created.md).
+
 <!-- Add new learnings above this line -->

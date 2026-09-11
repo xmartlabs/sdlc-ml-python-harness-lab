@@ -14,6 +14,7 @@ from harness_lab_app.case_service import CaseService, CaseValidationError
 from harness_lab_app.experiment_service import (
     ExperimentDesignError,
     ExperimentError,
+    ExperimentNotFoundError,
     ExperimentService,
     repetition_warning,
     validate_design,
@@ -846,13 +847,71 @@ def test_prompt_variant_alone_is_a_valid_harness_axis():
     assert warnings == []
 
 
-def test_launch_refuses_a_prompt_variant_the_case_does_not_define(session):
+def test_creation_refuses_a_prompt_variant_the_case_does_not_define(session):
     """An undefined variant means an empty prompt, and an empty prompt is a loss.
 
     The prompt lookup falls back to "" for a variant a case does not declare,
     so the run went out with nothing to do — inside one arm, which then read as
-    that arm being bad. The refusal belongs at launch, before anything is
-    persisted, exactly as it does for a batch (ADR-0023).
+    that arm being bad.
+
+    Refusing at launch was not early enough: the experiment was already
+    persisted, so a design that can never run left a row behind and burnt the
+    id derived from its question — the next attempt at the same question had to
+    be filed under a suffixed one. Which variant each arm fixes is knowable at
+    creation, so that is where a mixed-family selection is refused.
+    """
+    from harness_lab_app.models import Case, CaseType
+
+    session.add(
+        Case(
+            case_id="pokemon-v1",
+            name="Pokemon",
+            type=CaseType.single_prompt,
+            prompt_variants={"default": "Build the game."},
+        )
+    )
+    session.commit()
+    service = ExperimentService(session)
+    design = ExperimentCreate(
+        experiment_id="mixed-families",
+        name="Mixed families",
+        question="Does the harness as a whole earn its keep?",
+        mode=ExperimentMode.harness_evaluation,
+        case_ids=["pokemon-v1"],
+        repetitions=1,
+        conditions=[
+            ExperimentConditionCreate(
+                label="bare",
+                role=ConditionRole.control,
+                overrides={"prompt_variant": "default", "skills_disabled": ["x"]},
+            ),
+            ExperimentConditionCreate(
+                label="full-harness",
+                role=ConditionRole.treatment,
+                # A variant from another prompt family — this case has none.
+                overrides={"prompt_variant": "sdlc", "skills_disabled": []},
+            ),
+        ],
+    )
+
+    with pytest.raises(ExperimentError, match="empty prompt") as refusal:
+        service.create_experiment(design)
+
+    # The case and the arm are named: with several cases selected from two
+    # prompt families, "some variant is missing" is not a fixable message.
+    assert "case 'pokemon-v1' / arm 'full-harness'" in str(refusal.value)
+    # Nothing was persisted, so the id derived from the question is still free.
+    with pytest.raises(ExperimentNotFoundError):
+        service.get_experiment("mixed-families")
+
+
+def test_launch_still_refuses_a_variant_only_the_payload_names(session):
+    """Creation cannot see every variant, so launch keeps the same guard.
+
+    An arm that fixes no ``prompt_variant`` inherits the one the launch payload
+    carries, and that payload does not exist at creation time. The refusal has
+    to survive there too — with nothing half-launched, exactly as a batch owes
+    (ADR-0023).
     """
     from harness_lab_app.models import Case, CaseType
     from harness_lab_app.schemas import RunConfigCreate
@@ -869,8 +928,8 @@ def test_launch_refuses_a_prompt_variant_the_case_does_not_define(session):
     service = ExperimentService(session)
     service.create_experiment(
         ExperimentCreate(
-            experiment_id="mixed-families",
-            name="Mixed families",
+            experiment_id="payload-variant",
+            name="Payload variant",
             question="Does the harness as a whole earn its keep?",
             mode=ExperimentMode.harness_evaluation,
             case_ids=["pokemon-v1"],
@@ -879,13 +938,12 @@ def test_launch_refuses_a_prompt_variant_the_case_does_not_define(session):
                 ExperimentConditionCreate(
                     label="bare",
                     role=ConditionRole.control,
-                    overrides={"prompt_variant": "default", "skills_disabled": ["x"]},
+                    overrides={"skills_disabled": ["x"]},
                 ),
                 ExperimentConditionCreate(
                     label="full-harness",
                     role=ConditionRole.treatment,
-                    # A variant from another prompt family — this case has none.
-                    overrides={"prompt_variant": "sdlc", "skills_disabled": []},
+                    overrides={"skills_disabled": []},
                 ),
             ],
         )
@@ -893,10 +951,11 @@ def test_launch_refuses_a_prompt_variant_the_case_does_not_define(session):
 
     with pytest.raises(ExperimentError, match="empty prompt"):
         service.launch(
-            "mixed-families",
+            "payload-variant",
             RunConfigCreate(
                 case_id="pokemon-v1",
-                prompt_variant="default",
+                # A variant from another prompt family — this case has none.
+                prompt_variant="sdlc",
                 executor_model="stub-executor",
                 score_mode="manual",
                 max_steps=5,
@@ -905,7 +964,7 @@ def test_launch_refuses_a_prompt_variant_the_case_does_not_define(session):
         )
 
     # One intent: the arm that *was* runnable is not left half-launched either.
-    assert service.runs("mixed-families") == []
+    assert service.runs("payload-variant") == []
 
 
 def test_a_single_variant_case_can_still_carry_the_full_harness_pair(session):

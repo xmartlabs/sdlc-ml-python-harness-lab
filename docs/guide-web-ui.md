@@ -424,8 +424,14 @@ choose, every run records `skill_invoked` and `skill_invocations`, and an arm
 that never opened its skills gets that said at the top of its verdict.
 
 **How it runs** carries the classic run form's own controls — the three-tier
-model picker, the harness, the prompt variant (union of the selected cases'
-variants), the step budget, dry run — so the wizard is the whole journey.
+model picker, the harness, the prompt variant, the step budget, dry run — so the
+wizard is the whole journey. The prompt pickers — the shared one here and the
+bare/governed pair under **What varies** — offer only the variants *every*
+selected case declares, not the union: an experiment runs one design across all
+of its cases, so a variant only some of them define would hand the rest an empty
+prompt and the launch would be refused (ADR-0059). Selecting cases from two
+prompt families — a hand-written lab case and a SWE-bench instance, say — leaves
+nothing in common, and the form blocks creation and names the families instead.
 **Create & launch runs** queues arms × cases × repetitions in one step;
 *Create without launching* leaves a draft the experiment page can launch later. The panel at
 the bottom shows the exact arms about to be created, and lists what is blocking
