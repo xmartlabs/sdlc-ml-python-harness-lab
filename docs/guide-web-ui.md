@@ -1272,6 +1272,15 @@ Line up runs of the same case across models or harness conditions:
 - Pick 2–4 runs; the **metrics table** shows case, models, prompt, objective
   result, final/composite score, tokens, cost, time, steps, and interventions —
   with the best cell per row highlighted.
+- **The three skill rows are three conditions, not one.** *Skills removed* is an
+  ablation, *skills added* is a staged skill, and *skills asked for* is the prompt
+  telling the agent to invoke them
+  ([ADR-0041](adr/0041-a-skill-under-test-is-invoked-not-just-available.md)). They
+  are counted separately and labelled by direction because they point opposite
+  ways: a column reading "24 skill(s)" under *removed* is the **bare** arm, and one
+  reading "24 skill(s)" under *asked for* is the fullest **treatment**. A single
+  direction-less "Ablation" count rendered those two identically, which reads as the
+  exact inverse of what happened.
 - The aggregated ranking by condition (% resolved, harness version, official
   reference) lives on the **Advanced → Benchmarks** leaderboard.
 

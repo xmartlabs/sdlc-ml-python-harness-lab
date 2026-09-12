@@ -33,7 +33,16 @@ type RunFlags = {
   plannerModel: string;
   executorModel: string;
   maxSteps: string;
-  ablation: number;
+  // Three counts, never one. Removing a skill, adding a staged one and asking
+  // the agent to invoke one are three different conditions, and two of them
+  // point in opposite directions: an arm with 24 skills removed is the bare
+  // control, an arm with 24 asked for is the fullest treatment. Collapsing them
+  // into a single direction-less number rendered those two identically, which
+  // reads as the exact inverse of what happened. Availability is not use
+  // either, so the third count stands on its own (ADR-0041).
+  skillsRemoved: number;
+  skillsAdded: number;
+  skillsAsked: number;
 };
 
 function flagValue(command: string[], flag: string): string {
@@ -41,17 +50,27 @@ function flagValue(command: string[], flag: string): string {
   return idx >= 0 && idx + 1 < command.length ? command[idx + 1] : "";
 }
 
+function countFlag(command: string[], flag: string): number {
+  return command.filter((token) => token === flag).length;
+}
+
 function parseFlags(command: string[]): RunFlags {
-  const ablation =
-    command.filter((c) => c === "--disable-skill" || c === "--extra-skill").length;
   return {
     caseId: flagValue(command, "--case") || "—",
     prompt: flagValue(command, "--prompt") || "—",
     plannerModel: flagValue(command, "--planner-model") || "none",
     executorModel: flagValue(command, "--executor-model") || "—",
     maxSteps: flagValue(command, "--max-steps") || "—",
-    ablation,
+    skillsRemoved: countFlag(command, "--disable-skill"),
+    skillsAdded: countFlag(command, "--extra-skill"),
+    skillsAsked: countFlag(command, "--invoke-skill"),
   };
+}
+
+// A skill count always carries its unit: "24" beside "none" is only readable
+// when the row label says which direction the 24 points in.
+function skillCount(value: number): string {
+  return value ? `${value} skill(s)` : "none";
 }
 
 function fmt(value: number | null | undefined): string {
@@ -87,8 +106,16 @@ const METRICS: Metric[] = [
   { label: "Prompt variant", display: (c) => c.flags.prompt },
   { label: "Max steps", display: (c) => c.flags.maxSteps },
   {
-    label: "Ablation",
-    display: (c) => (c.flags.ablation ? `${c.flags.ablation} skill(s)` : "none"),
+    label: "Skills removed",
+    display: (c) => skillCount(c.flags.skillsRemoved),
+  },
+  {
+    label: "Skills added",
+    display: (c) => skillCount(c.flags.skillsAdded),
+  },
+  {
+    label: "Skills asked for",
+    display: (c) => skillCount(c.flags.skillsAsked),
   },
   {
     label: "Objective",
@@ -343,6 +370,11 @@ export function Compare({ runs }: CompareProps) {
             skill conditions) from the selectors.</li>
           <li>The metrics table highlights the best cell per row — higher is better
             for scores, lower for tokens / cost / time / steps.</li>
+          <li>The three <strong>skill rows</strong> are three conditions, not one.
+            <em>Removed</em> is an ablation, <em>added</em> is a staged skill, and
+            <em>asked for</em> is the prompt telling the agent to invoke them. A
+            column reading &ldquo;24 skill(s) removed&rdquo; is the bare arm, not
+            the equipped one.</li>
           <li><strong>Objective</strong> comes from automatic validation; SWE-bench
             resolves to pass/fail, other cases show their check summary.</li>
           <li>The aggregated <strong>Leaderboard</strong> (% resolved per harness +
