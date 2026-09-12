@@ -66,6 +66,10 @@ export function Cases({
   const [description, setDescription] = useState("");
   const [promptBody, setPromptBody] = useState("Describe the task here.");
   const [maxSteps, setMaxSteps] = useState(1);
+  // Required by the server whenever the case carries a validation command: a
+  // case with commands and no rubric has nothing to grade against and parks in
+  // awaiting_manual_score, so `check_case` refuses it with a 422.
+  const [scoringRubric, setScoringRubric] = useState("");
   // One command per line, the shape the case stores and the runner executes.
   const [commandText, setCommandText] = useState("");
   const [stepPrompts, setStepPrompts] = useState<string[]>([]);
@@ -77,6 +81,7 @@ export function Cases({
   const [isDrafting, setIsDrafting] = useState(false);
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [swebenchId, setSwebenchId] = useState("pallets__flask-4992");
   const [isImporting, setIsImporting] = useState(false);
   const [importMessage, setImportMessage] = useState<string | null>(null);
@@ -226,6 +231,7 @@ export function Cases({
       if (draft.subject) setName(draft.subject);
       if (draft.description) setDescription(draft.description);
       if (draft.instruction) setPromptBody(draft.instruction);
+      if (draft.scoring_rubric) setScoringRubric(draft.scoring_rubric);
       setStepPrompts(draft.step_prompts ?? []);
       // The server screened these: what is left is one runnable command per
       // line, which is the only shape this textarea preserves.
@@ -262,6 +268,7 @@ export function Cases({
 
   const handleCreate = async () => {
     setIsSaving(true);
+    setSaveError(null);
     try {
       const created = await onCreateCase({
         case_id: caseId || slugify(name) || "new-case",
@@ -282,7 +289,7 @@ export function Cases({
                   .filter(Boolean)
             : [],
         success_criteria: {},
-        scoring_rubric: "",
+        scoring_rubric: scoringRubric,
         constraints: [],
         validation_commands: commandText
           .split("\n")
@@ -292,6 +299,12 @@ export function Cases({
       });
       onSelectCase(created.case_id);
       setCaseId(`${slugify(created.name)}-copy`);
+    } catch (error) {
+      // Without this the server's refusal became an unhandled rejection and the
+      // button read as dead: pressed, nothing created, nothing said.
+      setSaveError(
+        error instanceof Error ? error.message : "Unable to create the case."
+      );
     } finally {
       setIsSaving(false);
     }
@@ -620,13 +633,40 @@ export function Cases({
               value={commandText}
             />
           </label>
+          <label className="full">
+            <span>Scoring rubric — required once the case has a command</span>
+            <textarea
+              onChange={(event) => setScoringRubric(event.target.value)}
+              placeholder="10 = every validation command passes and the maze, scoring and ghost chase all work. 5 = it renders and moves but scoring or collisions are missing. 0 = nothing runs."
+              rows={4}
+              value={scoringRubric}
+            />
+          </label>
         </div>
         <p className="muted small">
           A case with no validation command cannot score itself: every run of it
           stops in <code>awaiting_manual_score</code> until a person grades it.
         </p>
+        {saveError ? (
+          <div className="callout callout--warning">
+            <IconAlert size={16} />
+            <div>
+              <strong>The case was not created:</strong>
+              <ul className="blocking-list">
+                {saveError.split("\n").map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        ) : null}
         <div className="panel-actions">
-          <button className="primary" disabled={isSaving} onClick={handleCreate} type="button">
+          <button
+            className="primary"
+            disabled={isSaving}
+            onClick={() => void handleCreate()}
+            type="button"
+          >
             {isSaving ? "Saving..." : "Create case"}
           </button>
         </div>
