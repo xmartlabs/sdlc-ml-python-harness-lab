@@ -112,8 +112,23 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     const text = await response.text();
     let message = text || response.statusText;
     try {
-      const parsed = JSON.parse(text) as { detail?: string };
-      if (parsed.detail) {
+      const parsed = JSON.parse(text) as {
+        detail?: string | string[] | { msg?: string }[];
+      };
+      // A 422 from case validation carries one `detail` entry per offending
+      // field, and FastAPI's own body errors carry objects. Joined here, so a
+      // caller can render `error.message` verbatim instead of stringifying an
+      // array into "a,b".
+      if (Array.isArray(parsed.detail)) {
+        const lines = parsed.detail
+          .map((item) =>
+            typeof item === "string" ? item : (item?.msg ?? JSON.stringify(item))
+          )
+          .filter(Boolean);
+        if (lines.length > 0) {
+          message = lines.join("\n");
+        }
+      } else if (parsed.detail) {
         message = parsed.detail;
       }
     } catch {
