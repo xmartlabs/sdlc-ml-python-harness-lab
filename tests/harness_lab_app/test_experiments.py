@@ -1343,17 +1343,27 @@ def _staged_skill_design(service, experiment_id="activation"):
     )
 
 
-def _score(session, run, *, passed, skill_invoked=None, stop_reason=None):
-    """Give a launched run the artifacts a real one would leave behind."""
+def _score(
+    session, run, *, passed, skill_invoked=None, stop_reason=None, objective=None
+):
+    """Give a launched run the artifacts a real one would leave behind.
+
+    ``passed=None`` writes no ``task_validation_pass`` at all, mirroring the
+    evaluator: an objective that settled nothing is not a zero (ADR-0048).
+    """
     from harness_lab_app.models import RunState, Score, Validation
 
     run.state = RunState.completed
     session.add(run)
-    session.add(
-        Score(
-            run_id=run.run_id, name="task_validation_pass", version=1, value_bool=passed
+    if passed is not None:
+        session.add(
+            Score(
+                run_id=run.run_id,
+                name="task_validation_pass",
+                version=1,
+                value_bool=passed,
+            )
         )
-    )
     if skill_invoked is not None:
         session.add(
             Score(
@@ -1363,8 +1373,14 @@ def _score(session, run, *, passed, skill_invoked=None, stop_reason=None):
                 value_num=skill_invoked,
             )
         )
-    if stop_reason:
-        session.add(Validation(run_id=run.run_id, effort={"stop_reason": stop_reason}))
+    if stop_reason or objective is not None:
+        session.add(
+            Validation(
+                run_id=run.run_id,
+                effort={"stop_reason": stop_reason} if stop_reason else {},
+                objective=objective or {},
+            )
+        )
     session.commit()
 
 
@@ -1821,3 +1837,94 @@ def test_an_abandoned_experiment_is_never_reopened_as_complete(lab, session):
 
     assert lab.try_complete("migration-safety") is None
     assert lab.get_experiment("migration-safety").status == ExperimentStatus.abandoned
+
+
+def _failed_check(command="make test", exit_code=2):
+    return {
+        "strategy": "tests",
+        "passed": False,
+        "checks": [
+            {
+                "command": command,
+                "name": command,
+                "exit_code": exit_code,
+                "passed": False,
+                "conclusive": True,
+            }
+        ],
+        "summary": "0/1 checks passed",
+    }
+
+
+def _unmeasured_check(command="make test", reason="not_found"):
+    return {
+        "strategy": "tests",
+        "passed": None,
+        "checks": [
+            {
+                "command": command,
+                "name": command,
+                "exit_code": 127,
+                "passed": False,
+                "conclusive": False,
+                "inconclusive_reason": reason,
+            }
+        ],
+        "summary": "0/1 checks passed; 1 inconclusive (command not found)",
+    }
+
+
+def test_two_arms_failing_the_same_check_identically_is_a_floor(session):
+    """Nothing resolved on either side, so the 0-point delta ranks nothing.
+
+    This is `audit-ml-python-base`: every run failed the lab's own `make test`
+    and the summary led with "No difference observed" (ADR-0062).
+    """
+    service = ExperimentService(session)
+    # Two repetitions: below that the floor stays quiet for the same reason the
+    # ceiling does — one failing run is evidence of one run.
+    _staged_skill_design(service, "floored")
+    runs = service.launch("floored", _base_config())
+    for run in runs:
+        _score(session, run, passed=False, objective=_failed_check())
+
+    summary = service.summarize("floored")
+
+    assert "floor_effect" in [i["code"] for i in summary["validity"]["issues"]]
+    assert summary["verdict"]["headline"] == "Comparison not valid"
+
+
+def test_an_experiment_whose_checks_never_ran_is_reported_unmeasured(session):
+    """The runs completed; it is the checks that measured nothing."""
+    service = ExperimentService(session)
+    _skills_design(service, "unmeasured")
+    runs = service.launch("unmeasured", _base_config())
+    for run in runs:
+        _score(session, run, passed=None, objective=_unmeasured_check())
+
+    summary = service.summarize("unmeasured")
+
+    codes = [issue["code"] for issue in summary["validity"]["issues"]]
+    assert codes[0] == "objective_unmeasured"
+    assert summary["validity"]["status"] == "invalid"
+    assert "command not found" in summary["validity"]["issues"][0]["detail"]
+    # Every arm reports the count behind the call, not just the verdict.
+    assert all(
+        health["unmeasured"] == health["runs"]
+        for health in summary["run_health"].values()
+    )
+
+
+def test_a_manual_only_case_is_not_an_unmeasured_experiment(session):
+    """It declares no checks: nothing was meant to be measured."""
+    service = ExperimentService(session)
+    _skills_design(service, "manualonly")
+    runs = service.launch("manualonly", _base_config())
+    for run in runs:
+        _score(session, run, passed=None, objective={"passed": None, "checks": []})
+
+    summary = service.summarize("manualonly")
+
+    assert "objective_unmeasured" not in [
+        issue["code"] for issue in summary["validity"]["issues"]
+    ]

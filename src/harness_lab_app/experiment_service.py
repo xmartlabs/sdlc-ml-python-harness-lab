@@ -432,6 +432,7 @@ class ExperimentService:
         from harness_lab_app.statistics import (
             assess_validity,
             compare,
+            objective_signature,
             paired_by_case,
             success_delta,
             summarize_condition,
@@ -468,6 +469,10 @@ class ExperimentService:
         # `harness_error` archived at exit 0 used to enter the corpus as a model
         # scoring zero; counting it here is what lets the reader see it as
         # infrastructure without rewriting the run's recorded state.
+        # `unmeasured` is a different accident from the others: the run finished,
+        # and its *checks* settled nothing (a missing binary, a sandbox with no
+        # network). Nothing else counts those — an arm with no crash is skipped
+        # by the health rule and an arm with no score has no rate to floor.
         run_health: dict[str, dict[str, int]] = {
             condition.label: {
                 "runs": 0,
@@ -475,8 +480,15 @@ class ExperimentService:
                 "failed": 0,
                 "unhealthy": 0,
                 "scored_runs": 0,
+                "unmeasured": 0,
             }
             for condition in conditions
+        }
+        # What each run's checks did, comparably across runs: two arms failing
+        # the same command in every repetition is the environment deciding, and
+        # the floor issue needs to be able to say so (ADR-0062).
+        check_signatures: dict[str, list[Any]] = {
+            condition.label: [] for condition in conditions
         }
         # Whether the skills an arm is about were actually opened (ADR-0041).
         # A comparison whose treatment arm never invoked its skill measured
@@ -560,12 +572,19 @@ class ExperimentService:
             )
             if reason:
                 stop_reasons[label].append(str(reason))
+            objective = (validation.objective if validation else None) or {}
+            check_signatures[label].append(objective_signature(objective, run.run_id))
             health = run_health[label]
             health["runs"] += 1
             health["scored_runs"] += int(values.get("task_validation_pass") is not None)
             health["harness_error"] += int(reason == "harness_error")
             health["failed"] += int(crashed)
             health["unhealthy"] += int(crashed or reason == "harness_error")
+            # A manual-only case declares no checks and was never meant to be
+            # measured; only a run that *had* checks and got no verdict counts.
+            health["unmeasured"] += int(
+                bool(objective.get("checks")) and objective.get("passed") is None
+            )
 
         summaries = {
             condition.label: summarize_condition(
@@ -628,8 +647,12 @@ class ExperimentService:
             mode=str(experiment.mode.value),
             control=summaries[first["control"]] if first else None,
             treatment=summaries[first["treatment"]] if first else None,
+            # Every arm, not the compared pair: a floor is a property of the
+            # whole design, and a mode without a control still has one.
+            arms=list(summaries.values()),
             skill_usage=skill_usage,
             run_health=run_health,
+            check_signatures=check_signatures,
             success=first["success"] if first else None,
             design_notes=list(experiment.design_notes or []),
         )

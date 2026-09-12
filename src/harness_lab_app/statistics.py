@@ -335,6 +335,55 @@ def _highlight(
     }
 
 
+# How far an efficiency metric has to move before the headline mentions it at
+# all. Relative, because these metrics have no common unit — and product
+# judgement, like `_MATERIAL_POINTS`, never a claim of significance.
+_MATERIAL_RELATIVE = 0.10
+
+
+def _efficiency_movement(
+    highlights: Sequence[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    """How the cost-of-the-outcome metrics moved, or ``None`` if none did.
+
+    Read only when the success rate tied, and deliberately blind to the outcome
+    metrics themselves: the question it answers is "the same result, at what
+    price?". Direction comes from the registry, so a drop is favourable for a
+    cost and adverse for a pass rate without this function knowing which is
+    which.
+    """
+    favourable: list[tuple[str, float]] = []
+    adverse: list[tuple[str, float]] = []
+    for item in highlights:
+        if item.get("metric") in ("success_rate", "test_pass_rate"):
+            continue
+        direction = str(item.get("direction") or "neutral")
+        if direction == "neutral":
+            continue
+        left, right = item.get("control"), item.get("treatment")
+        if left is None or right is None or not left:
+            continue
+        relative = (right - left) / abs(left)
+        if abs(relative) < _MATERIAL_RELATIVE:
+            continue
+        better = relative < 0 if direction == "lower_is_better" else relative > 0
+        (favourable if better else adverse).append((str(item["label"]), relative))
+    if not favourable and not adverse:
+        return None
+    return {"favourable": favourable, "adverse": adverse}
+
+
+def _movement_phrase(movement: Mapping[str, Any]) -> str:
+    """`cost usd fell 30%, agent steps fell 33%` — the movers, largest first."""
+    moves = [*movement["favourable"], *movement["adverse"]]
+    moves.sort(key=lambda pair: abs(pair[1]), reverse=True)
+    return ", ".join(
+        f"{label.lower()} {'fell' if relative < 0 else 'rose'} "
+        f"{abs(relative) * 100:.0f}%"
+        for label, relative in moves[:3]
+    )
+
+
 def _direction_of(name: str) -> str:
     """`higher_is_better` / `lower_is_better` / `neutral` for a registry score."""
     try:
@@ -395,10 +444,15 @@ DEGRADED = "degraded"
 INVALID = "invalid"
 
 # The order a reader should meet these in when several hold at once.
+# `objective_unmeasured` precedes `floor_effect`: "nothing was measured" is the
+# more fundamental fact, and a reader who meets "nothing resolved" first will
+# start looking for a harder case when the checks never ran at all.
 _ISSUE_ORDER = (
     "treatment_not_activated",
     "infrastructure_failures",
     "no_headroom",
+    "objective_unmeasured",
+    "floor_effect",
     "mixed_treatment",
     "design_objection",
 )
@@ -574,13 +628,155 @@ def _ceiling_issue(
     )
 
 
+#: One run's objective, reduced to what can be compared across runs:
+#: the conclusive failures it recorded, and why anything settled nothing.
+CheckSignature = tuple[tuple[tuple[str, Any], ...], tuple[str, ...]]
+
+
+def objective_signature(
+    objective: Mapping[str, Any] | None, run_id: str = ""
+) -> CheckSignature:
+    """What failed in this run, in a form two runs can be compared on.
+
+    The run id is replaced by a placeholder because every workspace path
+    contains it — ``cd data/runs/<run>/workspace && make test`` is the *same*
+    check in two runs, and comparing the raw strings would never say so.
+
+    Inconclusive checks are kept out of the failure tuple and summarised as
+    reasons instead: a command that never ran did not fail (ADR-0048).
+    """
+    checks = (objective or {}).get("checks") or []
+    failures: list[tuple[str, Any]] = []
+    reasons: set[str] = set()
+    for check in checks:
+        command = str(check.get("command") or check.get("name") or "")
+        if run_id:
+            command = command.replace(run_id, "{run_id}")
+        if check.get("conclusive") is False:
+            reasons.add(str(check.get("inconclusive_reason") or "unknown"))
+        elif not check.get("passed"):
+            failures.append((command, check.get("exit_code")))
+    return (tuple(sorted(failures)), tuple(sorted(reasons)))
+
+
+def _floor_issue(
+    arms: Sequence[ConditionSummary],
+    check_signatures: Mapping[str, Sequence[CheckSignature]] | None,
+) -> ValidityIssue | None:
+    """Flag a design where no arm resolved anything — the ceiling's mirror.
+
+    A control at 100% can only show a regression; every arm at 0% can show
+    nothing at all, and the delta it produces is a confident ``0.0``. That is
+    how `audit-ml-python-base` published "No difference observed" over two arms
+    whose every check had failed on the lab's own Makefile.
+
+    Below ``EXPLORATORY_ONLY`` this stays quiet for the same reason the ceiling
+    does: one failing run is evidence of one run.
+    """
+    scored = [arm for arm in arms if arm.scored_runs >= EXPLORATORY_ONLY]
+    if not scored or any(arm.successes for arm in scored):
+        return None
+    signatures = [
+        signature
+        for arm in scored
+        for signature in (check_signatures or {}).get(arm.label) or []
+        if signature[0]
+    ]
+    # Identical failures everywhere means the environment decided, not the
+    # agents: two different models failing the same command with the same code
+    # in every repetition is not a measurement of either.
+    identical = len(signatures) > 1 and len(set(signatures)) == 1
+    common = (
+        ", ".join(f"`{command}`" for command, _code in signatures[0][0][:2])
+        if identical
+        else ""
+    )
+    names = ", ".join(f"{arm.label} (0/{arm.scored_runs})" for arm in scored)
+    return ValidityIssue(
+        code="floor_effect",
+        severity=(
+            INVALID
+            if identical or min(arm.scored_runs for arm in scored) >= STRONGER_EVIDENCE
+            else DEGRADED
+        ),
+        arm=None,
+        detail=(
+            f"No arm resolved anything: {names}"
+            + (
+                f" — and every run failed the same check ({common}), so the "
+                "environment decided this, not the agents."
+                if identical
+                else " — a dimension no arm moves on cannot rank them."
+            )
+        ),
+        remedy=(
+            "Pick a case at least one arm can solve, or fix the checks, before "
+            "reading a difference off this dimension."
+        ),
+    )
+
+
+def _unmeasured_issue(
+    run_health: Mapping[str, Mapping[str, Any]],
+    check_signatures: Mapping[str, Sequence[CheckSignature]] | None,
+) -> ValidityIssue | None:
+    """Flag an experiment whose checks never settled anything, in any arm.
+
+    Distinct from ``infrastructure_failures``, which counts runs that *crashed*:
+    these runs completed, and it is the checks that did not measure — a missing
+    binary, a sandbox with no network. Nothing else fires on them, because an
+    arm with no unhealthy run is skipped and an arm with no scored run has no
+    success rate to be a floor.
+
+    Gated on evidence rather than absence: ``unmeasured > 0`` and every run
+    accounted for. A freshly launched experiment has runs still queued, and an
+    "everything is 0" rule would render it as *not valid* for its first minutes.
+    """
+    if not run_health:
+        return None
+    reasons: set[str] = set()
+    total = 0
+    for label, health in run_health.items():
+        runs = int(health.get("runs") or 0)
+        unmeasured = int(health.get("unmeasured") or 0)
+        if not runs or not unmeasured:
+            return None
+        if int(health.get("scored_runs") or 0):
+            return None
+        if unmeasured + int(health.get("unhealthy") or 0) != runs:
+            return None
+        total += unmeasured
+        for signature in (check_signatures or {}).get(label) or []:
+            reasons.update(signature[1])
+    from harness_lab_app.validation import INCONCLUSIVE_LABELS
+
+    why = ", ".join(INCONCLUSIVE_LABELS.get(name, name) for name in sorted(reasons))
+    return ValidityIssue(
+        code="objective_unmeasured",
+        severity=INVALID,
+        arm=None,
+        detail=(
+            f"Every arm's objective went unmeasured: {total} run(s) whose checks "
+            "all settled nothing"
+            + (f" ({why})" if why else "")
+            + " — this experiment recorded the sandbox, not the agents."
+        ),
+        remedy=(
+            "Fix what the checks could not reach, then re-validate the runs; "
+            "nothing here can be read as an outcome until they settle."
+        ),
+    )
+
+
 def assess_validity(
     *,
     mode: str,
     control: ConditionSummary | None = None,
     treatment: ConditionSummary | None = None,
+    arms: Sequence[ConditionSummary] | None = None,
     skill_usage: Mapping[str, Mapping[str, Any]] | None = None,
     run_health: Mapping[str, Mapping[str, Any]] | None = None,
+    check_signatures: Mapping[str, Sequence[CheckSignature]] | None = None,
     success: Mapping[str, Any] | None = None,
     design_notes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
@@ -604,6 +800,20 @@ def assess_validity(
         ceiling = _ceiling_issue(control, success)
         if ceiling:
             issues.append(ceiling)
+    # A floor is the ceiling's mirror and needs every arm, not a control —
+    # under `subject_validation` there is no control at all, and an arm that
+    # resolved nothing is still the first thing to say about it.
+    every_arm = (
+        list(arms)
+        if arms is not None
+        else [arm for arm in (control, treatment) if arm is not None]
+    )
+    unmeasured = _unmeasured_issue(run_health or {}, check_signatures)
+    if unmeasured:
+        issues.append(unmeasured)
+    floor = _floor_issue(every_arm, check_signatures)
+    if floor:
+        issues.append(floor)
     for note in design_notes or []:
         issues.append(
             ValidityIssue(
@@ -876,11 +1086,45 @@ def _compose_verdict(
         }
 
     if abs(points) < 1e-9:
-        headline = "No difference observed"
-        claim = (
-            f"{treatment.label} matched {control.label} on success rate over "
-            f"{evidence}."
+        # "No difference observed" is a sentence about the *success rate*, and
+        # it was printed over a pair whose cost, tokens, steps and wall time had
+        # all moved a third in the same direction. Two arms that both resolve
+        # the case have tied on the outcome and not on what the outcome cost;
+        # saying "no difference" of the whole comparison is the same mistake as
+        # reading a floor as a result.
+        movement = _efficiency_movement(highlights)
+        tied = (
+            f"{treatment.label} matched {control.label} on success rate over {evidence}"
         )
+        if movement is None:
+            headline = "No difference observed"
+            claim = f"{tied}, and no efficiency metric moved materially either."
+        elif confound:
+            # The arms stopped under different rules, so effort and cost partly
+            # measure the stop criterion. The move is real; its direction is not
+            # the treatment's to claim.
+            headline = "Same outcome, different cost"
+            claim = (
+                f"{tied}, and {_movement_phrase(movement)} — but the arms "
+                "stopped under different rules, so that direction cannot be "
+                "credited to the harness."
+            )
+        elif movement["favourable"] and movement["adverse"]:
+            headline = "Same outcome, mixed efficiency"
+            claim = f"{tied}, and {_movement_phrase(movement)}."
+        else:
+            better = bool(movement["favourable"])
+            cheaper = any(
+                label == "Cost usd"
+                for label, _ in (movement["favourable"] or movement["adverse"])
+            )
+            word = (
+                ("lower cost" if better else "higher cost")
+                if cheaper
+                else ("less effort" if better else "more effort")
+            )
+            headline = f"Same outcome, {word}"
+            claim = f"{tied}, and {_movement_phrase(movement)}."
     else:
         word = "improvement" if points > 0 else "regression"
         material = abs(points) >= _MATERIAL_POINTS

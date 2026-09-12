@@ -765,7 +765,11 @@ CASE_PROPOSALS_PROMPT = (
     "bash tests/run.sh — o (b) una frase que empiece con 'Comprobar que' si se "
     "decide leyendo. Si health_at_pin.status es 'fail', NO uses la suite completa "
     "como condición de éxito salvo que task sea arreglarla: una suite roja antes "
-    "de empezar no puede medir al agente.\n"
+    "de empezar no puede medir al agente. Si es 'unmeasured', tampoco la uses, "
+    "pero por otro motivo y decilo así: no sabemos si la suite anda — el "
+    "laboratorio no pudo correrla (health_at_pin.reason dice por qué, por "
+    "ejemplo sin red en la fase de validación). Proponé validation_hint que no "
+    "dependan de instalar ni descargar nada.\n"
     '- required_runtime_version: sólo si el repositorio declara una (ej. "3.2" '
     'para bash); si no, "".\n\n'
     "Reglas: usá SOLO el mapa y la evidencia; nombrá los componentes exactamente "
@@ -1349,7 +1353,9 @@ _SHAPE_LABEL = {
     "both": "gobierna este repositorio y se instala en otros",
     "unknown": "sin determinar",
 }
-_HEALTH_LABEL = {"pass": "verde", "fail": "roja", "unmeasured": "sin medir"}
+# "sin medir" is not a softer "roja": it is a different claim, and the only one
+# the evidence supports when the suite never ran (ADR-0062).
+_HEALTH_LABEL = {"pass": "verde", "fail": "roja", "unmeasured": "no se pudo medir"}
 _MEASURES_LABEL = {
     "harness_claim": "mide una afirmación del harness",
     "harness_development": "mide trabajar sobre el harness",

@@ -66,16 +66,58 @@ def _strip_app(path: str) -> str:
     return path.removeprefix("/app/").strip('"')
 
 
-def from_claude_events(lines: list[str]) -> dict[str, Any]:
-    """Ordered tool calls and the closing message from stream-json events."""
-    steps: list[dict[str, Any]] = []
-    skill_calls: list[str] = []
-    final_output = ""
+def _parse_events(lines: list[str]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
     for raw in lines:
         try:
             event = json.loads(raw)
         except json.JSONDecodeError:
             continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def _errored_tool_uses(events: list[dict[str, Any]]) -> set[str]:
+    """Ids of the tool calls whose result came back as an error.
+
+    Results arrive as ``user`` events carrying ``tool_result`` blocks, each
+    pointing back at its ``tool_use_id``. Read in a pass of their own because
+    a result always follows its call, and the call is what carries the skill
+    name.
+    """
+    errored: set[str] = set()
+    for event in events:
+        if event.get("type") != "user":
+            continue
+        for block in (event.get("message") or {}).get("content", []):
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            if block.get("is_error") and block.get("tool_use_id"):
+                errored.add(str(block["tool_use_id"]))
+    return errored
+
+
+def from_claude_events(lines: list[str]) -> dict[str, Any]:
+    """Ordered tool calls and the closing message from stream-json events.
+
+    A skill call the harness rejected is **not** an invocation. ``Skill`` with
+    a name the CLI never registered answers ``Unknown skill`` and hands the
+    agent nothing, and a read of a ``SKILL.md`` that is not there does the
+    same; counting either as "the agent opened the skill" is how a run whose
+    catalog was never loaded scored as a fully activated treatment. Those
+    calls are kept in ``steps`` (they happened, and a judge should see the
+    agent reaching for something it could not get) and tallied separately in
+    ``skill_call_errors``, so the observation can say *why* nothing was
+    opened rather than merely that it was not.
+    """
+    events = _parse_events(lines)
+    errored = _errored_tool_uses(events)
+    steps: list[dict[str, Any]] = []
+    skill_calls: list[str] = []
+    skill_call_errors: list[str] = []
+    final_output = ""
+    for event in events:
         if event.get("type") == "result":
             final_output = str(event.get("result") or final_output)
             continue
@@ -92,7 +134,11 @@ def from_claude_events(lines: list[str]) -> dict[str, Any]:
                 if not name:
                     continue
                 payload = block.get("input") or {}
-                skill_calls.extend(_skill_mentions(name, payload))
+                mentions = _skill_mentions(name, payload)
+                if str(block.get("id") or "") in errored:
+                    skill_call_errors.extend(mentions)
+                else:
+                    skill_calls.extend(mentions)
                 steps.append(
                     {
                         "index": len(steps) + 1,
@@ -100,7 +146,12 @@ def from_claude_events(lines: list[str]) -> dict[str, Any]:
                         "input": _summarize_input(name, payload),
                     }
                 )
-    return {"steps": steps, "final_output": final_output, "skill_calls": skill_calls}
+    return {
+        "steps": steps,
+        "final_output": final_output,
+        "skill_calls": skill_calls,
+        "skill_call_errors": skill_call_errors,
+    }
 
 
 def _summarize_input(name: str, payload: dict[str, Any]) -> str:
@@ -144,7 +195,12 @@ def from_opencode_logs(log_text: str) -> dict[str, Any]:
                 "input": target,
             }
         )
-    return {"steps": steps, "final_output": "", "skill_calls": skill_calls}
+    return {
+        "steps": steps,
+        "final_output": "",
+        "skill_calls": skill_calls,
+        "skill_call_errors": [],
+    }
 
 
 def _clip(steps: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
@@ -163,7 +219,12 @@ def build(
 ) -> dict[str, Any] | None:
     """Assemble a run's trajectory, or ``None`` when nothing was recorded."""
     source = ""
-    parsed: dict[str, Any] = {"steps": [], "final_output": "", "skill_calls": []}
+    parsed: dict[str, Any] = {
+        "steps": [],
+        "final_output": "",
+        "skill_calls": [],
+        "skill_call_errors": [],
+    }
     if event_lines:
         parsed = from_claude_events(event_lines)
         source = "claude_events"
@@ -183,6 +244,11 @@ def build(
     skill_invocations: dict[str, int] = {}
     for name in parsed.get("skill_calls") or []:
         skill_invocations[name] = skill_invocations.get(name, 0) + 1
+    # Kept apart from the invocations, never folded in: "reached for it five
+    # times and got nothing" is the fact that explains a zero above.
+    skill_call_errors: dict[str, int] = {}
+    for name in parsed.get("skill_call_errors") or []:
+        skill_call_errors[name] = skill_call_errors.get(name, 0) + 1
     return {
         "source": source,
         "task": task,
@@ -193,6 +259,7 @@ def build(
         "expected_tools": list(expected_tools),
         "final_output": parsed["final_output"],
         "skill_invocations": skill_invocations,
+        "skill_call_errors": skill_call_errors,
     }
 
 

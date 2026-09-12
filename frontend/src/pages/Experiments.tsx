@@ -234,6 +234,8 @@ const VALIDITY_TITLE: Record<string, string> = {
   treatment_not_activated: "The treatment never happened",
   infrastructure_failures: "These runs measured the connection",
   no_headroom: "No headroom to detect an improvement",
+  objective_unmeasured: "The objective was never measured",
+  floor_effect: "Nothing resolved on either side",
   mixed_treatment: "The arm mixes treated and untreated runs",
   design_objection: "The design was objected to when it was created"
 };

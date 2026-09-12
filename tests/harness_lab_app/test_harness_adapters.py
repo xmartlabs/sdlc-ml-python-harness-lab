@@ -136,3 +136,79 @@ def test_preflight_claude_in_docker_requires_credentials(monkeypatch):
         lambda name, *_a, **_k: "tok" if name == "CLAUDE_CODE_OAUTH_TOKEN" else "",
     )
     service.preflight(cfg)
+
+
+def test_claude_cmd_registers_extra_skill_directories_before_the_prompt():
+    cmd = bench_run.build_claude_cmd(None, "do it", add_dirs=(Path("/app"),))
+    assert cmd[-3:] == ["--add-dir", "/app", "do it"]
+    # Nothing added, nothing emitted: the existing command shape is unchanged.
+    assert "--add-dir" not in bench_run.build_claude_cmd(None, "do it")
+
+
+def test_a_lab_root_claude_run_started_inside_a_clone_needs_a_staged_catalog(tmp_path):
+    """Claude Code walks `.claude/skills` up to the nearest repository root.
+
+    A workspace that is itself a clone is that root, so a run started there
+    never reaches the lab's catalog unless the CLI is handed one (ADR-0061).
+    """
+    clone = tmp_path / "workspace" / "r1"
+    assert bench_run.needs_staged_catalog("claude", clone, True) is True
+    # From the lab root itself the catalog loads natively.
+    assert bench_run.needs_staged_catalog("claude", None, True) is False
+    assert bench_run.needs_staged_catalog("claude", bench_run.REPO_ROOT, True) is False
+    # A masked condition has nothing to stage: its views are empty stubs (ADR-0049).
+    assert bench_run.needs_staged_catalog("claude", clone, False) is False
+    # opencode reads the lab's instructions list, not --add-dir.
+    assert bench_run.needs_staged_catalog("opencode", clone, True) is False
+
+
+def test_the_staged_catalog_holds_the_skills_and_nothing_else(tmp_path):
+    """What `--add-dir` registers is `<dir>/.claude/skills`, so the directory
+    named must contain only that. Naming the repo root hung every run: the CLI
+    indexes and watches an added directory, and that one is gigabytes wide and
+    contains the workspace the agent runs in.
+    """
+    from ml_python_base.skills_sync.models import KIND_INTERNAL, Skill
+
+    source = tmp_path / "skills"
+    source.mkdir()
+    (source / "caveman.md").write_text("# caveman\n")
+    skill = Skill(name="caveman", kind=KIND_INTERNAL, source_path=source / "caveman.md")
+
+    out_dir = tmp_path / "run"
+    out_dir.mkdir()
+    staged = bench_run.stage_skill_catalog(out_dir, [skill], "claude")
+
+    assert staged == out_dir / "harness_skills"
+    assert (staged / ".claude/skills/caveman/SKILL.md").read_text() == "# caveman\n"
+    # Copied, not symlinked: an archived run still explains itself.
+    assert not (staged / ".claude/skills/caveman/SKILL.md").is_symlink()
+    # Only the catalog. Anything else here is another 4.7 GB waiting to happen.
+    assert [entry.name for entry in staged.iterdir()] == [".claude"]
+
+
+def test_the_staged_catalog_is_rebuilt_so_a_retry_stays_ablated(tmp_path):
+    from ml_python_base.skills_sync.models import KIND_INTERNAL, Skill
+
+    source = tmp_path / "skills"
+    source.mkdir()
+    for name in ("caveman", "tdd"):
+        (source / f"{name}.md").write_text(f"# {name}\n")
+    made = lambda name: Skill(  # noqa: E731
+        name=name, kind=KIND_INTERNAL, source_path=source / f"{name}.md"
+    )
+
+    out_dir = tmp_path / "run"
+    out_dir.mkdir()
+    bench_run.stage_skill_catalog(out_dir, [made("caveman"), made("tdd")], "claude")
+    staged = bench_run.stage_skill_catalog(out_dir, [made("caveman")], "claude")
+
+    # The survivor of the first attempt would silently undo the ablation.
+    assert [d.name for d in (staged / ".claude/skills").iterdir()] == ["caveman"]
+
+
+def test_a_run_with_no_effective_skills_stages_nothing(tmp_path):
+    out_dir = tmp_path / "run"
+    out_dir.mkdir()
+    assert bench_run.stage_skill_catalog(out_dir, [], "claude") is None
+    assert not (out_dir / "harness_skills").exists()

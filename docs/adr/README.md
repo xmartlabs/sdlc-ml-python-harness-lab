@@ -89,6 +89,8 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0058 — The repository audit maps harness components to claims and derives cases and conditions from them](0058-the-audit-maps-harness-components-to-claims.md)
 - [0059 — A design that cannot launch is not created](0059-a-design-that-cannot-launch-is-not-created.md)
 - [0060 — Compare can ask a model to read its own table](0060-compare-can-ask-a-model-to-read-the-table.md)
+- [0061 — A claude run started inside a clone must be told where the skills are](0061-a-claude-run-started-inside-a-clone-must-be-told-where-the-skills-are.md)
+- [0062 — A check the environment failed is not a verdict](0062-a-check-the-environment-failed-is-not-a-verdict.md)
 
 ## Why ADRs exist
 

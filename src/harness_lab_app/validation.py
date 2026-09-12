@@ -86,10 +86,98 @@ def command_deadline_seconds(
 
 # Exit codes that mean "we did not get an answer", not "the answer was wrong":
 # 124 is GNU timeout's own status, 137 and 143 are SIGKILL and SIGTERM (128+n),
-# and -1 is this process failing to launch the command at all. ADR-0046 kept
-# infrastructure out of an experiment's verdict; these keep it out of a run's
-# capability score, which is where it entered in experiment `...-on--2`.
-INCONCLUSIVE_EXIT_CODES = frozenset({-1, 124, 137, 143})
+# -1 is this process failing to launch the command at all, and 127 is the shell
+# reporting that the command itself does not exist. ADR-0046 kept infrastructure
+# out of an experiment's verdict; these keep it out of a run's capability score,
+# which is where it entered in experiment `...-on--2`.
+INCONCLUSIVE_EXIT_CODES = frozenset({-1, 124, 137, 143, 127})
+
+#: Why a check settled nothing, keyed by the reason code stored on it.
+INCONCLUSIVE_LABELS = {
+    "timeout": "timed out",
+    "killed": "killed",
+    "not_launched": "never launched",
+    "not_found": "command not found",
+    "no_network": "no network",
+}
+
+_EXIT_CODE_REASONS = {
+    -1: "not_launched",
+    124: "timeout",
+    137: "killed",
+    143: "killed",
+    127: "not_found",
+}
+
+# A missing binary, as each layer reports it. Anchored to end of line because
+# "not found" is ordinary prose in test output — an unanchored match would call
+# a genuine assertion failure infrastructure. `Error 127` is how make reports a
+# recipe command that does not exist; make's own exit status is 2, so the code
+# alone never catches it, and that is exactly how a lab-root `make test` whose
+# `format` target could not find ruff was stored as the agent failing.
+_NOT_FOUND_RE = re.compile(
+    r"(?m)(?:command not found|: not found)\s*$|\bError 127\b", re.IGNORECASE
+)
+
+# A sandbox with `network_mode="none"` (the hardened validate lane) as every
+# resolver in it phrases the same fact.
+_NO_NETWORK_RE = re.compile(
+    r"Temporary failure in name resolution"
+    r"|failed to lookup address information"
+    r"|dns error"
+    r"|Could not resolve host"
+    r"|Name or service not known"
+    r"|Network is unreachable"
+    r"|nodename nor servname provided",
+    re.IGNORECASE,
+)
+
+
+def classify_inconclusive(exit_code: Any, output: str = "") -> str | None:
+    """Why this check settled nothing, or ``None`` when it produced a verdict.
+
+    Two families. The exit codes in :data:`INCONCLUSIVE_EXIT_CODES` say it on
+    their own — a timeout, a kill, a command that never launched, a command the
+    shell could not find. The rest have to be read out of the output, because
+    the failure is reported by something *inside* the command: make exits 2 when
+    a recipe's binary is missing, and ``uv`` exits 2 when it cannot resolve an
+    index host.
+
+    Deliberately not here: ``No such file or directory``. That is usually the
+    agent not having written the file, which is the agent's failure and the
+    whole point of the check.
+    """
+    reason = _EXIT_CODE_REASONS.get(exit_code)
+    if reason is not None:
+        return reason
+    if exit_code == 0 or exit_code is None:
+        return None
+    text = output or ""
+    if _NOT_FOUND_RE.search(text):
+        return "not_found"
+    if _NO_NETWORK_RE.search(text):
+        return "no_network"
+    return None
+
+
+def describe_inconclusive(checks: list[dict[str, Any]]) -> str:
+    """``command not found, no network (2)`` — why nothing was measured.
+
+    The old wording was a fixed list of every reason the lab knew, printed
+    whenever any of them held. It read as a guess; a reader chasing a red gate
+    needs the one that actually happened. A count is added only where it says
+    something — one of a kind is already implied by naming it.
+    """
+    counts: dict[str, int] = {}
+    for check in checks:
+        if check.get("conclusive") is not False:
+            continue
+        reason = str(check.get("inconclusive_reason") or "") or "unknown"
+        counts[reason] = counts.get(reason, 0) + 1
+    return ", ".join(
+        INCONCLUSIVE_LABELS.get(reason, reason) + (f" ({count})" if count > 1 else "")
+        for reason, count in sorted(counts.items())
+    )
 
 
 if TYPE_CHECKING:
@@ -181,6 +269,17 @@ def build_validation_spec(
     repositories cannot name each one's test command, and merging the two would
     run the case's guess *as well as* the repo's truth, failing runs for the
     wrong reason.
+
+    A repository's gate is written relative to *its* root, and the lab's root is
+    not it. `make test` from a target row carries no ``{workspace}`` to anchor —
+    nor should it, since the same string has to work in a gate check — so it is
+    prefixed with a ``cd`` into the workspace, exactly as
+    :func:`gate_check_service.build_gate_check_spec` already does. Without it
+    every target-paired run validated the *lab*: the eight runs of
+    `audit-ml-python-base` all recorded `0/2 checks passed` from the lab's own
+    Makefile, and the experiment read as "the harness did not help" (ADR-0062).
+    Case commands are not prefixed: they anchor on ``{workspace}`` themselves,
+    and a ``cd`` would break the lab-relative paths some of them also use.
     """
     # Managed (--fresh) runs archive + remove the live workspace, so prefer the
     # archived copy under data/runs/<id>/workspace when it exists (also the home
@@ -189,6 +288,7 @@ def build_validation_spec(
     workspace = (
         f"data/runs/{run_id}/workspace" if archived.exists() else f"workspace/{run_id}"
     )
+    in_workspace = bool(target_commands)
     commands: list[list[str]] = []
     for raw in target_commands or case.validation_commands or []:
         if not is_executable_command(raw):
@@ -198,7 +298,13 @@ def build_validation_spec(
             # command it did not recognise disappeared without a check, a note
             # or a line in the log.
             continue
-        rendered = _portable_timeout(raw.format(workspace=workspace, run_id=run_id))
+        # `.` for a target command: it already runs *inside* the workspace, and
+        # the lab-relative path would resolve under itself after the cd.
+        rendered = _portable_timeout(
+            raw.format(workspace="." if in_workspace else workspace, run_id=run_id)
+        )
+        if in_workspace:
+            rendered = f"cd {shlex.quote(workspace)} && {rendered}"
         # `-c` and not `-lc`: a login shell resets PATH and would drop the
         # runner image's /opt/venv/bin, so `python` would miss the installed
         # deps. Only argv[0] varies. `/bin/sh` in that image is dash, so a
@@ -214,6 +320,9 @@ def build_validation_spec(
         "strategy": strategy,
         "commands": commands,
         "workspace": workspace,
+        # Where the gate ran. Informational — the `cd` is already in the argv —
+        # but a run whose checks all failed should be able to say from where.
+        "cwd": workspace if in_workspace else None,
         "local": local,
     }
 
@@ -224,10 +333,12 @@ def parse_objective(results: list[dict[str, Any]], strategy: str) -> dict[str, A
     Each result is ``{"command": str, "exit_code": int, "output": str}``.
 
     A check is **conclusive** when it actually produced a verdict. One that
-    timed out, was killed, or never launched did not measure the agent's work,
-    and ``passed`` distinguishes the three outcomes accordingly: ``False`` when
-    something conclusively failed, ``None`` when nothing failed but something
-    could not be measured, ``True`` only when every check ran and passed.
+    timed out, was killed, never launched, could not find its command or had no
+    network did not measure the agent's work, and ``passed`` distinguishes the
+    three outcomes accordingly: ``False`` when something conclusively failed,
+    ``None`` when nothing failed but something could not be measured, ``True``
+    only when every check ran and passed. ``inconclusive_reason`` says which of
+    those it was, so a red gate names its own cause (ADR-0062).
     """
     checks: list[dict[str, Any]] = []
     swebench_line: str | None = None
@@ -236,6 +347,7 @@ def parse_objective(results: list[dict[str, Any]], strategy: str) -> dict[str, A
         output = result.get("output", "")
         swebench_line = _swebench_summary(output) or swebench_line
         command = str(result.get("command", "") or "")
+        reason = classify_inconclusive(exit_code, output)
         checks.append(
             {
                 # `name` is what the UI and the audit have always read; the
@@ -246,7 +358,8 @@ def parse_objective(results: list[dict[str, Any]], strategy: str) -> dict[str, A
                 "name": command,
                 "command": command,
                 "passed": exit_code == 0,
-                "conclusive": exit_code not in INCONCLUSIVE_EXIT_CODES,
+                "conclusive": reason is None,
+                "inconclusive_reason": reason,
                 "exit_code": exit_code,
                 "detail": _swebench_summary(output)
                 or _pytest_summary(output)
@@ -269,14 +382,23 @@ def parse_objective(results: list[dict[str, Any]], strategy: str) -> dict[str, A
     else:
         passed = True
     # Prefer the SWE-bench F2P/P2P verdict as the headline when present.
-    summary = (
-        swebench_line
-        or f"{sum(c['passed'] for c in checks)}/{len(checks)} checks passed"
-    )
-    if inconclusive:
-        summary += (
-            f"; {len(inconclusive)} inconclusive (timed out, killed, or never launched)"
+    if swebench_line:
+        summary = swebench_line
+    elif len(inconclusive) == len(checks):
+        # Every check settled nothing. "0/2 checks passed" is literally true and
+        # reads as a verdict — it is the exact sentence this distinction exists
+        # to stop, and it is what made eight unmeasured runs look like eight
+        # failures on the page and to the auditor reading the same string.
+        summary = (
+            f"nothing measured: all {len(checks)} check(s) were inconclusive "
+            f"({describe_inconclusive(checks)})"
         )
+    else:
+        summary = f"{sum(c['passed'] for c in checks)}/{len(checks)} checks passed"
+        if inconclusive:
+            summary += (
+                f"; {len(inconclusive)} inconclusive ({describe_inconclusive(checks)})"
+            )
     return {
         "strategy": strategy,
         "passed": passed,
@@ -304,7 +426,9 @@ def describe_objective_for_judge(objective: dict[str, Any] | None) -> str:
     lines = [summary] if summary else []
     for check in checks:
         if check.get("conclusive") is False:
-            verdict = "INCONCLUSIVE"
+            reason = str(check.get("inconclusive_reason") or "")
+            label = INCONCLUSIVE_LABELS.get(reason, reason)
+            verdict = f"INCONCLUSIVE: {label}" if label else "INCONCLUSIVE"
         else:
             verdict = "PASS" if check.get("passed") else "FAIL"
         lines.append(f"- [{verdict}] exit={check.get('exit_code')} {check.get('name')}")
@@ -312,8 +436,9 @@ def describe_objective_for_judge(objective: dict[str, Any] | None) -> str:
         if detail:
             lines.append(f"      {detail[:_JUDGE_DETAIL_CLIP]}")
     if any(check.get("conclusive") is False for check in checks):
+        why = describe_inconclusive(checks)
         lines.append(
-            "An INCONCLUSIVE check timed out, was killed, or never launched. It "
+            f"An INCONCLUSIVE check settled nothing ({why}). It "
             "is evidence about the harness, not about the agent's code: it "
             "neither confirms nor refutes any rubric level."
         )

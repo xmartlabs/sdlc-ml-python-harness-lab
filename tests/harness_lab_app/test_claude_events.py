@@ -155,3 +155,54 @@ def test_claude_cmd_includes_stream_json():
     cmd = bench_run.build_claude_cmd("claude-haiku-4-5-20251001", "do it")
     assert "--output-format" in cmd and "stream-json" in cmd and "--verbose" in cmd
     assert cmd[-1] == "do it"
+
+
+def test_a_rejected_skill_call_is_not_consulted():
+    """Attribution and the trajectory must agree: an errored call opened nothing."""
+    from harness_lab_app.attribution import parse_claude_events
+
+    lines = [
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "t1",
+                            "name": "Skill",
+                            "input": {"skill": "systematic_debugging"},
+                        },
+                        {
+                            "type": "tool_use",
+                            "id": "t2",
+                            "name": "Skill",
+                            "input": {"skill": "writing-plans"},
+                        },
+                    ]
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t1",
+                            "is_error": True,
+                            "content": "<tool_use_error>Unknown skill</tool_use_error>",
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t2",
+                            "content": "# Writing plans",
+                        },
+                    ]
+                },
+            }
+        ),
+    ]
+
+    assert parse_claude_events(lines)["skills_consulted"] == ["writing-plans"]

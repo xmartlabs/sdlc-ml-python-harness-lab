@@ -1945,4 +1945,95 @@ picker offers the intersection. And validate a design at creation for everything
 creation can already see — a refusal after the row exists is a refusal that leaves
 litter. See [ADR-0059](../docs/adr/0059-a-design-that-cannot-launch-is-not-created.md).
 
+## A clone is a repository root, and Claude Code stops there (2026-09-12)
+
+Claude Code loads `.claude/skills/` from the cwd and its parents *up to the nearest
+repository root*. The SWE lane starts the claude agent inside the workspace, which is
+a git clone — so the walk ends at the clone and never reaches `/app/.claude/skills`.
+`CLAUDE.md` is collected from every ancestor regardless, which is why the agent read
+a rulebook naming twenty-four skills and was told `Unknown skill` on every call. Five
+runs, five resolved instances, zero real skill activations, and one arm scored
+`skill_invoked = 1.0` because the parser counted the rejected calls.
+
+**Why it matters:** every skill-activation number for a `claude` + `lab_root` run
+started in a clone was measuring the CLI's discovery rule, not the agent. The
+experiment audit called the design degraded for four true reasons and missed the
+one that mattered, because it can see the arms but not the operator's intent.
+
+An added directory is indexed and watched, so `--add-dir /app` (4.7 GB, 141k files,
+and it contains the workspace the agent runs in) hung the CLI before session init:
+three runs, zero-byte event streams, killed by the stall watchdog at ten minutes with
+`exit code 137`. A 352 KB per-run staging directory holding only the catalog reaches
+init in ten seconds.
+
+**How to apply:** when a `Skill` call fails, look at the `system/init` event's
+`skills` list before reading any score; if the governed names are absent, the run
+measured nothing about them. The runner now passes `--add-dir <lab root>` for that
+lane, and both parsers skip `tool_use` blocks whose `tool_result` is an error. When
+an ablation selects nearly the whole catalog, the skill left out is the one held
+constant — check the wizard's design note before launching. See
+[ADR-0061](../docs/adr/0061-a-claude-run-started-inside-a-clone-must-be-told-where-the-skills-are.md).
+
+## A gate runs where you put it, and a floor is as blind as a ceiling (2026-09-12)
+
+`audit-ml-python-base` reported `0/2 checks passed` on all eight runs, validity
+`valid`, verdict "No difference observed", and an LLM audit concluding the harness did
+not help. Nothing was measured. A target repository's `validation_commands` replace
+the case's (ADR-0029) but run with `working_dir="/app"`, so the target's `make test`
+ran the **lab's** Makefile; and the `validate` phase is `network_mode="none"` by
+design, so `uv` died on DNS. Both were stored as conclusive failures, both arms landed
+at 0 %, and `success_delta` returned a confident `0.0`. Running the *cases'* own
+checks by hand against the archived workspaces gave native 4/4, injected 3/4.
+
+**Why it matters:** three independent layers agreed on a wrong answer — the runner,
+the scorer and the auditor — because each was locally correct. The gate-check lane had
+had the `cd {workspace} &&` prefix all along; objective validation never got the same
+line, and nothing compared the two.
+
+The same blindness existed one layer up: `health_at_pin` called that gate `fail`, so
+the audit published "Suite al pin: **roja**" about a client repository whose suite it
+had simply been unable to run. The auditor *model* read the DNS line in the tail and
+corrected it in prose — a heuristic that is less careful than the text it feeds is a
+heuristic waiting to be believed.
+
+**How to apply:** when every arm of an experiment reads 0, look at one check's
+`detail` before reading any delta — an `Error 127` or a DNS line means the sandbox,
+not the agent. A validity engine that detects a ceiling needs the floor too, and it
+must be gated on evidence (`unmeasured > 0`) rather than absence, or a freshly
+launched experiment renders as invalid while its runs are still queued. Fix 2 of
+[ADR-0062](../docs/adr/0062-a-check-the-environment-failed-is-not-a-verdict.md) is
+stored at validation time, so old runs need **re-validating** before the new reading
+applies — unlike the validity rules, which are computed on read.
+
+## A gate runs where you put it, and a floor is as blind as a ceiling (2026-09-12)
+
+`audit-ml-python-base` reported `0/2 checks passed` on all eight runs, validity
+`valid`, verdict "No difference observed", and an LLM audit concluding the harness did
+not help. Nothing was measured. A target repository's `validation_commands` replace
+the case's (ADR-0029) but run with `working_dir="/app"`, so the target's `make test`
+ran the **lab's** Makefile; and the `validate` phase is `network_mode="none"` by
+design, so `uv` died on DNS. Both were stored as conclusive failures, both arms landed
+at 0 %, and `success_delta` returned a confident `0.0`. Running the *cases'* own
+checks by hand against the archived workspaces gave native 4/4, injected 3/4.
+
+**Why it matters:** three independent layers agreed on a wrong answer — the runner,
+the scorer and the auditor — because each was locally correct. The gate-check lane had
+had the `cd {workspace} &&` prefix all along; objective validation never got the same
+line, and nothing compared the two.
+
+The same blindness existed one layer up: `health_at_pin` called that gate `fail`, so
+the audit published "Suite al pin: **roja**" about a client repository whose suite it
+had simply been unable to run. The auditor *model* read the DNS line in the tail and
+corrected it in prose — a heuristic that is less careful than the text it feeds is a
+heuristic waiting to be believed.
+
+**How to apply:** when every arm of an experiment reads 0, look at one check's
+`detail` before reading any delta — an `Error 127` or a DNS line means the sandbox,
+not the agent. A validity engine that detects a ceiling needs the floor too, and it
+must be gated on evidence (`unmeasured > 0`) rather than absence, or a freshly
+launched experiment renders as invalid while its runs are still queued. Fix 2 of
+[ADR-0062](../docs/adr/0062-a-check-the-environment-failed-is-not-a-verdict.md) is
+stored at validation time, so old runs need **re-validating** before the new reading
+applies — unlike the validity rules, which are computed on read.
+
 <!-- Add new learnings above this line -->
