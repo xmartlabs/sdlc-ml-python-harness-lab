@@ -454,3 +454,26 @@ def test_a_native_arm_gets_its_staged_skills_placed_in_the_workspace(tmp_path):
     # Their own skills survive: an arm that added one skill by deleting the rest
     # would be measuring something else entirely.
     assert (theirs / "SKILL.md").exists()
+
+
+def test_a_rejected_skill_call_explains_the_zero():
+    """Five `Unknown skill` answers are a zero with a cause, and the cause is said."""
+    trajectory = {
+        "source": "claude_events",
+        "steps": [{"index": 1, "tool": "Skill", "input": "caveman"}],
+        "skill_invocations": {},
+        "skill_call_errors": {"caveman": 5, "unrelated": 1},
+    }
+    context = EvaluationContext(
+        run_id="r", trajectory=trajectory, skills_under_test=("caveman",)
+    )
+
+    scores = {score.name: score for score in SkillUsageEvaluator().evaluate(context)}
+
+    assert scores["skill_invoked"].value == 0.0
+    assert scores["skill_invocations"].value == 0.0
+    for name in ("skill_invoked", "skill_invocations"):
+        assert "caveman: 5 call(s) failed" in scores[name].reason
+        # A skill the run is not about is not reported, failed or otherwise.
+        assert "unrelated" not in scores[name].reason
+        assert scores[name].provenance_detail["failed_calls"] == {"caveman": 5}

@@ -208,6 +208,111 @@ _MISMATCH_PATTERNS: tuple[tuple[re.Pattern[str], str, tuple[str, ...]], ...] = (
 )
 
 
+# Commands that reach the network. The gate's `validate` phase and objective
+# validation both run with `network_mode="none"` on purpose — it is what stops
+# audited code from calling out while it is being measured — so any of these in
+# a *validation* command fails there every time, having tested nothing.
+_NEEDS_NETWORK = (
+    re.compile(r"\buv\s+sync\b"),
+    re.compile(r"\buv\s+(?:pip\s+)?install\b"),
+    # `uv run` re-resolves the lock unless told not to.
+    re.compile(r"\buv\s+run\b(?!.*--(?:offline|no-sync))"),
+    re.compile(r"\bpip3?\s+install\b"),
+    re.compile(r"\bpoetry\s+install\b"),
+    re.compile(r"\b(?:npm|pnpm|yarn)\s+(?:install|ci|add)\b"),
+    re.compile(r"\bgo\s+mod\s+(?:download|tidy)\b"),
+    re.compile(r"\bcargo\s+(?:fetch|update)\b"),
+    re.compile(r"\bbundle\s+install\b"),
+    re.compile(r"\bapt(?:-get)?\s+install\b"),
+    re.compile(r"\bgit\s+(?:clone|fetch|pull)\b"),
+    # A fetch is a fetch whatever runs it. This is what catches the shape the
+    # patterns above miss: a recipe that resolves its own toolchain through a
+    # variable (`"$$UV_BIN" sync`) still has to download the installer first.
+    re.compile(r"\b(?:curl|wget)\b[^\n]*https?://"),
+    # `uv python pin` / `uv python install` fetch a standalone interpreter —
+    # the exact line an audit once reported as the repository's suite failing.
+    re.compile(r"\bpython\s+(?:pin|install)\b"),
+)
+
+#: A task-runner invocation, whose recipe has to be read to know what it does.
+_TASK_RUNNER_RE = re.compile(r"^\s*(?:make|just)\s+([A-Za-z0-9_.-]+)")
+
+
+def _recipe_body(makefile: str, target_name: str, _depth: int = 0) -> str:
+    """A Make target's recipe, plus the recipes of the targets it calls.
+
+    Shallow on purpose (two levels): the question is only whether running this
+    target reaches the network, and `test: → install: → uv sync` is the shape
+    that actually occurs. A deeper walk would need a real Make parser.
+    """
+    match = re.search(
+        rf"^{re.escape(target_name)}\s*:[^\n]*\n((?:[ \t]+[^\n]*\n?)*)",
+        makefile,
+        re.MULTILINE,
+    )
+    if not match:
+        return ""
+    body = match.group(1)
+    if _depth >= 2:
+        return body
+    for called in set(re.findall(r"\bmake\s+([A-Za-z0-9_.-]+)", body)):
+        body += _recipe_body(makefile, called, _depth + 1)
+    return body
+
+
+def offline_validation(
+    validation_commands: list[str], contents: dict[str, str] | None = None
+) -> Check:
+    """Would these validation commands survive a sandbox with no network?
+
+    A soft warning, like :func:`runtime_compatibility`, and for the same reason:
+    the lab fails open. But this one is worth saying out loud at registration,
+    because the failure it predicts is silent and total — the command dies in
+    its own installer, every run, and the lab used to record that as the agent
+    failing the check (ADR-0062).
+
+    A task-runner target is resolved against the Makefile the caller already
+    read, so ``make test`` whose recipe calls ``make install`` is named for what
+    it does rather than waved through for what it is called.
+    """
+    label = "Offline validation"
+    commands = [c for c in (validation_commands or []) if c.strip()]
+    if not commands:
+        return Check(
+            label,
+            "unknown",
+            "No validation commands configured yet, so nothing can be checked.",
+        )
+    makefile = (contents or {}).get("Makefile", "")
+    offenders: list[str] = []
+    for command in commands:
+        text = command.strip()
+        runner = _TASK_RUNNER_RE.match(text)
+        if runner and makefile:
+            text = f"{text}\n{_recipe_body(makefile, runner.group(1))}"
+        elif runner:
+            # A target whose body was never read: say so rather than guess.
+            continue
+        if any(pattern.search(text) for pattern in _NEEDS_NETWORK):
+            offenders.append(command.strip())
+    if not offenders:
+        return Check(
+            label,
+            "ok",
+            "Every validation command looks like it runs without a network, "
+            "which is what the validation sandbox gives it.",
+            commands,
+        )
+    return Check(
+        label,
+        "missing",
+        "Validation runs with no network, so these will fail in their own "
+        "install step and measure nothing. Install in the setup commands "
+        "instead, or add an offline flag (for example `uv run --offline`).",
+        offenders,
+    )
+
+
 def detect_ecosystems(paths: list[str]) -> dict[str, bool]:
     """``{ecosystem: runner ships its toolchain}`` for every marker at the root.
 
@@ -309,6 +414,7 @@ def build(
     paths: list[str] | None = None,
     read_error: str = "",
     suggested: dict[str, list[str]] | None = None,
+    contents: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """The readiness report for one repository.
 
@@ -357,6 +463,7 @@ def build(
         list(target.setup_commands),
         list(target.validation_commands),
     )
+    offline = offline_validation(list(target.validation_commands), contents)
 
     checks = [
         reachable,
@@ -364,6 +471,7 @@ def build(
         gates,
         setup,
         runtime,
+        offline,
         *_governance_checks(detected),
     ]
     return {
@@ -459,7 +567,11 @@ def infer_commands(paths: list[str], contents: dict[str, str]) -> dict[str, list
         if "uv.lock" in path_set:
             setup.append("uv sync")
             if has_pytest:
-                validation.append("uv run pytest -x -q")
+                # `--offline`: setup installs with a network, validation runs
+                # without one (ADR-0062). Plain `uv run` re-checks the lock and
+                # dies on DNS in that lane, having tested nothing. The venv the
+                # setup phase built is already there, so nothing is lost.
+                validation.append("uv run --offline pytest -x -q")
         elif "poetry.lock" in path_set:
             setup.append("poetry install")
             if has_pytest:
@@ -479,9 +591,10 @@ def infer_commands(paths: list[str], contents: dict[str, str]) -> dict[str, list
         and part.endswith(".sh")
     )
     if shell_tests:
-        # `{workspace}`-anchored, like every other command the lab stores: the
-        # gate check runs from inside the checkout but objective validation
-        # runs from the lab's own root, and a bare `tests/` resolves there.
+        # `{workspace}`-anchored, like every other command the lab stores.
+        # Both lanes now run from inside the checkout — the gate check always
+        # did, and objective validation gained the `cd` in ADR-0062 — but the
+        # placeholder costs nothing and keeps the string readable either way.
         # `|| exit 1` inside the body, because a `for` loop otherwise returns
         # only its last command's status.
         validation.append(
@@ -609,6 +722,10 @@ class ReadinessService:
         paths: list[str] | None = None
         read_error = ""
         suggested: dict[str, list[str]] | None = None
+        # Bound before the try: an unreachable mirror still renders a report,
+        # and the offline check has to be able to say "not read" rather than
+        # crash on a name that was never assigned.
+        contents: dict[str, str] = {}
         try:
             mirror = sync_mirror(
                 source,
@@ -633,4 +750,5 @@ class ReadinessService:
             paths=paths,
             read_error=read_error,
             suggested=suggested,
+            contents=contents,
         )

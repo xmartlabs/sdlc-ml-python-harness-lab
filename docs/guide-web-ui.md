@@ -160,6 +160,10 @@ prompt, no model. Without it a red run is ambiguous between "the agent failed" a
 "this repository does not build here", which look identical and mean opposite things.
 A green gate check is what makes every later failure a fact about the agent.
 
+A gate check that could not run its suite reports **no se pudo medir**, not a red
+suite: "your tests fail" and "we could not run your tests" are different claims, and
+only one of them is about the repository.
+
 **3. One case.** Four ways to get one, all storing the case against this repository;
 every case created or selected here is ticked for the experiment in step 4:
 
@@ -884,7 +888,7 @@ second borrows the authority of the first.
 | Metric | What it is |
 |---|---|
 | `task_validation_pass` | every one of the case's validation commands exited 0. The success metric of every experiment |
-| `test_pass_rate` | passed ÷ *conclusive* checks. Its resolution is the number of validation commands the case declares: one command makes it binary, ten make it a gradient. A check that timed out or was killed is excluded, never counted as a failure ([ADR-0048](adr/0048-a-check-that-did-not-measure-is-not-a-failure.md)) |
+| `test_pass_rate` | passed ÷ *conclusive* checks. Its resolution is the number of validation commands the case declares: one command makes it binary, ten make it a gradient. A check that timed out, was killed, could not find its command or had no network is excluded, never counted as a failure ([ADR-0048](adr/0048-a-check-that-did-not-measure-is-not-a-failure.md), [ADR-0061](adr/0062-a-check-the-environment-failed-is-not-a-verdict.md)) |
 | `cost_usd` | what the provider charged, from the CLI's own accounting |
 | `billed_tokens` | **every token billed**: input + output + prompt cache written + prompt cache re-read. This is what a harness actually costs — a 25-skill catalog in the system prompt is re-read on every turn |
 | `total_tokens` | uncached input + output only. Kept for continuity with older runs; it can move *down* while cost moves up, so read `billed_tokens` |
@@ -1058,7 +1062,7 @@ The detail view opens with a **validity card whenever the comparison has a probl
 above the verdict and never inside it
 ([ADR-0046](adr/0046-an-experiment-reports-validity-before-it-reports-a-verdict.md)).
 It answers a question the verdict cannot: *could this comparison have measured the
-thing it names?* Five things put a card there:
+thing it names?* Seven things put a card there:
 
 - **The treatment never happened** — an arm carrying skills opened none of them in any
   run. It measured the skills' availability, not the skills.
@@ -1066,6 +1070,13 @@ thing it names?* Five things put a card there:
   harness (`harness_error`) or failed outright, or the arm has no scored runs at all.
 - **No headroom** — the control passed every repetition, so only "no change" or a
   regression was ever representable.
+- **The objective was never measured** — every arm's runs finished, and every one of
+  their checks settled nothing (a command that was not found, a sandbox with no
+  network). The experiment recorded the sandbox, not the agents.
+- **Nothing resolved on either side** — the mirror of "no headroom": no arm passed
+  anything, so the dimension ranks nobody. When every run failed the *same* check it
+  is the environment that decided, and the card says so
+  ([ADR-0061](adr/0062-a-check-the-environment-failed-is-not-a-verdict.md)).
 - **The arm mixes treated and untreated runs** — it invoked its skills in some and not
   others.
 - **The design was objected to when it was created** — a warning the wizard showed you
@@ -1079,7 +1090,13 @@ thing read, which is the whole change.
 Under it, the **verdict**: whether the treatment improved things, on
 which metrics, at what cost, and how much evidence stands behind it — "12 cases × 5
 repetitions" — plus the case movements as `fixed / broken / unchanged`. The wording
-is deliberately cautious. The lab runs no hypothesis test, so it never says
+is deliberately cautious. A tie on success is reported as a tie on success and
+nothing more: two arms that both resolved the case read as **Same outcome, lower
+cost** (or *higher cost*, or *mixed efficiency*) when the cost, tokens, steps or wall
+time moved by at least 10%, and only as **No difference observed** when nothing moved
+either. Where the arms stopped under different rules the headline says the cost moved
+and refuses to say who won, because that delta partly measures the stop criterion. The
+wording is deliberately cautious. The lab runs no hypothesis test, so it never says
 *significant*; it says exploratory (1 repetition), a judgement (2–4), a validation
 (5 or more), within observed variance, or improvement observed.
 
@@ -1184,8 +1201,14 @@ whatever was pushed since ([ADR-0029](adr/0029-target-repositories-pinned-per-ru
 typo'd branch is reported here rather than as a failed run.
 
 A target's **validation commands** replace the case's when a run has one — the repo
-knows how it is tested better than a portable case does. Full walkthrough:
-[Target repositories](guide-target-repositories.md).
+knows how it is tested better than a portable case does. They run **from inside the
+workspace** and **with no network**: installing is the setup phase's job, and cutting
+the network at validation is what stops audited code from calling out while it is
+being measured. A command that installs will therefore die in its own installer every
+time, so the readiness report carries an **Offline validation** line that names any
+such command — including a `make test` whose recipe calls `make install` — before a
+run proves it ([ADR-0061](adr/0062-a-check-the-environment-failed-is-not-a-verdict.md)).
+Full walkthrough: [Target repositories](guide-target-repositories.md).
 
 Once two active repositories are registered the page header offers **Test the
 harness across these repositories**, the entry to a `cross_repo` experiment. It
@@ -1272,6 +1295,15 @@ Line up runs of the same case across models or harness conditions:
 - Pick 2–4 runs; the **metrics table** shows case, models, prompt, objective
   result, final/composite score, tokens, cost, time, steps, and interventions —
   with the best cell per row highlighted.
+- **The three skill rows are three conditions, not one.** *Skills removed* is an
+  ablation, *skills added* is a staged skill, and *skills asked for* is the prompt
+  telling the agent to invoke them
+  ([ADR-0041](adr/0041-a-skill-under-test-is-invoked-not-just-available.md)). They
+  are counted separately and labelled by direction because they point opposite
+  ways: a column reading "24 skill(s)" under *removed* is the **bare** arm, and one
+  reading "24 skill(s)" under *asked for* is the fullest **treatment**. A single
+  direction-less "Ablation" count rendered those two identically, which reads as the
+  exact inverse of what happened.
 - The aggregated ranking by condition (% resolved, harness version, official
   reference) lives on the **Advanced → Benchmarks** leaderboard.
 

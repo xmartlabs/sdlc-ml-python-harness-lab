@@ -144,22 +144,33 @@ def dry_run_verdict(results: list[dict[str, Any]]) -> dict[str, Any]:
       the case has something to measure.
     - ``tautological`` — every check passed before the agent did anything. The
       case cannot distinguish work from no work; its green is not a result.
-    - ``inconclusive`` — provisioning or setup broke, or a check timed out.
-      Nothing was measured, so nothing is claimed (ADR-0048).
-    """
-    from harness_lab_app.validation import INCONCLUSIVE_EXIT_CODES
+    - ``inconclusive`` — provisioning or setup broke, or a check did not settle
+      anything (timed out, was killed, could not find its command, had no
+      network). Nothing was measured, so nothing is claimed (ADR-0048/0063).
 
-    checks = [
-        {
-            "phase": result.get("phase", ""),
-            "command": result.get("command", ""),
-            "exit_code": result.get("exit_code"),
-            "passed": result.get("exit_code") == 0,
-            "conclusive": result.get("exit_code") not in INCONCLUSIVE_EXIT_CODES,
-            "detail": _tail(str(result.get("output", ""))),
-        }
-        for result in results
-    ]
+    The same classifier the real gate uses, so a dry run and a run cannot
+    disagree about the same command. It also fixes a false ``ok``: a check whose
+    command does not exist exits 127 on the clean tree, which used to read as
+    "the case has something to measure".
+    """
+    from harness_lab_app.validation import classify_inconclusive
+
+    checks = []
+    for result in results:
+        reason = classify_inconclusive(
+            result.get("exit_code"), str(result.get("output", ""))
+        )
+        checks.append(
+            {
+                "phase": result.get("phase", ""),
+                "command": result.get("command", ""),
+                "exit_code": result.get("exit_code"),
+                "passed": result.get("exit_code") == 0,
+                "conclusive": reason is None,
+                "inconclusive_reason": reason,
+                "detail": _tail(str(result.get("output", ""))),
+            }
+        )
     validate = [check for check in checks if check["phase"] == "validate"]
     setup_failed = any(
         not check["passed"] for check in checks if check["phase"] != "validate"
@@ -314,6 +325,13 @@ def health_at_pin(results: list[dict[str, Any]], *, measured: bool) -> dict[str,
     ``pass`` and ``fail`` only when a validate command actually ran and
     finished; a broken provision or setup is ``unmeasured`` with the phase
     that broke, because a suite that never ran says nothing about the tree.
+
+    So is a validate command that could not run *itself* (ADR-0062). The gate's
+    validate phase has no network, so a repository whose ``make test`` re-runs
+    its installer dies in the installer — and ``fail`` there would publish "this
+    repository's suite is red" on evidence that only says "we could not run it".
+    That sentence reached a real audit report, and the model had to correct it
+    in prose because the mechanism would not.
     """
     if not measured:
         return {
@@ -327,6 +345,17 @@ def health_at_pin(results: list[dict[str, Any]], *, measured: bool) -> dict[str,
         return {
             "status": "unmeasured",
             "reason": f"{verdict['failed_phase']} failed before the suite ran",
+            "checks": verdict["checks"],
+        }
+    if verdict["failed_inconclusively"]:
+        from harness_lab_app.validation import INCONCLUSIVE_LABELS
+
+        why = verdict["inconclusive_reason"] or "unknown"
+        return {
+            "status": "unmeasured",
+            "reason": (
+                f"the suite could not run here ({INCONCLUSIVE_LABELS.get(why, why)})"
+            ),
             "checks": verdict["checks"],
         }
     if not validate:
@@ -352,22 +381,39 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     Stops being interesting after the first failure on purpose: the executor
     stops there too, because running a test suite in a workspace whose setup
     failed measures the setup, not the suite.
+
+    A failure the environment caused is reported as one (ADR-0062). The gate's
+    ``validate`` phase runs with no network by design, so a repository whose
+    ``make test`` re-runs its own installer fails there every time — and calling
+    that a red suite is a claim about someone else's repository that the lab
+    has no evidence for.
     """
-    checks = [
-        {
-            "phase": result.get("phase", ""),
-            "command": result.get("command", ""),
-            "exit_code": result.get("exit_code"),
-            "passed": result.get("exit_code") == 0,
-            "detail": _tail(str(result.get("output", ""))),
-        }
-        for result in results
-    ]
+    from harness_lab_app.validation import classify_inconclusive
+
+    checks = []
+    for result in results:
+        reason = classify_inconclusive(
+            result.get("exit_code"), str(result.get("output", ""))
+        )
+        checks.append(
+            {
+                "phase": result.get("phase", ""),
+                "command": result.get("command", ""),
+                "exit_code": result.get("exit_code"),
+                "passed": result.get("exit_code") == 0,
+                "conclusive": reason is None,
+                "inconclusive_reason": reason,
+                "detail": _tail(str(result.get("output", ""))),
+            }
+        )
     failed = next((check for check in checks if not check["passed"]), None)
     return {
         "passed": failed is None and bool(checks),
         "failed_phase": failed["phase"] if failed else "",
         "failed_command": failed["command"] if failed else "",
+        # Whether the thing that stopped the gate measured anything at all.
+        "failed_inconclusively": failed is not None and failed["conclusive"] is False,
+        "inconclusive_reason": failed["inconclusive_reason"] if failed else None,
         "checks": checks,
     }
 

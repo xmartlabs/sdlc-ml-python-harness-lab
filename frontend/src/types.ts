@@ -158,10 +158,12 @@ export type RunEventRecord = {
 export type ValidationCheck = {
   name: string;
   passed: boolean;
-  // false when the command timed out, was killed, or never launched: the check
-  // says something about the lab, not about the agent's code. Absent on rows
-  // written before validation started recording it.
+  // false when the command timed out, was killed, never launched, could not be
+  // found or had no network: the check says something about the lab, not about
+  // the agent's code. Absent on rows written before validation recorded it.
   conclusive?: boolean;
+  // Which of those it was. Absent on rows written before ADR-0061.
+  inconclusive_reason?: string | null;
   exit_code: number | null;
   detail: string;
 };
@@ -830,6 +832,9 @@ export type ValidityIssue = {
     | "treatment_not_activated"
     | "infrastructure_failures"
     | "no_headroom"
+    // The ceiling's mirror, and the case where nothing was measured at all.
+    | "objective_unmeasured"
+    | "floor_effect"
     | "mixed_treatment"
     | "design_objection";
   severity: "invalid" | "degraded";
@@ -898,6 +903,8 @@ export type ExperimentSummary = {
       failed: number;
       unhealthy: number;
       scored_runs: number;
+      /** Finished runs whose checks all settled nothing (ADR-0061). */
+      unmeasured?: number;
     }
   >;
 };

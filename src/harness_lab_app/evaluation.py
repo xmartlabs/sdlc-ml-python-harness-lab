@@ -321,13 +321,33 @@ class SkillUsageEvaluator:
         if not under_test or context.trajectory is None:
             return []
         counts: dict[str, int] = dict(context.trajectory.get("skill_invocations") or {})
+        # Calls the harness rejected. Not invocations — the agent got nothing
+        # back — but the one fact that turns "never opened" into "could not
+        # open": a skill the CLI never registered fails every call this way.
+        errors: dict[str, int] = {
+            name: count
+            for name, count in dict(
+                context.trajectory.get("skill_call_errors") or {}
+            ).items()
+            if name in under_test
+        }
         invoked = [name for name in under_test if counts.get(name, 0) > 0]
         total = sum(counts.get(name, 0) for name in under_test)
         detail = {
             "skills_under_test": under_test,
             "invoked": invoked,
+            "failed_calls": errors,
             "source": context.trajectory.get("source", ""),
         }
+        failed_note = (
+            "; "
+            + ", ".join(
+                f"{name}: {count} call(s) failed" for name, count in errors.items()
+            )
+            + " — the harness rejected the skill (not registered?)"
+            if errors
+            else ""
+        )
         return [
             ScoreValue(
                 "skill_invoked",
@@ -335,15 +355,17 @@ class SkillUsageEvaluator:
                 reason=(
                     f"{', '.join(invoked) if invoked else 'none'} of "
                     f"{', '.join(under_test)} invoked (Skill call or SKILL.md "
-                    "read in the step record)"
+                    f"read in the step record){failed_note}"
                 ),
                 provenance_detail=detail,
             ),
             ScoreValue(
                 "skill_invocations",
                 float(total),
-                reason=", ".join(f"{name} x{counts[name]}" for name in invoked)
-                or "none",
+                reason=(
+                    ", ".join(f"{name} x{counts[name]}" for name in invoked) or "none"
+                )
+                + failed_note,
                 provenance_detail=detail,
             ),
         ]

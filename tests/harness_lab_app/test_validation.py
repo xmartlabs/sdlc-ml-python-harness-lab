@@ -312,7 +312,9 @@ def test_judge_evidence_names_the_command_its_code_and_its_verdict():
     )
     text = describe_objective_for_judge(objective)
     assert "[FAIL] exit=1 pytest -q" in text
-    assert "[INCONCLUSIVE] exit=124 smoke" in text
+    # The reason rides along: "we never found out" and "we never found out
+    # because the sandbox has no network" are different things to judge on.
+    assert "[INCONCLUSIVE: timed out] exit=124 smoke" in text
     assert "neither confirms nor refutes" in text
 
 
@@ -359,3 +361,163 @@ def test_billed_tokens_are_absent_when_nothing_is_known(tmp_path):
 
     assert cost["total_tokens"] is None
     assert cost["billed_tokens"] is None
+
+
+# --------------------------------------------------------------------------
+# A target's gate runs inside the workspace (ADR-0062)
+# --------------------------------------------------------------------------
+
+
+def test_a_target_command_runs_inside_the_workspace(tmp_path, monkeypatch):
+    """`make test` from a target row means *its* Makefile, not the lab's.
+
+    Without the `cd` every target-paired run validated the lab: all eight runs
+    of `audit-ml-python-base` recorded `0/2 checks passed` from the lab's own
+    `make test`, and the experiment read as "the harness did not help".
+    """
+    (tmp_path / "run-1" / "workspace").mkdir(parents=True)
+    monkeypatch.setattr(
+        "harness_lab_app.validation.get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path),
+    )
+    spec = build_validation_spec(_case(), "run-1", ["make test"])
+    assert spec["commands"] == [
+        ["sh", "-c", "cd data/runs/run-1/workspace && make test"]
+    ]
+    assert spec["cwd"] == "data/runs/run-1/workspace"
+
+
+def test_a_target_command_renders_the_workspace_as_dot(tmp_path, monkeypatch):
+    """It is already there; the lab-relative path would nest under itself."""
+    monkeypatch.setattr(
+        "harness_lab_app.validation.get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path),
+    )
+    spec = build_validation_spec(_case(), "run-1", ["pytest {workspace}/tests"])
+    assert spec["commands"][0][-1] == "cd workspace/run-1 && pytest ./tests"
+
+
+def test_a_case_command_is_never_prefixed(tmp_path, monkeypatch):
+    """Case commands anchor on {workspace} themselves, and some also use
+    lab-relative paths a `cd` would break."""
+    monkeypatch.setattr(
+        "harness_lab_app.validation.get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path),
+    )
+    case = _case(validation_commands=["python {workspace}/main.py"])
+    spec = build_validation_spec(case, "run-1")
+    assert spec["commands"] == [["sh", "-c", "python workspace/run-1/main.py"]]
+    assert spec["cwd"] is None
+
+
+# --------------------------------------------------------------------------
+# A check the environment failed is not a verdict (ADR-0062)
+# --------------------------------------------------------------------------
+
+
+def test_a_missing_tool_reported_by_make_is_inconclusive():
+    """make exits 2 when a recipe's binary is missing, so the code cannot tell.
+
+    This is the exact shape that scored eight runs as agent failures: the
+    hardened lane has no ruff on PATH, `make test` runs `format`, and the lab
+    stored `0/2 checks passed`.
+    """
+    objective = parse_objective(
+        [
+            _result(
+                "make test",
+                2,
+                "make[1]: *** [Makefile:98: format] Error 127\n"
+                "make: *** [Makefile:149: test] Error 2",
+            )
+        ],
+        "tests",
+    )
+    assert objective["passed"] is None
+    assert objective["checks"][0]["conclusive"] is False
+    assert objective["checks"][0]["inconclusive_reason"] == "not_found"
+    assert "command not found" in objective["summary"]
+
+
+def test_exit_127_is_inconclusive_even_without_output():
+    """The dry run scripts exit codes and captures no output."""
+    objective = parse_objective([_result("nope", 127)], "tests")
+    assert objective["passed"] is None
+    assert objective["checks"][0]["inconclusive_reason"] == "not_found"
+
+
+def test_a_dns_failure_is_inconclusive():
+    """`network_mode="none"` on the validate lane is deliberate; blaming the
+    agent for it is not."""
+    objective = parse_objective(
+        [
+            _result(
+                "uv run pytest -x -q",
+                2,
+                "  Caused by: dns error\n"
+                "  Caused by: failed to lookup address information: "
+                "Temporary failure in name resolution",
+            )
+        ],
+        "tests",
+    )
+    assert objective["passed"] is None
+    assert objective["checks"][0]["inconclusive_reason"] == "no_network"
+    assert "no network" in objective["summary"]
+
+
+def test_no_such_file_on_exit_1_stays_a_real_failure():
+    """The agent not having written the file is the whole point of the check."""
+    objective = parse_objective(
+        [_result("python main.py", 1, "No such file or directory: 'main.py'")],
+        "smoke",
+    )
+    assert objective["passed"] is False
+    assert objective["checks"][0]["conclusive"] is True
+
+
+def test_a_not_found_string_inside_a_passing_output_is_ignored():
+    objective = parse_objective(
+        [_result("pytest", 0, "test_missing_key_is_not_found PASSED")], "tests"
+    )
+    assert objective["passed"] is True
+    assert objective["checks"][0]["conclusive"] is True
+
+
+def test_a_real_failure_beside_an_infrastructure_one_still_fails():
+    """A sibling that could not run does not excuse an assertion that did."""
+    objective = parse_objective(
+        [_result("assert", 1, "AssertionError"), _result("make test", 127)], "tests"
+    )
+    assert objective["passed"] is False
+
+
+def test_the_summary_counts_inconclusive_checks_by_reason():
+    objective = parse_objective(
+        [_result("ok", 0), _result("a", 127), _result("b", 127), _result("c", 124)],
+        "tests",
+    )
+    assert "1/4 checks passed" in objective["summary"]
+    assert "3 inconclusive (command not found (2), timed out)" in objective["summary"]
+
+
+def test_a_summary_where_nothing_settled_does_not_lead_with_a_score():
+    """`0/2 checks passed` is true, and reads as a verdict.
+
+    It is what made two unmeasured runs look like two failures on the page —
+    the reader saw the same headline as before the classification existed.
+    """
+    objective = parse_objective([_result("make test", 127), _result("b", 124)], "tests")
+    assert objective["passed"] is None
+    assert objective["summary"] == (
+        "nothing measured: all 2 check(s) were inconclusive "
+        "(command not found, timed out)"
+    )
+    assert "checks passed" not in objective["summary"]
+
+
+def test_the_judge_reads_why_a_check_did_not_measure():
+    objective = parse_objective([_result("uv run pytest", 127)], "tests")
+    text = describe_objective_for_judge(objective)
+    assert "[INCONCLUSIVE: command not found]" in text
+    assert "settled nothing (command not found)" in text

@@ -86,7 +86,7 @@ set up, and with no agent work applied — through the hardened validation lane
 |---|---|
 | `ok` | at least one check failed conclusively on the untouched tree — the case has something to measure |
 | `tautological` | every check passed before the agent started; its green means nothing, and the experiment gate will refuse to launch it |
-| `inconclusive` | provisioning broke or a check timed out — nothing measured, so nothing claimed ([ADR-0048](adr/0048-a-check-that-did-not-measure-is-not-a-failure.md)) |
+| `inconclusive` | provisioning broke, or a check settled nothing — it timed out, was killed, or its command did not exist (exit 127, which used to read as a false `ok`) — so nothing is claimed ([ADR-0048](adr/0048-a-check-that-did-not-measure-is-not-a-failure.md), [ADR-0062](adr/0062-a-check-the-environment-failed-is-not-a-verdict.md)) |
 
 Every check is asked, even after one fails: the question is whether *any* of them can
 fail, and stopping at the first answer leaves the rest unasked.

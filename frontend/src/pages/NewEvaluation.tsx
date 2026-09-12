@@ -982,6 +982,41 @@ export function NewEvaluation() {
           "against nothing)."
       );
     }
+    // B2. The skill under test is the one *selected*: the treatment removes
+    // (or stages) it and the control keeps (or lacks) it, so whatever is left
+    // unticked is held constant across both arms. A selection of "all but
+    // one" reads like the inverse — as if the unticked skill were the subject
+    // — and it is exactly the one skill the design never varies. That is how
+    // an experiment meant to test `systematic_debugging` ran with it available
+    // to both arms and asked for by neither (ADR-0061). Said here, before the
+    // runs, because no auditor can recover the operator's intent afterwards.
+    if (mode === "harness_evaluation" && isSkillFactor && skillNames.length > 1) {
+      const catalog =
+        factorKey === "skills_disabled"
+          ? skills.map((skill) => skill.name)
+          : stagedSkills.map((skill) => skill.name);
+      const leftOut = catalog
+        .filter((name) => !skillNames.includes(name))
+        .sort();
+      const moved =
+        factorKey === "skills_disabled"
+          ? "removed from the treatment arm"
+          : "staged in the treatment arm";
+      let note =
+        `${skillNames.length} skills are ${moved} together, so a difference ` +
+        "belongs to the bundle and cannot be attributed to any one of them. " +
+        "To evaluate one skill, select that skill alone.";
+      if (leftOut.length > 0 && leftOut.length <= 3) {
+        note +=
+          ` ${leftOut.map((name) => `'${name}'`).join(", ")} ` +
+          `${leftOut.length === 1 ? "is" : "are"} left out: ` +
+          (factorKey === "skills_disabled"
+            ? "available to both arms and tested by neither."
+            : "absent from both arms and tested by neither.") +
+          " If that is the skill you mean to evaluate, the selection is inverted.";
+      }
+      notes.push(note);
+    }
     // C. Prompt and catalog moved together. Legitimate — it is what the factor
     // means (ADR-0044) — and unattributable, which the reader must know before
     // the numbers rather than after them.
@@ -1043,7 +1078,9 @@ export function NewEvaluation() {
     harnessVariant,
     mode,
     promptVariant,
+    skillNames,
     skills,
+    stagedSkills,
     useSuite,
     variantOptions,
     venue

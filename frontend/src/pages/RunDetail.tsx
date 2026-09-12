@@ -965,7 +965,15 @@ export function RunDetail({
                   const mark = inconclusive ? "⊘" : check.passed ? "✓" : "✗";
                   return (
                     <div className={`run-console-line ${tone}`} key={index}>
-                      <span title={inconclusive ? "did not measure" : undefined}>{mark}</span>
+                      <span
+                        title={
+                          inconclusive
+                            ? `did not measure${check.inconclusive_reason ? `: ${check.inconclusive_reason.replace(/_/g, " ")}` : ""}`
+                            : undefined
+                        }
+                      >
+                        {mark}
+                      </span>
                       <span>
                         {check.name} (exit {check.exit_code ?? "?"}) {check.detail}
                       </span>

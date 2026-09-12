@@ -109,3 +109,74 @@ def test_expected_tools_come_only_from_what_the_case_declares():
     assert expected_tools_for(
         files_expected=("src/a.py",), validation_commands=("pytest",)
     ) == ("Edit", "Bash")
+
+
+def tool_result(tool_use_id: str, content: str, *, error: bool = False) -> str:
+    return json.dumps(
+        {
+            "type": "user",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": content,
+                        "is_error": error,
+                    }
+                ]
+            },
+        }
+    )
+
+
+def test_a_rejected_skill_call_is_not_an_invocation():
+    """`Unknown skill` hands the agent nothing.
+
+    Counting it is how a run whose catalog was never registered with the CLI
+    scored as a fully activated treatment (ADR-0061).
+    """
+    call = {**tool_use("Skill", skill="systematic_debugging"), "id": "t1"}
+    lines = [
+        event(call),
+        tool_result(
+            "t1",
+            "<tool_use_error>Unknown skill: systematic_debugging</tool_use_error>",
+            error=True,
+        ),
+    ]
+
+    parsed = from_claude_events(lines)
+
+    assert parsed["skill_calls"] == []
+    assert parsed["skill_call_errors"] == ["systematic_debugging"]
+    # The step itself survives: the agent reached for the skill, and a judge
+    # reading the trajectory should see it reaching and getting nothing.
+    assert [step["tool"] for step in parsed["steps"]] == ["Skill"]
+
+    built = build(event_lines=lines)
+    assert built["skill_invocations"] == {}
+    assert built["skill_call_errors"] == {"systematic_debugging": 1}
+
+
+def test_a_skill_call_whose_result_succeeded_still_counts():
+    call = {**tool_use("Skill", skill="tdd"), "id": "t2"}
+    lines = [event(call), tool_result("t2", "# TDD\nRed, green, refactor.")]
+    assert from_claude_events(lines)["skill_calls"] == ["tdd"]
+
+
+def test_a_failed_read_of_a_skill_file_is_not_an_invocation_either():
+    call = {
+        **tool_use("Read", file_path="/app/.claude/skills/tdd/SKILL.md"),
+        "id": "t3",
+    }
+    lines = [event(call), tool_result("t3", "File does not exist.", error=True)]
+    parsed = from_claude_events(lines)
+    assert parsed["skill_calls"] == []
+    assert parsed["skill_call_errors"] == ["tdd"]
+
+
+def test_a_call_with_no_recorded_result_still_counts():
+    """A truncated record is not evidence of failure."""
+    lines = [event(tool_use("Skill", skill="tdd"))]
+    assert from_claude_events(lines)["skill_calls"] == ["tdd"]
+    assert from_claude_events(lines)["skill_call_errors"] == []

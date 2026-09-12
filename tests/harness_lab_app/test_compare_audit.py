@@ -238,6 +238,41 @@ def test_the_evidence_names_what_was_held_and_what_varied(session):
     assert rows["K-002"]["objective"] == "3/3 checks passed"
 
 
+def test_an_inconclusive_check_is_not_listed_as_a_failure(session):
+    """Failed and did-not-measure are two different claims (ADR-0062)."""
+    from harness_lab_app.models import Validation
+
+    _make_run(session, "K-002", prompt_variant="default")
+    _make_run(session, "K-004", prompt_variant="harness")
+    _measure(session, "K-002")
+    session.add(
+        Validation(
+            run_id="K-004",
+            objective={
+                "passed": None,
+                "summary": "0/1 checks passed; 1 inconclusive (no network)",
+                "checks": [
+                    {
+                        "command": "uv run pytest -x -q",
+                        "passed": False,
+                        "exit_code": 2,
+                        "conclusive": False,
+                        "inconclusive_reason": "no_network",
+                        "detail": "dns error",
+                    }
+                ],
+            },
+        )
+    )
+    session.commit()
+
+    evidence = build_evidence(session, ["K-002", "K-004"])
+
+    row = next(r for r in evidence["runs"] if r["run_id"] == "K-004")
+    assert row["failed_checks"] == []
+    assert row["inconclusive_checks"][0]["reason"] == "no_network"
+
+
 def test_an_unmeasured_metric_is_flagged_not_read_as_a_zero(session):
     _make_run(session, "K-002", prompt_variant="default")
     _make_run(session, "K-004", prompt_variant="harness")

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi import HTTPException
+from sqlmodel import select
 
 from harness_lab_app.experiment_audit_service import (
     EXPERIMENT_AUDIT_SYSTEM_PROMPT,
@@ -193,6 +194,45 @@ def test_the_evidence_says_what_each_arm_used_and_did_not(session):
     # The lab's own validity verdict travels with the evidence, verbatim.
     assert evidence["validity"]["status"] in ("valid", "degraded", "invalid")
     assert evidence["verdict"]["headline"]
+
+
+def test_an_inconclusive_check_is_not_listed_as_a_failure(session):
+    """An auditor handed a sandbox failure as a failed check writes that the arm
+    failed the check (ADR-0062)."""
+    from harness_lab_app.models import Validation
+
+    _, runs = _launch(session)
+    bare = next(r for r in runs if r.condition_label == "bare")
+    full = next(r for r in runs if r.condition_label == "full-harness")
+    _finish(session, bare, passed=True, cost=0.4)
+    _finish(session, full, passed=True, cost=1.2)
+    validation = session.exec(
+        select(Validation).where(Validation.run_id == full.run_id)
+    ).first()
+    validation.objective = {
+        "passed": None,
+        "summary": "0/2 checks passed; 1 inconclusive (command not found)",
+        "checks": [
+            {"command": "pytest -q", "passed": False, "exit_code": 1, "detail": "boom"},
+            {
+                "command": "make test",
+                "passed": False,
+                "exit_code": 127,
+                "conclusive": False,
+                "inconclusive_reason": "not_found",
+                "detail": "make: ruff: No such file",
+            },
+        ],
+    }
+    session.add(validation)
+    session.commit()
+
+    evidence = build_evidence(session, "read-me")
+
+    row = next(r for r in evidence["runs"] if r["arm"] == "full-harness")
+    assert [c["command"] for c in row["failed_checks"]] == ["pytest -q"]
+    assert [c["command"] for c in row["inconclusive_checks"]] == ["make test"]
+    assert row["inconclusive_checks"][0]["reason"] == "not_found"
 
 
 def test_the_prompt_demands_the_fixed_sections():

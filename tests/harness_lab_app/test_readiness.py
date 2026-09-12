@@ -270,7 +270,9 @@ def test_a_python_repo_with_uv_lock_suggests_uv_flavoured_commands():
         {"pyproject.toml": "[tool.pytest.ini_options]\n"},
     )
     assert out["setup"] == ["uv sync"]
-    assert out["validation"] == ["uv run pytest -x -q"]
+    # `--offline`: setup installs with a network, validation runs without one,
+    # and plain `uv run` dies re-checking the lock there (ADR-0062).
+    assert out["validation"] == ["uv run --offline pytest -x -q"]
 
 
 def test_a_polyglot_repo_suggests_one_gate_per_ecosystem():
@@ -435,3 +437,88 @@ def test_suggestions_ride_on_the_readiness_report(session):
     )
     assert report["suggested_validation_commands"] == ["make test"]
     assert report["suggested_setup_commands"] == []
+
+
+# --------------------------------------------------------------------------
+# Validation runs offline, and the report says so before a run proves it
+# --------------------------------------------------------------------------
+
+
+def _offline(commands, makefile=""):
+    from harness_lab_app.readiness_service import offline_validation
+
+    return offline_validation(commands, {"Makefile": makefile} if makefile else {})
+
+
+def test_a_command_that_installs_is_flagged_before_it_ever_runs():
+    check = _offline(["uv sync && pytest -q"])
+    assert check.status == "missing"
+    assert check.items == ["uv sync && pytest -q"]
+    assert "no network" in check.detail
+
+
+def test_a_task_runner_target_is_judged_by_its_recipe_not_its_name():
+    """`make test` is the repository's own word for its gate, and it is also
+    how a network dependency hides two levels down."""
+    makefile = (
+        "install:\n\t@uv sync\n\n"
+        "test:\n\t@if [ ! -d .venv ]; then make install; fi\n\t@pytest -q\n"
+    )
+    assert _offline(["make test"], makefile).status == "missing"
+
+
+def test_a_recipe_that_fetches_its_own_toolchain_is_flagged():
+    """The shape the command patterns miss: the binary is behind a variable.
+
+    `ml-python-base`'s `install` resolves uv through `$$UV_BIN`, so `uv sync`
+    never appears as a literal — but it curls the installer first, and a fetch
+    is a fetch whatever runs it.
+    """
+    makefile = (
+        "install:\n"
+        "\t@curl -LsSf https://astral.sh/uv/install.sh | sh; \\\n"
+        '\t"$$UV_BIN" sync\n\n'
+        "test:\n\t@if [ ! -d .venv ]; then make install; fi\n\t@pytest -q\n"
+    )
+    check = _offline(["make test"], makefile)
+    assert check.status == "missing"
+    assert check.items == ["make test"]
+
+
+def test_a_task_runner_target_that_only_tests_is_fine():
+    makefile = "test:\n\t@pytest -q\n"
+    assert _offline(["make test"], makefile).status == "ok"
+
+
+def test_a_target_whose_makefile_was_not_read_is_not_guessed_at():
+    """Silence beats a warning the lab cannot support."""
+    assert _offline(["make test"]).status == "ok"
+
+
+def test_an_offline_flag_clears_the_warning():
+    assert _offline(["uv run --offline pytest -x -q"]).status == "ok"
+    assert _offline(["uv run pytest -x -q"]).status == "missing"
+
+
+def test_nothing_configured_is_unknown_not_ok():
+    assert _offline([]).status == "unknown"
+
+
+def test_the_report_carries_the_offline_check(session):
+    from harness_lab_app.models import TargetRepository
+    from harness_lab_app.readiness_service import build
+
+    target = TargetRepository(
+        target_id="t",
+        name="t",
+        repository_url="https://example.invalid/t.git",
+        validation_commands=["make test"],
+    )
+    report = build(
+        target,
+        commit="c" * 40,
+        paths=["Makefile"],
+        contents={"Makefile": "install:\n\t@uv sync\n\ntest:\n\t@make install\n"},
+    )
+    offline = next(c for c in report["checks"] if c["label"] == "Offline validation")
+    assert offline["status"] == "missing"

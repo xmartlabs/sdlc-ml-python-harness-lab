@@ -1565,7 +1565,9 @@ def build_codex_cmd(executor_model: str | None, message: str) -> list[str]:
     return cmd
 
 
-def build_claude_cmd(executor_model: str | None, message: str) -> list[str]:
+def build_claude_cmd(
+    executor_model: str | None, message: str, add_dirs: Sequence[Path] = ()
+) -> list[str]:
     """Assemble a non-interactive Claude Code CLI command (host, native auth).
 
     -p is print/non-interactive; --dangerously-skip-permissions avoids blocking
@@ -1573,6 +1575,11 @@ def build_claude_cmd(executor_model: str | None, message: str) -> list[str]:
     mode) emits one JSON event per assistant message / tool call / result —
     the observability layer that gives claude runs real tool-level attribution
     and usage numbers (the plain CLI only prints a final summary).
+
+    ``add_dirs`` are passed as ``--add-dir``, which is the only way Claude Code
+    loads ``.claude/skills`` (and agents) from a directory that is not the cwd
+    or one of its parents *inside the same repository*. See
+    :func:`harness_add_dirs` for when the lab root has to be one.
     """
     cmd = [
         "claude",
@@ -1585,18 +1592,81 @@ def build_claude_cmd(executor_model: str | None, message: str) -> list[str]:
     native = _native_model(executor_model)
     if native:
         cmd += ["--model", native]
+    for directory in add_dirs:
+        cmd += ["--add-dir", str(directory)]
     cmd.append(message)
     return cmd
 
 
+def needs_staged_catalog(
+    harness: str, agent_cwd: Path | None, lab_root_visible: bool
+) -> bool:
+    """Whether this run has to hand the CLI a skill catalog of its own (ADR-0061).
+
+    A ``lab_root`` claude run whose agent starts inside the workspace — the
+    SWE lane's control-arm hygiene — starts inside a *clone*. Claude Code walks
+    ``.claude/skills`` from the cwd up to the nearest repository root, and the
+    clone is one, so the walk stops there and the lab's catalog at the real
+    root is never registered: every ``Skill`` call answers ``Unknown skill``
+    and the run records "asked and not invoked" about a skill that was never
+    on the menu. (``CLAUDE.md`` is collected from every ancestor regardless,
+    which is what made the half-loaded harness look whole.)
+
+    False under every masked condition: there the lab's views are empty stubs
+    by design (ADR-0049), and an ``injected`` arm already carries its skills
+    inside the workspace.
+    """
+    if harness != "claude" or agent_cwd is None or not lab_root_visible:
+        return False
+    return agent_cwd.resolve() != REPO_ROOT.resolve()
+
+
+def stage_skill_catalog(out_dir: Path, skills: list, tool_id: str) -> Path | None:
+    """Copy the run's effective catalog into a directory of its own.
+
+    What ``--add-dir`` registers is ``<dir>/.claude/skills``, so the directory
+    named has to be one whose *only* content is that catalog. Naming the lab
+    root instead hung every run: Claude Code indexes and watches an added
+    directory, the repo root is 4.7 GB across 141k files, and it contains
+    ``workspace/`` — the clone the agent is working in — so the add was also
+    recursive. The CLI never reached session init and the watchdog killed the
+    run at ten minutes with an empty event stream.
+
+    A per-run staging directory is also the honest surface: the agent gets the
+    skills the condition grants it and not read access to every other run's
+    artifacts. Copied, not symlinked, so an archived run still explains itself.
+    """
+    from ml_python_base.skills_sync.config import DEFAULT_REGISTRY_PATH, load_registry
+    from ml_python_base.skills_sync.linker import add_skills
+
+    if not skills:
+        return None
+    registry = load_registry(REPO_ROOT / DEFAULT_REGISTRY_PATH)
+    tool = registry.tool(tool_id)
+    if not tool.has_native_view:
+        return None
+    root = out_dir / "harness_skills"
+    # Rebuilt every run: the catalog is derived from this run's ablation, and a
+    # survivor from a previous attempt would silently undo it on a retry.
+    if root.exists():
+        shutil.rmtree(root)
+    placed = sorted(add_skills(root, tool, skills))
+    print(f"  ✓ Skill catalog staged for the CLI: {len(placed)} skill(s)")
+    return root
+
+
 def build_harness_cmd(
-    harness: str, executor_model: str | None, agent: str | None, message: str
+    harness: str,
+    executor_model: str | None,
+    agent: str | None,
+    message: str,
+    add_dirs: Sequence[Path] = (),
 ) -> list[str]:
     """Dispatch to the per-harness command builder (opencode | codex | claude)."""
     if harness == "codex":
         return build_codex_cmd(executor_model, message)
     if harness == "claude":
-        return build_claude_cmd(executor_model, message)
+        return build_claude_cmd(executor_model, message, add_dirs=add_dirs)
     return build_opencode_cmd(executor_model, agent, message)
 
 
@@ -2626,6 +2696,13 @@ def main(argv: list[str] | None = None) -> int:
     elif args.harness == "claude" and provisions_repo and prompt_short == "swe_default":
         # Pre-existing control-arm hygiene for the SWE lane, unchanged.
         agent_cwd = workspace
+    # A cwd inside a clone hides the lab's skill catalog from Claude Code even
+    # under `lab_root`; the CLI has to be handed one of its own (ADR-0061).
+    add_dirs: tuple[Path, ...] = ()
+    if needs_staged_catalog(args.harness, agent_cwd, lab_root_visible):
+        staged_catalog = stage_skill_catalog(out_dir, effective_skills, args.harness)
+        if staged_catalog is not None:
+            add_dirs = (staged_catalog,)
 
     repo_note: str | None = None
     if provisions_repo:
@@ -2843,13 +2920,21 @@ def main(argv: list[str] | None = None) -> int:
             prompt_kinds.append(prompt_kind)
 
             prompt_text = step_prompt_path.read_text()
-            cmd = build_harness_cmd(args.harness, executor_model, None, prompt_text)
+            cmd = build_harness_cmd(
+                args.harness, executor_model, None, prompt_text, add_dirs=add_dirs
+            )
             print(f"  Harness:     {args.harness}")
             print(f"  Model:       {executor_model or '(harness default)'}")
             print(f"  Log:         {step_log.relative_to(REPO_ROOT)}")
             if agent_cwd is not None:
                 print(
                     f"  Agent cwd:   {agent_cwd.relative_to(REPO_ROOT)} (clean context)"
+                )
+            if add_dirs:
+                print(
+                    "  Skills from: "
+                    + ", ".join(str(d.relative_to(REPO_ROOT)) for d in add_dirs)
+                    + " (--add-dir: the cwd is a clone, its root hides the lab's)"
                 )
             print("-" * 66)
 

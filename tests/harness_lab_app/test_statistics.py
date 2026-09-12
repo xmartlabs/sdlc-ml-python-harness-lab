@@ -16,6 +16,7 @@ from harness_lab_app.statistics import (
     compare,
     confidence_interval,
     evidence_strength,
+    objective_signature,
     paired_by_case,
     repetition_warnings,
     success_delta,
@@ -414,7 +415,8 @@ def test_headline_metrics_lead_with_success_then_cost():
     labels = [item["label"] for item in answer["highlights"]]
     assert labels[0] == "Success"
     assert "Cost usd" in labels
-    assert answer["headline"] == "No difference observed"
+    # Success tied, cost did not: `_pair` gives the treatment 1.5 against 2.0.
+    assert answer["headline"] == "Same outcome, lower cost"
 
 
 @pytest.mark.parametrize(
@@ -726,3 +728,334 @@ def test_headline_metrics_lead_with_the_graded_outcome_and_the_billed_cost():
     assert "billed_tokens" in HEADLINE_METRICS
     # The uncached count hid a 71% cost increase behind a lower number.
     assert "total_tokens" not in HEADLINE_METRICS
+
+
+# --------------------------------------------------------------------------
+# The floor, which is the ceiling's mirror (ADR-0062)
+# --------------------------------------------------------------------------
+
+
+def _signature(command: str, exit_code: int = 2):
+    return objective_signature(
+        {
+            "checks": [
+                {
+                    "command": command,
+                    "exit_code": exit_code,
+                    "passed": False,
+                    "conclusive": True,
+                }
+            ]
+        }
+    )
+
+
+def _floor_validity(control, treatment, **kwargs):
+    return assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        arms=[control, treatment],
+        success=success_delta(control, treatment),
+        **kwargs,
+    )
+
+
+def test_two_arms_that_never_pass_cannot_be_ranked():
+    """0.0 versus 0.0 is a delta of exactly zero, and reads as 'no difference'.
+
+    That is how `audit-ml-python-base` published "No difference observed" over
+    two arms whose every check had failed on the lab's own Makefile.
+    """
+    control, treatment = _pair([False] * 5, [False] * 5)
+    validity = _floor_validity(control, treatment)
+    assert validity["status"] == "invalid"
+    assert _codes(validity) == ["floor_effect"]
+
+
+def test_a_floor_at_two_runs_only_degrades():
+    """Two failing runs are evidence of two runs, exactly as for a ceiling."""
+    control, treatment = _pair([False, False], [False, False], reps=2)
+    validity = _floor_validity(control, treatment)
+    assert validity["status"] == "degraded"
+    assert _codes(validity) == ["floor_effect"]
+
+
+def test_an_identical_failing_check_on_every_run_is_the_environment():
+    """Two different arms failing the same command the same way decided nothing."""
+    control, treatment = _pair([False, False], [False, False], reps=2)
+    signature = _signature("cd {run_id}/workspace && make test")
+    validity = _floor_validity(
+        control,
+        treatment,
+        check_signatures={
+            control.label: [signature, signature],
+            treatment.label: [signature, signature],
+        },
+    )
+    assert validity["status"] == "invalid"
+    assert "make test" in validity["issues"][0]["detail"]
+    assert "the environment decided this" in validity["issues"][0]["detail"]
+
+
+def test_a_control_at_zero_against_a_treatment_that_passes_is_not_a_floor():
+    """One arm moving is exactly the result the design exists to find."""
+    control, treatment = _pair([False] * 5, [True] * 5)
+    assert _codes(_floor_validity(control, treatment)) == []
+
+
+def test_a_floor_and_a_ceiling_cannot_both_hold():
+    """The control is either 0/n or n/n; the two rules never fire together."""
+    control, treatment = _pair([True] * 5, [True] * 5)
+    assert _codes(_floor_validity(control, treatment)) == ["no_headroom"]
+
+
+def test_a_single_failing_run_per_arm_is_not_yet_a_floor():
+    control, treatment = _pair([False], [False], reps=1)
+    assert _codes(_floor_validity(control, treatment)) == []
+
+
+def test_subject_validation_caps_the_floor_at_degraded():
+    """It has no control, so there is no comparison to invalidate."""
+    arm = _arm("claude", [1.0] * 5, [False] * 5)
+    validity = assess_validity(mode="subject_validation", arms=[arm])
+    assert validity["status"] == "degraded"
+    assert _codes(validity) == ["floor_effect"]
+
+
+# --------------------------------------------------------------------------
+# An objective nobody measured
+# --------------------------------------------------------------------------
+
+
+def _unmeasured_health(runs=2):
+    return {
+        "runs": runs,
+        "harness_error": 0,
+        "failed": 0,
+        "unhealthy": 0,
+        "scored_runs": 0,
+        "unmeasured": runs,
+    }
+
+
+def test_an_experiment_whose_every_check_was_inconclusive_measured_nothing():
+    """Nothing else fires: the runs did not crash, and there is no rate to floor."""
+    control, treatment = _pair([], [], reps=0)
+    validity = _floor_validity(
+        control,
+        treatment,
+        run_health={
+            control.label: _unmeasured_health(),
+            treatment.label: _unmeasured_health(),
+        },
+        check_signatures={
+            control.label: [((), ("no_network",))],
+            treatment.label: [((), ("not_found",))],
+        },
+    )
+    assert validity["status"] == "invalid"
+    assert _codes(validity) == ["objective_unmeasured"]
+    detail = validity["issues"][0]["detail"]
+    assert "command not found" in detail and "no network" in detail
+
+
+def test_pending_runs_do_not_read_as_unmeasured():
+    """`summarize` is polled while runs are still queued.
+
+    Gating on absence would render a freshly launched experiment as "not valid"
+    for its first minutes.
+    """
+    control, treatment = _pair([], [], reps=0)
+    half = {**_unmeasured_health(), "runs": 4, "unmeasured": 2}
+    validity = _floor_validity(
+        control, treatment, run_health={control.label: half, treatment.label: half}
+    )
+    assert _codes(validity) == []
+
+
+def test_one_arm_that_still_measured_something_is_not_an_unmeasured_experiment():
+    control = _arm("native", [2.0] * 2, [True] * 2)
+    scored = {**_unmeasured_health(), "scored_runs": 2, "unmeasured": 0}
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        arms=[control],
+        run_health={control.label: scored},
+    )
+    assert "objective_unmeasured" not in _codes(validity)
+
+
+def test_unmeasured_leads_the_floor_in_the_ordering():
+    """A reader told "nothing resolved" first goes looking for a harder case."""
+    arm = _arm("solo", [1.0] * 5, [False] * 5)
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=arm,
+        arms=[arm],
+        run_health={arm.label: {**_unmeasured_health(runs=5), "runs": 5}},
+    )
+    assert _codes(validity) == ["objective_unmeasured", "floor_effect"]
+
+
+# --------------------------------------------------------------------------
+# The signature two runs are compared on
+# --------------------------------------------------------------------------
+
+
+def test_a_signature_forgets_the_run_id_so_two_runs_can_match():
+    """Every workspace path carries the run id; raw strings would never match."""
+
+    def objective(run_id):
+        return {
+            "checks": [
+                {
+                    "command": f"cd data/runs/{run_id}/workspace && make test",
+                    "exit_code": 2,
+                    "passed": False,
+                    "conclusive": True,
+                }
+            ]
+        }
+
+    assert objective_signature(objective("K-001"), "K-001") == objective_signature(
+        objective("K-002"), "K-002"
+    )
+
+
+def test_a_signature_keeps_inconclusive_checks_out_of_the_failures():
+    """A command that never ran did not fail (ADR-0048)."""
+    signature = objective_signature(
+        {
+            "checks": [
+                {
+                    "command": "make test",
+                    "exit_code": 127,
+                    "passed": False,
+                    "conclusive": False,
+                    "inconclusive_reason": "not_found",
+                },
+                {
+                    "command": "pytest",
+                    "exit_code": 1,
+                    "passed": False,
+                    "conclusive": True,
+                },
+            ]
+        }
+    )
+    assert signature == ((("pytest", 1),), ("not_found",))
+
+
+def test_a_run_with_no_objective_has_an_empty_signature():
+    assert objective_signature(None) == ((), ())
+
+
+# --------------------------------------------------------------------------
+# A tie on success is not a tie on what the success cost
+# --------------------------------------------------------------------------
+
+
+def _priced(label, *, cost, tokens, steps, minutes, passes=True, reps=1):
+    return summarize_condition(
+        label,
+        [
+            {
+                "cost_usd": cost,
+                "billed_tokens": tokens,
+                "agent_steps": steps,
+                "wall_time_minutes": minutes,
+                "task_validation_pass": passes,
+            }
+        ]
+        * reps,
+    )
+
+
+def _tie(control, treatment, stop_reasons=None):
+    return verdict(
+        mode="harness_evaluation",
+        cases=1,
+        repetitions=1,
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+        case_matrix=[],
+        stop_reasons=stop_reasons,
+    )
+
+
+def test_a_tie_on_success_still_names_what_the_outcome_cost():
+    """Both arms resolved the case; one did it for a third less of everything.
+
+    "No difference observed" is a sentence about the success rate, and printing
+    it over that pair tells the reader the opposite of what the page shows.
+    """
+    control = _priced("native", cost=1.78, tokens=10_400_000, steps=6, minutes=12.3)
+    treatment = _priced("injected", cost=1.25, tokens=6_890_000, steps=4, minutes=7.91)
+
+    answer = _tie(control, treatment)
+
+    assert answer["headline"] == "Same outcome, lower cost"
+    assert "matched native on success rate" in answer["claim"]
+    assert "fell" in answer["claim"]
+
+
+def test_a_tie_where_the_treatment_cost_more_says_so():
+    control = _priced("native", cost=1.0, tokens=1_000_000, steps=3, minutes=5.0)
+    treatment = _priced("injected", cost=2.0, tokens=2_000_000, steps=6, minutes=10.0)
+
+    assert _tie(control, treatment)["headline"] == "Same outcome, higher cost"
+
+
+def test_a_tie_with_nothing_moving_is_still_no_difference():
+    control = _priced("native", cost=1.0, tokens=1_000_000, steps=4, minutes=6.0)
+    treatment = _priced("injected", cost=1.0, tokens=1_000_000, steps=4, minutes=6.0)
+
+    answer = _tie(control, treatment)
+
+    assert answer["headline"] == "No difference observed"
+    assert "no efficiency metric moved materially" in answer["claim"]
+
+
+def test_a_move_under_ten_percent_is_not_worth_a_headline():
+    """A floor on the wording, like `_MATERIAL_POINTS` — never a significance claim."""
+    control = _priced("native", cost=1.00, tokens=1_000_000, steps=4, minutes=6.00)
+    treatment = _priced("injected", cost=1.05, tokens=1_040_000, steps=4, minutes=6.20)
+
+    assert _tie(control, treatment)["headline"] == "No difference observed"
+
+
+def test_a_tie_whose_arms_stopped_differently_does_not_credit_the_direction():
+    """Effort and cost partly measure the stop criterion, so the headline may
+    say that they moved and may not say who won."""
+    control = _priced("native", cost=1.78, tokens=10_400_000, steps=6, minutes=12.3)
+    treatment = _priced("injected", cost=1.25, tokens=6_890_000, steps=4, minutes=7.91)
+
+    answer = _tie(
+        control,
+        treatment,
+        stop_reasons={"native": ["no_progress"], "injected": ["completion_signal"]},
+    )
+
+    assert answer["headline"] == "Same outcome, different cost"
+    assert "cannot be credited to the harness" in answer["claim"]
+
+
+def test_a_tie_with_metrics_moving_both_ways_says_mixed():
+    control = _priced("native", cost=1.0, tokens=2_000_000, steps=6, minutes=12.0)
+    treatment = _priced("injected", cost=2.0, tokens=1_000_000, steps=3, minutes=6.0)
+
+    assert _tie(control, treatment)["headline"] == "Same outcome, mixed efficiency"
+
+
+def test_the_outcome_metrics_are_not_read_as_a_price():
+    """`test_pass_rate` is the result, not what the result cost."""
+    control = summarize_condition(
+        "native", [{"test_pass_rate": 1.0, "task_validation_pass": True}]
+    )
+    treatment = summarize_condition(
+        "injected", [{"test_pass_rate": 0.5, "task_validation_pass": True}]
+    )
+
+    assert _tie(control, treatment)["headline"] == "No difference observed"

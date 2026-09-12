@@ -322,6 +322,20 @@ def test_a_check_that_timed_out_is_inconclusive_not_evidence_of_anything(session
     assert record["verdict"] == "inconclusive"
 
 
+def test_an_unanchored_check_that_exits_127_settles_nothing(session):
+    """127 on the clean tree used to read as "the case has something to measure".
+
+    It is the shell saying the command does not exist — a fact about the case,
+    not about whether the case can distinguish work from no work (ADR-0062).
+    """
+    _seed_case_and_target(session, ["bash {workspace}/tests/run.sh"])
+
+    record = _dry_run(session, _ScriptedExecutor({"provision": [0], "validate": [127]}))
+
+    assert record["verdict"] == "inconclusive"
+    assert record["checks"][-1]["inconclusive_reason"] == "not_found"
+
+
 def test_every_check_is_asked_even_after_one_of_them_fails(session):
     """The question is whether *any* check can fail, so none may go unasked."""
     _seed_case_and_target(

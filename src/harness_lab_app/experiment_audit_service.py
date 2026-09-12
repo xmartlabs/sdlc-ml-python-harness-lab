@@ -163,6 +163,9 @@ def build_evidence(session: Session, experiment_id: str) -> dict[str, Any]:
         objective = (validation.objective if validation else None) or {}
         subjective = (validation.subjective if validation else None) or {}
         effort = (validation.effort if validation else None) or {}
+        # Failed and did-not-measure are two different claims, and an auditor
+        # handed the second under the name of the first will write that the arm
+        # failed the check (ADR-0062).
         failed_checks = [
             {
                 # `command` first: rows written before validation emitted it
@@ -173,7 +176,17 @@ def build_evidence(session: Session, experiment_id: str) -> dict[str, Any]:
                 "detail": str(check.get("detail") or "").strip()[-DETAIL_CLIP:],
             }
             for check in objective.get("checks") or []
-            if not check.get("passed")
+            if not check.get("passed") and check.get("conclusive", True)
+        ]
+        inconclusive_checks = [
+            {
+                "command": str(check.get("command") or check.get("name") or "")[-120:],
+                "exit_code": check.get("exit_code"),
+                "reason": check.get("inconclusive_reason"),
+                "detail": str(check.get("detail") or "").strip()[-DETAIL_CLIP:],
+            }
+            for check in objective.get("checks") or []
+            if check.get("conclusive") is False
         ]
         values: dict[str, Any] = {}
         for score in scores.list_scores(run.run_id):
@@ -221,6 +234,7 @@ def build_evidence(session: Session, experiment_id: str) -> dict[str, Any]:
                 "executor_model": config.executor_model,
                 "objective": objective.get("summary"),
                 "failed_checks": failed_checks,
+                "inconclusive_checks": inconclusive_checks,
                 "judge": {
                     "score": subjective.get("functional_score"),
                     "source": subjective.get("score_source"),

@@ -401,7 +401,9 @@ def test_the_targets_commands_replace_the_cases(session):
     spec = build_validation_spec(case, "run-1", ["make test"])
 
     rendered = [command[-1] for command in spec["commands"]]
-    assert rendered == ["make test"]
+    # Prefixed with the `cd`: a repository's gate is written relative to its own
+    # root, and the lab's root is not it (ADR-0062).
+    assert rendered == ["cd workspace/run-1 && make test"]
     assert not any("pytest" in command for command in rendered)
 
 

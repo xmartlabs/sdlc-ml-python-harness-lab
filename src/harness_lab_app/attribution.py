@@ -163,11 +163,31 @@ def parse_claude_events(lines: list[str]) -> dict[str, Any]:
     skills_consulted: set[str] = set()
     agent_modes: dict[str, int] = {}
 
+    events: list[dict[str, Any]] = []
     for raw in lines:
         try:
             event = json.loads(raw)
         except json.JSONDecodeError:
             continue
+        if isinstance(event, dict):
+            events.append(event)
+    # A `Skill` call the CLI rejected ("Unknown skill") consulted nothing: the
+    # agent asked and was handed an error. Results are `tool_result` blocks on
+    # `user` events, keyed back to the call, so they are collected first.
+    errored: set[str] = set()
+    for event in events:
+        if event.get("type") != "user":
+            continue
+        for block in (event.get("message") or {}).get("content", []):
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_result"
+                and block.get("is_error")
+                and block.get("tool_use_id")
+            ):
+                errored.add(str(block["tool_use_id"]))
+
+    for event in events:
         if event.get("type") != "assistant":
             continue
         for block in (event.get("message") or {}).get("content", []):
@@ -175,10 +195,11 @@ def parse_claude_events(lines: list[str]) -> dict[str, Any]:
                 continue
             name = block.get("name", "")
             inp = block.get("input") or {}
+            failed = str(block.get("id") or "") in errored
             if name == "Read":
                 tools["read"] += 1
                 path = _normalize_event_path(str(inp.get("file_path", "")))
-                if path:
+                if path and not failed:
                     files_read.add(path)
                     skill = _SKILL_PATH_RE.search(path)
                     if skill:
@@ -195,7 +216,7 @@ def parse_claude_events(lines: list[str]) -> dict[str, Any]:
                     bash_commands[command] = bash_commands.get(command, 0) + 1
             elif name == "Skill":
                 skill_name = str(inp.get("skill", "")).strip()
-                if skill_name:
+                if skill_name and not failed:
                     skills_consulted.add(skill_name)
             elif name in {"Task", "Agent"}:
                 mode = str(inp.get("subagent_type", "agent")).strip() or "agent"
