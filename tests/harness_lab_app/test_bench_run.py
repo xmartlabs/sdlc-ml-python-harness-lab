@@ -22,6 +22,74 @@ def _args(**over) -> Namespace:
     return Namespace(**base)
 
 
+def test_run_models_lists_each_model_once_in_a_stable_order():
+    args = Namespace(executor_model="gateway/a", planner_model="gateway/b")
+    assert bench_run.run_models(args) == ("gateway/a", "gateway/b")
+    same = Namespace(executor_model="lmstudio/x", planner_model="lmstudio/x")
+    assert bench_run.run_models(same) == ("lmstudio/x",)
+    assert (
+        bench_run.run_models(Namespace(executor_model=None, planner_model=None)) == ()
+    )
+
+
+def test_detected_windows_are_off_under_the_probe_kill_switch(monkeypatch):
+    """The autouse fixture sets HARNESS_LAB_DISABLE_GATEWAY_PROBE; no host is asked."""
+    from harness_lab_app import context_window
+
+    monkeypatch.setattr(
+        context_window,
+        "detect_windows",
+        lambda *_a, **_k: pytest.fail("a host was probed under the kill switch"),
+    )
+    bench_run.detected_context_windows.cache_clear()
+    assert bench_run.detected_context_windows(("gateway/lmstudio-35b",)) == ()
+
+
+def test_detected_windows_reach_the_overlay_as_limits(tmp_path, monkeypatch):
+    from harness_lab_app import context_window
+    from harness_lab_app.context_window import ContextWindow
+
+    (tmp_path / "opencode.json").write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "gateway": {
+                        "npm": "x",
+                        "models": {"lmstudio-35b": {"name": "35B"}},
+                    }
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(bench_run, "REPO_ROOT", tmp_path)
+    monkeypatch.delenv("HARNESS_LAB_DISABLE_GATEWAY_PROBE", raising=False)
+    window = ContextWindow(
+        "gateway/lmstudio-35b",
+        "lmstudio",
+        "http://gpu:1234",
+        "q/35b",
+        41216,
+        37120,
+        4096,
+    )
+    monkeypatch.setattr(context_window, "detect_windows", lambda *_a, **_k: [window])
+    bench_run.detected_context_windows.cache_clear()
+    bench_run.apply_gateway_overlay.cache_clear()
+
+    digest = bench_run.apply_gateway_overlay((), ("gateway/lmstudio-35b",))
+
+    assert digest is not None
+    effective = json.loads(
+        (tmp_path / "data" / "app" / "opencode-effective.json").read_text()
+    )
+    assert effective["provider"]["gateway"]["models"]["lmstudio-35b"]["limit"] == {
+        "context": 37120,
+        "output": 4096,
+    }
+    bench_run.detected_context_windows.cache_clear()
+    bench_run.apply_gateway_overlay.cache_clear()
+
+
 def test_resolve_returns_registered_run(tmp_path):
     runs_path = tmp_path / "runs.yaml"
     runs_path.write_text(

@@ -164,6 +164,11 @@ test-unit:
 
 # Launch the opencode TUI with .env loaded so opencode.json {env:...} resolves.
 # Installs opencode-conductor-plugin into the global opencode config dir on first run.
+# Before launching, scripts/opencode_context.py reads the context window each
+# self-hosted model in .env is serving (LM Studio / Ollama) and exports an
+# OPENCODE_CONFIG_CONTENT overlay declaring it, so opencode compacts inside the
+# served window instead of overflowing it (ADR-0063). HARNESS_LAB_CONTEXT_AUTODETECT=0
+# skips the probe.
 opencode:
 	@command -v opencode >/dev/null 2>&1 || { echo "❌ opencode not found. Install: brew install anomalyco/tap/opencode"; exit 1; }
 	@[ -f .env ] || echo "⚠️  no .env found — copy .env.example to .env and edit (or use 'opencode auth login' / the /models picker)."
@@ -171,7 +176,8 @@ opencode:
 	  echo "🔌 Installing opencode-conductor-plugin..."; \
 	  npm install --prefix "$$HOME/.config/opencode" opencode-conductor-plugin; \
 	fi
-	@set -a; [ -f .env ] && . ./.env; set +a; opencode
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	eval "$$(uv run python scripts/opencode_context.py)"; opencode
 
 # Start a benchmark run: register, create workspace, inject prompt, launch opencode.
 # Usage: make bench-start RUN=tetris-v1-A-002 [KEY=sk-xxx]

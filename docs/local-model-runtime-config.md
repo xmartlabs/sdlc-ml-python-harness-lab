@@ -135,6 +135,48 @@ The reliable fix on the LM Studio side is to load the model explicitly with the 
 want (or raise its default in the model's config) before launching a run, rather than
 letting JIT pick it.
 
+## The served window is declared to opencode automatically (ADR-0063)
+
+opencode compacts a session when its token count reaches
+`limit.context - min(limit.output, 32000)`. A model that declares no `limit` has
+`limit.context = 0`, and that **disables compaction entirely**. No `lmstudio-*` card in
+`opencode.json` declares one, so a session simply grew past the served window; LM Studio
+then truncated the prompt from the middle on every turn, the cached prefix never matched
+again, and every call paid the full prefill (~60s for 35k tokens on the lab's box, ~580
+tokens/s). That is the "each iteration waits for minutes" symptom.
+
+The window is whatever you loaded in LM Studio — the run form already prints it ("loaded,
+41k ctx") — so the lab reads it at launch instead of asking you to copy it:
+
+- `make opencode` runs `scripts/opencode_context.py`, which resolves the models in `.env`
+  (`OPENCODE_MODEL`, `OPENCODE_MODEL_PLAN`, `OPENCODE_SMALL_MODEL`) to their serving host,
+  reads the loaded window, and exports an `OPENCODE_CONFIG_CONTENT` overlay declaring
+  `limit.context` (window minus 10 % headroom, floor 4096) and `limit.output` (the gateway
+  card's `max_tokens`, else 4096). Each detected model is printed as one line.
+- `bench_run.py` does the same for a lab run, records it in `metadata.json` under
+  `context_windows`, and folds it into the `condition_hash`: a run compacted at 41k and
+  one compacted at 120k are different arms.
+- A `gateway/` alias is followed through LiteLLM's `/model/info` to the host its card
+  names; a card spelling `localhost` falls back to `LMSTUDIO_BASE_URL` / `OLLAMA_BASE_URL`.
+- Nothing is declared for a cloud model, an unloaded model (JIT would pick its own
+  default — the trap above), a dead host, or a window under ~8k. Those cases are exactly
+  what the preflight already reports.
+
+`HARNESS_LAB_CONTEXT_AUTODETECT=0` turns it off; `HARNESS_LAB_DISABLE_GATEWAY_PROBE=1`
+turns it off too. `HARNESS_LAB_DIRECT_OUTPUT_TOKENS` changes the output cap used for the
+direct lanes.
+
+**What a bigger window buys, and what it does not.** Raising LM Studio to 120k means
+fewer compactions per run, and each compaction loses code state, so long cases benefit.
+It does not make anything faster: prefill cost is proportional to the prompt, so the
+first cold call and every compaction take ~3× longer at 120k than at 41k. The 60s
+"hola" is the ~14k-token harness prompt being prefilled cold (plus the model reloading if
+LM Studio unloaded it on idle); shrink the instruction surface (lever 4), keep the model
+loaded, and tune LM Studio's engine settings (Flash Attention, KV cache in GPU, batch
+2048, all layers on GPU) for that one. Through the public gateway, Cloudflare closes an
+origin connection after 100s, so a cold prefill above ~55k tokens fails there; windows
+beyond that are for the direct lanes.
+
 ## Prompt processing time and the run watchdog
 
 A local model says **nothing at all** while it processes the prompt. That silence is not

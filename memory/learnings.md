@@ -3,6 +3,35 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## Rebuilding an exception with `type(exc)(message)` breaks any subclass with its own signature (2026-09-23)
+
+The auditor's retry ended with `raise type(last)(f"{last} (after N attempts)")`.
+`GatewayHTTPError.__init__` takes `(code, body)`, so three 5xx in a row produced
+`TypeError: GatewayHTTPError.__init__() missing 1 required positional argument: 'body'`
+— and the comparison page stored *that* as its failure, hiding the gateway's real answer.
+The tests only covered the 4xx (no retry) and the 5xx-then-success paths, never
+"5xx exhausts the retries". Fixed with a helper that rebuilds a `GatewayHTTPError` from
+its own fields and falls back to the base `TransportError` for any other odd signature.
+Rule: when re-raising "the same kind of error with a longer message", never assume a
+one-string constructor; either mutate `.args`, wrap, or rebuild from the fields.
+
+## A model with no declared limit never compacts, and the server pays for it every turn (2026-09-22)
+
+opencode's overflow check is `count >= limit.context - min(limit.output, 32000)`, and a
+custom-provider model with no `limit` gets `limit.context = 0`, which short-circuits the
+check to false. No `lmstudio-*` card in `opencode.json` declared one, so a session against
+the 41k LM Studio box simply grew past the window; LM Studio truncated the prompt from the
+middle on every turn, the single cached prefix never matched again, and each call paid the
+full prefill. Measured with `max_tokens=1` on a 35k-token prompt: 60s cold, 0.4s identical,
+1.1s with one turn appended, 60s again after any request with a different prefix (a title
+call, a second session, the LM Studio chat window). Prefill is ~580 tok/s on that box, so
+the harness's ~14k-token startup prompt alone is ~25s cold — that is the slow "hola", and
+no context setting changes it. The window is now read off the host at launch
+(ADR-0063); the lever for the cold first call is prompt size and LM Studio's engine
+settings, not the window. Also: `OPENCODE_SMALL_MODEL` was `openai/qwen/qwen3.5-9b`, a
+model the OpenAI provider does not have — a small-model tier that points at the executor's
+own host evicts its prefix on every title.
+
 ## The gate that stops a repository runs before anything can argue with it (2026-09-09)
 
 Shell repositories were ending the audit wizard with "the runner ships only Python and

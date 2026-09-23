@@ -495,7 +495,31 @@ def restore_full_skill_views() -> None:
 
 
 @functools.cache
-def apply_gateway_overlay(direct_models: tuple[str, ...] = ()) -> str | None:
+def detected_context_windows(models: tuple[str, ...] = ()) -> tuple:
+    """The served context window of every self-hosted model this run uses.
+
+    Read off the serving host itself (LM Studio ``/api/v0/models``, Ollama
+    ``/api/ps``) the way the run form does, so the limit opencode is told is
+    the window the operator actually loaded — 41k today, 120k tomorrow — with
+    no variable to keep in sync. Cached per model set for the same reason as
+    :func:`apply_gateway_overlay`; empty when detection is off or nothing
+    answered, which leaves every model exactly as undeclared as before.
+    """
+    from harness_lab_app.context_window import autodetect_enabled, detect_windows
+
+    if not models or not autodetect_enabled():
+        return ()
+    try:
+        return tuple(detect_windows(models))
+    except Exception as exc:
+        print(f"  ⚠️  context window detection skipped: {exc!r}")
+        return ()
+
+
+@functools.cache
+def apply_gateway_overlay(
+    direct_models: tuple[str, ...] = (), run_models: tuple[str, ...] = ()
+) -> str | None:
     """Export the opencode routing overlay and return its content hash.
 
     A model enabled from the web lives in ``data/app/gateway-models.json``, not
@@ -516,11 +540,24 @@ def apply_gateway_overlay(direct_models: tuple[str, ...] = ()) -> str | None:
     when nothing is added to the tracked map, which is what keeps every
     historical ``condition_hash`` byte-identical.
     """
+    from harness_lab_app.context_window import describe, limits_by_model
     from harness_lab_app.opencode_overlay import build_overlay
 
-    env, digest = build_overlay(REPO_ROOT, direct_models)
+    windows = detected_context_windows(run_models)
+    for window in windows:
+        print(f"  ✓ {describe(window)}")
+    env, digest = build_overlay(REPO_ROOT, direct_models, limits_by_model(windows))
     os.environ.update(env)
     return digest
+
+
+def run_models(args: argparse.Namespace) -> tuple[str, ...]:
+    """Every model id this run addresses, in a stable order."""
+    candidates = (
+        getattr(args, "executor_model", None),
+        getattr(args, "planner_model", None),
+    )
+    return tuple(dict.fromkeys(str(m) for m in candidates if m))
 
 
 def direct_models(args: argparse.Namespace) -> tuple[str, ...]:
@@ -1051,6 +1088,11 @@ def write_metadata(
         # Friendly adopted-governance version at run time (leaderboard axis).
         "template_ref": read_template_ref(REPO_ROOT),
         "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+        # The served window each self-hosted model had at launch and the limit
+        # opencode was told (ADR-0063). Empty when nothing was detected.
+        "context_windows": [
+            w.as_dict() for w in detected_context_windows(run_models(args))
+        ],
     }
     # Add the hashable trial condition manifest (condition_hash, harness
     # fingerprint, model condition, prompt/case hashes). Best-effort: if
@@ -1073,7 +1115,9 @@ def write_metadata(
             list(getattr(args, "extra_skill", []) or [])
         ),
         skills_extra_hash_algo=STAGED_SKILL_HASH_ALGO,
-        gateway_overlay_hash=apply_gateway_overlay(direct_models(args)),
+        gateway_overlay_hash=apply_gateway_overlay(
+            direct_models(args), run_models(args)
+        ),
         skills_invoke=tuple(meta["skills_invoke"]),
     )
     path = out_dir / "metadata.json"
@@ -2360,7 +2404,7 @@ def main(argv: list[str] | None = None) -> int:
     # Export the routing overlay before anything builds a harness command, so a
     # model enabled from the web — or addressed directly at LM Studio —
     # resolves in both the docker and host lanes.
-    apply_gateway_overlay(direct_models(args))
+    apply_gateway_overlay(direct_models(args), run_models(args))
 
     out_dir = DATA_DIR / args.run
     case_spec = _load_case_spec(out_dir)
@@ -2471,7 +2515,7 @@ def main(argv: list[str] | None = None) -> int:
     args.planner_model = planner_model
     # A resumed run learns its models from stored metadata, after the overlay
     # was first written; re-apply so a direct LM Studio executor is routable.
-    apply_gateway_overlay(direct_models(args))
+    apply_gateway_overlay(direct_models(args), run_models(args))
     # opencode resolves its project config from the cwd, so a run launched from
     # the workspace would lose the lab's provider block — its gateway routing —
     # along with the governance it is meant to lose. Routing is not part of the

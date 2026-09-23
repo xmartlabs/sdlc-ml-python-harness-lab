@@ -174,6 +174,7 @@ def build_config(
     tracked_gateway: dict[str, Any],
     delta: dict[str, dict],
     direct_models: Iterable[str] = (),
+    limits: dict[str, dict[str, int]] | None = None,
 ) -> dict:
     """The full opencode config document the overlay contributes.
 
@@ -188,6 +189,13 @@ def build_config(
     models a run actually selected: a host may serve thirty and a config listing
     all of them would change on every load or eject, churning the condition hash
     for runs that are otherwise identical.
+
+    ``limits`` maps a run-addressable id (``gateway/<alias>``, ``lmstudio/<id>``,
+    ``ollama/<id>``) to the ``limit`` block opencode should carry for it — the
+    window the serving host reported, see :mod:`harness_lab_app.context_window`.
+    Only models the document already declares receive one: a limit on an
+    unknown alias would make it routable by accident and hide the preflight
+    message that says it is not.
     """
     gateway = {key: value for key, value in tracked_gateway.items() if key != "models"}
     merged = dict(tracked_gateway.get("models") or {})
@@ -199,38 +207,53 @@ def build_config(
         providers["lmstudio"] = build_lmstudio_provider(grouped["lmstudio"])
     if grouped["ollama"]:
         providers["ollama"] = build_ollama_provider(grouped["ollama"])
+    for model, limit in (limits or {}).items():
+        provider_id, _, model_id = model.partition("/")
+        models = (providers.get(provider_id) or {}).get("models")
+        if not isinstance(models, dict) or model_id not in models:
+            continue
+        models[model_id] = {**models[model_id], "limit": dict(limit)}
     return {"provider": providers}
 
 
 def build_overlay(
-    repo_root: Path, direct_models: Iterable[str] = ()
+    repo_root: Path,
+    direct_models: Iterable[str] = (),
+    limits: dict[str, dict[str, int]] | None = None,
 ) -> tuple[dict[str, str], str | None]:
     """Materialize the overlay and return ``(env_vars, overlay_hash)``.
 
-    Returns ``({}, None)`` when neither the catalog nor a direct model adds
-    anything, so a lab that never touches the Models page runs byte-identically
-    to before.
+    Returns ``({}, None)`` when neither the catalog, a direct model nor a
+    detected context window adds anything, so a lab that never touches the
+    Models page and serves nothing locally runs byte-identically to before.
     """
     tracked_gateway = read_tracked_gateway(repo_root)
     tracked_models = tracked_gateway.get("models") or {}
     delta = compute_delta(tracked_models, read_catalog_models(repo_root))
     direct = sorted({mid for mid in direct_models if mid})
-    if not delta and not direct:
+    limits = {model: dict(limit) for model, limit in (limits or {}).items() if limit}
+    if not delta and not direct and not limits:
         return {}, None
 
-    config = build_config(tracked_gateway, delta, direct)
+    config = build_config(tracked_gateway, delta, direct, limits)
     content = json.dumps(config, sort_keys=True, separators=(",", ":"))
 
     path = repo_root / EFFECTIVE_CONFIG_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
+    # Direct routing is part of the experimental condition: the same case run
+    # through the gateway and run against the host are not one arm. The
+    # prefixed id is the key, so the two lanes never collide in the hash. A
+    # served window is a condition too — a session compacted at 41k and one
+    # compacted at 120k did not see the same context — so the limit joins the
+    # identity under the same prefixed id.
+    identity: dict[str, dict] = {**delta, **{mid: {} for mid in direct}}
+    for model, limit in limits.items():
+        identity[model] = {**identity.get(model, {}), "limit": limit}
     return (
         {ENV_CONFIG_PATH: str(path), ENV_CONFIG_CONTENT: content},
-        # Direct routing is part of the experimental condition: the same case
-        # run through the gateway and run against the host are not one arm. The
-        # prefixed id is the key, so the two lanes never collide in the hash.
-        overlay_hash({**delta, **{mid: {} for mid in direct}}),
+        overlay_hash(identity),
     )
 
 

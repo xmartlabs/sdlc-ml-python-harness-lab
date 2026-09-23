@@ -124,7 +124,26 @@ def call_with_retry(
             index = min(attempt - 1, len(backoff) - 1) if backoff else -1
             sleep(backoff[index] if index >= 0 else 0.0)
     assert last is not None
-    raise type(last)(f"{last} (after {attempts} attempts)") from last
+    raise _with_attempt_count(last, attempts) from last
+
+
+def _with_attempt_count(error: Exception, attempts: int) -> Exception:
+    """The same error, its message saying how many times the gateway was asked.
+
+    ``GatewayHTTPError`` takes ``(code, body)``, not a message: rebuilding it as
+    ``type(error)(message)`` raised ``TypeError: missing 'body'`` — and that
+    TypeError, not the gateway's answer, is what a comparison stored as its
+    reason. The status stays on the rebuilt error so a caller can still read it.
+    """
+    from harness_lab_app.llm_transport import GatewayHTTPError, TransportError
+
+    suffix = f" (after {attempts} attempts)"
+    if isinstance(error, GatewayHTTPError):
+        return GatewayHTTPError(error.code, f"{error.body}{suffix}")
+    try:
+        return type(error)(f"{error}{suffix}")
+    except TypeError:  # a subclass with its own signature; keep the family
+        return TransportError(f"{error}{suffix}")
 
 
 def runs_finished(session: Session, experiment_id: str) -> tuple[bool, int, int]:
