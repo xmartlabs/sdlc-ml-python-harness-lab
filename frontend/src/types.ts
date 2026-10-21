@@ -745,14 +745,53 @@ export type AggregateRecord = {
   missing: number;
 };
 
+/** pass@k and pass^k over one arm's cases, every arm at one shared k (ADR-0064). */
+export type PassAtK = {
+  k: number;
+  cases: number;
+  /** At least one of k tries passes, averaged over cases. */
+  pass_at_k: number;
+  /** All k tries pass, averaged over cases — the reliability number. */
+  pass_hat_k: number;
+};
+
 export type ConditionSummary = {
   label: string;
   role: ConditionRole;
   runs: number;
   scored_runs: number;
   success_rate: number | null;
+  /** 95% Wilson interval around `success_rate`; null with nothing scored (ADR-0064). */
+  success_rate_ci_low?: number | null;
+  success_rate_ci_high?: number | null;
+  pass_k?: PassAtK | null;
   warnings: string[];
   metrics: Record<string, AggregateRecord>;
+};
+
+/** The success delta, in points, with its case-clustered 95% interval (ADR-0064). */
+export type SuccessDelta = {
+  control: number | null;
+  treatment: number | null;
+  points: number | null;
+  delta_ci_low?: number | null;
+  delta_ci_high?: number | null;
+  /** Descriptive: the runs are also compatible with no effect. Never a test. */
+  interval_crosses_zero?: boolean | null;
+  /** Cases both arms scored — what the interval was resampled over. */
+  paired_cases?: number;
+};
+
+/** Advice for the next design, never a verdict on this one (ADR-0064). */
+export type RepetitionPlan = {
+  difference_points: number;
+  alpha: number;
+  power: number;
+  /** "assumed" plans from a 50% rate; "observed" from the noisiest arm. */
+  basis: "assumed" | "observed";
+  base_rate: number;
+  runs_per_arm: number;
+  repetitions_per_case: number;
 };
 
 export type DeltaRecord = {
@@ -879,9 +918,12 @@ export type ExperimentSummary = {
     control: string;
     treatment: string;
     deltas: DeltaRecord[];
-    success: { control: number | null; treatment: number | null; points: number | null };
+    success: SuccessDelta;
     case_matrix: CaseMatrixRow[];
   }[];
+  /** How many repetitions a 20-point move would need; null without a comparison. */
+  repetition_plan?: RepetitionPlan | null;
+  repetitions_needed_for_20pp?: number | null;
   /**
    * Per-arm, per-case counts: {arm label: {case_id: {runs, scored_runs,
    * successes}}}. Raw grid with the repetitions kept — not a comparison:

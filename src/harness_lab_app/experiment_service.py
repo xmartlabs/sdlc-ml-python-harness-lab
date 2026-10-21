@@ -434,6 +434,8 @@ class ExperimentService:
             compare,
             objective_signature,
             paired_by_case,
+            pass_k_by_arm,
+            plan_repetitions,
             success_delta,
             summarize_condition,
             verdict,
@@ -631,8 +633,13 @@ class ExperimentService:
                                 directions,
                             )
                         ],
+                        # Every repetition per case, so the delta's interval
+                        # is resampled by case rather than by run (ADR-0064).
                         "success": success_delta(
-                            summaries[control.label], summaries[condition.label]
+                            summaries[control.label],
+                            summaries[condition.label],
+                            control_cases=outcomes[control.label],
+                            treatment_cases=outcomes[condition.label],
                         ),
                         "case_matrix": paired_by_case(
                             verdicts[control.label], verdicts[condition.label]
@@ -674,6 +681,16 @@ class ExperimentService:
             skill_usage=skill_usage,
             validity=validity,
         )
+        # Reliability across repetitions, every arm at one shared k, and the
+        # repetition count a 20-point move would need. Both are ADR-0064: the
+        # first says how often a case passes *every* time, the second is advice
+        # for the next design — offered only where arms are compared at all.
+        pass_k = pass_k_by_arm(outcomes)
+        plan = (
+            plan_repetitions(list(summaries.values()), cases=len(experiment.case_ids))
+            if control is not None
+            else None
+        )
 
         return {
             "experiment_id": experiment_id,
@@ -696,6 +713,14 @@ class ExperimentService:
                     "runs": summary.runs,
                     "scored_runs": summary.scored_runs,
                     "success_rate": summary.success_rate,
+                    # The rate's 95% Wilson interval; None with nothing scored.
+                    "success_rate_ci_low": (
+                        summary.success_rate_ci[0] if summary.success_rate_ci else None
+                    ),
+                    "success_rate_ci_high": (
+                        summary.success_rate_ci[1] if summary.success_rate_ci else None
+                    ),
+                    "pass_k": pass_k.get(summary.label),
                     "warnings": summary.warnings,
                     "metrics": {
                         name: aggregate.__dict__
@@ -705,6 +730,12 @@ class ExperimentService:
                 for summary in summaries.values()
             ],
             "comparisons": comparisons,
+            "repetition_plan": plan,
+            # The one planning figure, flat, for a reader that wants only it:
+            # repetitions per case per arm to detect a 20-point difference.
+            "repetitions_needed_for_20pp": (
+                plan["repetitions_per_case"] if plan else None
+            ),
             # Per-arm, per-case counts: {label: {case_id: {runs, scored_runs,
             # successes}}}. Not a comparison — `comparisons[].case_matrix` pairs
             # a control against a treatment, which a mode without a control

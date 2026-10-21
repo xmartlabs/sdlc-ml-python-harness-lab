@@ -31,8 +31,10 @@ import type {
   ExperimentSummary,
   LaunchConfigSummary,
   ModelOption,
+  RepetitionPlan,
   RunConfigPayload,
   RunValidationResult,
+  SuccessDelta,
   ValidityBlock,
   VerdictBlock,
   VerdictHighlight
@@ -66,6 +68,38 @@ function formatNumber(value: number | null | undefined, digits = 3): string {
 
 function formatPercent(value: number | null): string {
   return value === null ? "—" : `${(value * 100).toFixed(0)}%`;
+}
+
+/**
+ * "[23–88]" — a rate's 95% interval in percent, or nothing when there is none
+ * (ADR-0064). Shown beside the rate, never instead of it.
+ */
+function rateInterval(
+  low: number | null | undefined,
+  high: number | null | undefined
+): string | null {
+  if (low === null || low === undefined || high === null || high === undefined) {
+    return null;
+  }
+  return `[${(low * 100).toFixed(0)}–${(high * 100).toFixed(0)}]`;
+}
+
+/** "+12", "-8" and "0" for a bound in points — never "-0". */
+function signedPoints(value: number): string {
+  const rounded = Math.round(value);
+  if (rounded === 0) {
+    return "0";
+  }
+  return rounded > 0 ? `+${rounded}` : `${rounded}`;
+}
+
+/** "[-12, +52] pp" for a success delta, or nothing for an older backend. */
+function deltaInterval(success: SuccessDelta): string | null {
+  const { delta_ci_low: low, delta_ci_high: high } = success;
+  if (low === null || low === undefined || high === null || high === undefined) {
+    return null;
+  }
+  return `[${signedPoints(low)}, ${signedPoints(high)}] pp`;
 }
 
 /** A mean is never shown without its spread. */
@@ -374,6 +408,31 @@ function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
   );
 }
 
+/**
+ * How many repetitions a 20-point move would need — advice for the next design,
+ * never a verdict on this one (ADR-0064). Planned from a coin flip until every
+ * arm has enough scored runs to plan from its own rate.
+ */
+function RepetitionHint({ plan, current }: { plan: RepetitionPlan; current: number }) {
+  const basis =
+    plan.basis === "observed"
+      ? `planned from the noisiest arm's observed rate (${formatPercent(plan.base_rate)})`
+      : "planned from a 50% rate, the worst case, until every arm has 10 scored runs";
+  return (
+    <p className="callout">
+      <span>
+        <strong>Planning hint:</strong> to detect a {plan.difference_points}-point
+        difference in success (two-sided 5%, 80% power), plan about{" "}
+        <strong>{plan.repetitions_per_case}</strong> repetition
+        {plan.repetitions_per_case === 1 ? "" : "s"} per case per arm (
+        {plan.runs_per_arm} runs per arm); this design has {current}. It is{" "}
+        {basis}, and it ignores what pairing by case saves, so it errs high. Advice
+        for the next design, not a judgement on this one.
+      </span>
+    </p>
+  );
+}
+
 function ConditionTable({ conditions }: { conditions: ConditionSummary[] }) {
   const metricNames = [
     ...new Set(conditions.flatMap((condition) => Object.keys(condition.metrics)))
@@ -396,17 +455,60 @@ function ConditionTable({ conditions }: { conditions: ConditionSummary[] }) {
         <tr>
           <td>
             <strong>Success rate</strong>
-            <div className="muted small">fact — validation verdict</div>
+            <div className="muted small">fact — validation verdict, 95% interval</div>
           </td>
-          {conditions.map((condition) => (
-            <td key={condition.label}>
-              {formatPercent(condition.success_rate)}
+          {conditions.map((condition) => {
+            const interval = rateInterval(
+              condition.success_rate_ci_low,
+              condition.success_rate_ci_high
+            );
+            return (
+              <td key={condition.label}>
+                {formatPercent(condition.success_rate)}
+                {interval ? (
+                  <span
+                    className="muted small"
+                    title="95% Wilson interval: the range of pass rates these runs are compatible with. Descriptive, not a test."
+                  >
+                    {" "}
+                    {interval}
+                  </span>
+                ) : null}
+                <div className="muted small">
+                  {condition.scored_runs}/{condition.runs} scored
+                </div>
+              </td>
+            );
+          })}
+        </tr>
+        {conditions.some((condition) => condition.pass_k) ? (
+          <tr>
+            <td>
+              <strong>pass^k</strong>
               <div className="muted small">
-                {condition.scored_runs}/{condition.runs} scored
+                every one of k tries passes, averaged over cases
               </div>
             </td>
-          ))}
-        </tr>
+            {conditions.map((condition) => (
+              <td key={condition.label}>
+                {condition.pass_k ? (
+                  <>
+                    {formatPercent(condition.pass_k.pass_hat_k)}
+                    <div
+                      className="muted small"
+                      title="pass@k: at least one of k tries passes. The gap to pass^k is how much retrying hides."
+                    >
+                      k={condition.pass_k.k} · pass@k{" "}
+                      {formatPercent(condition.pass_k.pass_at_k)}
+                    </div>
+                  </>
+                ) : (
+                  "—"
+                )}
+              </td>
+            ))}
+          </tr>
+        ) : null}
         {metricNames.map((name) => (
           <tr key={name}>
             <td className="mono small">{name}</td>
@@ -1081,6 +1183,12 @@ function ExperimentDetail({
       <div className="card">
         <h3>Conditions</h3>
         <ConditionTable conditions={summary.conditions} />
+        {summary.repetition_plan ? (
+          <RepetitionHint
+            plan={summary.repetition_plan}
+            current={summary.repetitions}
+          />
+        ) : null}
       </div>
 
       <LaunchPanel experimentId={summary.experiment_id} onLaunched={onLaunched} />
@@ -1101,10 +1209,24 @@ function ExperimentDetail({
               <>
                 {" "}
                 (<strong>{comparison.success.points > 0 ? "+" : ""}
-                {comparison.success.points.toFixed(0)} pp</strong>)
+                {comparison.success.points.toFixed(0)} pp</strong>
+                {deltaInterval(comparison.success) ? (
+                  <span title="95% interval for the delta, resampled by case and then by repetition. Descriptive, not a test.">
+                    {", 95% interval "}
+                    {deltaInterval(comparison.success)}
+                  </span>
+                ) : null}
+                )
               </>
             )}
           </p>
+          {comparison.success.interval_crosses_zero ? (
+            <p className="muted small">
+              The interval includes zero: these runs are also compatible with no
+              effect on success. More repetitions narrow it; the interval describes
+              the runs, it does not test them.
+            </p>
+          ) : null}
 
           <table className="data-table">
             <thead>

@@ -1726,6 +1726,141 @@ def test_the_case_matrix_reads_every_repetition_not_the_last(session):
     assert summary["verdict"]["movements"]["fixed"] == 0
 
 
+def _reps_design(service, experiment_id, repetitions=3):
+    """One case, a control and a treatment: the smallest design with a delta."""
+    from sqlmodel import select
+
+    from harness_lab_app.models import Case, CaseType
+
+    session = service.session
+    if not session.exec(select(Case).where(Case.case_id == "tetris-v1")).first():
+        session.add(
+            Case(
+                case_id="tetris-v1",
+                name="Tetris",
+                type=CaseType.single_prompt,
+                prompt_variants={"sdlc": "Build Tetris."},
+            )
+        )
+        session.commit()
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id=experiment_id,
+            name="Uncertainty",
+            question="Does the skill help?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=["tetris-v1"],
+            repetitions=repetitions,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="control",
+                    role=ConditionRole.control,
+                    overrides={"skills_disabled": ["bootstrap_project"]},
+                ),
+                ExperimentConditionCreate(
+                    label="treatment",
+                    role=ConditionRole.treatment,
+                    overrides={"skills_disabled": []},
+                ),
+            ],
+        )
+    )
+
+
+def test_every_arm_reports_the_interval_around_its_success_rate(session):
+    """A pass rate over three runs is a range, and the summary says which range.
+
+    ADR-0064: the interval existed in `statistics.py` for months and reached
+    neither the API nor the page, so "validation" was printed over numbers
+    whose 95% interval spanned most of the scale.
+    """
+    from harness_lab_app.statistics import wilson_interval
+
+    service = ExperimentService(session)
+    _reps_design(service, "uncertainty")
+    runs = service.launch("uncertainty", _base_config())
+    treatment_runs = [run for run in runs if run.condition_label == "treatment"]
+    for run in runs:
+        if run.condition_label == "control":
+            _score(session, run, passed=False)
+    for run, passed in zip(treatment_runs, (True, True, False), strict=True):
+        _score(session, run, passed=passed)
+
+    summary = service.summarize("uncertainty")
+
+    arms = {condition["label"]: condition for condition in summary["conditions"]}
+    low, high = wilson_interval(2, 3)
+    assert arms["treatment"]["success_rate_ci_low"] == pytest.approx(low)
+    assert arms["treatment"]["success_rate_ci_high"] == pytest.approx(high)
+    # 0 of 3 is not "certainly zero": the upper bound stays above half.
+    assert arms["control"]["success_rate_ci_low"] == 0.0
+    assert arms["control"]["success_rate_ci_high"] > 0.5
+    # pass^k asks whether every try passes; two of three is not that.
+    assert arms["treatment"]["pass_k"]["k"] == 3
+    assert arms["treatment"]["pass_k"]["pass_at_k"] == pytest.approx(1.0)
+    assert arms["treatment"]["pass_k"]["pass_hat_k"] == pytest.approx(0.0)
+
+
+def test_the_success_delta_arrives_with_a_case_clustered_interval(session):
+    service = ExperimentService(session)
+    _reps_design(service, "delta-interval")
+    runs = service.launch("delta-interval", _base_config())
+    for run in runs:
+        _score(session, run, passed=run.condition_label == "treatment")
+
+    summary = service.summarize("delta-interval")
+
+    success = summary["comparisons"][0]["success"]
+    assert success["points"] == pytest.approx(100.0)
+    assert success["paired_cases"] == 1
+    assert success["delta_ci_low"] < success["points"]
+    assert success["delta_ci_high"] == pytest.approx(100.0)
+    assert success["interval_crosses_zero"] is (success["delta_ci_low"] <= 0.0)
+    # Computed twice, rendered twice, the same both times.
+    assert service.summarize("delta-interval")["comparisons"][0]["success"] == success
+
+
+def test_the_summary_says_how_many_repetitions_a_20_point_difference_needs(session):
+    """Advice for the next design, offered before anything has even run."""
+    service = ExperimentService(session)
+    _reps_design(service, "planning", repetitions=2)
+
+    summary = service.summarize("planning")
+
+    plan = summary["repetition_plan"]
+    assert plan["basis"] == "assumed"
+    assert plan["difference_points"] == 20
+    assert plan["repetitions_per_case"] == plan["runs_per_arm"] == 93
+    assert summary["repetitions_needed_for_20pp"] == 93
+    # Nothing scored yet: no interval, no pass^k — and no invented ones.
+    for condition in summary["conditions"]:
+        assert condition["success_rate_ci_low"] is None
+        assert condition["success_rate_ci_high"] is None
+        assert condition["pass_k"] is None
+
+
+def test_a_mode_with_no_comparison_gets_no_repetition_plan(lab):
+    lab.create_experiment(
+        _payload(
+            experiment_id="nothing-to-compare",
+            mode=ExperimentMode.discovery,
+            repetitions=1,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="as-is",
+                    role=ConditionRole.control,
+                    overrides={"target_repo_id": "payments"},
+                ),
+            ],
+        )
+    )
+
+    summary = lab.summarize("nothing-to-compare")
+
+    assert summary["repetition_plan"] is None
+    assert summary["repetitions_needed_for_20pp"] is None
+
+
 def test_a_ladder_rung_is_not_objected_to_for_being_single_factor():
     """A rung of a family is single-factor by design (ADR-0051)."""
     warnings = validate_design(

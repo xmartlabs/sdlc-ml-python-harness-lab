@@ -1100,6 +1100,43 @@ wording is deliberately cautious. The lab runs no hypothesis test, so it never s
 *significant*; it says exploratory (1 repetition), a judgement (2–4), a validation
 (5 or more), within observed variance, or improvement observed.
 
+#### Uncertainty — how wide the result still is
+
+The repetition ladder says that five runs are more than two. It does not say how wide
+five runs still are, so every experiment now shows its intervals
+([ADR-0064](adr/0064-an-experiment-shows-its-uncertainty.md)):
+
+- **Every arm's success rate carries its 95% interval**, as in `60% [23–88]`. This is
+  a Wilson interval over the scored runs, which stays honest at the edges: 0 of 5
+  reads `0% [0–43]`, not a confident zero.
+- **The success delta carries a 95% interval in points**, as in
+  `+40 pp, 95% interval [-12, +80] pp`, and the verdict's claim repeats it. The lab
+  resamples by case first and then by repetition within each case. Repetitions of one
+  case share its difficulty, so forty runs over four cases are not forty independent
+  facts. The interval is also never narrower than Newcombe's interval from the two
+  arms' Wilson intervals, so a unanimous 0/5 against 5/5 does not read as
+  "+100, certainly". The same runs always draw the same interval, because the
+  resampling seed is fixed.
+- **When the delta's interval includes zero**, the page and the verdict say so: these
+  runs are also compatible with no effect. For a tie, the verdict says that a tie this
+  wide does not show the arms are equivalent. This is a description, not a test, and
+  it never changes the headline.
+- **pass^k** sits under the success rate: the share of cases where *every* one of
+  k tries passed, with k the fewest repetitions any case has in any arm. **pass@k**
+  (at least one of k passed) sits beside it, and the gap between them shows how much
+  retrying hides.
+- **A planning hint** under the conditions table answers one question: how many
+  repetitions per case per arm would detect a 20-point difference (two-sided 5%, 80%
+  power). It plans from a 50% rate until every arm has 10 scored runs, and from the
+  noisiest observed arm after that. It ignores what pairing by case saves, so it errs
+  high. It is advice for the next design and never a judgement on this one. It appears
+  only for designs that compare arms.
+
+The summary API carries the same numbers: `success_rate_ci_low/high` and `pass_k` per
+condition, `delta_ci_low/high`, `interval_crosses_zero` and `paired_cases` on each
+comparison's `success`, and `repetition_plan` plus `repetitions_needed_for_20pp` on
+the summary.
+
 #### Reading — the experiment in plain language
 
 Below the verdict, **Read this experiment** hands the same evidence to an LLM and
