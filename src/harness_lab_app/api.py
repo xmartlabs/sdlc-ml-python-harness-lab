@@ -427,6 +427,19 @@ def create_app() -> FastAPI:
         catalog["direct_errors"] = direct_errors
         return catalog
 
+    @app.get("/api/models/native")
+    def list_native_models():
+        """The models each host CLI addresses natively (ADR-0069), each marked
+        with whether the gateway has a card that serves it. ``on_gateway`` is
+        null when no gateway is configured: unknown, not missing."""
+        from harness_lab_app.gateway_models import fetch_gateway_routing_cached
+        from harness_lab_app.native_models import native_catalog
+
+        base, token = _gateway_endpoint()
+        routing = fetch_gateway_routing_cached(base, token) if base and token else None
+        # An unreachable gateway returns {}; that is "could not ask", not "none".
+        return native_catalog(routing or None)
+
     def _direct_options() -> tuple[list[dict], dict[str, str], list[DirectHostProbe]]:
         """Picker options for the direct sources, why each empty one is empty,
         and what each host answered.

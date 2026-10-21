@@ -19,6 +19,7 @@ import type {
   CheckoutSummary,
   DroppedCommand,
   GateCheckRecord,
+  HarnessCheck,
   LocalSourceListing,
   ModelOption,
   ReadinessReport,
@@ -99,6 +100,13 @@ const COVERAGE_LABEL: Record<"none" | "partial" | "full", string> = {
   partial: "partial",
   full: "full",
 };
+
+/** "1 fail · 5 warn · 2 pass" — the deterministic checks at a glance (ADR-0065). */
+function checkTally(checks: HarnessCheck[]): string {
+  const count = (status: HarnessCheck["status"]) =>
+    checks.filter((check) => check.status === status).length;
+  return `${count("fail")} fail · ${count("warn")} warn · ${count("pass")} pass`;
+}
 
 function slugify(value: string): string {
   return (
@@ -1736,6 +1744,14 @@ export function Audit() {
                         {repositoryAudit.evidence_json.case_plan.runnable} runnable ·{" "}
                         {repositoryAudit.evidence_json.case_plan.static} static ·{" "}
                         {repositoryAudit.evidence_json.case_plan.blocked} blocked
+                      </code>
+                    </div>
+                  ) : null}
+                  {repositoryAudit.evidence_json.harness_checks?.length ? (
+                    <div>
+                      <span className="muted small">Checks</span>
+                      <code>
+                        {checkTally(repositoryAudit.evidence_json.harness_checks)}
                       </code>
                     </div>
                   ) : null}

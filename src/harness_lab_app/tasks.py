@@ -298,6 +298,8 @@ def _write_case_spec(
             "max_steps": case.max_steps,
             "constraints": list(case.constraints),
             "success_criteria": dict(case.success_criteria),
+            # The starter files a bug-fix case begins from (ADR-0068).
+            "starter_dir": meta.get("starter_dir", ""),
         }
     if target:
         # An external target repository (ADR-0029). Carried alongside the case

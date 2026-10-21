@@ -74,6 +74,10 @@ class ExperimentMode(StrEnum):
     cross_repo = "cross_repo"
     discovery = "discovery"
     subject_validation = "subject_validation"
+    # A full grid of harness levels x models (ADR-0066): the one design that can
+    # ask whether a stronger model needs less harness, because it measures the
+    # interaction instead of refusing it as a confound.
+    harness_by_model = "harness_by_model"
 
 
 class ExperimentStatus(StrEnum):

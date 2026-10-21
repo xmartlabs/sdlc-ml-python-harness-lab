@@ -97,6 +97,11 @@ def test_every_case_declares_exactly_the_two_variant_pair(task_path: Path):
 GRADED_CONTRACT = {
     "tetris-v2": ("BENCH_SMOKE", "test_game.py"),
     "cli-textstats": ("words", "lines", "unique"),
+    "todo-web-v1": ("test_todo.py", "TODO_WORKSPACE", "index.html"),
+    "frontend-bugfix-v1": ("test_schedule.py", "SCHEDULE_WORKSPACE", "index.html"),
+    "clinic-slots-t1": ("test_slots.py", "CLINIC_WORKSPACE", "clinic.py"),
+    "clinic-booking-t2": ("test_booking.py", "CLINIC_WORKSPACE", "clinic.py"),
+    "clinic-rules-t3": ("test_rules.py", "CLINIC_WORKSPACE", "clinic.py"),
 }
 
 

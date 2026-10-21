@@ -1,0 +1,66 @@
+task_id: todo-web-v1
+version: "1"
+status: active
+category: web-frontend
+tags: [frontend, browser, accessibility, single-page, graded, ships-tests]
+
+description: >
+  Build an accessible, offline todo web app as one static page, graded in a real
+  headless browser by a shipped Playwright suite (ADR-0067). The lab's first
+  frontend case: it measures behaviour a user and a screen reader rely on —
+  keyboard flow, ARIA state, persistence and HTML escaping — rather than how the
+  code looks, so it can also test whether a harness lets a backend-leaning agent
+  ship sound frontend work.
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+target_level: 10
+complexity: small
+
+validation: objective
+validation_note: >
+  The tests in benchmarks/todo-web-v1/tests/test_todo.py are the grade. One
+  validation command per test, so test_pass_rate has twelve steps of resolution.
+  The first command is the tamper guard; the second confirms the entry point
+  exists. The runner image must ship Playwright and Chromium (BROWSER_AVAILABLE).
+  The tests open index.html from file://, so validation needs no network.
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/todo-web-v1/tests && test -z \"$(git -C /app status --porcelain -- benchmarks/todo-web-v1/tests)\""
+  - "test -f {workspace}/index.html"
+  - "cd {workspace} && TODO_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py::test_the_page_has_a_title_and_an_input_labelled_new_todo"
+  - "cd {workspace} && TODO_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py::test_enter_adds_a_todo_and_clears_the_input"
+  - "cd {workspace} && TODO_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py::test_blank_or_whitespace_input_adds_nothing"
+  - "cd {workspace} && TODO_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py::test_the_counter_says_how_many_are_left"
+  - "cd {workspace} && TODO_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py::test_completing_a_todo_checks_it_and_updates_the_counter"
+  - "cd {workspace} && TODO_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py::test_deleting_a_todo_removes_it"
+  - "cd {workspace} && TODO_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py::test_filters_show_all_active_and_completed"
+  - "cd {workspace} && TODO_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py::test_the_active_filter_is_announced_with_aria_pressed"
+  - "cd {workspace} && TODO_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py::test_todos_survive_a_reload"
+  - "cd {workspace} && TODO_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py::test_clear_completed_removes_only_completed_todos"
+  - "cd {workspace} && TODO_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py::test_the_whole_flow_works_from_the_keyboard"
+  - "cd {workspace} && TODO_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py::test_text_is_rendered_as_text_not_html"
+files_forbidden:
+  - benchmarks/todo-web-v1/tests/test_todo.py
+
+constraints:
+  - One static page, index.html, opened from file://
+  - Plain HTML, CSS and JavaScript; no dependencies, no network
+  - Do not edit the shipped tests
+
+success_criteria:
+  level_0: no useful code produced
+  level_2: index.html exists and renders the heading and the input (test 1)
+  level_5: todos can be added, counted, completed and deleted (tests 2-6)
+  level_8: filters, their aria-pressed state and clear-completed behave (tests 7, 8, 10)
+  level_10: todos persist across reloads, the keyboard flow works, and user text is never parsed as HTML (tests 9, 11, 12)
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+# `harness` is `_harness_preamble.md` concatenated onto `prompt_default.md`;
+# regenerate with `make prompts`.
+prompts:
+  default: benchmarks/todo-web-v1/prompt_default.md
+  harness: benchmarks/todo-web-v1/prompt_harness.md
+
+scoring_rubric: benchmarks/todo-web-v1/scoring.md

@@ -564,6 +564,17 @@ ladder:
 	@[ -n "$(MODEL)" ] || { echo "❌ MODEL is required. Example: MODEL=claude-haiku-4-5-20251001"; exit 1; }
 	@uv run python scripts/ladder.py $(if $(CASES),--cases $(CASES),) --model $(MODEL) --harness $(or $(HARNESS),claude) --reps $(or $(REPS),2) $(if $(LAUNCH),--launch,)
 
+# Read-only readiness checklist before a demo: docker, credential (names only),
+# API and cases. Writes nothing. Usage: make demo-check [API=http://localhost:8009]
+demo-check:
+	@uv run python scripts/demo_check.py $(API)
+
+# Deterministic harness checks on any local git repo — no stack, no model.
+# Exits 1 when a check fails. Usage: make harness-check REPO=../my-project [REF=main]
+harness-check:
+	@[ -n "$(REPO)" ] || { echo "❌ REPO is required. Example: REPO=../my-project"; exit 1; }
+	@uv run python scripts/harness_check.py --repo '$(REPO)' $(if $(REF),--ref '$(REF)',)
+
 # Import a hand-authored benchmark case from its task.yaml (idempotent).
 # Usage: make case-import TASK=benchmarks/cli-textstats/task.yaml
 case-import:
@@ -975,4 +986,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill
+.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill

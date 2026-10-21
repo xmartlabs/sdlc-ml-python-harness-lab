@@ -14,6 +14,7 @@ import { RepositoryDetail } from "./pages/RepositoryDetail";
 import { Dashboard } from "./pages/Dashboard";
 import { Guide } from "./pages/Guide";
 import { Health } from "./pages/Health";
+import { HarnessByModel } from "./pages/HarnessByModel";
 import { Home } from "./pages/Home";
 import { Improvements } from "./pages/Improvements";
 import { Login } from "./pages/Login";
@@ -300,6 +301,7 @@ export default function App() {
         <Route element={<NewEvaluation />} path="/evaluate/new" />
         <Route element={<Audit />} path="/evaluate/audit" />
         <Route element={<SubjectValidation />} path="/evaluate/subject" />
+        <Route element={<HarnessByModel />} path="/evaluate/harness-by-model" />
         <Route element={<Experiments />} path="/evaluate/experiments" />
         <Route element={<Findings />} path="/evidence/findings" />
         <Route element={<Repositories />} path="/evidence/repositories" />

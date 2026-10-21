@@ -386,6 +386,52 @@ def test_the_lab_verdict_comes_from_the_evidence_not_the_model():
     assert "El laboratorio no puede ejecutarlo" in markdown
 
 
+SWALLOWING = {
+    **GOVERNED_PYTHON,
+    "Makefile": "test:\n\tpytest || echo 'no tests'\n",
+}
+
+
+def test_the_evidence_carries_the_deterministic_checks():
+    evidence = _evidence(SWALLOWING)
+    by_id = {row["id"]: row for row in evidence["harness_checks"]}
+    assert by_id["verify_target_exit_code"]["status"] == "fail"
+
+
+def test_the_report_prints_the_checks_after_the_summary_and_before_the_model_reading():
+    evidence = _evidence(SWALLOWING)
+    findings = svc.parse_findings(json.dumps(GOOD_ANSWER))
+    markdown = svc.render_markdown(findings, evidence, model="m")
+
+    assert (
+        markdown.index("## Resumen")
+        < markdown.index("## Chequeos determinísticos")
+        < markdown.index("## Harness detectado")
+    )
+    assert "❌ falla" in markdown
+    assert "Qué hacer, en orden" in markdown
+
+
+def test_the_checks_survive_a_model_that_answered_garbage():
+    """The checks are the lab's: a parse error must not hide them."""
+    evidence = _evidence(SWALLOWING)
+    findings = svc.parse_findings("not json")
+    markdown = svc.render_markdown(findings, evidence, model="m", raw="not json")
+    assert "## Chequeos determinísticos" in markdown
+    assert "Verification can fail" in markdown
+
+
+def test_the_case_pass_is_shown_what_the_checks_flagged():
+    evidence = _evidence(SWALLOWING)
+    findings = svc.parse_findings(json.dumps(GOOD_ANSWER))
+    prompt = svc.render_case_prompt(evidence, findings)
+    flagged = json.loads(prompt.split("```json\n", 1)[1].rsplit("\n```", 1)[0])[
+        "harness_checks_flagged"
+    ]
+    assert any(row["id"] == "verify_target_exit_code" for row in flagged)
+    assert all(row["status"] in {"fail", "warn"} for row in flagged)
+
+
 def test_a_parse_error_report_shows_what_the_model_said():
     evidence = _evidence(GOVERNED_PYTHON)
     findings = svc.parse_findings("not json")

@@ -814,3 +814,76 @@ def test_finalize_workspace_includes_files_the_agent_created(tmp_path):
     assert "+echo new" in patch
     assert "tests/test_new.sh" in patch and "+exit 0" in patch
     assert "build/out.bin" not in patch
+
+
+# --- seeding a workspace from a case's starter files (ADR-0068) ---------------
+
+
+def _starter(root):
+    starter = root / "benchmarks" / "fixit" / "starter"
+    (starter / "src").mkdir(parents=True)
+    (starter / "index.html").write_text("<h1>broken</h1>\n")
+    (starter / "src" / "app.js").write_text("console.log(1)\n")
+    return starter
+
+
+def test_a_starter_dir_seeds_an_empty_workspace(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_run, "REPO_ROOT", tmp_path)
+    _starter(tmp_path)
+    ws = tmp_path / "workspace" / "run-1"
+    ws.mkdir(parents=True)
+
+    copied = bench_run.seed_workspace(ws, {"starter_dir": "benchmarks/fixit/starter"})
+
+    assert copied == 2
+    assert (ws / "index.html").read_text() == "<h1>broken</h1>\n"
+    assert (ws / "src" / "app.js").exists()
+
+
+def test_seeding_never_overwrites_a_workspace_that_has_files(tmp_path, monkeypatch):
+    """A resumed or continued run already holds the agent's work."""
+    monkeypatch.setattr(bench_run, "REPO_ROOT", tmp_path)
+    _starter(tmp_path)
+    ws = tmp_path / "workspace" / "run-1"
+    ws.mkdir(parents=True)
+    (ws / "index.html").write_text("<h1>agent's fix</h1>\n")
+
+    assert (
+        bench_run.seed_workspace(ws, {"starter_dir": "benchmarks/fixit/starter"}) == 0
+    )
+    assert (ws / "index.html").read_text() == "<h1>agent's fix</h1>\n"
+
+
+@pytest.mark.parametrize(
+    "starter", ["../outside", "/etc", "benchmarks/../../etc", "src/harness_lab_app"]
+)
+def test_a_starter_outside_benchmarks_is_refused(tmp_path, monkeypatch, starter):
+    monkeypatch.setattr(bench_run, "REPO_ROOT", tmp_path)
+    (tmp_path / "src" / "harness_lab_app").mkdir(parents=True)
+    ws = tmp_path / "workspace" / "run-1"
+    ws.mkdir(parents=True)
+    with pytest.raises(SystemExit):
+        bench_run.seed_workspace(ws, {"starter_dir": starter})
+
+
+def test_a_symlink_in_a_starter_is_not_followed_out_of_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_run, "REPO_ROOT", tmp_path)
+    starter = _starter(tmp_path)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("token")
+    (starter / "leak.txt").symlink_to(secret)
+    ws = tmp_path / "workspace" / "run-1"
+    ws.mkdir(parents=True)
+
+    bench_run.seed_workspace(ws, {"starter_dir": "benchmarks/fixit/starter"})
+
+    # Links are skipped: a starter can never carry a host file into a run.
+    assert not (ws / "leak.txt").exists()
+    assert not (ws / "leak.txt").is_symlink()
+
+
+def test_no_starter_dir_seeds_nothing(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    assert bench_run.seed_workspace(ws, {}) == 0
+    assert bench_run.seed_workspace(ws, None) == 0

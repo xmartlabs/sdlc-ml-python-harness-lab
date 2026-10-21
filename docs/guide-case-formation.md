@@ -122,3 +122,33 @@ a model to recover the command from it.
 (`spec_provisions_repo` and `spec_is_swe_bench`). Reading the first as the second gave
 every case paired with an external repository a prompt about resolving a GitHub issue.
 `prompt_kinds` is what makes that class of defect readable from the artifacts.
+
+## Frontend cases — graded in a real browser
+
+A frontend case is graded the way a user meets the page: in headless Chromium,
+through roles, accessible names, `data-testid` hooks and the keyboard — never
+through class names or the DOM's shape, which an agent is free to choose
+([ADR-0067](adr/0067-a-frontend-case-is-graded-in-a-real-browser.md)).
+`benchmarks/todo-web-v1` is the template:
+
+- **The contract is in the prompt.** A table of what the tests look for — the
+  heading text, the input's accessible name, `data-testid="todo-item"`, the
+  filter buttons and their `aria-pressed`. A test that relies on something the
+  prompt does not name measures guessing, not frontend skill.
+- **Offline and server-less.** The page is opened from `file://`, so validation
+  needs neither a dev server nor network, and runs in the network-less
+  validation lane.
+- **One command per test**, after the tamper guard and an entry-point check, so
+  `test_pass_rate` has the suite's resolution.
+- **Exact locators.** `get_by_role("button", name="Completed")` also matches
+  *Clear completed*; use `exact=True` for short names, or a correct page fails
+  a test it should pass. This was caught by running a reference
+  implementation, not by reading the tests.
+- **Calibrate before trusting.** An empty workspace must fail every test, a
+  reference implementation (kept *outside* the repository) must pass every
+  test, and a plausible weaker build should land in between — `todo-web-v1`
+  scores 0, 12 and 9 of 12.
+
+The runner provides Python Playwright, `pytest-playwright` and Chromium from a
+pinned layer of `Dockerfile.runner`; rebuild the image (`make app-up`) after
+pulling.

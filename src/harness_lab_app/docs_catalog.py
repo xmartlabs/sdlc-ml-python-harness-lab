@@ -13,6 +13,20 @@ from harness_lab_app.config import get_settings
 # Order defines display order; `group` buckets them in the Guide page.
 _DOCS: list[dict[str, str]] = [
     {
+        "slug": "demo",
+        "file": "demo-guide.md",
+        "group": "Start here",
+        "title": "Demo guide",
+        "description": "The lab in 20 minutes, and how to try it on your own project.",
+    },
+    {
+        "slug": "small-models",
+        "file": "guide-small-models.md",
+        "group": "Start here",
+        "title": "Small & self-hosted models",
+        "description": "Which tier a model does reliably, and whether the harness raises it.",
+    },
+    {
         "slug": "onboarding",
         "file": "onboarding.md",
         "group": "Start here",

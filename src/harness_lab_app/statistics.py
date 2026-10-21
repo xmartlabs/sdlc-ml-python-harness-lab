@@ -1260,6 +1260,25 @@ def _compose_verdict(
             ],
         }
 
+    if mode == "harness_by_model":
+        # A grid, not a pair (ADR-0066): there is no single comparison to lead
+        # with, and saying "not enough evidence" over a fully scored grid would
+        # contradict the panel that reads it.
+        return {
+            **base,
+            "headline": "Read the harness x model panel",
+            "claim": (
+                "This experiment runs every harness level on every model. Its "
+                "result is the harness effect per model and how that effect "
+                "changes from the first model to the last, read in the Harness x "
+                "model panel with its intervals."
+            ),
+            "caveats": [
+                "Cells are not compared pairwise here: any two cells would mix "
+                "the model with the harness."
+            ],
+        }
+
     if mode == "cross_repo":
         return {
             **base,

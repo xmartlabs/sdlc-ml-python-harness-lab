@@ -1473,6 +1473,44 @@ def _provision_git_target(
     print(f"  ✓ Target {target_id} provisioned at {commit[:10]}.")
 
 
+def seed_workspace(workspace: Path, spec: dict | None) -> int:
+    """Copy a case's starter files into an empty workspace (ADR-0068).
+
+    A bug-fix case needs the broken code to exist before the agent runs; a
+    workspace otherwise starts empty, from a git target, or from a SWE-bench
+    Pro image. ``starter_dir`` is a path under ``benchmarks/`` of this
+    repository — anything else is refused, because the spec is a file the
+    worker writes and a path outside the corpus would copy host files into a
+    run. Symlinks are skipped, not followed. A workspace that already holds
+    files (a resumed or continued run) is left alone. Returns the number of
+    files copied.
+    """
+    starter = str((spec or {}).get("starter_dir") or "").strip()
+    if not starter:
+        return 0
+    root = (REPO_ROOT / "benchmarks").resolve()
+    source = (REPO_ROOT / starter).resolve()
+    if Path(starter).is_absolute() or root not in source.parents:
+        sys.exit(
+            f"❌ starter_dir '{starter}' is not inside benchmarks/; refusing to seed."
+        )
+    if not source.is_dir():
+        sys.exit(f"❌ starter_dir '{starter}' does not exist.")
+    if workspace.exists() and any(workspace.iterdir()):
+        return 0
+    workspace.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for path in sorted(source.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        target = workspace / path.relative_to(source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+        copied += 1
+    print(f"  Seeded workspace/{workspace.name}/ with {copied} starter file(s).")
+    return copied
+
+
 def provision_workspace(
     workspace: Path, spec: dict, on_provisioned: object = None
 ) -> None:
@@ -2755,6 +2793,10 @@ def main(argv: list[str] | None = None) -> int:
             case_spec,
             _inject if harness_source == "injected" else None,
         )
+    elif case_spec is not None:
+        # A case that starts from files (a broken page to fix) rather than an
+        # empty folder or a cloned repository (ADR-0068).
+        seed_workspace(workspace, case_spec)
 
     # A `native` arm that stages skills has to have them placed in the
     # workspace, or the agent — whose cwd is the clone — never sees them and the

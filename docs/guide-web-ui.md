@@ -34,7 +34,7 @@ state a question → declare the arms → launch N repetitions
    → record a finding → test it with another experiment
 ```
 
-## Four ways to use the lab
+## Five ways to use the lab
 
 The screens below document *what each one does*. This section is the other half:
 **which job you are doing**, and which screens that job touches.
@@ -96,6 +96,34 @@ Nothing is ablated, so the result says nothing about the harness. The sentence i
 licenses is "this subject passed N of M under `<harness>`/`<model>`", and it never
 adds the arms together. Lane C of
 [guide-skill-validation.md](guide-skill-validation.md) is the walkthrough.
+
+### Mode E — does a stronger model need less harness?
+
+**Home → Does a stronger model need less harness?** (or **Evaluate → Harness x
+model**) builds a full grid: every harness level on every model. Pick cases — ones the
+smallest model does not already pass without a harness — and models, listed smallest
+first, current generation before previous. The harness levels form a nested ladder:
+**no harness** (governance masked), **governance only** (rules on, every skill off) and
+**full harness**; untick the middle rung for a two-level grid. Models the configured
+gateway does not serve are marked before launch, and the form states the run count.
+
+The experiment page shows a **Harness x model** panel instead of a comparison:
+
+- each cell's pass rate, with cost per resolved task;
+- the harness effect per model with its 95% interval;
+- the interaction — how the effect changes from the first model to the last — with
+  its interval and one sentence of reading.
+
+The change is called *established* only when its interval excludes zero **and** at
+least three cases were scored in every cell; the cases, not the repetitions, are the
+unit of evidence. The interaction's interval is conservative by construction and can
+extend past what the design could reach.
+See [ADR-0066](adr/0066-harness-and-model-vary-together-only-in-a-full-grid.md).
+
+When the cases carry `tier:<name>` tags, a **Capability frontier** panel follows: per
+arm, the highest tier done reliably (ADR-0069). A tier with fewer than four cases cannot
+be established; the panel says so above the table and marks the frontier the runs so
+far point to with a **?** — see [Small models](guide-small-models.md).
 
 ## Auditing someone else's repository — worked example
 
@@ -295,7 +323,10 @@ dev server headlessly:
 
 ### Home — what do you want to learn?
 
-The landing page asks one question and offers three answers. Each card states the
+The landing page opens with a **Start in 30 seconds** band — `make harness-check
+REPO=<path>` and a link to the [demo guide](demo-guide.md) — then asks one question
+and offers four answers, and closes with what the lab will and will not tell you
+(it measures harnesses and workflows, never people). Each card states the
 question it can answer, what it holds fixed, what it varies, and what it is **not**
 allowed to claim — so the choice of mode happens before any data is collected
 rather than after.
@@ -305,6 +336,8 @@ rather than after.
   it leaves behind what the other two consume: a staged skill and a case with a
   real validation command.
 - **Evaluate a harness change** → the wizard at **Evaluate → New evaluation**.
+- **Does a stronger model need less harness?** → **Evaluate → Harness x model**, the
+  full harness x model grid (Mode E below).
 - **Audit a repository** → the three-step setup, then the repository's own page.
 
 Cross-repo evaluation keeps its mode but not its card: it needs two registered

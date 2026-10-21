@@ -2063,3 +2063,248 @@ def test_a_manual_only_case_is_not_an_unmeasured_experiment(session):
     assert "objective_unmeasured" not in [
         issue["code"] for issue in summary["validity"]["issues"]
     ]
+
+
+# --------------------------------------------------------------------------
+# Harness x model — the interaction is the question (ADR-0066)
+# --------------------------------------------------------------------------
+
+
+def _grid(**over):
+    """A 2x2: bare vs the lab harness, on two models."""
+    conditions = []
+    for model in ("small", "large"):
+        for source in (HarnessSource.bare, HarnessSource.lab_root):
+            conditions.append(
+                ExperimentConditionCreate(
+                    label=f"{source.value}-{model}",
+                    role=ConditionRole.control
+                    if (source == HarnessSource.bare and model == "small")
+                    else ConditionRole.treatment,
+                    overrides={"harness_source": source, "executor_model": model},
+                )
+            )
+    base = {
+        "experiment_id": "less-harness",
+        "question": "Do stronger models need less harness?",
+        "mode": ExperimentMode.harness_by_model,
+        "case_ids": ["add-endpoint"],
+        "prompt_variants": ["default"],
+        "repetitions": 3,
+        "conditions": conditions,
+    }
+    base.update(over)
+    return ExperimentCreate(**base)
+
+
+def test_harness_by_model_accepts_a_full_grid_where_harness_evaluation_refuses_it(lab):
+    experiment, _ = lab.create_experiment(_grid())
+    assert experiment.mode == ExperimentMode.harness_by_model
+    with pytest.raises(ExperimentDesignError, match="confounded"):
+        lab.create_experiment(
+            _grid(experiment_id="refused", mode=ExperimentMode.harness_evaluation)
+        )
+
+
+def test_harness_by_model_refuses_an_incomplete_grid(lab):
+    payload = _grid()
+    payload.conditions = payload.conditions[:3]
+    with pytest.raises(ExperimentDesignError, match="incomplete"):
+        lab.create_experiment(payload)
+
+
+def test_harness_by_model_refuses_a_second_varying_harness_factor(lab):
+    payload = _grid()
+    for condition in payload.conditions:
+        if condition.overrides["harness_source"] == HarnessSource.lab_root:
+            condition.overrides["skills_invoke"] = ["verify_changes"]
+    with pytest.raises(ExperimentDesignError, match="one harness"):
+        lab.create_experiment(payload)
+
+
+def test_harness_by_model_keeps_the_declared_model_order(lab):
+    """Labels sort alphabetically on read ('bare-large' before 'bare-small'), but
+    the interaction runs from the first model declared to the last — reading it
+    the other way round flips its sign."""
+    lab.create_experiment(_grid())
+    block = lab.summarize("less-harness")["factorial"]
+    assert block["models"] == ["small", "large"]
+    assert block["interaction"]["from_model"] == "small"
+    assert block["interaction"]["to_model"] == "large"
+
+
+def test_harness_by_model_order_does_not_depend_on_which_arm_is_the_control(lab):
+    """Declared small→large, control on the *large* model: the reading must still
+    run small→large. The control role sorts first on read and used to drag its
+    model to the front."""
+    payload = _grid()
+    for condition in payload.conditions:
+        condition.role = (
+            ConditionRole.control
+            if condition.label == "bare-large"
+            else ConditionRole.treatment
+        )
+    lab.create_experiment(payload)
+    block = lab.summarize("less-harness")["factorial"]
+    assert block["models"] == ["small", "large"]
+    assert block["harness_levels"] == ["no harness", "lab harness"]
+
+
+def _cost(session, run, usd):
+    from harness_lab_app.models import Score
+
+    session.add(Score(run_id=run.run_id, name="cost_usd", version=1, value_num=usd))
+    session.commit()
+
+
+def test_harness_by_model_cost_per_resolved_counts_only_scored_runs_with_cost(lab):
+    """Cost per resolved task divides the cost of the runs it counts by their
+    passes. A run with no cost figure is not $0: the cell reports no figure."""
+    lab.create_experiment(_grid(repetitions=2))
+    runs = lab.launch(
+        "less-harness",
+        RunConfigCreate(case_id="add-endpoint", prompt_variant="default"),
+    )
+    for run in runs:
+        _score(lab.session, run, passed=True)
+        if run.condition_label != "lab_root-large":
+            _cost(lab.session, run, 1.0)
+    # lab_root-large: one run has a cost, the other does not.
+    _cost(
+        lab.session, next(r for r in runs if r.condition_label == "lab_root-large"), 1.0
+    )
+
+    cells = {
+        (c["level"], c["model"]): c
+        for c in lab.summarize("less-harness")["factorial"]["cells"]
+    }
+    assert cells[("no harness", "small")]["cost_per_resolved_usd"] == pytest.approx(1.0)
+    assert cells[("lab harness", "large")]["cost_usd"] is None
+    assert cells[("lab harness", "large")]["cost_per_resolved_usd"] is None
+
+
+def test_harness_by_model_summary_reads_the_interaction(lab):
+    lab.create_experiment(_grid())
+    runs = lab.launch(
+        "less-harness",
+        RunConfigCreate(case_id="add-endpoint", prompt_variant="default"),
+    )
+    assert len(runs) == 12  # 4 cells x 3 repetitions
+    # small: bare 0/3 → harness 3/3 ; large: bare 3/3 → harness 3/3
+    passes = {
+        "bare-small": False,
+        "lab_root-small": True,
+        "bare-large": True,
+        "lab_root-large": True,
+    }
+    for run in runs:
+        _score(lab.session, run, passed=passes[run.condition_label])
+
+    block = lab.summarize("less-harness")["factorial"]
+
+    assert block["axis"] == "harness_source"
+    assert block["models"] == ["small", "large"]
+    assert block["harness_levels"] == ["no harness", "lab harness"]
+    effects = {row["model"]: row["points"] for row in block["harness_effect"]}
+    assert effects == {"small": pytest.approx(100.0), "large": pytest.approx(0.0)}
+    assert block["interaction"]["points"] == pytest.approx(-100.0)
+    # One case cannot establish anything, however large the observed change.
+    assert block["interaction"]["established"] is False
+
+
+def test_harness_by_model_verdict_points_to_the_panel_not_to_missing_evidence(lab):
+    lab.create_experiment(_grid())
+    runs = lab.launch(
+        "less-harness",
+        RunConfigCreate(case_id="add-endpoint", prompt_variant="default"),
+    )
+    for run in runs:
+        _score(lab.session, run, passed=True)
+    verdict = lab.summarize("less-harness")["verdict"]
+    assert verdict["headline"] != "Not enough evidence yet"
+    assert "harness x model" in verdict["headline"].lower()
+    assert verdict["causal"] is False
+
+
+def test_tier_tags_give_each_arm_a_capability_frontier(lab):
+    """Cases tagged tier:1 / tier:2 turn any experiment into a capability ladder
+    per arm (ADR-0069): the highest tier the arm does reliably."""
+    for case_id, tier in [
+        ("t1a", "1"),
+        ("t1b", "1"),
+        ("t1c", "1"),
+        ("t1d", "1"),
+        ("t2a", "2"),
+        ("t2b", "2"),
+        ("t2c", "2"),
+        ("t2d", "2"),
+    ]:
+        CaseService(lab.session).create_case(
+            CaseCreate(
+                case_id=case_id,
+                name=case_id,
+                type=CaseType.repo_task,
+                prompt_variants={"default": "do it"},
+                tags=[f"tier:{tier}"],
+            )
+        )
+    lab.create_experiment(
+        _grid(
+            experiment_id="ladder",
+            case_ids=["t1a", "t1b", "t1c", "t1d", "t2a", "t2b", "t2c", "t2d"],
+            repetitions=5,
+        )
+    )
+    runs = lab.launch(
+        "ladder", RunConfigCreate(case_id="t1a", prompt_variant="default")
+    )
+    run_service = RunService(lab.session)
+    for run in runs:
+        case_id = run_service.get_run_config(run.run_config_id).case_id
+        # Every arm solves tier 1; only the large model with the harness solves tier 2.
+        passed = case_id.startswith("t1") or run.condition_label == "lab_root-large"
+        _score(lab.session, run, passed=passed)
+
+    block = lab.summarize("ladder")["capability"]
+    frontier = {arm["label"]: arm["frontier"] for arm in block["arms"]}
+    assert block["tiers"] == ["1", "2"]
+    assert frontier["lab_root-large"] == "2"
+    assert frontier["bare-small"] == "1"
+
+
+def test_untagged_cases_produce_no_capability_block(lab):
+    lab.create_experiment(_grid(experiment_id="plain"))
+    assert lab.summarize("plain")["capability"] is None
+
+
+def test_a_partial_vs_full_harness_ladder_runs_as_harness_by_model(lab):
+    """none → governance only → full, on two models: the effect of each rung is
+    read per model against 'none'."""
+    conditions = []
+    for model in ("small", "large"):
+        for label, overrides in [
+            ("none", {"harness_source": HarnessSource.bare}),
+            (
+                "gov",
+                {
+                    "harness_source": HarnessSource.lab_root,
+                    "skills_disabled": ["verify_changes"],
+                },
+            ),
+            ("full", {"harness_source": HarnessSource.lab_root}),
+        ]:
+            conditions.append(
+                ExperimentConditionCreate(
+                    label=f"{label}-{model}",
+                    role=ConditionRole.control
+                    if (label, model) == ("none", "small")
+                    else ConditionRole.treatment,
+                    overrides={**overrides, "executor_model": model},
+                )
+            )
+    lab.create_experiment(_grid(experiment_id="ladder3", conditions=conditions))
+    block = lab.summarize("ladder3")["factorial"]
+    assert block["axis"] == "harness_level"
+    assert len(block["harness_levels"]) == 3
+    rungs = {(row["model"], row["level"]) for row in block["harness_effect"]}
+    assert len(rungs) == 4  # two rungs above 'none', on two models

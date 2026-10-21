@@ -1,0 +1,57 @@
+task_id: clinic-booking-t2
+version: "1"
+status: active
+category: agentic-build
+tags: [python, stdlib, healthcare, scheduling, graded, ships-tests, "tier:2"]
+
+description: >
+  Tier 2 of the clinic ladder: book, cancel and reschedule appointments — no double-booking of a doctor or a patient, atomic reschedule, and idempotent requests. Part of a three-tier ladder (clinic-slots-t1, clinic-booking-t2,
+  clinic-rules-t3) that measures the highest tier a model-harness pair does
+  reliably (ADR-0069).
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+target_level: 8
+complexity: medium
+
+validation: objective
+validation_note: >
+  The tests in benchmarks/clinic-booking-t2/tests/test_booking.py are the grade, one command per
+  test, after a tamper guard and an entry-point check. Pure Python, no network.
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/clinic-booking-t2/tests && test -z \"$(git -C /app status --porcelain -- benchmarks/clinic-booking-t2/tests)\""
+  - "test -f {workspace}/clinic.py"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_a_booking_returns_an_id_and_is_listed"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_the_same_doctor_cannot_be_double_booked"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_the_same_patient_cannot_be_in_two_places"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_back_to_back_bookings_are_allowed"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_different_doctors_and_patients_may_overlap"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_cancelling_frees_the_slot"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_cancelled_bookings_are_not_listed"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_cancelling_an_unknown_booking_raises_not_found"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_rescheduling_moves_the_booking"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_a_failed_reschedule_leaves_the_original_intact"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_a_booking_does_not_conflict_with_itself_when_rescheduled_nearby"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_the_same_idempotency_key_returns_the_same_booking"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_the_same_key_with_a_different_request_is_a_conflict"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py::test_bookings_are_listed_in_time_order"
+files_forbidden:
+  - benchmarks/clinic-booking-t2/tests/test_booking.py
+
+constraints:
+  - All code in clinic.py; standard library only
+  - Do not edit the shipped tests
+
+success_criteria:
+  level_0: clinic.py missing or does not import
+  level_5: about half of the graded tests pass
+  level_10: every graded test passes
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+prompts:
+  default: benchmarks/clinic-booking-t2/prompt_default.md
+  harness: benchmarks/clinic-booking-t2/prompt_harness.md
+
+scoring_rubric: benchmarks/clinic-booking-t2/scoring.md

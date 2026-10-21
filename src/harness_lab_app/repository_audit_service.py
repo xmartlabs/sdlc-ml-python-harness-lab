@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from harness_lab_app import governance_paths as gp
+from harness_lab_app.harness_checks import FAIL, NOT_APPLICABLE, PASS, WARN, run_checks
 from harness_lab_app.models import RepositoryAudit, TargetRepository, utc_now
 from harness_lab_app.readiness_service import RULES_FILES, classify, detect_ecosystems
 from harness_lab_app.runner_capabilities import (
@@ -506,6 +507,9 @@ def collect_evidence(
     """
     governance = classify(paths)
     hooks = hooks_evidence(paths, read)
+    # Decided by code, not by the model (ADR-0065): the report prints these
+    # verbatim, and the auditor is shown them so it does not contradict them.
+    checks = run_checks(paths, read)
     runtime = runtime_verdict(paths, capabilities=capabilities)
     present = harness_present(governance, hooks)
     next_step, reason = decide_next_step(runtime, present)
@@ -540,6 +544,7 @@ def collect_evidence(
         "next_step_reason": reason,
         "governance": governance,
         "hooks": hooks,
+        "harness_checks": checks,
         "rules_files": rules,
         "skills": skills,
         "agents": agents,
@@ -797,6 +802,14 @@ def render_case_prompt(evidence: dict[str, Any], annotated: dict[str, Any]) -> s
         "validation_commands": evidence.get("validation_commands", []),
         "makefile_targets": evidence.get("makefile_targets", []),
         "governance": evidence.get("governance", {}),
+        # What the lab's deterministic checks already flagged (ADR-0065): a
+        # failed or warned check is the cheapest place to propose a case that
+        # measures something, rather than one that re-reads a file.
+        "harness_checks_flagged": [
+            {key: row[key] for key in ("id", "status", "evidence")}
+            for row in evidence.get("harness_checks") or []
+            if row.get("status") in (FAIL, WARN)
+        ],
         "readme": evidence.get("readme", ""),
     }
     return (
@@ -1267,6 +1280,10 @@ def render_markdown(
         ]
     else:
         lines += ["## Resumen", "", findings.get("summary") or "(sin resumen)", ""]
+    # Printed whether or not the model answered: these are the lab's own checks
+    # (ADR-0065), so they survive a parse error and never depend on the model.
+    lines += render_harness_checks(evidence.get("harness_checks") or [])
+    if not findings.get("parse_error"):
         verdict = _VERDICT_LABEL.get(findings.get("harness_verdict", "unknown"), "?")
         lines += [f"## Harness detectado — {verdict}", ""]
         components = findings.get("harness_components") or []
@@ -1345,6 +1362,50 @@ def render_markdown(
         "",
     ]
     return "\n".join(lines)
+
+
+_CHECK_STATUS_LABEL = {
+    FAIL: "❌ falla",
+    WARN: "⚠️ revisar",
+    PASS: "✅ ok",
+    NOT_APPLICABLE: "— no aplica",
+}
+
+
+def render_harness_checks(checks: list[dict[str, Any]]) -> list[str]:
+    """The deterministic checks (ADR-0065), failures first, with their fix.
+
+    The check titles, evidence and fixes are the module's English text: they
+    quote file names and commands, and translating them would be a second
+    source of truth for the same rule.
+    """
+    if not checks:
+        return []
+    order = {FAIL: 0, WARN: 1, PASS: 2, NOT_APPLICABLE: 3}
+    ordered = sorted(checks, key=lambda row: order.get(row.get("status", ""), 9))
+    failed = sum(1 for row in checks if row.get("status") == FAIL)
+    warned = sum(1 for row in checks if row.get("status") == WARN)
+    passed = sum(1 for row in checks if row.get("status") == PASS)
+    lines = [
+        "## Chequeos determinísticos",
+        "",
+        f"Decididos por el laboratorio leyendo los archivos, sin modelo: "
+        f"**{failed} fallan, {warned} para revisar, {passed} ok**.",
+        "",
+        "| Estado | Chequeo | Evidencia |",
+        "|---|---|---|",
+    ]
+    for row in ordered:
+        evidence = str(row.get("evidence", "")).replace("|", "\\|")
+        label = _CHECK_STATUS_LABEL.get(row.get("status", ""), "?")
+        lines.append(f"| {label} | {row.get('title', row.get('id'))} | {evidence} |")
+    fixes = [row for row in ordered if row.get("fix")]
+    if fixes:
+        lines += ["", "**Qué hacer, en orden:**", ""]
+        for index, row in enumerate(fixes, start=1):
+            lines.append(f"{index}. **{row['title']}** — {row['fix']} _{row['why']}_")
+    lines.append("")
+    return lines
 
 
 _SHAPE_LABEL = {

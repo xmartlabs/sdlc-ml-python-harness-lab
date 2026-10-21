@@ -545,3 +545,31 @@ def test_staging_never_breaks_a_run(monkeypatch, tmp_path):
         )
         == []
     )
+
+
+def test_a_starter_case_reaches_the_runner_through_the_spec(
+    session, tmp_path, monkeypatch
+):
+    """task.yaml `starter` → Case.metadata_json → case_spec.json `starter_dir`, the
+    only path by which a bug-fix case's broken files reach the workspace (ADR-0068)."""
+    import json
+
+    from harness_lab_app import tasks
+    from harness_lab_app.case_service import CaseService
+
+    case = next(
+        c
+        for c in CaseService(session).seed_benchmark_cases()
+        if c.case_id == "frontend-bugfix-v1"
+    )
+    assert case.metadata_json["starter_dir"] == "benchmarks/frontend-bugfix-v1/starter"
+    runs_dir = tmp_path / "runs"
+    monkeypatch.setattr(
+        tasks,
+        "get_settings",
+        lambda: SimpleNamespace(data_runs_dir=runs_dir, repo_root=tmp_path),
+    )
+    tasks._write_case_spec(session, "fb-K-001", "frontend-bugfix-v1", "default")
+    spec = json.loads((runs_dir / "fb-K-001" / "case_spec.json").read_text())
+    assert spec["starter_dir"] == "benchmarks/frontend-bugfix-v1/starter"
+    assert spec["repo"] == ""

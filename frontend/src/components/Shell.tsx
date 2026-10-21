@@ -13,6 +13,7 @@ import {
   IconFiles,
   IconFlask,
   IconHome,
+  IconLayers,
   IconLightbulb,
   IconList,
   IconPlus,
@@ -61,6 +62,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/evaluate/new", label: "New evaluation", icon: IconPlus },
       { to: "/evaluate/subject", label: "Validate your tool", icon: IconPuzzle },
       { to: "/evaluate/audit", label: "Audit a repository", icon: IconSearch },
+      { to: "/evaluate/harness-by-model", label: "Harness x model", icon: IconLayers },
       { to: "/evaluate/experiments", label: "Experiments", icon: IconFlask }
     ]
   },

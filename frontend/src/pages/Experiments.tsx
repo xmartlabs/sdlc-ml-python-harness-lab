@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { CapabilityPanel } from "../components/CapabilityPanel";
+import { FactorialPanel } from "../components/FactorialPanel";
 import { HelpPanel } from "../components/HelpPanel";
 import { Markdown } from "../components/Markdown";
 import { ModelPicker } from "../components/ModelPicker";
@@ -44,7 +46,8 @@ const MODE_LABEL: Record<string, string> = {
   harness_evaluation: "Harness evaluation",
   cross_repo: "Cross-repo",
   discovery: "Discovery",
-  subject_validation: "Subject validation"
+  subject_validation: "Subject validation",
+  harness_by_model: "Harness x model"
 };
 
 /** What each mode does and does not license — shown, not assumed known. */
@@ -56,7 +59,9 @@ const MODE_CAVEAT: Record<string, string> = {
   discovery:
     "No control. Exploratory evidence, not experimental evidence — this mode describes, it does not demonstrate.",
   subject_validation:
-    "No control, nothing ablated. Reports how reliably the declared subject passed under each harness/model arm — one rate per arm, never pooled, and nothing about the harness."
+    "No control, nothing ablated. Reports how reliably the declared subject passed under each harness/model arm — one rate per arm, never pooled, and nothing about the harness.",
+  harness_by_model:
+    "Every harness level runs on every model. Read the harness effect per model and how it changes from the first model to the last; no two cells are compared on their own, because that would mix the model with the harness."
 };
 
 function formatNumber(value: number | null | undefined, digits = 3): string {
@@ -1197,6 +1202,10 @@ function ExperimentDetail({
         <CaseOutcomeGrid outcomes={summary.case_outcomes} />
       ) : null}
 
+      {summary.factorial ? <FactorialPanel block={summary.factorial} /> : null}
+
+      {summary.capability ? <CapabilityPanel block={summary.capability} /> : null}
+
       {summary.comparisons.map((comparison) => (
         <div className="card" key={`${comparison.control}-${comparison.treatment}`}>
           <h3>
@@ -1306,6 +1315,10 @@ export function Experiments() {
   const [selected, setSelected] = useState<string | null>(params.get("experiment"));
   const [summary, setSummary] = useState<ExperimentSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  // A form that created an experiment but could not launch it lands here with
+  // the reason, so the launch is retried on that design rather than a copy.
+  const handedOver = (useLocation().state as { launchError?: string } | null)?.launchError;
+  const [launchNotice, setLaunchNotice] = useState<string | null>(handedOver ?? null);
   const [error, setError] = useState<string | null>(null);
   // Bumped after a launch so the summary refetches with the queued runs in it.
   const [refresh, setRefresh] = useState(0);
@@ -1403,6 +1416,9 @@ export function Experiments() {
         </p>
       </HelpPanel>
 
+      {launchNotice !== null && (
+        <ErrorBanner message={launchNotice} onDismiss={() => setLaunchNotice(null)} />
+      )}
       {error !== null && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
       <div className="card">

@@ -75,7 +75,6 @@ export interface CaseDraftResponse {
   step_prompts?: string[];
 }
 
-
 export type RunRecord = {
   run_id: string;
   state: RunState;
@@ -445,6 +444,16 @@ export type RepositoryAuditRuntime = {
   capabilities?: RepositoryAuditRuntimeCapability[];
 };
 
+/** One deterministic harness check (ADR-0065), decided by code, not a model. */
+export type HarnessCheck = {
+  id: string;
+  title: string;
+  status: "pass" | "warn" | "fail" | "not_applicable";
+  evidence: string;
+  why: string;
+  fix: string;
+};
+
 export type RepositoryAuditRecord = {
   target_id: string;
   commit: string;
@@ -459,6 +468,8 @@ export type RepositoryAuditRecord = {
     harness_present?: boolean;
     next_step?: RepositoryAuditNextStep;
     next_step_reason?: string;
+    /** Absent on audits recorded before the checks existed. */
+    harness_checks?: HarnessCheck[];
     [key: string]: unknown;
   };
   error: string | null;
@@ -684,8 +695,80 @@ export type ExperimentMode =
    * The harness is a setting here, not the subject — so this mode has no
    * ablated arm and reports a pass rate per arm, never a delta.
    */
-  | "subject_validation";
+  | "subject_validation"
+  /**
+   * Do stronger models need less harness? (ADR-0066) A full grid of harness
+   * levels x models; read through `ExperimentSummary.factorial`, never a pair.
+   */
+  | "harness_by_model";
 export type ConditionRole = "control" | "treatment";
+
+/** A harness effect for one model: one level against the first, in points. */
+export type FactorialEffect = {
+  model: string;
+  level: string;
+  points: number | null;
+  ci_low: number | null;
+  ci_high: number | null;
+};
+
+export type FactorialCell = {
+  level: string;
+  model: string;
+  runs: number;
+  passed: number;
+  pass_rate: number | null;
+  cost_usd: number | null;
+  cost_per_resolved_usd: number | null;
+};
+
+/** One tier's reliability for one arm (ADR-0069). */
+export type TierReading = {
+  status: "reliable" | "capable" | "not_established";
+  reason: string;
+  cases: number;
+  runs: number;
+  passed: number;
+  pass_rate: number | null;
+  wilson_low: number | null;
+  pass_hat_3: number | null;
+  /** Every case scored so far clears the per-case floor (may still be too few cases). */
+  runs_ok: boolean;
+};
+
+/** Per arm, the highest difficulty tier it does reliably (ADR-0069). */
+export type CapabilityBlock = {
+  tiers: string[];
+  arms: {
+    label: string;
+    frontier: string | null;
+    tiers: Record<string, TierReading>;
+    /** Cases still missing per tier before it can be called reliable. */
+    case_shortfall: Record<string, number>;
+    /** Where the frontier would sit on the runs so far, given enough cases. */
+    frontier_if_enough_cases: string | null;
+  }[];
+};
+
+/** The harness x model reading (ADR-0066). */
+export type FactorialBlock = {
+  axis: string;
+  harness_levels: string[];
+  models: string[];
+  paired_cases: number;
+  cells: FactorialCell[];
+  harness_effect: FactorialEffect[];
+  interaction: {
+    level: string;
+    from_model: string;
+    to_model: string;
+    points: number | null;
+    ci_low: number | null;
+    ci_high: number | null;
+    established: boolean;
+  };
+  reading: string;
+};
 
 export type ExperimentRecord = {
   experiment_id: string;
@@ -931,6 +1014,10 @@ export type ExperimentSummary = {
    * mode without a control never has.
    */
   case_outcomes?: Record<string, Record<string, CaseOutcomeCell>>;
+  /** Present only under `harness_by_model` (ADR-0066). */
+  factorial?: FactorialBlock | null;
+  /** Present when the cases carry `tier:<name>` tags (ADR-0069). */
+  capability?: CapabilityBlock | null;
   /** Whether this comparison could have measured what it names (ADR-0046). */
   validity?: ValidityBlock;
   /**
@@ -1357,6 +1444,8 @@ export type ContextProbeResult = {
   context_tokens: number | null;
   prompt_tokens: number | null;
   detail: string;
+  /** Non-blocking: passes, but tight for agentic coding (below 64k). */
+  advisory?: string;
 };
 
 export type ModelCatalog = {
@@ -1369,6 +1458,16 @@ export type ModelCatalog = {
   // provider id. Per provider because one host can be up while the other is
   // down — an empty group with no reason is unactionable.
   direct_errors?: Record<string, string>;
+};
+
+/** A host CLI's native model with gateway coverage (ADR-0069). */
+export type NativeModelRecord = {
+  id: string;
+  label: string;
+  generation: "current" | "previous";
+  size_rank: number;
+  /** null when no gateway is configured to ask. */
+  on_gateway: boolean | null;
 };
 
 /** One model as the LM Studio host reports it, with no gateway in between. */

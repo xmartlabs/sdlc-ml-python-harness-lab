@@ -89,7 +89,7 @@ LITELLM_MASTER_KEY=sk-...
 Optional model overrides (LiteLLM model names, no `gateway/` prefix). The
 defaults are transport-specific: over the gateway the lab uses `gpt-5.4-mini`
 for audits/judges and `gpt-5.4-nano` for summaries; over the Claude CLI (Path B)
-it uses `claude-sonnet-5` and `claude-haiku-4-5`. An override must be a name the
+it uses `claude-sonnet-5-5` and `claude-haiku-5-5`. An override must be a name the
 active transport understands.
 
 ```bash
@@ -391,7 +391,7 @@ What "in place" means:
 - **A judge**, for the two `GEval` rubrics. Zero-config under either credential
   path: the judge goes over the same LLM transport as the audit
   ([ADR-0043](adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)) —
-  `gpt-5.4-mini` through the gateway, `claude-sonnet-5` through the Claude CLI.
+  `gpt-5.4-mini` through the gateway, `claude-sonnet-5-5` through the Claude CLI.
   Override with `DEEPEVAL_MODEL` (or `AUDITOR_MODEL`) in `.env`.
 - `tool_correctness` is deterministic and needs no judge — but it only scores
   cases that declare `files_expected` or `validation_commands`, because an

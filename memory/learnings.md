@@ -2083,4 +2083,41 @@ production actually has, not the convenient one. An "empty" result from git insi
 nested directory means "not my repo", not "no changes". When merging sources by
 priority, a missing value must never beat a present one.
 
+## 2026-10-21 — Calibrate every grader against a real artifact before trusting it
+
+Three graders built this day looked right in unit tests and were wrong on contact
+with reality, each caught only by running them on something real:
+
+- **Harness checks on real repos** (ADR-0065). Symlinked skill projections read
+  through `git show` return the link target, so 19 "skills without frontmatter" were
+  projections, not skills; `command -v uv || echo …` was flagged as a swallowed test;
+  `uvx mcp-server-git` and `sh -c "npx …"` passed as "pinned". Running
+  `make harness-check` on five repositories found all of them.
+- **A browser test suite** (ADR-0067). `get_by_role("button", name="Completed")` also
+  matched *Clear completed*, so a correct page failed. Only running a reference
+  implementation exposed it.
+- **The factorial estimate** (ADR-0066). A case-weighted point beside pooled counts
+  and a pooled Newcombe floor printed "33%" next to "1/21"; a bootstrap over one
+  unanimous case read as certainty; the read order of conditions (control first, then
+  by label) flipped the interaction's sign.
+
+**How to apply:** a grader is not done until it has scored an empty input (must
+fail), a known-good input (must pass) and a plausible half-right one (must land in
+between). Keep one estimand per number shown together. Read untrusted repository text
+with linear scans, bounded and flattened, never a backtracking regex. When a test DB
+copy misbehaves, delete its `-wal`/`-shm` before copying over it — a stale WAL replays
+onto the new file and reads as corruption.
+
+## 2026-10-21 — A search over a set must not depend on the set's order
+
+`_is_nested_ladder` decided whether three harness levels form a ladder by sorting
+them on a key with ties and walking a `set`: the same conditions were a valid grid on
+one `PYTHONHASHSEED` and refused on another. It now tries every ordering of the
+levels (3–6 rungs, so at most 720) over a `repr`-sorted list.
+
+**How to apply:** any check that walks a `set` or a sort with ties must give the same
+answer for every order — run its test under `PYTHONHASHSEED=1..3`. And a reading that
+cannot be established yet (a tier with too few cases) must say *why* on the page, not
+only in a tooltip: "none yet" on every row read as "the model failed".
+
 <!-- Add new learnings above this line -->

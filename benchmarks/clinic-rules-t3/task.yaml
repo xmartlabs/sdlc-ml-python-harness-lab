@@ -1,0 +1,55 @@
+task_id: clinic-rules-t3
+version: "1"
+status: active
+category: agentic-build
+tags: [python, stdlib, healthcare, scheduling, graded, ships-tests, "tier:3"]
+
+description: >
+  Tier 3 of the clinic ladder: tier-2 booking plus the rules production schedulers get wrong — wall-clock times in the clinic's time zone across DST, storage in UTC, a minimum lead time against an injected clock, and an audit trail with no patient data. Part of a three-tier ladder (clinic-slots-t1, clinic-booking-t2,
+  clinic-rules-t3) that measures the highest tier a model-harness pair does
+  reliably (ADR-0069).
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+target_level: 10
+complexity: medium
+
+validation: objective
+validation_note: >
+  The tests in benchmarks/clinic-rules-t3/tests/test_rules.py are the grade, one command per
+  test, after a tamper guard and an entry-point check. Pure Python, no network.
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/clinic-rules-t3/tests && test -z \"$(git -C /app status --porcelain -- benchmarks/clinic-rules-t3/tests)\""
+  - "test -f {workspace}/clinic.py"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-rules-t3/tests/test_rules.py::test_double_booking_a_doctor_is_still_refused"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-rules-t3/tests/test_rules.py::test_bookings_are_stored_in_utc"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-rules-t3/tests/test_rules.py::test_a_wall_time_before_the_change_uses_daylight_time"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-rules-t3/tests/test_rules.py::test_an_ambiguous_fall_back_time_is_refused_without_a_fold"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-rules-t3/tests/test_rules.py::test_an_ambiguous_time_is_accepted_when_the_fold_is_given"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-rules-t3/tests/test_rules.py::test_a_time_skipped_by_spring_forward_is_refused"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-rules-t3/tests/test_rules.py::test_a_booking_in_the_past_is_refused"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-rules-t3/tests/test_rules.py::test_a_booking_inside_the_minimum_lead_time_is_refused"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-rules-t3/tests/test_rules.py::test_a_booking_exactly_at_the_lead_time_is_allowed"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-rules-t3/tests/test_rules.py::test_every_change_is_audited_with_ids_and_utc_times"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-rules-t3/tests/test_rules.py::test_the_audit_never_contains_patient_data"
+  - "cd {workspace} && CLINIC_WORKSPACE={workspace} timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-rules-t3/tests/test_rules.py::test_errors_and_logs_never_contain_patient_data"
+files_forbidden:
+  - benchmarks/clinic-rules-t3/tests/test_rules.py
+
+constraints:
+  - All code in clinic.py; standard library only
+  - Do not edit the shipped tests
+
+success_criteria:
+  level_0: clinic.py missing or does not import
+  level_5: about half of the graded tests pass
+  level_10: every graded test passes
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+prompts:
+  default: benchmarks/clinic-rules-t3/prompt_default.md
+  harness: benchmarks/clinic-rules-t3/prompt_harness.md
+
+scoring_rubric: benchmarks/clinic-rules-t3/scoring.md

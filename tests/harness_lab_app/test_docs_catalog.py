@@ -21,6 +21,20 @@ def test_read_doc_returns_content_for_known_slug():
     assert len(doc["content"]) > 0
 
 
+def test_the_demo_guide_is_served_first():
+    """Home links to it; a new user should meet it before anything else."""
+    docs = docs_catalog.list_docs()
+    assert docs[0]["slug"] == "demo"
+    doc = docs_catalog.read_doc("demo")
+    assert doc is not None
+    assert "make harness-check" in doc["content"]
+
+
+def test_every_catalogued_doc_exists():
+    for entry in docs_catalog.list_docs():
+        assert docs_catalog.read_doc(entry["slug"]) is not None, entry["slug"]
+
+
 def test_read_doc_rejects_unknown_or_traversal_slug():
     assert docs_catalog.read_doc("does-not-exist") is None
     # Slug is whitelisted, so a traversal attempt resolves to nothing.

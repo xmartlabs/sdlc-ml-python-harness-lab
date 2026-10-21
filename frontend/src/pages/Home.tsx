@@ -10,6 +10,7 @@ import {
   IconCheck,
   IconFlask,
   IconInfo,
+  IconLayers,
   IconPuzzle,
   IconSearch
 } from "../components/icons";
@@ -58,6 +59,18 @@ const MODES = [
     note: "Works on this lab's own harness — the continuous-improvement loop — or on an external repository. The only mode that can support a causal claim, and only with enough repetitions per arm."
   },
   {
+    key: "harness_by_model",
+    icon: IconLayers,
+    title: "Does a stronger model need less harness?",
+    question:
+      "Run the same cases with and without the harness on several models, and see whether the harness effect shrinks as the model grows.",
+    cta: "Start harness x model",
+    to: "/evaluate/harness-by-model",
+    holds: ["Cases", "Where it runs"],
+    varies: "Harness level and model, as a full grid",
+    note: "Reports the harness effect per model and how it changes from the first model to the last, with an interval. Below three cases the change is never called established."
+  },
+  {
     key: "discovery",
     icon: IconSearch,
     title: "Audit a repository",
@@ -69,6 +82,16 @@ const MODES = [
     note: "Registers the repository through your own clone, pins a commit, reads what it already ships, and ends when one case passes. Findings and the report accumulate on the repository's workbench. It never produces a causal verdict."
   }
 ] as const;
+
+/**
+ * What the lab measures and what it refuses to — said on the first screen, so
+ * nobody walks into a demo expecting a leaderboard of people.
+ */
+const HONESTY = [
+  "It measures a harness and a workflow — rules, skills, hooks, verification — never a person. No result is per developer.",
+  "Repetitions decide how far a result goes: one is exploratory, two to four a judgement, five or more a validation — and every rate carries its interval so you can see how wide it still is.",
+  "A result holds for the cases, model and harness version it ran on. Every run records all three.",
+];
 
 const SEVERITY_ICON: Record<string, ComponentType<IconProps>> = {
   critical: IconAlert,
@@ -166,6 +189,29 @@ export function Home() {
 
       {error ? <ErrorBanner message={error} /> : null}
 
+      <section className="panel quick-start">
+        <div className="quick-start-body">
+          <h2>Start in 30 seconds — check a repository's harness</h2>
+          <p className="muted">
+            Eight checks decided by code, not by a model: can your verify target fail,
+            can any hook block, how long is the rules file every session loads, are
+            your skills discoverable. No stack, no cost, one fix per finding.
+          </p>
+          <pre className="quick-start-command">
+            <code>make harness-check REPO=../your-project</code>
+          </pre>
+        </div>
+        <div className="quick-start-actions">
+          <Link className="primary" to="/system/guide?doc=demo">
+            Open the demo guide
+            <IconArrowRight size={15} />
+          </Link>
+          <Link className="secondary" to="/evaluate/audit">
+            Full audit in the UI
+          </Link>
+        </div>
+      </section>
+
       <div className="mode-cards">
         {MODES.map((mode) => {
           const Icon = mode.icon;
@@ -197,6 +243,15 @@ export function Home() {
           );
         })}
       </div>
+
+      <section className="panel subtle honesty">
+        <h2>What the lab will — and will not — tell you</h2>
+        <ul className="onboarding-steps">
+          {HONESTY.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      </section>
 
       {isNewLab ? (
         <section className="panel subtle onboarding">

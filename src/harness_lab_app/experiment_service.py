@@ -227,6 +227,23 @@ def validate_design(
             )
         return warnings
 
+    if mode == ExperimentMode.harness_by_model:
+        # The model varies by design here — the refusal `harness_evaluation`
+        # raises for it is exactly what this mode exists to lift (ADR-0066). It
+        # is only sound as a full grid with one harness factor: an incomplete
+        # grid or two harness factors cannot separate the interaction from a
+        # confound. The control role is not used; effects are read per model
+        # against the first harness level.
+        from harness_lab_app.factorial import grid_problems
+
+        problems = grid_problems(conditions)
+        if problems:
+            raise ExperimentDesignError(
+                "Mode 'harness_by_model' needs a full grid of harness levels x "
+                "models with exactly one harness factor. " + " ".join(problems)
+            )
+        return warnings
+
     if len(conditions) > 1 and len(controls) != 1:
         raise ExperimentDesignError(
             "A comparison needs exactly one control condition — mark the arm the "
@@ -361,6 +378,85 @@ def validate_design(
     return warnings
 
 
+def _factorial_block(
+    conditions: list[ExperimentCondition],
+    outcomes: dict[str, dict[str, list[bool]]],
+    scored_costs: dict[str, dict[str, list[float | None]]],
+) -> dict[str, Any] | None:
+    """The harness x model analysis of a summarized grid (ADR-0066).
+
+    Harness levels are ordered as the conditions were declared, so the first
+    level an author lists is the baseline every effect is read against; models
+    likewise, so the interaction runs from the first model listed to the last.
+    """
+    from harness_lab_app.factorial import analyze, harness_axis, level_of
+
+    raw = [{"label": c.label, "overrides": dict(c.overrides or {})} for c in conditions]
+    axis = harness_axis(raw)
+    if axis is None:
+        return None
+    levels: list[str] = []
+    models: list[str] = []
+    grid: dict[tuple[str, str], dict[str, list[bool]]] = {}
+    costs: dict[tuple[str, str], dict[str, list[float | None]]] = {}
+    # Declaration order, not read order: `conditions()` sorts the control first
+    # and the rest by label, which would make whichever model carries the
+    # control the reference of the interaction and can flip its sign.
+    declared = sorted(conditions, key=lambda row: row.id or 0)
+    for condition in declared:
+        overrides = condition.overrides or {}
+        level = level_of({"label": condition.label, "overrides": dict(overrides)}, raw)
+        model = str(overrides.get("executor_model"))
+        if level not in levels:
+            levels.append(level)
+        if model not in models:
+            models.append(model)
+        grid[(level, model)] = outcomes.get(condition.label, {})
+        costs[(level, model)] = scored_costs.get(condition.label, {})
+    return {
+        "axis": axis,
+        **analyze(grid, harness_levels=levels, models=models, costs=costs),
+    }
+
+
+TIER_TAG_PREFIX = "tier:"
+
+
+def _capability_block(
+    session: Session,
+    case_ids: list[str],
+    conditions: list[ExperimentCondition],
+    outcomes: dict[str, dict[str, list[bool]]],
+) -> dict[str, Any] | None:
+    """Each arm's capability frontier over cases tagged `tier:<name>` (ADR-0069).
+
+    Tiers are ordered by name (`tier:1` < `tier:2`, `tier:T1` < `tier:T2`), so a
+    corpus states its difficulty ladder in its own tags. Untagged cases are left
+    out; with fewer than two tiers there is no ladder and no block.
+    """
+    from harness_lab_app.capability import capability_frontier
+
+    tier_of: dict[str, str] = {}
+    for case_id in case_ids:
+        case = session.exec(select(Case).where(Case.case_id == case_id)).first()
+        for tag in (case.tags if case else []) or []:
+            if str(tag).startswith(TIER_TAG_PREFIX):
+                tier_of[case_id] = str(tag)[len(TIER_TAG_PREFIX) :]
+                break
+    order = sorted(set(tier_of.values()))
+    if len(order) < 2:
+        return None
+    arms = []
+    for condition in sorted(conditions, key=lambda row: row.id or 0):
+        by_tier: dict[str, dict[str, list[bool]]] = {tier: {} for tier in order}
+        for case_id, runs in outcomes.get(condition.label, {}).items():
+            if case_id in tier_of:
+                by_tier[tier_of[case_id]][case_id] = runs
+        reading = capability_frontier(by_tier, order=order)
+        arms.append({"label": condition.label, **reading})
+    return {"tiers": order, "arms": arms}
+
+
 def repetition_warning(repetitions: int) -> str | None:
     """State plainly what a given N does and does not support."""
     if repetitions < 2:
@@ -461,6 +557,12 @@ class ExperimentService:
         case_counts: dict[str, dict[str, dict[str, int]]] = {
             condition.label: {} for condition in conditions
         }
+        # Per arm, per case: the cost of every *scored* run, None where a scored
+        # run reported no cost. Read by the harness x model block (ADR-0066),
+        # which must price exactly the runs it counts, never a subtotal.
+        scored_costs: dict[str, dict[str, list[float | None]]] = {
+            condition.label: {} for condition in conditions
+        }
         # Why the arms stopped, per arm. Two arms that terminate under
         # different rules are not two measurements of the same quantity, and
         # the verdict has to say so before anyone reads the effort delta.
@@ -559,6 +661,10 @@ class ExperimentService:
             passed = values.get("task_validation_pass")
             if passed is not None:
                 outcomes[label].setdefault(case_id, []).append(bool(passed))
+                cost_value = values.get("cost_usd")
+                scored_costs[label].setdefault(case_id, []).append(
+                    float(cost_value) if isinstance(cost_value, (int, float)) else None
+                )
             cell = case_counts[label].setdefault(
                 case_id, {"runs": 0, "scored_runs": 0, "successes": 0}
             )
@@ -612,9 +718,13 @@ class ExperimentService:
         # mode that cannot support a causal claim never renders a
         # control-versus-treatment delta, whatever roles the rows happen to
         # carry.
+        # A harness x model grid (ADR-0066) has no single pair to compare: any
+        # control-versus-treatment delta across two cells would mix the model
+        # with the harness. It is read through its `factorial` block instead.
         if experiment.mode in (
             ExperimentMode.discovery,
             ExperimentMode.subject_validation,
+            ExperimentMode.harness_by_model,
         ):
             control = None
         if control is not None:
@@ -743,6 +853,17 @@ class ExperimentService:
             # is the only matrix subject validation can show and is useful under
             # every mode.
             "case_outcomes": case_counts,
+            # The harness x model reading (ADR-0066); None under every other mode.
+            "factorial": (
+                _factorial_block(conditions, outcomes, scored_costs)
+                if experiment.mode == ExperimentMode.harness_by_model
+                else None
+            ),
+            # Per arm, the highest difficulty tier it does *reliably*, when the
+            # cases are tagged `tier:<name>` (ADR-0069). None otherwise.
+            "capability": _capability_block(
+                self.session, experiment.case_ids, conditions, outcomes
+            ),
         }
 
     def try_complete(self, experiment_id: str) -> Experiment | None:

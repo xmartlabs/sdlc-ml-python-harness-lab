@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import { Markdown } from "../components/Markdown";
@@ -16,8 +17,10 @@ Audits, judges and summaries use your AI gateway, or the Claude Code CLI when on
 `;
 
 export function Guide() {
+  // `?doc=<slug>` opens one doc directly, so Home can link to the demo guide.
+  const [searchParams] = useSearchParams();
   const [docs, setDocs] = useState<DocEntry[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(searchParams.get("doc"));
   const [content, setContent] = useState<DocContent | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -28,7 +31,12 @@ export function Guide() {
       .then((entries) => {
         if (!active) return;
         setDocs(entries);
-        setSelected((current) => current ?? entries[0]?.slug ?? null);
+        // An unknown `?doc=` falls back to the first doc rather than a blank page.
+        setSelected((current) =>
+          current && entries.some((entry) => entry.slug === current)
+            ? current
+            : (entries[0]?.slug ?? null)
+        );
       })
       .catch(() => active && setLoadError("Docs API unavailable — start the app backend."));
     return () => {

@@ -68,6 +68,21 @@ RUN uv sync --no-dev --frozen || uv sync --no-dev
 # validation container runs it against the agent's workspace.
 RUN uv pip install --python /opt/venv/bin/python --no-cache pygame jinja2 pytest pytest-cov
 
+# A real browser for frontend cases (ADR-0067, todo-web-v1): the graded suite
+# drives the agent's page in headless Chromium through its accessible contract.
+# Pinned, in its own layer so a Playwright bump does not rebuild the CLIs below.
+# `--with-deps` pulls Chromium's system libraries (absent from -slim). Declaring
+# BROWSER_AVAILABLE here makes the audit's capability table say so without a
+# per-machine .env edit.
+ARG PLAYWRIGHT_VERSION=1.56.0
+ARG PYTEST_PLAYWRIGHT_VERSION=0.7.1
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    BROWSER_AVAILABLE=1
+RUN uv pip install --python /opt/venv/bin/python --no-cache \
+        "playwright==${PLAYWRIGHT_VERSION}" "pytest-playwright==${PYTEST_PLAYWRIGHT_VERSION}" \
+    && /opt/venv/bin/python -m playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+
 # opencode CLI (host equivalent: brew install anomalyco/tap/opencode) and the
 # conductor plugin the Makefile installs into ~/.config/opencode.
 ARG OPENCODE_VERSION=latest

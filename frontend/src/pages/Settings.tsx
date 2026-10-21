@@ -94,7 +94,11 @@ function ContextBadge({ result }: { result: ContextProbeResult | undefined }) {
     );
   }
   if (result.status === "ok") {
-    return (
+    return result.advisory ? (
+      <span className="badge warn" title={result.advisory}>
+        context {result.context_tokens} — tight for agents
+      </span>
+    ) : (
       <span className="badge ok" title={result.detail}>
         context ≥ {result.required_tokens}
       </span>
@@ -312,7 +316,7 @@ export function Settings({ theme, onThemeChange }: SettingsProps) {
         if (result.status === "insufficient") {
           setError(`${modelId}: ${result.detail}`);
         } else {
-          setNotice(`${modelId}: ${result.detail}`);
+          setNotice(`${modelId}: ${result.advisory || result.detail}`);
         }
       })
       .catch((err: Error) => setError(err.message))
