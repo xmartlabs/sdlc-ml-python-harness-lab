@@ -8,6 +8,31 @@ For the properties that are *inherent* to running a benchmarking lab — untrust
 model output, credentials in run containers, host-root reachability — see
 [SECURITY.md](../SECURITY.md). Those are design, not debt.
 
+## Measurements archived before 2026-10-21
+
+Two defects in `scripts/bench_run.py`, fixed on 2026-10-21, bias every run archived
+before that date. Read any earlier comparison of cost, steps or time with them in mind.
+
+### Build-from-scratch runs stopped at step 2
+
+`workspace_fingerprint` asked git for status and diff inside a workspace with no
+`.git` of its own. git answered for the lab repository, where `/workspace/` is
+ignored, so the fingerprint never changed and the loop stopped as `no_progress`
+after step 2 whatever the agent had done — 36 archived runs. A bare arm that
+signalled completion at step 1 and a harness arm cut at step 2 therefore stopped
+for different reasons, which makes the earlier "the harness costs more" readings on
+`tetris-v2` and `cli-textstats-v1` unreliable. Such a workspace is now fingerprinted
+by its file tree.
+
+### Cost lost when usage was merged
+
+The usage merge let a remote source that returned `cost_usd: None` overwrite the
+cost parsed from Claude's own `result` events: 37 archived claude runs show no cost
+while their events report $56.09 in total — more than the $47.57 the lab had
+recorded. `merge_usage` now never replaces a value with an empty one. Archived
+`usage.json` files were **not** rewritten; recompute a run's cost from
+`collect_claude_usage(<run dir>)` before using it.
+
 ## Batch runs
 
 ### `create_batch` is not transactional

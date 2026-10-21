@@ -956,15 +956,43 @@ def generate_swe_continuation_prompt(
     return path
 
 
-def workspace_fingerprint(workspace: Path) -> str | None:
-    """Cheap change detector: hash of the workspace's git status + diff vs HEAD.
+def _tree_fingerprint(workspace: Path) -> str:
+    """Hash of every file's relative path and bytes under ``workspace``.
 
-    Used as the SWE stop fallback when no objective per-step evaluation is
-    possible — two consecutive identical fingerprints mean the agent's step
-    made no edits. Returns None (never raises) when git state is unreadable.
+    Symlinks are hashed by target, not followed, so a link loop cannot hang it.
     """
     import hashlib
 
+    digest = hashlib.sha256()
+    for path in sorted(workspace.rglob("*")):
+        if ".git" in path.relative_to(workspace).parts:
+            continue
+        rel = path.relative_to(workspace).as_posix()
+        if path.is_symlink():
+            digest.update(f"L {rel} -> {os.readlink(path)}\n".encode())
+        elif path.is_file():
+            digest.update(f"F {rel}\n".encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def workspace_fingerprint(workspace: Path) -> str | None:
+    """Cheap change detector: two identical fingerprints in a row mean the
+    agent's step made no edits.
+
+    A workspace that is its own git repository (SWE-bench, target clones) is
+    fingerprinted by git status + diff vs HEAD. A build-from-scratch workspace
+    has no ``.git`` and sits inside the lab repo, where ``/workspace/`` is
+    ignored, so git would answer for the enclosing repo and never change; its
+    file tree is hashed instead. Returns None (never raises) when unreadable.
+    """
+    import hashlib
+
+    if workspace.is_dir() and not (workspace / ".git").exists():
+        try:
+            return _tree_fingerprint(workspace)
+        except OSError:
+            return None
     try:
         status = _run_git(
             ["git", "-C", str(workspace), "status", "--porcelain"], cwd=REPO_ROOT
@@ -2080,6 +2108,23 @@ def pull_usage_langfuse(session_id: str) -> dict | None:
     except Exception:
         pass
     return None
+
+
+def merge_usage(*sources: dict | None) -> dict:
+    """Merge usage dicts, lowest priority first; a later source wins per field.
+
+    An empty value (None or "") never overwrites a populated one: a remote
+    source that knows the session but has no cost for it must not erase the
+    cost a lower-priority source did record.
+    """
+    merged: dict = {}
+    for source in sources:
+        for key, value in (source or {}).items():
+            if value is None or value == "":
+                merged.setdefault(key, value)
+            else:
+                merged[key] = value
+    return merged
 
 
 def collect_claude_usage(out_dir: Path) -> dict:
@@ -3209,14 +3254,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Merge priority (highest wins): remote API > opencode DB > log estimates >
     # claude stream-json events (claude runs: the only populated source).
-    merged_usage: dict = {}
-    merged_usage.update(collect_claude_usage(out_dir))
-    if log_usage:
-        merged_usage.update(log_usage)
-    if db_usage:
-        merged_usage.update(db_usage)
-    if remote_usage:
-        merged_usage.update(remote_usage)
+    merged_usage = merge_usage(
+        collect_claude_usage(out_dir), log_usage, db_usage, remote_usage
+    )
     if completed_steps > 1:
         merged_usage["steps"] = completed_steps
     if stop_reason:

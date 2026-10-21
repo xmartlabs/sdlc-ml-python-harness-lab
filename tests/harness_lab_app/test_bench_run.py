@@ -184,6 +184,46 @@ def test_workspace_fingerprint_detects_changes(tmp_path):
     assert bench_run.workspace_fingerprint(tmp_path / "not-a-repo") is None
 
 
+def test_merge_usage_never_overwrites_a_value_with_an_empty_one():
+    """A remote source that knows the session but has no cost (an unpriced
+    Langfuse trace) returns `cost_usd: None`. A plain dict.update let that None
+    erase the cost the claude stream-json events had reported, which is how 37
+    archived claude runs lost their cost."""
+    events = {"cost_usd": 0.42, "input_tokens": 1200, "turns": 7}
+    remote = {"cost_usd": None, "input_tokens": None, "turns": 3}
+
+    merged = bench_run.merge_usage(events, None, {}, remote)
+
+    assert merged["cost_usd"] == 0.42
+    assert merged["input_tokens"] == 1200
+    assert merged["turns"] == 3  # a populated, higher-priority value still wins
+
+
+def test_workspace_fingerprint_sees_edits_in_an_ignored_nested_workspace(tmp_path):
+    """A build-from-scratch workspace has no .git of its own and lives under the
+    lab repo, where /workspace/ is git-ignored. git then answers for the
+    enclosing repo, its status/diff never change, and every such run used to
+    stop as `no_progress` at step 2 whatever the agent did."""
+    import subprocess
+
+    lab = tmp_path / "lab"
+    lab.mkdir()
+    ident = ["-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q", str(lab)], check=True)
+    (lab / ".gitignore").write_text("/workspace/\n")
+    subprocess.run(["git", "-C", str(lab), "add", "-A"], check=True)
+    subprocess.run(["git", *ident, "-C", str(lab), "commit", "-qm", "base"], check=True)
+    ws = lab / "workspace" / "run-1"
+    ws.mkdir(parents=True)
+    (ws / "main.py").write_text("print(1)\n")
+
+    fp1 = bench_run.workspace_fingerprint(ws)
+    assert fp1 is not None
+    assert bench_run.workspace_fingerprint(ws) == fp1  # no edits → stable
+    (ws / "game.py").write_text("class Game: ...\n")
+    assert bench_run.workspace_fingerprint(ws) != fp1  # new file → changes
+
+
 def test_validate_workspace_fresh_resets_stale_dir(tmp_path, capsys):
     ws = tmp_path / "run-2"
     ws.mkdir()

@@ -2065,4 +2065,22 @@ launched experiment renders as invalid while its runs are still queued. Fix 2 of
 stored at validation time, so old runs need **re-validating** before the new reading
 applies — unlike the validity rules, which are computed on read.
 
+## 2026-10-21 — `git -C <dir>` answers for the enclosing repo when `<dir>` has no `.git`
+
+`workspace_fingerprint` hashed `git status` + `git diff HEAD` run with `-C workspace`.
+A build-from-scratch workspace has no `.git`, so git walked up to the lab repo, where
+`/workspace/` is ignored, and returned empty output on every step: the fingerprint was
+the SHA-256 of the empty string and 36 runs stopped `no_progress` at step 2. The
+existing test only covered a workspace that *is* a repo and a path that does not exist
+— never the real layout, a non-repo nested inside an ignoring repo.
+
+In the same pass, `dict.update` merged usage sources so a remote `cost_usd: None`
+erased the cost the claude events had reported (37 runs, $56.09 unrecorded — more than
+everything the lab had recorded).
+
+**How to apply:** before trusting a change detector or a merge, test it on the layout
+production actually has, not the convenient one. An "empty" result from git inside a
+nested directory means "not my repo", not "no changes". When merging sources by
+priority, a missing value must never beat a present one.
+
 <!-- Add new learnings above this line -->
