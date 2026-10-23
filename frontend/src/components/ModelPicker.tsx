@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
+import { useNativeModelIndex } from "../harnesses";
+import { defineMessages, pickMessages, useMessages } from "../i18n";
 import type { ModelOption } from "../types";
 
 type ModelSource = "gateway" | "direct";
@@ -32,10 +34,66 @@ type ModelPickerProps = {
   children?: ReactNode;
 };
 
-const SOURCE_LABELS: Record<ModelSource, string> = {
-  gateway: "AI Gateway",
-  direct: "Direct (local)"
-};
+const MESSAGES = defineMessages({
+  en: {
+    sourceLabels: { gateway: "AI Gateway", direct: "Direct (local)" } as Record<
+      ModelSource,
+      string
+    >,
+    none: "None",
+    notServed: (model: string) =>
+      `The gateway has no card for ${model}: runs would fail on their first request. Pick a model it serves, or add it to the gateway.`,
+    reloading: "Reloading…",
+    reload: "⟳ Reload",
+    notLoaded: "Not loaded — a JIT auto-load would use the model's default window.",
+    loadedWith: (ctx: string, max: string) => `Loaded with ${ctx}${max}.`,
+    tokens: (count: string) => `${count} tokens`,
+    unreportedWindow: "an unreported window",
+    ofMax: (count: string) => ` of ${count} max`,
+    notRoutable: "Not routable — enable it on the Settings page before running it.",
+    backendUnavailable: (reason: string) => `Backend unavailable — ${reason}.`,
+    unreachableReasonFallback: "the machine behind this card is not serving it",
+    warningNotRoutable: " — not routable",
+    warningBackendUnavailable: " — backend unavailable",
+    noModelsFromSource: "No models available from this source.",
+    hostUrlHelp: (currentPick: string) => (
+      <>
+        Set the host URL under Settings → Local runtimes (it must end in{" "}
+        <code>/v1</code>), then press Reload. Your current pick — {currentPick} — is
+        unchanged.
+      </>
+    )
+  },
+  es: {
+    sourceLabels: { gateway: "AI Gateway", direct: "Directo (local)" } as Record<
+      ModelSource,
+      string
+    >,
+    none: "Ninguno",
+    notServed: (model: string) =>
+      `El gateway no tiene card para ${model}: las corridas fallarían en el primer pedido. Elegí un modelo que sirva, o agregalo al gateway.`,
+    reloading: "Recargando…",
+    reload: "⟳ Recargar",
+    notLoaded: "No cargado — una autocarga JIT usaría la ventana por defecto del modelo.",
+    loadedWith: (ctx: string, max: string) => `Cargado con ${ctx}${max}.`,
+    tokens: (count: string) => `${count} tokens`,
+    unreportedWindow: "una ventana no informada",
+    ofMax: (count: string) => ` de ${count} máx.`,
+    notRoutable: "No enrutable — habilitalo en la página de Configuración antes de usarlo.",
+    backendUnavailable: (reason: string) => `Backend no disponible — ${reason}.`,
+    unreachableReasonFallback: "la máquina detrás de esta ficha no lo está sirviendo",
+    warningNotRoutable: " — no enrutable",
+    warningBackendUnavailable: " — backend no disponible",
+    noModelsFromSource: "No hay modelos disponibles desde esta fuente.",
+    hostUrlHelp: (currentPick: string) => (
+      <>
+        Configurá la URL del host en Configuración → Runtimes locales (debe terminar en{" "}
+        <code>/v1</code>), y después presioná Recargar. Tu elección actual — {currentPick}{" "}
+        — no cambió.
+      </>
+    )
+  }
+});
 
 // Display names for providers named only in an error, where no option exists to
 // carry a `provider_label`.
@@ -94,26 +152,25 @@ function classify(option: ModelOption): Tiers {
 
 /** What the selected model means for a run, in one line. */
 function metadataFor(option: ModelOption | undefined): string | null {
+  const m = pickMessages(MESSAGES);
   if (!option) {
     return null;
   }
   if (option.source === "direct") {
     if (!option.loaded) {
-      return "Not loaded — a JIT auto-load would use the model's default window.";
+      return m.notLoaded;
     }
     const ctx = option.loaded_context
-      ? `${option.loaded_context.toLocaleString()} tokens`
-      : "an unreported window";
-    const max = option.max_context
-      ? ` of ${option.max_context.toLocaleString()} max`
-      : "";
-    return `Loaded with ${ctx}${max}.`;
+      ? m.tokens(option.loaded_context.toLocaleString())
+      : m.unreportedWindow;
+    const max = option.max_context ? m.ofMax(option.max_context.toLocaleString()) : "";
+    return m.loadedWith(ctx, max);
   }
   if (option.routable === false) {
-    return "Not routable — enable it on the Settings page before running it.";
+    return m.notRoutable;
   }
   if (option.reachable === false) {
-    return `Backend unavailable — ${option.unreachable_reason ?? "the machine behind this card is not serving it"}.`;
+    return m.backendUnavailable(option.unreachable_reason ?? m.unreachableReasonFallback);
   }
   return null;
 }
@@ -128,11 +185,12 @@ function metadataFor(option: ModelOption | undefined): string | null {
  * send the operator to the wrong place.
  */
 function warningFor(option: ModelOption): string {
+  const m = pickMessages(MESSAGES);
   if (option.routable === false) {
-    return " — not routable";
+    return m.warningNotRoutable;
   }
   if (option.reachable === false) {
-    return " — backend unavailable";
+    return m.warningBackendUnavailable;
   }
   return "";
 }
@@ -153,13 +211,15 @@ export function ModelPicker({
   onChange,
   options,
   allowNone = false,
-  noneLabel = "None",
+  noneLabel,
   nativeOptions,
   directErrors,
   onReload,
   reloading = false,
   children
 }: ModelPickerProps) {
+  const m = useMessages(MESSAGES);
+  const nativeIndex = useNativeModelIndex();
   const [source, setSource] = useState<ModelSource>("gateway");
   const [provider, setProvider] = useState("lmstudio");
 
@@ -254,17 +314,23 @@ export function ModelPicker({
   };
 
   if (nativeOptions) {
+    const notServed = nativeIndex[value]?.on_gateway === false;
     return (
       <label className="model-picker">
         <span>{label}</span>
         <select onChange={(event) => onChange(event.target.value)} value={value}>
-          {allowNone ? <option value="">{noneLabel}</option> : null}
+          {allowNone ? <option value="">{noneLabel ?? m.none}</option> : null}
           {nativeOptions.map((option) => (
             <option key={option.id} value={option.id}>
-              {option.label}
+              {nativeIndex[option.id]?.label ?? option.label}
             </option>
           ))}
         </select>
+        {notServed ? (
+          <small className="callout callout--danger" role="alert">
+            {m.notServed(value)}
+          </small>
+        ) : null}
         {children}
       </label>
     );
@@ -281,7 +347,7 @@ export function ModelPicker({
             onClick={onReload}
             type="button"
           >
-            {reloading ? "Reloading…" : "⟳ Reload"}
+            {reloading ? m.reloading : m.reload}
           </button>
         ) : null}
       </div>
@@ -298,7 +364,7 @@ export function ModelPicker({
             onClick={() => jumpTo(id)}
             type="button"
           >
-            {SOURCE_LABELS[id]}
+            {m.sourceLabels[id]}
           </button>
         ))}
       </div>
@@ -312,12 +378,10 @@ export function ModelPicker({
               </small>
             ))
           ) : (
-            <small className="muted">No models available from this source.</small>
+            <small className="muted">{m.noModelsFromSource}</small>
           )}
           <small className="muted">
-            Set the host URL under Settings → Local runtimes (it must end in{" "}
-            <code>/v1</code>), then press Reload. Your current pick —{" "}
-            {selected?.label ?? value ?? noneLabel} — is unchanged.
+            {m.hostUrlHelp(selected?.label ?? value ?? noneLabel ?? m.none)}
           </small>
         </div>
       ) : (
@@ -337,7 +401,7 @@ export function ModelPicker({
           </div>
 
           <select onChange={(event) => onChange(event.target.value)} value={value}>
-            {allowNone ? <option value="">{noneLabel}</option> : null}
+            {allowNone ? <option value="">{noneLabel ?? m.none}</option> : null}
             {visible.map((option) => (
               <option key={option.id} value={option.id}>
                 {`${option.label}${warningFor(option)}`}

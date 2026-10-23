@@ -7,6 +7,7 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
 import { ReadinessReportView } from "../components/ReadinessReportView";
 import { Spinner } from "../components/Spinner";
+import { defineMessages, useMessages } from "../i18n";
 import type {
   CaseCandidate,
   CaseCandidates,
@@ -47,6 +48,292 @@ const EMPTY_FORM: FormState = {
   team: ""
 };
 
+const MESSAGES = defineMessages({
+  en: {
+    errors: {
+      loadRepositories: "Unable to load repositories",
+      saveRepository: "Unable to save repository",
+      inspectRepository: "Unable to inspect the repository",
+      archiveRepository: "Unable to archive repository",
+      couldNotResolve: "Could not resolve",
+      readRepository: "Unable to read the repository",
+      readHistory: "Unable to read the repository's history",
+      adoptInferred: "Unable to adopt the inferred commands"
+    },
+    header: {
+      title: "Repositories",
+      description:
+        "The repositories a case can be run against. A case is paired with a " +
+        "repository at the run, so the same case can be evaluated across several " +
+        "of them.",
+      crossRepoLink: "Test the harness across these repositories",
+      crossRepoNeedsMore: (count: 0 | 1) =>
+        `Cross-repo evaluation needs at least two active repositories to vary — ${
+          count === 0 ? "none" : "one"
+        } registered so far.`
+    },
+    helpPanel: {
+      title: "How a repository is pinned",
+      body: (
+        <>
+          The checkout lives under <code>data/checkouts/</code>, because that is the
+          only folder a run container can see. You put it there: clone it yourself
+          with the command this page shows, attach a clone that is already in that
+          folder under any name, or have the lab copy a repository you already have
+          on this machine. The lab never fetches a remote on your behalf. It then{" "}
+          <strong>pins the commit</strong> that checkout is on, and every run,
+          readiness read and derived case works from that pinned commit until you
+          re-pin it. Re-running later is the same experiment, not whatever was
+          pushed since.
+        </>
+      ),
+      bodyNote: (
+        <>
+          <strong>Setup</strong> runs before the agent (for example{" "}
+          <code>uv sync</code>). <strong>Validation</strong> are the repository's own
+          gates, and they replace the case's when a run has a target — the repo
+          knows how it is tested better than a portable case does.
+        </>
+      )
+    },
+    form: {
+      editTitle: (id: string) => `Edit ${id}`,
+      addTitle: "Add a repository",
+      id: "Id",
+      name: "Name",
+      repositoryUrl: "Repository URL",
+      defaultRef: "Default ref",
+      language: "Language",
+      team: "Team",
+      setupLabel: "Setup commands — one per line, run before the agent",
+      validationLabel: "Validation commands — one per line, the repo's own gates",
+      saving: "Saving…",
+      saveChanges: "Save changes",
+      addRepository: "Add repository",
+      inspecting: "Inspecting…",
+      inspectRepository: "Inspect repository",
+      cancel: "Cancel",
+      inspectHint:
+        "Inspect reads the repository before you save it — it checks the runtime " +
+        "is one the runner image can build (Python or Node), and that your setup " +
+        "and validation commands name a toolchain the repository actually has. It " +
+        "only warns; you can still add the repository.",
+      incompatible: "This repository is likely not to work in the lab",
+      compatible: "Runtime looks compatible",
+      dismiss: "Dismiss"
+    },
+    table: {
+      title: "Registered repositories",
+      showArchived: "Show archived",
+      noneTitle: "No target repositories yet",
+      noneDescription: "Add one above to run a case against an external repository.",
+      colId: "Id",
+      colRepository: "Repository",
+      colDefaultRef: "Default ref",
+      colResolvesTo: "Resolves to",
+      colGates: "Gates",
+      archived: "archived",
+      checking: "checking…",
+      check: "Check",
+      gatesCommands: (count: number) => `${count} command(s)`,
+      caseDefault: "case default",
+      open: "Open",
+      edit: "Edit",
+      reading: "Reading…",
+      readiness: "Readiness",
+      deriveCases: "Derive cases",
+      archive: "Archive"
+    },
+    readinessCard: {
+      title: (targetId: string) => `Readiness — ${targetId}`,
+      ready: "Ready to run",
+      notReady: "Not runnable yet",
+      narrowClaim:
+        "\"Ready\" is a narrow claim: a run against this repository would execute " +
+        "and be scored. It says nothing about how good the repository's own AI " +
+        "governance is.",
+      close: "Close"
+    },
+    derived: {
+      title: (targetId: string, count: number) => `Candidate cases from ${targetId} (${count})`,
+      intro: (
+        <>
+          Mined from commits that changed source <strong>and</strong> its tests
+          together — tasks this team performs and already knows how to verify.
+          Nothing is saved: read them, keep the ones the team would recognise as
+          their work, and create those as cases.
+        </>
+      ),
+      note: (
+        <>
+          Each candidate carries the commit it came from, which is what lets you
+          show later that the case predates the results instead of having been
+          written to fit them. Freeze the case and its rubric{" "}
+          <strong>before</strong> running either harness condition.
+        </>
+      ),
+      noneTitle: "No candidates found",
+      noneDescription:
+        "No commit in the scanned history changed source and tests together. " +
+        "Widen the scan, or the repository may not keep tests in recognisable paths.",
+      candidateMeta: (commit: string, files: number, tests: number) =>
+        `${commit} · ${files} file(s) · ${tests} test(s)`,
+      suggestedId: "Suggested case id",
+      suggestedPrompt: "Suggested prompt — edit before using",
+      createHint: (
+        <>
+          Create it from this repository&apos;s workbench (Open → Cases), so it
+          carries <code>origin_target_id</code>.
+        </>
+      )
+    }
+  },
+  es: {
+    errors: {
+      loadRepositories: "No se pudieron cargar los repositorios",
+      saveRepository: "No se pudo guardar el repositorio",
+      inspectRepository: "No se pudo inspeccionar el repositorio",
+      archiveRepository: "No se pudo archivar el repositorio",
+      couldNotResolve: "No se pudo resolver",
+      readRepository: "No se pudo leer el repositorio",
+      readHistory: "No se pudo leer el historial del repositorio",
+      adoptInferred: "No se pudieron adoptar los comandos inferidos"
+    },
+    header: {
+      title: "Repositorios",
+      description:
+        "Los repositorios contra los que se puede correr un caso. Un caso se " +
+        "empareja con un repositorio al lanzar la corrida, así que el mismo caso " +
+        "se puede evaluar en varios de ellos.",
+      crossRepoLink: "Probá el arnés entre estos repositorios",
+      crossRepoNeedsMore: (count: 0 | 1) =>
+        `La evaluación entre repositorios necesita al menos dos repositorios ` +
+        `activos para variar — hay ${count === 0 ? "ninguno" : "uno"} registrado ` +
+        `hasta ahora.`
+    },
+    helpPanel: {
+      title: "Cómo se fija un repositorio",
+      body: (
+        <>
+          El checkout vive en <code>data/checkouts/</code>, porque es la única
+          carpeta que un contenedor de corrida puede ver. Vos lo ponés ahí: cloná el
+          repositorio con el comando que muestra esta página, adjuntá un clon que ya
+          esté en esa carpeta con cualquier nombre, o dejá que el lab copie un
+          repositorio que ya tenés en esta máquina. El lab nunca hace fetch de un
+          remoto por su cuenta. Después <strong>fija el commit</strong> en el que
+          está ese checkout, y cada corrida, lectura de estado y caso derivado
+          trabaja desde ese commit fijado hasta que lo volvás a fijar. Correr de
+          nuevo más tarde es el mismo experimento, no lo que se haya subido desde
+          entonces.
+        </>
+      ),
+      bodyNote: (
+        <>
+          <strong>Setup</strong> corre antes del agente (por ejemplo{" "}
+          <code>uv sync</code>). <strong>Validation</strong> son los propios gates
+          del repositorio, y reemplazan a los del caso cuando una corrida tiene un
+          repositorio objetivo — el repo sabe cómo se lo testea mejor que un caso
+          portable.
+        </>
+      )
+    },
+    form: {
+      editTitle: (id: string) => `Editar ${id}`,
+      addTitle: "Agregar un repositorio",
+      id: "Id",
+      name: "Nombre",
+      repositoryUrl: "URL del repositorio",
+      defaultRef: "Ref por defecto",
+      language: "Lenguaje",
+      team: "Equipo",
+      setupLabel: "Comandos de setup — uno por línea, corren antes del agente",
+      validationLabel: "Comandos de validación — uno por línea, los gates del repo",
+      saving: "Guardando…",
+      saveChanges: "Guardar cambios",
+      addRepository: "Agregar repositorio",
+      inspecting: "Inspeccionando…",
+      inspectRepository: "Inspeccionar repositorio",
+      cancel: "Cancelar",
+      inspectHint:
+        "Inspeccionar lee el repositorio antes de guardarlo — chequea que el " +
+        "runtime sea uno que la imagen del runner pueda construir (Python o Node), " +
+        "y que tus comandos de setup y validación nombren un toolchain que el " +
+        "repositorio realmente tenga. Solo avisa; igual podés agregar el " +
+        "repositorio.",
+      incompatible: "Es probable que este repositorio no funcione en el lab",
+      compatible: "El runtime parece compatible",
+      dismiss: "Descartar"
+    },
+    table: {
+      title: "Repositorios registrados",
+      showArchived: "Mostrar archivados",
+      noneTitle: "Todavía no hay repositorios objetivo",
+      noneDescription:
+        "Agregá uno arriba para correr un caso contra un repositorio externo.",
+      colId: "Id",
+      colRepository: "Repositorio",
+      colDefaultRef: "Ref por defecto",
+      colResolvesTo: "Resuelve a",
+      colGates: "Gates",
+      archived: "archivado",
+      checking: "chequeando…",
+      check: "Chequear",
+      gatesCommands: (count: number) => `${count} comando(s)`,
+      caseDefault: "por defecto del caso",
+      open: "Abrir",
+      edit: "Editar",
+      reading: "Leyendo…",
+      readiness: "Estado",
+      deriveCases: "Derivar casos",
+      archive: "Archivar"
+    },
+    readinessCard: {
+      title: (targetId: string) => `Estado — ${targetId}`,
+      ready: "Listo para correr",
+      notReady: "Todavía no se puede correr",
+      narrowClaim:
+        "\"Listo\" es una afirmación acotada: una corrida contra este repositorio " +
+        "se ejecutaría y se puntuaría. No dice nada sobre qué tan buena es la " +
+        "propia gobernanza de IA del repositorio.",
+      close: "Cerrar"
+    },
+    derived: {
+      title: (targetId: string, count: number) => `Casos candidatos de ${targetId} (${count})`,
+      intro: (
+        <>
+          Extraídos de commits que cambiaron código fuente <strong>y</strong> sus
+          tests juntos — tareas que este equipo hace y ya sabe cómo verificar. No se
+          guarda nada: leelos, quedate con los que el equipo reconocería como su
+          trabajo, y creá esos como casos.
+        </>
+      ),
+      note: (
+        <>
+          Cada candidato lleva el commit del que vino, que es lo que te permite
+          mostrar después que el caso es anterior a los resultados en vez de haber
+          sido escrito para ajustarse a ellos. Congelá el caso y su rúbrica{" "}
+          <strong>antes</strong> de correr cualquiera de las condiciones del arnés.
+        </>
+      ),
+      noneTitle: "No se encontraron candidatos",
+      noneDescription:
+        "Ningún commit del historial escaneado cambió código fuente y tests " +
+        "juntos. Ampliá el escaneo, o puede que el repositorio no guarde los tests " +
+        "en rutas reconocibles.",
+      candidateMeta: (commit: string, files: number, tests: number) =>
+        `${commit} · ${files} archivo(s) · ${tests} test(s)`,
+      suggestedId: "Id de caso sugerido",
+      suggestedPrompt: "Prompt sugerido — editalo antes de usarlo",
+      createHint: (
+        <>
+          Creálo desde el banco de trabajo de este repositorio (Abrir → Cases), para
+          que lleve <code>origin_target_id</code>.
+        </>
+      )
+    }
+  }
+});
+
 function formFrom(target: TargetRecord): FormState {
   return {
     target_id: target.target_id,
@@ -62,6 +349,7 @@ function formFrom(target: TargetRecord): FormState {
 }
 
 export function Repositories() {
+  const m = useMessages(MESSAGES);
   const [targets, setTargets] = useState<TargetRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -92,9 +380,7 @@ export function Repositories() {
       setTargets(await api.listTargets(archived));
       setError(null);
     } catch (loadError) {
-      setError(
-        loadError instanceof Error ? loadError.message : "Unable to load repositories"
-      );
+      setError(loadError instanceof Error ? loadError.message : m.errors.loadRepositories);
     } finally {
       setIsLoading(false);
     }
@@ -134,9 +420,7 @@ export function Repositories() {
       setInspection(null);
       await load();
     } catch (saveError) {
-      setError(
-        saveError instanceof Error ? saveError.message : "Unable to save repository"
-      );
+      setError(saveError instanceof Error ? saveError.message : m.errors.saveRepository);
     } finally {
       setIsSaving(false);
     }
@@ -157,9 +441,7 @@ export function Repositories() {
       );
     } catch (inspectError) {
       setError(
-        inspectError instanceof Error
-          ? inspectError.message
-          : "Unable to inspect the repository"
+        inspectError instanceof Error ? inspectError.message : m.errors.inspectRepository
       );
     } finally {
       setInspecting(false);
@@ -173,9 +455,7 @@ export function Repositories() {
       await load();
     } catch (archiveError) {
       setError(
-        archiveError instanceof Error
-          ? archiveError.message
-          : "Unable to archive repository"
+        archiveError instanceof Error ? archiveError.message : m.errors.archiveRepository
       );
     }
   };
@@ -189,7 +469,7 @@ export function Repositories() {
       setPins((current) => ({
         ...current,
         [target.target_id]:
-          checkError instanceof Error ? checkError.message : "Could not resolve"
+          checkError instanceof Error ? checkError.message : m.errors.couldNotResolve
       }));
     } finally {
       setChecking(null);
@@ -202,9 +482,7 @@ export function Repositories() {
     try {
       setReadiness(await api.getTargetReadiness(targetId));
     } catch (readError) {
-      setError(
-        readError instanceof Error ? readError.message : "Unable to read the repository"
-      );
+      setError(readError instanceof Error ? readError.message : m.errors.readRepository);
     } finally {
       setReading(null);
     }
@@ -217,11 +495,7 @@ export function Repositories() {
     try {
       setDerived(await api.deriveCases(target.target_id));
     } catch (deriveError) {
-      setError(
-        deriveError instanceof Error
-          ? deriveError.message
-          : "Unable to read the repository's history"
-      );
+      setError(deriveError instanceof Error ? deriveError.message : m.errors.readHistory);
     } finally {
       setDeriving(null);
     }
@@ -231,12 +505,8 @@ export function Repositories() {
     <section className="stack">
       <header className="page-header">
         <div>
-          <h1>Repositories</h1>
-          <p className="muted">
-            The repositories a case can be run against. A case is paired with a
-            repository at the run, so the same case can be evaluated across several
-            of them.
-          </p>
+          <h1>{m.header.title}</h1>
+          <p className="muted">{m.header.description}</p>
         </div>
         {/*
           Cross-repo lives here rather than on the home page: it is the one mode
@@ -247,43 +517,28 @@ export function Repositories() {
         <div className="page-header-action">
           {activeTargets.length >= 2 ? (
             <Link className="primary" to="/evaluate/new?mode=cross_repo">
-              Test the harness across these repositories
+              {m.header.crossRepoLink}
             </Link>
           ) : (
             <p className="muted">
-              Cross-repo evaluation needs at least two active repositories to vary —{" "}
-              {activeTargets.length === 0 ? "none" : "one"} registered so far.
+              {m.header.crossRepoNeedsMore(activeTargets.length === 0 ? 0 : 1)}
             </p>
           )}
         </div>
       </header>
 
-      <HelpPanel title="How a repository is pinned">
-        <p>
-          The checkout lives under <code>data/checkouts/</code>, because that is the
-          only folder a run container can see. You put it there: clone it yourself with
-          the command this page shows, attach a clone that is already in that folder
-          under any name, or have the lab copy a repository you already have on this
-          machine. The lab never fetches a remote on your behalf. It then{" "}
-          <strong>pins the commit</strong> that checkout is on, and every run, readiness
-          read and derived case works from that pinned commit until you re-pin it.
-          Re-running later is the same experiment, not whatever was pushed since.
-        </p>
-        <p className="muted">
-          <strong>Setup</strong> runs before the agent (for example{" "}
-          <code>uv sync</code>). <strong>Validation</strong> are the repository's own
-          gates, and they replace the case's when a run has a target — the repo knows
-          how it is tested better than a portable case does.
-        </p>
+      <HelpPanel title={m.helpPanel.title}>
+        <p>{m.helpPanel.body}</p>
+        <p className="muted">{m.helpPanel.bodyNote}</p>
       </HelpPanel>
 
       {error !== null && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
       <div className="card">
-        <h2>{editingId ? `Edit ${editingId}` : "Add a repository"}</h2>
+        <h2>{editingId ? m.form.editTitle(editingId) : m.form.addTitle}</h2>
         <div className="form-grid">
           <label>
-            <span>Id</span>
+            <span>{m.form.id}</span>
             <input
               disabled={editingId !== null}
               onChange={(event) =>
@@ -294,7 +549,7 @@ export function Repositories() {
             />
           </label>
           <label>
-            <span>Name</span>
+            <span>{m.form.name}</span>
             <input
               onChange={(event) => setForm({ ...form, name: event.target.value })}
               placeholder="Payments API"
@@ -302,7 +557,7 @@ export function Repositories() {
             />
           </label>
           <label>
-            <span>Repository URL</span>
+            <span>{m.form.repositoryUrl}</span>
             <input
               onChange={(event) =>
                 setForm({ ...form, repository_url: event.target.value })
@@ -312,7 +567,7 @@ export function Repositories() {
             />
           </label>
           <label>
-            <span>Default ref</span>
+            <span>{m.form.defaultRef}</span>
             <input
               onChange={(event) =>
                 setForm({ ...form, default_ref: event.target.value })
@@ -322,7 +577,7 @@ export function Repositories() {
             />
           </label>
           <label>
-            <span>Language</span>
+            <span>{m.form.language}</span>
             <input
               onChange={(event) => setForm({ ...form, language: event.target.value })}
               placeholder="python"
@@ -330,7 +585,7 @@ export function Repositories() {
             />
           </label>
           <label>
-            <span>Team</span>
+            <span>{m.form.team}</span>
             <input
               onChange={(event) => setForm({ ...form, team: event.target.value })}
               placeholder="payments"
@@ -339,7 +594,7 @@ export function Repositories() {
           </label>
         </div>
         <label className="stacked-field">
-          <span>Setup commands — one per line, run before the agent</span>
+          <span>{m.form.setupLabel}</span>
           <textarea
             onChange={(event) => setForm({ ...form, setup: event.target.value })}
             placeholder={"uv sync"}
@@ -348,7 +603,7 @@ export function Repositories() {
           />
         </label>
         <label className="stacked-field">
-          <span>Validation commands — one per line, the repo's own gates</span>
+          <span>{m.form.validationLabel}</span>
           <textarea
             onChange={(event) => setForm({ ...form, validation: event.target.value })}
             placeholder={"make lint\nmake test"}
@@ -367,14 +622,14 @@ export function Repositories() {
             onClick={() => void handleSubmit()}
             type="button"
           >
-            {isSaving ? "Saving…" : editingId ? "Save changes" : "Add repository"}
+            {isSaving ? m.form.saving : editingId ? m.form.saveChanges : m.form.addRepository}
           </button>
           <button
             disabled={inspecting || form.repository_url.trim() === ""}
             onClick={() => void handleInspect()}
             type="button"
           >
-            {inspecting ? "Inspecting…" : "Inspect repository"}
+            {inspecting ? m.form.inspecting : m.form.inspectRepository}
           </button>
           {editingId !== null && (
             <button
@@ -385,16 +640,11 @@ export function Repositories() {
               }}
               type="button"
             >
-              Cancel
+              {m.form.cancel}
             </button>
           )}
         </div>
-        <p className="muted small">
-          Inspect reads the repository before you save it — it checks the runtime is
-          one the runner image can build (Python or Node), and that your setup and
-          validation commands name a toolchain the repository actually has. It only
-          warns; you can still add the repository.
-        </p>
+        <p className="muted small">{m.form.inspectHint}</p>
 
         {inspection !== null &&
           (() => {
@@ -407,11 +657,7 @@ export function Repositories() {
                 {runtime !== undefined && (
                   <div className={`callout ${bad ? "callout--warning" : "callout--ok"}`}>
                     <div>
-                      <strong>
-                        {bad
-                          ? "This repository is likely not to work in the lab"
-                          : "Runtime looks compatible"}
-                      </strong>
+                      <strong>{bad ? m.form.incompatible : m.form.compatible}</strong>
                       <p>{runtime.detail}</p>
                       {runtime.items.length > 0 && (
                         <ul className="check-items">
@@ -426,7 +672,7 @@ export function Repositories() {
                 <ReadinessReportView report={inspection} />
                 <div className="row">
                   <button onClick={() => setInspection(null)} type="button">
-                    Dismiss
+                    {m.form.dismiss}
                   </button>
                 </div>
               </div>
@@ -436,33 +682,30 @@ export function Repositories() {
 
       <div className="card">
         <div className="row space-between">
-          <h2>Registered repositories</h2>
+          <h2>{m.table.title}</h2>
           <label className="row gap">
             <input
               checked={showArchived}
               onChange={(event) => setShowArchived(event.target.checked)}
               type="checkbox"
             />
-            <span>Show archived</span>
+            <span>{m.table.showArchived}</span>
           </label>
         </div>
 
         {isLoading ? (
           <Spinner />
         ) : targets.length === 0 ? (
-          <EmptyState
-            description="Add one above to run a case against an external repository."
-            title="No target repositories yet"
-          />
+          <EmptyState description={m.table.noneDescription} title={m.table.noneTitle} />
         ) : (
           <table className="data-table">
             <thead>
               <tr>
-                <th>Id</th>
-                <th>Repository</th>
-                <th>Default ref</th>
-                <th>Resolves to</th>
-                <th>Gates</th>
+                <th>{m.table.colId}</th>
+                <th>{m.table.colRepository}</th>
+                <th>{m.table.colDefaultRef}</th>
+                <th>{m.table.colResolvesTo}</th>
+                <th>{m.table.colGates}</th>
                 <th />
               </tr>
             </thead>
@@ -474,7 +717,7 @@ export function Repositories() {
                     <td>
                       <strong>{target.target_id}</strong>
                       {target.status === "archived" && (
-                        <span className="badge"> archived</span>
+                        <span className="badge"> {m.table.archived}</span>
                       )}
                       <div className="muted small">{target.name}</div>
                     </td>
@@ -482,10 +725,10 @@ export function Repositories() {
                     <td className="mono small">{target.default_ref}</td>
                     <td className="mono small">
                       {checking === target.target_id ? (
-                        "checking…"
+                        m.table.checking
                       ) : pin === undefined ? (
                         <button onClick={() => void handleCheck(target)} type="button">
-                          Check
+                          {m.table.check}
                         </button>
                       ) : typeof pin === "string" ? (
                         <span className="error-text">{pin}</span>
@@ -495,8 +738,8 @@ export function Repositories() {
                     </td>
                     <td className="small">
                       {target.validation_commands.length > 0
-                        ? `${target.validation_commands.length} command(s)`
-                        : "case default"}
+                        ? m.table.gatesCommands(target.validation_commands.length)
+                        : m.table.caseDefault}
                     </td>
                     <td className="row gap">
                       {/* The workbench, where this repository's checkout, cases
@@ -505,7 +748,7 @@ export function Repositories() {
                         className="button-link"
                         to={`/evidence/repositories/${target.target_id}`}
                       >
-                        Open
+                        {m.table.open}
                       </Link>
                       <button
                         onClick={() => {
@@ -514,28 +757,28 @@ export function Repositories() {
                         }}
                         type="button"
                       >
-                        Edit
+                        {m.table.edit}
                       </button>
                       <button
                         disabled={reading !== null}
                         onClick={() => void handleReadiness(target.target_id)}
                         type="button"
                       >
-                        {reading === target.target_id ? "Reading…" : "Readiness"}
+                        {reading === target.target_id ? m.table.reading : m.table.readiness}
                       </button>
                       <button
                         disabled={deriving !== null}
                         onClick={() => void handleDerive(target)}
                         type="button"
                       >
-                        {deriving === target.target_id ? "Reading…" : "Derive cases"}
+                        {deriving === target.target_id ? m.table.reading : m.table.deriveCases}
                       </button>
                       {target.status === "active" && (
                         <button
                           onClick={() => void handleArchive(target.target_id)}
                           type="button"
                         >
-                          Archive
+                          {m.table.archive}
                         </button>
                       )}
                     </td>
@@ -550,16 +793,12 @@ export function Repositories() {
       {readiness !== null && (
         <div className="card">
           <div className="row space-between">
-            <h2>Readiness — {readiness.target_id}</h2>
+            <h2>{m.readinessCard.title(readiness.target_id)}</h2>
             <span className={`badge ${readiness.ready ? "ok" : "warn"}`}>
-              {readiness.ready ? "Ready to run" : "Not runnable yet"}
+              {readiness.ready ? m.readinessCard.ready : m.readinessCard.notReady}
             </span>
           </div>
-          <p className="muted small">
-            "Ready" is a narrow claim: a run against this repository would execute
-            and be scored. It says nothing about how good the repository's own AI
-            governance is.
-          </p>
+          <p className="muted small">{m.readinessCard.narrowClaim}</p>
           <ReadinessReportView
             adopting={reading !== null}
             onAdopt={(payload) => {
@@ -573,7 +812,7 @@ export function Repositories() {
                   setError(
                     adoptError instanceof Error
                       ? adoptError.message
-                      : "Unable to adopt the inferred commands"
+                      : m.errors.adoptInferred
                   );
                 } finally {
                   setReading(null);
@@ -583,32 +822,20 @@ export function Repositories() {
             report={readiness}
           />
           <button onClick={() => setReadiness(null)} type="button">
-            Close
+            {m.readinessCard.close}
           </button>
         </div>
       )}
 
       {derived !== null && (
         <div className="card">
-          <h2>
-            Candidate cases from {derived.target_id} ({derived.candidates.length})
-          </h2>
-          <p className="muted">
-            Mined from commits that changed source <strong>and</strong> its tests
-            together — tasks this team performs and already knows how to verify.
-            Nothing is saved: read them, keep the ones the team would recognise as
-            their work, and create those as cases.
-          </p>
-          <p className="muted small">
-            Each candidate carries the commit it came from, which is what lets you
-            show later that the case predates the results instead of having been
-            written to fit them. Freeze the case and its rubric{" "}
-            <strong>before</strong> running either harness condition.
-          </p>
+          <h2>{m.derived.title(derived.target_id, derived.candidates.length)}</h2>
+          <p className="muted">{m.derived.intro}</p>
+          <p className="muted small">{m.derived.note}</p>
           {derived.candidates.length === 0 ? (
             <EmptyState
-              description="No commit in the scanned history changed source and tests together. Widen the scan, or the repository may not keep tests in recognisable paths."
-              title="No candidates found"
+              description={m.derived.noneDescription}
+              title={m.derived.noneTitle}
             />
           ) : (
             <ul className="candidate-list">
@@ -626,28 +853,28 @@ export function Repositories() {
                     {expanded === candidate.commit ? "▾" : "▸"} {candidate.subject}
                     <span className="muted small">
                       {" "}
-                      {candidate.commit.slice(0, 7)} · {candidate.source_files.length}{" "}
-                      file(s) · {candidate.test_files.length} test(s)
+                      {m.derived.candidateMeta(
+                        candidate.commit.slice(0, 7),
+                        candidate.source_files.length,
+                        candidate.test_files.length
+                      )}
                     </span>
                   </button>
                   {expanded === candidate.commit && (
                     <div className="stack">
                       <label className="stacked-field">
-                        <span>Suggested case id</span>
+                        <span>{m.derived.suggestedId}</span>
                         <input readOnly value={candidate.suggested_case_id} />
                       </label>
                       <label className="stacked-field">
-                        <span>Suggested prompt — edit before using</span>
+                        <span>{m.derived.suggestedPrompt}</span>
                         <textarea
                           readOnly
                           rows={10}
                           value={candidate.suggested_prompt}
                         />
                       </label>
-                      <p className="muted small">
-                        Create it from this repository&apos;s workbench (Open →
-                        Cases), so it carries <code>origin_target_id</code>.
-                      </p>
+                      <p className="muted small">{m.derived.createHint}</p>
                     </div>
                   )}
                 </li>

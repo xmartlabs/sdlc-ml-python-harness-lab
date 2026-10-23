@@ -4,6 +4,7 @@ import { api, SESSION_EXPIRED_EVENT } from "./api";
 import { CaseEditor } from "./components/CaseEditor";
 import { Layout } from "./components/Layout";
 import { RunDetailRoute } from "./components/RunDetailRoute";
+import { defineMessages, useMessages } from "./i18n";
 import { Audit } from "./pages/Audit";
 import { Cases } from "./pages/Cases";
 import { Compare } from "./pages/Compare";
@@ -33,6 +34,16 @@ import type {
   RunRecord,
   SessionState
 } from "./types";
+
+const MESSAGES = defineMessages({
+  en: { previewMode: "Preview mode" },
+  es: { previewMode: "Modo de vista previa" }
+});
+
+/** Sentinel for `apiStatus`: the health check never reached the API. Mapped to
+ * text at render time (not stored translated) so a language switch updates it
+ * without a refetch. */
+const PREVIEW_MODE = "__preview_mode__";
 
 const previewCase: CaseRecord = {
   case_id: "tetris-v1",
@@ -81,11 +92,12 @@ export default function App() {
   const [cases, setCases] = useState<CaseRecord[]>(fallbackCases);
   const [runs, setRuns] = useState<RunRecord[]>(fallbackRuns);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(previewCase.case_id);
-  const [apiStatus, setApiStatus] = useState("Preview mode");
+  const [apiStatus, setApiStatus] = useState(PREVIEW_MODE);
   const [theme, setTheme] = useState<ThemeMode>(() => getStoredTheme());
   // `null` while the session probe is in flight, so the app never flashes the
   // login form at an already-authenticated operator.
   const [session, setSession] = useState<SessionState | null>(null);
+  const m = useMessages(MESSAGES);
 
   useEffect(() => {
     applyTheme(theme);
@@ -151,7 +163,7 @@ export default function App() {
           casesResult.status === "rejected" &&
           runsResult.status === "rejected"
         ) {
-          setApiStatus("Preview mode");
+          setApiStatus(PREVIEW_MODE);
         }
       }
     );
@@ -360,7 +372,13 @@ export default function App() {
         />
         <Route element={<Compare runs={runs} />} path="/advanced/compare" />
         <Route
-          element={<Dashboard apiStatus={apiStatus} cases={cases} runs={runs} />}
+          element={
+            <Dashboard
+              apiStatus={apiStatus === PREVIEW_MODE ? m.previewMode : apiStatus}
+              cases={cases}
+              runs={runs}
+            />
+          }
           path="/advanced/benchmarks"
         />
         <Route element={<Improvements />} path="/advanced/improvements" />

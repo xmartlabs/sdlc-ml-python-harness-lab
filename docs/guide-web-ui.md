@@ -311,8 +311,31 @@ classes that every wizard shares:
 
 Icons come from `frontend/src/components/icons.tsx` (inline Lucide geometry),
 never from emoji or text glyphs: emoji ignore the theme and render differently
-on every platform. To check a change without opening a browser, screenshot the
-dev server headlessly:
+on every platform.
+
+### Language
+
+The **EN | ES** switch under the brand at the top of the sidebar (and in **Settings → Appearance**)
+sets the interface language; the browser remembers it, and a first visit follows the
+browser's language. Every component keeps its strings beside its markup:
+
+```tsx
+const MESSAGES = defineMessages({
+  en: { title: "Experiments", runs: (count: number) => `${count} runs` },
+  es: { title: "Experimentos", runs: (count: number) => `${count} corridas` }
+});
+const m = useMessages(MESSAGES); // inside the component
+```
+
+The Spanish block is type-checked against the English one, so a string added in one
+language only fails `make check-frontend`. Strings that take values are functions, so
+each language owns its word order; helpers outside a component read
+`pickMessages(MESSAGES)` at call time, never at module load. Use the glossary in
+[ADR-0070](adr/0070-the-interface-speaks-english-and-spanish.md) for every term of the
+method. Text the backend composes — verdicts, readings, reasons, check results — and
+these guides stay in English for now.
+
+To check a change without opening a browser, screenshot the dev server headlessly:
 
 ```sh
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \

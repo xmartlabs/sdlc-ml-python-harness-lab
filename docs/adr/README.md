@@ -98,6 +98,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0067 — A frontend case is graded in a real browser](0067-a-frontend-case-is-graded-in-a-real-browser.md)
 - [0068 — A case can start from its own files](0068-a-case-can-start-from-its-own-files.md)
 - [0069 — A model is judged by the tier it does reliably](0069-a-model-is-judged-by-the-tier-it-does-reliably.md)
+- [0070 — The interface speaks English and Spanish](0070-the-interface-speaks-english-and-spanish.md)
 
 ## Why ADRs exist
 

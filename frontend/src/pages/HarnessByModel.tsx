@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { IconArrowRight, IconLayers } from "../components/icons";
 import { useNativeModels } from "../harnesses";
+import { defineMessages, pickMessages, useMessages } from "../i18n";
 import type { CaseRecord } from "../types";
 
 /**
@@ -20,8 +22,6 @@ import type { CaseRecord } from "../types";
 
 type Level = {
   key: string;
-  label: string;
-  note: string;
   overrides: (skills: string[]) => Record<string, unknown>;
 };
 
@@ -29,27 +29,152 @@ type Level = {
 // none → governance (rules, hooks) → governance + skills. The middle rung is
 // the "partial harness": everything except the skills, so its gap to the top
 // rung is what the skills add, and its gap to the bottom what governance adds.
+// The display label and note for each key live in MESSAGES, read at render time.
 const NONE: Level = {
   key: "none",
-  label: "No harness",
-  note: "governance masked in the runner",
   overrides: () => ({ harness_source: "bare" })
 };
 const GOVERNANCE: Level = {
   key: "governance",
-  label: "Governance only",
-  note: "rules and hooks, every skill disabled",
   overrides: (skills) => ({ harness_source: "lab_root", skills_disabled: skills })
 };
 const FULL: Level = {
   key: "full",
-  label: "Full harness",
-  note: "rules, hooks and skills",
   overrides: () => ({ harness_source: "lab_root" })
 };
 
 const DEFAULT_MODELS = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"];
 const MAX_SLUG = 60;
+
+const QUESTION = "Do stronger models need less harness?";
+
+const MESSAGES = defineMessages({
+  en: {
+    eyebrow: "Harness x model",
+    title: QUESTION,
+    question: QUESTION,
+    lede: "The lab runs every harness level on every model, then reports the harness effect per model and how it changes from the first model to the last — with the interval that says whether the change is real.",
+    levelLabel: {
+      none: "No harness",
+      governance: "Governance only",
+      full: "Full harness"
+    } as Record<string, string>,
+    levelNote: {
+      none: "governance masked in the runner",
+      governance: "rules and hooks, every skill disabled",
+      full: "rules, hooks and skills"
+    } as Record<string, string>,
+    casesTitle: "1. Cases",
+    casesHint:
+      "Pick cases where the smallest model does not already pass everything without a harness — a case every arm passes cannot show an effect.",
+    noCasesYet: (link: ReactNode) => <>No cases yet. {link}.</>,
+    createOrImportOne: "Create or import one",
+    modelsTitle: "2. Models, smallest first",
+    designTitle: "3. Design",
+    questionLabel: "Question",
+    repetitionsLabel: "Repetitions per cell and case",
+    harnessLevelsSmallestFirst: "Harness levels, smallest first",
+    addPartialRung:
+      "Add a partial rung (governance without skills) to separate what the rules add from what the skills add.",
+    cellsSummary: (
+      cells: number,
+      levels: number,
+      models: number,
+      cases: number,
+      repetitions: number,
+      runs: number,
+      variantSuffix: string
+    ) => (
+      <>
+        {cells} cells ({levels} harness levels x {models} models) x{" "}
+        {cases} case(s) x {repetitions} repetitions ={" "}
+        <strong>{runs} runs</strong>
+        {variantSuffix}. Runs execute one at a time; check cost on the first
+        cell before waiting for all of them.
+      </>
+    ),
+    variantSuffix: (variant: string) => ` · prompt variant '${variant}'`,
+    pickAtLeastOneCase: "Pick at least one case.",
+    fewerThanThreeCases:
+      "With fewer than three cases the interaction is never called established — the cases are the unit of evidence.",
+    pickAtLeastTwoModels: "Pick at least two models.",
+    noGatewayCard: (models: string) =>
+      `Your gateway has no card for ${models}. Runs routed through it will fail at launch — add the card to ai-gateway, or run with a Claude credential directly.`,
+    mixedGenerations:
+      "You mixed current and previous-generation models. The order is smallest first within each generation, so the interaction no longer reads 'smaller to larger' — compare one generation at a time.",
+    noSharedVariant: "The selected cases share no prompt variant; pick cases from one family.",
+    createWithoutLaunching: "Create without launching",
+    createAndLaunch: (runs: number) => `Create and launch ${runs} runs`,
+    unableToLoadCases: "Unable to load cases",
+    unknownError: "unknown error",
+    launchRefused: (experimentId: string, reason: string) =>
+      `Created '${experimentId}', but the launch was refused: ${reason}. Launch it from this page.`,
+    unableToCreate: "Unable to create the experiment"
+  },
+  es: {
+    eyebrow: "Arnés x modelo",
+    title: "¿Los modelos más fuertes necesitan menos arnés?",
+    question: "¿Los modelos más fuertes necesitan menos arnés?",
+    lede: "El lab corre cada nivel de arnés en cada modelo, y después reporta el efecto del arnés por modelo y cómo cambia del primer modelo al último — con el intervalo que dice si el cambio es real.",
+    levelLabel: {
+      none: "Sin arnés",
+      governance: "Solo gobernanza",
+      full: "Arnés completo"
+    } as Record<string, string>,
+    levelNote: {
+      none: "gobernanza oculta en el runner",
+      governance: "reglas y hooks, todas las skills deshabilitadas",
+      full: "reglas, hooks y skills"
+    } as Record<string, string>,
+    casesTitle: "1. Casos",
+    casesHint:
+      "Elegí casos donde el modelo más chico no pase ya todo sin arnés — un caso que todo brazo pasa no puede mostrar un efecto.",
+    noCasesYet: (link: ReactNode) => <>Todavía no hay casos. {link}.</>,
+    createOrImportOne: "Creá o importá uno",
+    modelsTitle: "2. Modelos, de menor a mayor",
+    designTitle: "3. Diseño",
+    questionLabel: "Pregunta",
+    repetitionsLabel: "Repeticiones por celda y caso",
+    harnessLevelsSmallestFirst: "Niveles de arnés, de menor a mayor",
+    addPartialRung:
+      "Agregá un escalón parcial (gobernanza sin skills) para separar lo que suman las reglas de lo que suman las skills.",
+    cellsSummary: (
+      cells: number,
+      levels: number,
+      models: number,
+      cases: number,
+      repetitions: number,
+      runs: number,
+      variantSuffix: string
+    ) => (
+      <>
+        {cells} celdas ({levels} niveles de arnés x {models} modelos) x{" "}
+        {cases} caso(s) x {repetitions} repeticiones ={" "}
+        <strong>{runs} corridas</strong>
+        {variantSuffix}. Las corridas se ejecutan de a una; revisá el costo en
+        la primera celda antes de esperar a todas.
+      </>
+    ),
+    variantSuffix: (variant: string) => ` · variante de prompt '${variant}'`,
+    pickAtLeastOneCase: "Elegí al menos un caso.",
+    fewerThanThreeCases:
+      "Con menos de tres casos la interacción nunca se llama establecida — los casos son la unidad de evidencia.",
+    pickAtLeastTwoModels: "Elegí al menos dos modelos.",
+    noGatewayCard: (models: string) =>
+      `Tu gateway no tiene carta para ${models}. Las corridas ruteadas por ahí van a fallar al lanzar — agregá la carta en ai-gateway, o corré con una credencial de Claude directa.`,
+    mixedGenerations:
+      "Mezclaste modelos de la generación actual y de una anterior. El orden es de menor a mayor dentro de cada generación, así que la interacción ya no se lee 'de menor a mayor' — comparalas de a una generación por vez.",
+    noSharedVariant:
+      "Los casos elegidos no comparten ninguna variante de prompt; elegí casos de una sola familia.",
+    createWithoutLaunching: "Crear sin lanzar",
+    createAndLaunch: (runs: number) => `Crear y lanzar ${runs} corridas`,
+    unableToLoadCases: "No se pudieron cargar los casos",
+    unknownError: "error desconocido",
+    launchRefused: (experimentId: string, reason: string) =>
+      `Se creó '${experimentId}', pero el lanzamiento fue rechazado: ${reason}. Lanzalo desde esta página.`,
+    unableToCreate: "No se pudo crear el experimento"
+  }
+});
 
 function slugify(value: string): string {
   return (
@@ -66,6 +191,7 @@ function toggle(list: string[], value: string): string[] {
 }
 
 export function HarnessByModel() {
+  const m = useMessages(MESSAGES);
   const navigate = useNavigate();
   const [cases, setCases] = useState<CaseRecord[]>([]);
   const [caseIds, setCaseIds] = useState<string[]>([]);
@@ -90,7 +216,9 @@ export function HarnessByModel() {
       a.size_rank - b.size_rank
   );
   const [repetitions, setRepetitions] = useState(3);
-  const [question, setQuestion] = useState("Do stronger models need less harness?");
+  // Sent to the API as the experiment's declared question: kept in English,
+  // like any other value the backend stores, until the user edits it.
+  const [question, setQuestion] = useState(QUESTION);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -99,8 +227,9 @@ export function HarnessByModel() {
       .listCases()
       .then((rows) => setCases(rows.filter((row) => row.status !== "archived")))
       .catch((loadError: unknown) =>
-        setError(loadError instanceof Error ? loadError.message : "Unable to load cases")
+        setError(loadError instanceof Error ? loadError.message : m.unableToLoadCases)
       );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Variants every selected case declares — the launch needs one they all have.
@@ -133,22 +262,12 @@ export function HarnessByModel() {
   const runs = cells * caseIds.length * repetitions;
 
   const problems: string[] = [];
-  if (caseIds.length === 0) problems.push("Pick at least one case.");
-  if (caseIds.length > 0 && caseIds.length < 3)
-    problems.push(
-      "With fewer than three cases the interaction is never called established — the cases are the unit of evidence."
-    );
-  if (orderedModels.length < 2) problems.push("Pick at least two models.");
-  if (offGateway.length)
-    problems.push(
-      `Your gateway has no card for ${offGateway.join(", ")}. Runs routed through it will fail at launch — add the card to ai-gateway, or run with a Claude credential directly.`
-    );
-  if (generations.size > 1)
-    problems.push(
-      "You mixed current and previous-generation models. The order is smallest first within each generation, so the interaction no longer reads 'smaller to larger' — compare one generation at a time."
-    );
-  if (caseIds.length > 0 && !sharedVariant)
-    problems.push("The selected cases share no prompt variant; pick cases from one family.");
+  if (caseIds.length === 0) problems.push(m.pickAtLeastOneCase);
+  if (caseIds.length > 0 && caseIds.length < 3) problems.push(m.fewerThanThreeCases);
+  if (orderedModels.length < 2) problems.push(m.pickAtLeastTwoModels);
+  if (offGateway.length) problems.push(m.noGatewayCard(offGateway.join(", ")));
+  if (generations.size > 1) problems.push(m.mixedGenerations);
+  if (caseIds.length > 0 && !sharedVariant) problems.push(m.noSharedVariant);
   const blocking = caseIds.length === 0 || orderedModels.length < 2 || !sharedVariant;
 
   const create = async (launch: boolean) => {
@@ -192,7 +311,7 @@ export function HarnessByModel() {
         conditions
       });
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Unable to create the experiment");
+      setError(saveError instanceof Error ? saveError.message : m.unableToCreate);
       setSaving(false);
       return;
     }
@@ -216,9 +335,10 @@ export function HarnessByModel() {
         setSaving(false);
         navigate(page, {
           state: {
-            launchError: `Created '${created.experiment_id}', but the launch was refused: ${
-              launchError instanceof Error ? launchError.message : "unknown error"
-            }. Launch it from this page.`
+            launchError: m.launchRefused(
+              created.experiment_id,
+              launchError instanceof Error ? launchError.message : m.unknownError
+            )
           }
         });
         return;
@@ -233,25 +353,18 @@ export function HarnessByModel() {
       <header className="page-header">
         <div>
           <span className="eyebrow">
-            <IconLayers size={14} /> Harness x model
+            <IconLayers size={14} /> {m.eyebrow}
           </span>
-          <h1>Do stronger models need less harness?</h1>
-          <p className="lede">
-            The lab runs every harness level on every model, then reports the harness
-            effect per model and how it changes from the first model to the last — with
-            the interval that says whether the change is real.
-          </p>
+          <h1>{m.title}</h1>
+          <p className="lede">{m.lede}</p>
         </div>
       </header>
 
       {error ? <ErrorBanner message={error} /> : null}
 
       <section className="panel">
-        <h2>1. Cases</h2>
-        <p className="muted small">
-          Pick cases where the smallest model does not already pass everything without a
-          harness — a case every arm passes cannot show an effect.
-        </p>
+        <h2>{m.casesTitle}</h2>
+        <p className="muted small">{m.casesHint}</p>
         <div className="checkbox-stack">
           {cases.map((row) => (
             <label className="checkbox" key={row.case_id}>
@@ -268,14 +381,16 @@ export function HarnessByModel() {
           ))}
           {cases.length === 0 ? (
             <p className="muted small">
-              No cases yet. <Link to="/evidence/cases">Create or import one</Link>.
+              {m.noCasesYet(
+                <Link to="/evidence/cases">{m.createOrImportOne}</Link>
+              )}
             </p>
           ) : null}
         </div>
       </section>
 
       <section className="panel">
-        <h2>2. Models, smallest first</h2>
+        <h2>{m.modelsTitle}</h2>
         <div className="checkbox-stack">
           {MODELS.map((model) => (
             <label className="checkbox" key={model.id}>
@@ -293,14 +408,14 @@ export function HarnessByModel() {
       </section>
 
       <section className="panel">
-        <h2>3. Design</h2>
+        <h2>{m.designTitle}</h2>
         <div className="form-grid">
           <label className="full">
-            Question
+            {m.questionLabel}
             <input onChange={(event) => setQuestion(event.target.value)} value={question} />
           </label>
           <label>
-            Repetitions per cell and case
+            {m.repetitionsLabel}
             <select
               onChange={(event) => setRepetitions(Number(event.target.value))}
               value={repetitions}
@@ -313,11 +428,11 @@ export function HarnessByModel() {
             </select>
           </label>
           <div>
-            <span className="muted small">Harness levels, smallest first</span>
+            <span className="muted small">{m.harnessLevelsSmallestFirst}</span>
             <ul className="onboarding-steps">
               {LEVELS.map((level) => (
                 <li key={level.key}>
-                  <strong>{level.label}</strong> — {level.note}
+                  <strong>{m.levelLabel[level.key]}</strong> — {m.levelNote[level.key]}
                 </li>
               ))}
             </ul>
@@ -328,18 +443,20 @@ export function HarnessByModel() {
                 onChange={(event) => setWithGovernance(event.target.checked)}
                 type="checkbox"
               />
-              <span>
-                Add a partial rung (governance without skills) to separate what the
-                rules add from what the skills add.
-              </span>
+              <span>{m.addPartialRung}</span>
             </label>
           </div>
         </div>
         <p className="muted small">
-          {cells} cells ({LEVELS.length} harness levels x {orderedModels.length} models) x{" "}
-          {caseIds.length} case(s) x {repetitions} repetitions = <strong>{runs} runs</strong>
-          {sharedVariant ? ` · prompt variant '${sharedVariant}'` : ""}. Runs execute one at a
-          time; check cost on the first cell before waiting for all of them.
+          {m.cellsSummary(
+            cells,
+            LEVELS.length,
+            orderedModels.length,
+            caseIds.length,
+            repetitions,
+            runs,
+            sharedVariant ? m.variantSuffix(sharedVariant) : ""
+          )}
         </p>
         {problems.length > 0 ? (
           <ul className="muted small">
@@ -355,7 +472,7 @@ export function HarnessByModel() {
             onClick={() => create(false)}
             type="button"
           >
-            Create without launching
+            {m.createWithoutLaunching}
           </button>
           <button
             className="primary"
@@ -363,7 +480,7 @@ export function HarnessByModel() {
             onClick={() => create(true)}
             type="button"
           >
-            Create and launch {runs} runs
+            {m.createAndLaunch(runs)}
             <IconArrowRight size={15} />
           </button>
         </div>

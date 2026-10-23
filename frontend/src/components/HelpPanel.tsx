@@ -2,7 +2,13 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 
+import { defineMessages, useMessages } from "../i18n";
 import { IconChevronRight } from "./icons";
+
+const MESSAGES = defineMessages({
+  en: { openGuide: "Open the guide" },
+  es: { openGuide: "Abrir la guía" }
+});
 
 type HelpPanelProps = {
   title: string;
@@ -16,6 +22,7 @@ type HelpPanelProps = {
 // links to the in-app guide so the UI stays self-explanatory.
 export function HelpPanel({ title, docHref, defaultOpen = false, children }: HelpPanelProps) {
   const [open, setOpen] = useState(defaultOpen);
+  const m = useMessages(MESSAGES);
   return (
     <section className="panel help-panel">
       <div className="help-head">
@@ -34,7 +41,7 @@ export function HelpPanel({ title, docHref, defaultOpen = false, children }: Hel
         </button>
         {docHref ? (
           <Link className="help-doc-link" title={docHref} to="/system/guide">
-            Open the guide
+            {m.openGuide}
           </Link>
         ) : null}
       </div>

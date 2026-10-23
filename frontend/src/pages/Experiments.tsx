@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
@@ -19,10 +20,13 @@ import {
   IconX
 } from "../components/icons";
 import {
+  defaultNativeModel,
   HARNESS_NATIVE_MODELS,
   HARNESS_OPTIONS,
-  HOST_HARNESSES
+  HOST_HARNESSES,
+  useNativeModelIndex
 } from "../harnesses";
+import { defineMessages, pickMessages, useMessages } from "../i18n";
 import type {
   AggregateRecord,
   CaseOutcomeCell,
@@ -42,27 +46,485 @@ import type {
   VerdictHighlight
 } from "../types";
 
-const MODE_LABEL: Record<string, string> = {
-  harness_evaluation: "Harness evaluation",
-  cross_repo: "Cross-repo",
-  discovery: "Discovery",
-  subject_validation: "Subject validation",
-  harness_by_model: "Harness x model"
-};
-
-/** What each mode does and does not license — shown, not assumed known. */
-const MODE_CAVEAT: Record<string, string> = {
-  harness_evaluation:
-    "Repository, case and model held fixed; the harness varies. The only mode that supports a causal claim — and only with repetitions.",
-  cross_repo:
-    "Harness and model held fixed; the repository varies. Read per repository: scores from different codebases are not equivalent conditions and must never be pooled.",
-  discovery:
-    "No control. Exploratory evidence, not experimental evidence — this mode describes, it does not demonstrate.",
-  subject_validation:
-    "No control, nothing ablated. Reports how reliably the declared subject passed under each harness/model arm — one rate per arm, never pooled, and nothing about the harness.",
-  harness_by_model:
-    "Every harness level runs on every model. Read the harness effect per model and how it changes from the first model to the last; no two cells are compared on their own, because that would mix the model with the harness."
-};
+const MESSAGES = defineMessages({
+  en: {
+    modeLabel: {
+      harness_evaluation: "Harness evaluation",
+      cross_repo: "Cross-repo",
+      discovery: "Discovery",
+      subject_validation: "Subject validation",
+      harness_by_model: "Harness x model"
+    } as Record<string, string>,
+    /** What each mode does and does not license — shown, not assumed known. */
+    modeCaveat: {
+      harness_evaluation:
+        "Repository, case and model held fixed; the harness varies. The only mode that supports a causal claim — and only with repetitions.",
+      cross_repo:
+        "Harness and model held fixed; the repository varies. Read per repository: scores from different codebases are not equivalent conditions and must never be pooled.",
+      discovery:
+        "No control. Exploratory evidence, not experimental evidence — this mode describes, it does not demonstrate.",
+      subject_validation:
+        "No control, nothing ablated. Reports how reliably the declared subject passed under each harness/model arm — one rate per arm, never pooled, and nothing about the harness.",
+      harness_by_model:
+        "Every harness level runs on every model. Read the harness effect per model and how it changes from the first model to the last; no two cells are compared on their own, because that would mix the model with the harness."
+    } as Record<string, string>,
+    notValidated: "Not validated",
+    passedValidation: "Passed validation",
+    failedValidation: "Failed validation",
+    better: "better",
+    worse: "worse",
+    perCasePerArm: "Per case, per arm",
+    perCasePerArmHint:
+      "Passed of scored, for every cell. Each arm is read down its own column — the columns are not combined.",
+    case: "Case",
+    validityTitle: {
+      treatment_not_activated: "The treatment never happened",
+      infrastructure_failures: "These runs measured the connection",
+      no_headroom: "No headroom to detect an improvement",
+      objective_unmeasured: "The objective was never measured",
+      floor_effect: "Nothing resolved on either side",
+      mixed_treatment: "The arm mixes treated and untreated runs",
+      design_objection: "The design was objected to when it was created"
+    } as Record<string, string>,
+    comparisonNotValid: "Comparison not valid",
+    readWithCare: "Read with care",
+    verdict: "Verdict",
+    measured: (observed: string) => `Measured: ${observed}`,
+    fixed: (count: number) => `${count} fixed`,
+    broken: (count: number) => `${count} broken`,
+    unchanged: (count: number) => `${count} unchanged`,
+    incomplete: (count: number) => `${count} incomplete`,
+    evidence: (evidence: string) => `Evidence: ${evidence}`,
+    repetitionHintBasisObserved: (rate: string) =>
+      `planned from the noisiest arm's observed rate (${rate})`,
+    repetitionHintBasisAssumed:
+      "planned from a 50% rate, the worst case, until every arm has 10 scored runs",
+    repetitionHint: (
+      differencePoints: number,
+      repetitionsPerCase: number,
+      runsPerArm: number,
+      current: number,
+      basis: string
+    ) => (
+      <span>
+        <strong>Planning hint:</strong> to detect a {differencePoints}-point
+        difference in success (two-sided 5%, 80% power), plan about{" "}
+        <strong>{repetitionsPerCase}</strong> repetition
+        {repetitionsPerCase === 1 ? "" : "s"} per case per arm (
+        {runsPerArm} runs per arm); this design has {current}. It is{" "}
+        {basis}, and it ignores what pairing by case saves, so it errs high.
+        Advice for the next design, not a judgement on this one.
+      </span>
+    ),
+    metric: "Metric",
+    control: "control",
+    successRate: "Success rate",
+    successRateFact: "fact — validation verdict, 95% interval",
+    scored: (scoredRuns: number, runs: number) => `${scoredRuns}/${runs} scored`,
+    successesOfScored: (successes: number, scoredRuns: number) =>
+      `${successes} of ${scoredRuns}`,
+    wilsonTitle:
+      "95% Wilson interval: the range of pass rates these runs are compatible with. Descriptive, not a test.",
+    passK: "pass^k",
+    passKHint: "every one of k tries passes, averaged over cases",
+    passAtKTitle: "pass@k: at least one of k tries passes. The gap to pass^k is how much retrying hides.",
+    missing: (count: number) => `${count} missing`,
+    runThisExperiment: "Run this experiment",
+    lockedIntro:
+      "Launched and locked: every further round reuses the configuration the existing runs already carry, so one experiment stays one measurement. Want a different model or budget? That is a different measurement — create a new experiment.",
+    harness: "Harness",
+    executorModel: "Executor model",
+    harnessDefault: "harness default",
+    plannerModel: "Planner model",
+    none: "none",
+    promptVariant: "Prompt variant",
+    promptVariants: "Prompt variants",
+    stepBudget: "Step budget",
+    skillsAdded: "Skills added",
+    skillsAskedFor: "Skills asked for",
+    skillsRemoved: "Skills removed",
+    watchThemInRuns: (link: ReactNode) => <>Watch them in {link}.</>,
+    runsLink: "Runs",
+    queueing: "Queueing…",
+    queueAnotherRound: "Queue another round — same configuration",
+    noCasesToLaunch: (newEvaluation: ReactNode) => (
+      <>
+        This experiment has no cases, so there is nothing to launch. Create a
+        new one from {newEvaluation} or from the repository&apos;s workbench;
+        experiments are immutable once declared.
+      </>
+    ),
+    newEvaluationLink: "New evaluation",
+    draftIntro:
+      "This experiment is a draft — it has no real runs yet. Shared settings for every arm; the design supplies the rest, and a field the experiment varies is overridden per arm, so nothing picked here can leak into the comparison as a confound.",
+    runsHostedAuth: (harness: string) => `Runs the ${harness} CLI with its native auth.`,
+    claudeAuthHelp:
+      "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host).",
+    otherHostHelp: "Needs host mode — run make app-host.",
+    promptVariantsFixed: (variants: string) =>
+      `Fixed by the design: ${variants} — every arm runs each of them.`,
+    promptVariantsUnion:
+      "Union of the variants the experiment's cases define. A case without the chosen variant contributes no runs for it.",
+    stepBudgetHint: "Defaults to the largest budget any selected case declares.",
+    nativeModelsHint: (harness: string) =>
+      `Native ${harness} CLI models (passed to --model).`,
+    heldFixedHint:
+      "Held fixed across every arm — the experiment varies the harness, never the model.",
+    dryRun: "Dry run — build the commands without executing them",
+    ready: "Ready",
+    blocked: "Blocked",
+    checking: "Checking…",
+    checkConfiguration: "Check configuration",
+    launchRuns: "Launch runs",
+    unableToCheck: "Unable to check",
+    unableToLaunch: "Unable to launch",
+    queuedNotice: (count: number) =>
+      `Queued ${count} run(s) — every case in every arm, repeated as the design declares. Results fill in here as they finish.`,
+    reading: "Reading",
+    readingEllipsis: "Reading…",
+    readAgain: "Read again",
+    readThisExperiment: "Read this experiment",
+    readyToReadTitle:
+      "An LLM reads the summary's evidence and writes what was compared, what the result per arm, what each arm read and invoked, and why the comparison can or cannot be trusted — in plain language.",
+    notYetReadableTitle: "Available once every run has stopped.",
+    noReadingYetFinished:
+      "No reading yet. Ask for one to get the verdict, the result per arm, what each arm read and invoked, and why the comparison can or cannot be trusted — in plain language.",
+    noReadingYetUnfinished: "The reading becomes available once every run has stopped.",
+    readingWith: (model: string) => `Reading with ${model}…`,
+    theDefaultModel: "the default model",
+    readingFailed: "The reading failed",
+    unableToAudit: "Unable to audit",
+    hideEvidence: "hide the evidence it was given",
+    showEvidence: "show the evidence it was given",
+    abandon: "Abandon",
+    abandonTitle:
+      "Hide from the list. Its runs stay in the corpus — this is 'stop showing me this', not 'this never happened'.",
+    deleteTitleWithRuns: (count: number) =>
+      `Erase this experiment and its ${count} run(s) — artifacts and scores leave every dashboard.`,
+    deleteTitleDraft: "Erase this draft.",
+    delete: "Delete",
+    repetitionsSuffix: (count: number) => `${count} repetition${count === 1 ? "" : "s"} per arm`,
+    subjectUnderTest: (subject: ReactNode) => <>Subject under test: {subject}</>,
+    conditions: "Conditions",
+    deltaTitle: "Δ",
+    beyondNoise: "Beyond noise?",
+    unknown: "unknown",
+    yes: "yes",
+    noWithinVariance: "no — within run-to-run variance",
+    caseMatrix: "Case matrix",
+    caseMatrixHint:
+      'Where the treatment helps, and where it does not. An average of "+8 points" can be "fixed four cases, broke two" — only this says which.',
+    successRateMove: (control: string, treatment: string) =>
+      `Success rate ${control} → ${treatment}`,
+    pp: " pp",
+    pp95Title: "95% interval for the delta, resampled by case and then by repetition. Descriptive, not a test.",
+    interval95Label: ", 95% interval ",
+    crossesZero:
+      "The interval includes zero: these runs are also compatible with no effect on success. More repetitions narrow it; the interval describes the runs, it does not test them.",
+    vs: (treatment: string, control: string) => `${treatment} vs ${control}`,
+    movementLabel: {
+      fixed: "fixed",
+      broken: "broken",
+      unchanged: "unchanged",
+      incomplete: "incomplete"
+    } as Record<string, string>,
+    experimentsTitle: "Experiments",
+    experimentsLede: "A stated question, declared arms, and the runs that answer it.",
+    helpTitle: "What an experiment is, and what a batch is not",
+    helpParagraph1: (
+      <>
+        An experiment states its <strong>question</strong> before anything runs, and
+        declares its arms up front — a control and its treatments, or, for subject
+        validation, peer arms with no control. The lab
+        checks the design against the mode and refuses one that cannot answer the
+        question it claims to: a comparison that varies both the harness and the
+        repository produces a number that cannot be attributed to either.
+      </>
+    ),
+    helpParagraph2:
+      "A batch is still the right tool for an ad-hoc sweep. The difference is that an experiment makes a claim, so it has to earn it.",
+    familyLabel: (familyId: string) => (
+      <>
+        Family <code>{familyId}</code>{" "}
+      </>
+    ),
+    showAll: "show all",
+    allExperiments: "All experiments",
+    showAbandoned: (count: number) => `Show abandoned (${count})`,
+    evaluateHarnessChange: "Evaluate a harness change",
+    auditRepository: "Audit a repository",
+    crossRepoEvaluation: "Cross-repo evaluation",
+    noExperimentsDescription:
+      "Start by choosing what you want to learn. An experiment needs a question, a mode, cases and at least one arm.",
+    noExperimentsTitle: "No experiments yet.",
+    id: "Id",
+    question: "Question",
+    mode: "Mode",
+    arms: "Arms",
+    runs: "Runs",
+    reps: "Reps",
+    familyButton: (familyId: string) => `family ${familyId}`,
+    familyButtonTitle: "Read this experiment with the rest of its ladder",
+    exploratory: "exploratory",
+    judgement: "judgement",
+    hide: "Hide",
+    open: "Open",
+    unableToLoadExperiments: "Unable to load experiments",
+    unableToSummarize: "Unable to summarize experiment",
+    unableToAbandon: "Unable to abandon",
+    unableToDelete: "Unable to delete",
+    deleteConfirmWithRuns: (experimentId: string, count: number) =>
+      `Delete "${experimentId}" AND its ${count} run(s)? Their artifacts and scores disappear from every dashboard and aggregate. This cannot be undone.`,
+    deleteConfirmDraft: (experimentId: string) =>
+      `Delete the draft "${experimentId}"? This cannot be undone.`,
+    experimentStatus: {
+      draft: "draft",
+      running: "running",
+      complete: "complete",
+      abandoned: "abandoned"
+    } as Record<string, string>
+  },
+  es: {
+    modeLabel: {
+      harness_evaluation: "Evaluación de arnés",
+      cross_repo: "Entre repositorios",
+      discovery: "Exploración",
+      subject_validation: "Validación de sujeto",
+      harness_by_model: "Arnés x modelo"
+    } as Record<string, string>,
+    modeCaveat: {
+      harness_evaluation:
+        "Repositorio, caso y modelo se mantienen fijos; el arnés varía. El único modo que admite una afirmación causal — y solo con repeticiones.",
+      cross_repo:
+        "Arnés y modelo se mantienen fijos; el repositorio varía. Se lee por repositorio: los puntajes de códigos distintos no son condiciones equivalentes y nunca deben agruparse.",
+      discovery:
+        "Sin control. Evidencia exploratoria, no experimental — este modo describe, no demuestra.",
+      subject_validation:
+        "Sin control, nada ablacionado. Reporta cuán confiablemente pasó el sujeto declarado bajo cada brazo de arnés/modelo — una tasa por brazo, nunca agrupadas, y nada sobre el arnés.",
+      harness_by_model:
+        "Cada nivel de arnés corre en cada modelo. Se lee el efecto del arnés por modelo y cómo cambia del primer modelo al último; no se comparan dos celdas por sí solas, porque eso mezclaría el modelo con el arnés."
+    } as Record<string, string>,
+    notValidated: "No validado",
+    passedValidation: "Pasó la validación",
+    failedValidation: "Falló la validación",
+    better: "mejor",
+    worse: "peor",
+    perCasePerArm: "Por caso, por brazo",
+    perCasePerArmHint:
+      "Pasados sobre puntuados, para cada celda. Cada brazo se lee por su propia columna — las columnas no se combinan.",
+    case: "Caso",
+    validityTitle: {
+      treatment_not_activated: "El tratamiento nunca ocurrió",
+      infrastructure_failures: "Estas corridas midieron la conexión",
+      no_headroom: "Sin margen para detectar una mejora",
+      objective_unmeasured: "El objetivo nunca se midió",
+      floor_effect: "Nada se resolvió en ninguno de los dos lados",
+      mixed_treatment: "El brazo mezcla corridas tratadas y no tratadas",
+      design_objection: "El diseño fue objetado cuando se creó"
+    } as Record<string, string>,
+    comparisonNotValid: "La comparación no es válida",
+    readWithCare: "Leé con cuidado",
+    verdict: "Veredicto",
+    measured: (observed: string) => `Medido: ${observed}`,
+    fixed: (count: number) => `${count} arreglado${count === 1 ? "" : "s"}`,
+    broken: (count: number) => `${count} roto${count === 1 ? "" : "s"}`,
+    unchanged: (count: number) => `${count} sin cambios`,
+    incomplete: (count: number) => `${count} incompleto${count === 1 ? "" : "s"}`,
+    evidence: (evidence: string) => `Evidencia: ${evidence}`,
+    repetitionHintBasisObserved: (rate: string) =>
+      `planificado a partir de la tasa observada del brazo más ruidoso (${rate})`,
+    repetitionHintBasisAssumed:
+      "planificado a partir de una tasa del 50%, el peor caso, hasta que cada brazo tenga 10 corridas puntuadas",
+    repetitionHint: (
+      differencePoints: number,
+      repetitionsPerCase: number,
+      runsPerArm: number,
+      current: number,
+      basis: string
+    ) => (
+      <span>
+        <strong>Sugerencia de planificación:</strong> para detectar una
+        diferencia de {differencePoints} puntos en el éxito (dos colas 5%,
+        potencia 80%), planificá unas <strong>{repetitionsPerCase}</strong>{" "}
+        repetición{repetitionsPerCase === 1 ? "" : "es"} por caso y por brazo
+        ({runsPerArm} corridas por brazo); este diseño tiene {current}. Está{" "}
+        {basis}, e ignora lo que ahorra el pareo por caso, así que se equivoca
+        por exceso. Es un consejo para el próximo diseño, no un juicio sobre
+        este.
+      </span>
+    ),
+    metric: "Métrica",
+    control: "control",
+    successRate: "Tasa de éxito",
+    successRateFact: "hecho — veredicto de validación, intervalo del 95%",
+    scored: (scoredRuns: number, runs: number) => `${scoredRuns}/${runs} puntuadas`,
+    successesOfScored: (successes: number, scoredRuns: number) =>
+      `${successes} de ${scoredRuns}`,
+    wilsonTitle:
+      "Intervalo de Wilson del 95%: el rango de tasas de éxito con el que estas corridas son compatibles. Descriptivo, no una prueba.",
+    passK: "pass^k",
+    passKHint: "todos los k intentos pasan, promediado sobre los casos",
+    passAtKTitle:
+      "pass@k: al menos uno de k intentos pasa. La brecha con pass^k es cuánto esconde el reintentar.",
+    missing: (count: number) => `${count} faltante${count === 1 ? "" : "s"}`,
+    runThisExperiment: "Correr este experimento",
+    lockedIntro:
+      "Lanzado y bloqueado: cada ronda adicional reusa la configuración que ya llevan las corridas existentes, así que un experimento sigue siendo una sola medición. ¿Querés otro modelo o presupuesto? Esa es otra medición — creá un nuevo experimento.",
+    harness: "Arnés",
+    executorModel: "Modelo ejecutor",
+    harnessDefault: "por defecto del arnés",
+    plannerModel: "Modelo planificador",
+    none: "ninguno",
+    promptVariant: "Variante de prompt",
+    promptVariants: "Variantes de prompt",
+    stepBudget: "Presupuesto de pasos",
+    skillsAdded: "Skills agregadas",
+    skillsAskedFor: "Skills pedidas",
+    skillsRemoved: "Skills quitadas",
+    watchThemInRuns: (link: ReactNode) => <>Mirálas en {link}.</>,
+    runsLink: "Corridas",
+    queueing: "Encolando…",
+    queueAnotherRound: "Encolar otra ronda — misma configuración",
+    noCasesToLaunch: (newEvaluation: ReactNode) => (
+      <>
+        Este experimento no tiene casos, así que no hay nada para lanzar. Creá
+        uno nuevo desde {newEvaluation} o desde el banco de trabajo del
+        repositorio; los experimentos son inmutables una vez declarados.
+      </>
+    ),
+    newEvaluationLink: "Nueva evaluación",
+    draftIntro:
+      "Este experimento es un borrador — todavía no tiene corridas reales. Configuración compartida para cada brazo; el diseño provee el resto, y un campo que el experimento varía se reemplaza por brazo, así que nada elegido acá puede filtrarse a la comparación como un confundidor.",
+    runsHostedAuth: (harness: string) => `Corre la CLI de ${harness} con su autenticación nativa.`,
+    claudeAuthHelp:
+      "Funciona en Docker (CLAUDE_CODE_OAUTH_TOKEN o ANTHROPIC_API_KEY en .env) o en modo host (make app-host).",
+    otherHostHelp: "Necesita modo host — corré make app-host.",
+    promptVariantsFixed: (variants: string) =>
+      `Fijado por el diseño: ${variants} — cada brazo corre cada una de ellas.`,
+    promptVariantsUnion:
+      "Unión de las variantes que definen los casos del experimento. Un caso sin la variante elegida no aporta corridas para ella.",
+    stepBudgetHint: "Por defecto, el presupuesto más grande que declare algún caso elegido.",
+    nativeModelsHint: (harness: string) =>
+      `Modelos nativos de la CLI de ${harness} (pasados a --model).`,
+    heldFixedHint:
+      "Se mantiene fijo en cada brazo — el experimento varía el arnés, nunca el modelo.",
+    dryRun: "Ensayo en seco — arma los comandos sin ejecutarlos",
+    ready: "Listo",
+    blocked: "Bloqueado",
+    checking: "Revisando…",
+    checkConfiguration: "Revisar configuración",
+    launchRuns: "Lanzar corridas",
+    unableToCheck: "No se pudo revisar",
+    unableToLaunch: "No se pudo lanzar",
+    queuedNotice: (count: number) =>
+      `Se encolaron ${count} corrida(s) — cada caso en cada brazo, repetido como declara el diseño. Los resultados se van completando acá a medida que terminan.`,
+    reading: "Lectura",
+    readingEllipsis: "Leyendo…",
+    readAgain: "Leer de nuevo",
+    readThisExperiment: "Leer este experimento",
+    readyToReadTitle:
+      "Un LLM lee la evidencia del resumen y escribe qué se comparó, el resultado por brazo, qué leyó e invocó cada brazo, y por qué la comparación se puede o no confiar — en lenguaje claro.",
+    notYetReadableTitle: "Disponible cuando todas las corridas hayan terminado.",
+    noReadingYetFinished:
+      "Todavía no hay lectura. Pedí una para obtener el veredicto, el resultado por brazo, qué leyó e invocó cada brazo, y por qué se puede o no confiar en la comparación — en lenguaje claro.",
+    noReadingYetUnfinished: "La lectura estará disponible cuando todas las corridas hayan terminado.",
+    readingWith: (model: string) => `Leyendo con ${model}…`,
+    theDefaultModel: "el modelo por defecto",
+    readingFailed: "La lectura falló",
+    unableToAudit: "No se pudo auditar",
+    hideEvidence: "ocultar la evidencia que recibió",
+    showEvidence: "mostrar la evidencia que recibió",
+    abandon: "Abandonar",
+    abandonTitle:
+      "Ocultar de la lista. Sus corridas se mantienen en el corpus — esto es 'dejá de mostrarme esto', no 'esto nunca pasó'.",
+    deleteTitleWithRuns: (count: number) =>
+      `Borrar este experimento y sus ${count} corrida(s) — los artefactos y puntajes desaparecen de todos los tableros.`,
+    deleteTitleDraft: "Borrar este borrador.",
+    delete: "Borrar",
+    repetitionsSuffix: (count: number) => `${count} repetición${count === 1 ? "" : "es"} por brazo`,
+    subjectUnderTest: (subject: ReactNode) => <>Sujeto bajo prueba: {subject}</>,
+    conditions: "Condiciones",
+    deltaTitle: "Δ",
+    beyondNoise: "¿Más allá del ruido?",
+    unknown: "desconocido",
+    yes: "sí",
+    noWithinVariance: "no — dentro de la varianza entre corridas",
+    caseMatrix: "Matriz de casos",
+    caseMatrixHint:
+      'Dónde ayuda el tratamiento y dónde no. Un promedio de "+8 puntos" puede ser "arregló cuatro casos, rompió dos" — solo esto dice cuáles.',
+    successRateMove: (control: string, treatment: string) =>
+      `Tasa de éxito ${control} → ${treatment}`,
+    pp: " pp",
+    pp95Title:
+      "Intervalo del 95% para la diferencia, remuestreado por caso y luego por repetición. Descriptivo, no una prueba.",
+    interval95Label: ", intervalo del 95% ",
+    crossesZero:
+      "El intervalo incluye el cero: estas corridas también son compatibles con ningún efecto sobre el éxito. Más repeticiones lo achican; el intervalo describe las corridas, no las pone a prueba.",
+    vs: (treatment: string, control: string) => `${treatment} vs ${control}`,
+    movementLabel: {
+      fixed: "arreglado",
+      broken: "roto",
+      unchanged: "sin cambios",
+      incomplete: "incompleto"
+    } as Record<string, string>,
+    experimentsTitle: "Experimentos",
+    experimentsLede: "Una pregunta declarada, brazos declarados, y las corridas que la responden.",
+    helpTitle: "Qué es un experimento, y qué no es un batch",
+    helpParagraph1: (
+      <>
+        Un experimento declara su <strong>pregunta</strong> antes de que nada
+        corra, y declara sus brazos de entrada — un control y sus
+        tratamientos, o, para validación de sujeto, brazos pares sin control.
+        El lab revisa el diseño contra el modo y rechaza uno que no pueda
+        responder la pregunta que dice responder: una comparación que varía
+        tanto el arnés como el repositorio produce un número que no se puede
+        atribuir a ninguno de los dos.
+      </>
+    ),
+    helpParagraph2:
+      "Un batch sigue siendo la herramienta correcta para un barrido ad-hoc. La diferencia es que un experimento hace una afirmación, así que tiene que ganársela.",
+    familyLabel: (familyId: string) => (
+      <>
+        Familia <code>{familyId}</code>{" "}
+      </>
+    ),
+    showAll: "mostrar todas",
+    allExperiments: "Todos los experimentos",
+    showAbandoned: (count: number) => `Mostrar abandonados (${count})`,
+    evaluateHarnessChange: "Evaluar un cambio de arnés",
+    auditRepository: "Auditar un repositorio",
+    crossRepoEvaluation: "Evaluación entre repositorios",
+    noExperimentsDescription:
+      "Empezá eligiendo qué querés aprender. Un experimento necesita una pregunta, un modo, casos y al menos un brazo.",
+    noExperimentsTitle: "Todavía no hay experimentos.",
+    id: "Id",
+    question: "Pregunta",
+    mode: "Modo",
+    arms: "Brazos",
+    runs: "Corridas",
+    reps: "Reps",
+    familyButton: (familyId: string) => `familia ${familyId}`,
+    familyButtonTitle: "Leer este experimento junto con el resto de su escalera",
+    exploratory: "exploratorio",
+    judgement: "juicio",
+    hide: "Ocultar",
+    open: "Abrir",
+    unableToLoadExperiments: "No se pudieron cargar los experimentos",
+    unableToSummarize: "No se pudo resumir el experimento",
+    unableToAbandon: "No se pudo abandonar",
+    unableToDelete: "No se pudo borrar",
+    deleteConfirmWithRuns: (experimentId: string, count: number) =>
+      `¿Borrar "${experimentId}" Y sus ${count} corrida(s)? Sus artefactos y puntajes desaparecen de todos los tableros y agregados. Esto no se puede deshacer.`,
+    deleteConfirmDraft: (experimentId: string) =>
+      `¿Borrar el borrador "${experimentId}"? Esto no se puede deshacer.`,
+    experimentStatus: {
+      draft: "borrador",
+      running: "corriendo",
+      complete: "completo",
+      abandoned: "abandonado"
+    } as Record<string, string>
+  }
+});
 
 function formatNumber(value: number | null | undefined, digits = 3): string {
   if (value === null || value === undefined) {
@@ -141,13 +603,14 @@ function deltaClass(delta: DeltaRecord): string {
 
 /** A pass/fail cell, as a shape rather than an emoji that renders differently everywhere. */
 function Outcome({ value }: { value: boolean | null }) {
+  const m = useMessages(MESSAGES);
   if (value === null) {
-    return <span className="outcome outcome--unknown" title="Not validated">·</span>;
+    return <span className="outcome outcome--unknown" title={m.notValidated}>·</span>;
   }
   return (
     <span
       className={`outcome outcome--${value ? "pass" : "fail"}`}
-      title={value ? "Passed validation" : "Failed validation"}
+      title={value ? m.passedValidation : m.failedValidation}
     >
       {value ? <IconCheck size={15} /> : <IconX size={15} />}
     </span>
@@ -177,6 +640,7 @@ const MOVEMENT_CLASS: Record<string, string> = {
  * regression for a rate; without this the reader supplied the direction.
  */
 function highlightMove(highlight: VerdictHighlight) {
+  const m = pickMessages(MESSAGES);
   const { control, treatment, direction } = highlight;
   if (
     control === null ||
@@ -194,7 +658,7 @@ function highlightMove(highlight: VerdictHighlight) {
   return (
     <span
       className={`highlight-move ${better ? "highlight-move--better" : "highlight-move--worse"}`}
-      title={better ? "better" : "worse"}
+      title={better ? m.better : m.worse}
     >
       {up ? "▲" : "▼"}
     </span>
@@ -224,6 +688,7 @@ function CaseOutcomeGrid({
 }: {
   outcomes: Record<string, Record<string, CaseOutcomeCell>>;
 }) {
+  const m = useMessages(MESSAGES);
   const labels = Object.keys(outcomes);
   const caseIds = [
     ...new Set(labels.flatMap((label) => Object.keys(outcomes[label] ?? {})))
@@ -233,15 +698,12 @@ function CaseOutcomeGrid({
   }
   return (
     <div className="card">
-      <h3>Per case, per arm</h3>
-      <p className="muted small">
-        Passed of scored, for every cell. Each arm is read down its own column —
-        the columns are not combined.
-      </p>
+      <h3>{m.perCasePerArm}</h3>
+      <p className="muted small">{m.perCasePerArmHint}</p>
       <table className="data-table">
         <thead>
           <tr>
-            <th>Case</th>
+            <th>{m.case}</th>
             {labels.map((label) => (
               <th key={label}>{label}</th>
             ))}
@@ -257,7 +719,7 @@ function CaseOutcomeGrid({
                   <td key={label}>
                     {!cell || cell.scored_runs === 0
                       ? "—"
-                      : `${cell.successes} of ${cell.scored_runs}`}
+                      : m.successesOfScored(cell.successes, cell.scored_runs)}
                   </td>
                 );
               })}
@@ -269,16 +731,6 @@ function CaseOutcomeGrid({
   );
 }
 
-const VALIDITY_TITLE: Record<string, string> = {
-  treatment_not_activated: "The treatment never happened",
-  infrastructure_failures: "These runs measured the connection",
-  no_headroom: "No headroom to detect an improvement",
-  objective_unmeasured: "The objective was never measured",
-  floor_effect: "Nothing resolved on either side",
-  mixed_treatment: "The arm mixes treated and untreated runs",
-  design_objection: "The design was objected to when it was created"
-};
-
 /**
  * Read before the verdict (ADR-0046).
  *
@@ -288,13 +740,14 @@ const VALIDITY_TITLE: Record<string, string> = {
  * they named.
  */
 function ValidityBanner({ validity }: { validity: ValidityBlock }) {
+  const m = useMessages(MESSAGES);
   if (validity.status === "valid" || validity.issues.length === 0) return null;
   const invalid = validity.status === "invalid";
   return (
     <div className={`card validity ${invalid ? "validity--invalid" : "validity--degraded"}`}>
       <div className="row space-between">
         <p className="verdict-kicker">
-          {invalid ? "Comparison not valid" : "Read with care"}
+          {invalid ? m.comparisonNotValid : m.readWithCare}
         </p>
         <span className={`badge ${invalid ? "error" : "warn"}`}>{validity.status}</span>
       </div>
@@ -302,7 +755,7 @@ function ValidityBanner({ validity }: { validity: ValidityBlock }) {
         {validity.issues.map((issue) => (
           <li key={`${issue.code}:${issue.arm ?? ""}:${issue.detail}`}>
             <strong>
-              <IconAlert size={14} /> {VALIDITY_TITLE[issue.code] ?? issue.code}
+              <IconAlert size={14} /> {m.validityTitle[issue.code] ?? issue.code}
             </strong>
             <p>{issue.detail}</p>
             {issue.remedy ? <p className="muted">{issue.remedy}</p> : null}
@@ -314,6 +767,7 @@ function ValidityBanner({ validity }: { validity: ValidityBlock }) {
 }
 
 function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
+  const m = useMessages(MESSAGES);
   // `tone` is authoritative since ADR-0046; the headline sniff below stays one
   // release longer so a summary from an older backend still renders in colour.
   const headline = verdict.headline.toLowerCase();
@@ -340,12 +794,12 @@ function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
           <Trend size={22} />
         </span>
         <div>
-          <p className="verdict-kicker">Verdict</p>
+          <p className="verdict-kicker">{m.verdict}</p>
           <h2>{verdict.headline}</h2>
           <p className="muted">{verdict.claim}</p>
           {verdict.observed ? (
             /* The measurement is demoted, never withheld (ADR-0041). */
-            <p className="muted verdict-observed">Measured: {verdict.observed}</p>
+            <p className="muted verdict-observed">{m.measured(verdict.observed)}</p>
           ) : null}
         </div>
         <span className="badge neutral verdict-strength">{verdict.strength}</span>
@@ -373,7 +827,7 @@ function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
                   <>
                     {formatHighlight(highlight.metric, highlight.rate)}{" "}
                     <span className="muted">
-                      ({highlight.successes} of {highlight.scored_runs})
+                      ({m.successesOfScored(highlight.successes ?? 0, highlight.scored_runs ?? 0)})
                     </span>
                   </>
                 )}
@@ -384,21 +838,21 @@ function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
       ) : null}
 
       <div className="verdict-movements">
-        <span className="movement movement--fixed">{verdict.movements.fixed} fixed</span>
+        <span className="movement movement--fixed">{m.fixed(verdict.movements.fixed)}</span>
         <span className="movement movement--broken">
-          {verdict.movements.broken} broken
+          {m.broken(verdict.movements.broken)}
         </span>
         <span className="movement movement--unchanged">
-          {verdict.movements.unchanged} unchanged
+          {m.unchanged(verdict.movements.unchanged)}
         </span>
         {verdict.movements.incomplete > 0 ? (
           <span className="movement movement--incomplete">
-            {verdict.movements.incomplete} incomplete
+            {m.incomplete(verdict.movements.incomplete)}
           </span>
         ) : null}
       </div>
 
-      <p className="verdict-evidence muted">Evidence: {verdict.evidence}</p>
+      <p className="verdict-evidence muted">{m.evidence(verdict.evidence)}</p>
 
       {verdict.caveats.length > 0 ? (
         <ul className="warning-list">
@@ -419,26 +873,26 @@ function VerdictCard({ verdict }: { verdict: VerdictBlock }) {
  * arm has enough scored runs to plan from its own rate.
  */
 function RepetitionHint({ plan, current }: { plan: RepetitionPlan; current: number }) {
+  const m = useMessages(MESSAGES);
   const basis =
     plan.basis === "observed"
-      ? `planned from the noisiest arm's observed rate (${formatPercent(plan.base_rate)})`
-      : "planned from a 50% rate, the worst case, until every arm has 10 scored runs";
+      ? m.repetitionHintBasisObserved(formatPercent(plan.base_rate))
+      : m.repetitionHintBasisAssumed;
   return (
     <p className="callout">
-      <span>
-        <strong>Planning hint:</strong> to detect a {plan.difference_points}-point
-        difference in success (two-sided 5%, 80% power), plan about{" "}
-        <strong>{plan.repetitions_per_case}</strong> repetition
-        {plan.repetitions_per_case === 1 ? "" : "s"} per case per arm (
-        {plan.runs_per_arm} runs per arm); this design has {current}. It is{" "}
-        {basis}, and it ignores what pairing by case saves, so it errs high. Advice
-        for the next design, not a judgement on this one.
-      </span>
+      {m.repetitionHint(
+        plan.difference_points,
+        plan.repetitions_per_case,
+        plan.runs_per_arm,
+        current,
+        basis
+      )}
     </p>
   );
 }
 
 function ConditionTable({ conditions }: { conditions: ConditionSummary[] }) {
+  const m = useMessages(MESSAGES);
   const metricNames = [
     ...new Set(conditions.flatMap((condition) => Object.keys(condition.metrics)))
   ].sort();
@@ -447,11 +901,11 @@ function ConditionTable({ conditions }: { conditions: ConditionSummary[] }) {
     <table className="data-table">
       <thead>
         <tr>
-          <th>Metric</th>
+          <th>{m.metric}</th>
           {conditions.map((condition) => (
             <th key={condition.label}>
               {condition.label}
-              {condition.role === "control" && <span className="badge"> control</span>}
+              {condition.role === "control" && <span className="badge"> {m.control}</span>}
             </th>
           ))}
         </tr>
@@ -459,8 +913,8 @@ function ConditionTable({ conditions }: { conditions: ConditionSummary[] }) {
       <tbody>
         <tr>
           <td>
-            <strong>Success rate</strong>
-            <div className="muted small">fact — validation verdict, 95% interval</div>
+            <strong>{m.successRate}</strong>
+            <div className="muted small">{m.successRateFact}</div>
           </td>
           {conditions.map((condition) => {
             const interval = rateInterval(
@@ -471,16 +925,13 @@ function ConditionTable({ conditions }: { conditions: ConditionSummary[] }) {
               <td key={condition.label}>
                 {formatPercent(condition.success_rate)}
                 {interval ? (
-                  <span
-                    className="muted small"
-                    title="95% Wilson interval: the range of pass rates these runs are compatible with. Descriptive, not a test."
-                  >
+                  <span className="muted small" title={m.wilsonTitle}>
                     {" "}
                     {interval}
                   </span>
                 ) : null}
                 <div className="muted small">
-                  {condition.scored_runs}/{condition.runs} scored
+                  {m.scored(condition.scored_runs, condition.runs)}
                 </div>
               </td>
             );
@@ -489,20 +940,15 @@ function ConditionTable({ conditions }: { conditions: ConditionSummary[] }) {
         {conditions.some((condition) => condition.pass_k) ? (
           <tr>
             <td>
-              <strong>pass^k</strong>
-              <div className="muted small">
-                every one of k tries passes, averaged over cases
-              </div>
+              <strong>{m.passK}</strong>
+              <div className="muted small">{m.passKHint}</div>
             </td>
             {conditions.map((condition) => (
               <td key={condition.label}>
                 {condition.pass_k ? (
                   <>
                     {formatPercent(condition.pass_k.pass_hat_k)}
-                    <div
-                      className="muted small"
-                      title="pass@k: at least one of k tries passes. The gap to pass^k is how much retrying hides."
-                    >
+                    <div className="muted small" title={m.passAtKTitle}>
                       k={condition.pass_k.k} · pass@k{" "}
                       {formatPercent(condition.pass_k.pass_at_k)}
                     </div>
@@ -521,9 +967,7 @@ function ConditionTable({ conditions }: { conditions: ConditionSummary[] }) {
               <td className="mono small" key={condition.label}>
                 {spread(condition.metrics[name])}
                 {condition.metrics[name]?.missing ? (
-                  <div className="muted small">
-                    {condition.metrics[name].missing} missing
-                  </div>
+                  <div className="muted small">{m.missing(condition.metrics[name].missing)}</div>
                 ) : null}
               </td>
             ))}
@@ -562,6 +1006,7 @@ function LaunchPanel({
   experimentId: string;
   onLaunched: () => void;
 }) {
+  const m = useMessages(MESSAGES);
   const [caseIds, setCaseIds] = useState<string[]>([]);
   // Set once the experiment has real runs: the backend refuses a relaunch
   // that differs, so the panel stops asking and just offers another round.
@@ -678,10 +1123,11 @@ function LaunchPanel({
     setCheck(null);
   }, [promptVariant, harness, plannerModel, executorModel, maxSteps, dryRun]);
 
+  const nativeIndex = useNativeModelIndex();
   const handleHarnessChange = (next: string) => {
     setHarness(next);
-    const native = HARNESS_NATIVE_MODELS[next];
-    setExecutorModel(native ? native[0].id : gatewayDefault);
+    // The first native model the gateway serves, never one it would refuse.
+    setExecutorModel(defaultNativeModel(next, nativeIndex) ?? gatewayDefault);
   };
 
   const buildConfig = (caseId: string): RunConfigPayload => ({
@@ -706,7 +1152,7 @@ function LaunchPanel({
       setCheck(await api.preflightRunConfig(buildConfig(caseIds[0] ?? "")));
     } catch (checkError) {
       setError(
-        checkError instanceof Error ? checkError.message : "Unable to check"
+        checkError instanceof Error ? checkError.message : m.unableToCheck
       );
     } finally {
       setChecking(false);
@@ -742,14 +1188,11 @@ function LaunchPanel({
             }
           : buildConfig(caseIds[0] ?? "")
       );
-      setNotice(
-        `Queued ${result.count} run(s) — every case in every arm, repeated as ` +
-          "the design declares. Results fill in here as they finish."
-      );
+      setNotice(m.queuedNotice(result.count));
       onLaunched();
     } catch (launchError) {
       setError(
-        launchError instanceof Error ? launchError.message : "Unable to launch"
+        launchError instanceof Error ? launchError.message : m.unableToLaunch
       );
     } finally {
       setBusy(false);
@@ -759,49 +1202,44 @@ function LaunchPanel({
   if (locked) {
     return (
       <div className="card">
-        <h3>Run this experiment</h3>
-        <p className="muted">
-          Launched and locked: every further round reuses the configuration the
-          existing runs already carry, so one experiment stays one measurement.
-          Want a different model or budget? That is a different measurement —
-          create a new experiment.
-        </p>
+        <h3>{m.runThisExperiment}</h3>
+        <p className="muted">{m.lockedIntro}</p>
         <div className="detail-grid">
           <div>
-            <span>Harness</span>
+            <span>{m.harness}</span>
             <strong>{locked.harness}</strong>
           </div>
           <div>
-            <span>Executor model</span>
-            <strong>{locked.executor_model ?? "harness default"}</strong>
+            <span>{m.executorModel}</span>
+            <strong>{locked.executor_model ?? m.harnessDefault}</strong>
           </div>
           <div>
-            <span>Planner model</span>
-            <strong>{locked.planner_model ?? "none"}</strong>
+            <span>{m.plannerModel}</span>
+            <strong>{locked.planner_model ?? m.none}</strong>
           </div>
           <div>
-            <span>Prompt variant</span>
+            <span>{m.promptVariant}</span>
             <strong>{locked.prompt_variant}</strong>
           </div>
           <div>
-            <span>Step budget</span>
+            <span>{m.stepBudget}</span>
             <strong>{locked.max_steps}</strong>
           </div>
           {locked.skills_extra?.length ? (
             <div>
-              <span>Skills added</span>
+              <span>{m.skillsAdded}</span>
               <strong>{locked.skills_extra.join(", ")}</strong>
             </div>
           ) : null}
           {locked.skills_invoke?.length ? (
             <div>
-              <span>Skills asked for</span>
+              <span>{m.skillsAskedFor}</span>
               <strong>{locked.skills_invoke.join(", ")}</strong>
             </div>
           ) : null}
           {locked.skills_disabled?.length ? (
             <div>
-              <span>Skills removed</span>
+              <span>{m.skillsRemoved}</span>
               <strong>{locked.skills_disabled.join(", ")}</strong>
             </div>
           ) : null}
@@ -811,7 +1249,8 @@ function LaunchPanel({
         ) : null}
         {notice ? (
           <p className="callout callout--ok">
-            {notice} <Link to="/advanced/runs">Watch them in Runs</Link>.
+            {notice}{" "}
+            {m.watchThemInRuns(<Link to="/advanced/runs">{m.runsLink}</Link>)}
           </p>
         ) : null}
         <div className="button-row">
@@ -821,7 +1260,7 @@ function LaunchPanel({
             onClick={() => void launch()}
             type="button"
           >
-            {busy ? "Queueing…" : "Queue another round — same configuration"}
+            {busy ? m.queueing : m.queueAnotherRound}
           </button>
         </div>
       </div>
@@ -831,11 +1270,11 @@ function LaunchPanel({
   if (caseIds.length === 0) {
     return (
       <div className="card">
-        <h3>Run this experiment</h3>
+        <h3>{m.runThisExperiment}</h3>
         <p className="callout callout--warning">
-          This experiment has no cases, so there is nothing to launch. Create a
-          new one from <Link to="/evaluate/new">New evaluation</Link> or from the
-          repository&apos;s workbench; experiments are immutable once declared.
+          {m.noCasesToLaunch(
+            <Link to="/evaluate/new">{m.newEvaluationLink}</Link>
+          )}
         </p>
       </div>
     );
@@ -843,17 +1282,12 @@ function LaunchPanel({
 
   return (
     <div className="card">
-      <h3>Run this experiment</h3>
-      <p className="muted">
-        This experiment is a draft — it has no real runs yet. Shared settings for
-        every arm; the design supplies the rest, and a field the experiment
-        varies is overridden per arm, so nothing picked here can leak into the
-        comparison as a confound.
-      </p>
+      <h3>{m.runThisExperiment}</h3>
+      <p className="muted">{m.draftIntro}</p>
 
       <div className="field-row">
         <label className="field">
-          <span>Harness</span>
+          <span>{m.harness}</span>
           <select
             onChange={(event) => handleHarnessChange(event.target.value)}
             value={harness}
@@ -866,24 +1300,19 @@ function LaunchPanel({
           </select>
           {HOST_HARNESSES.has(harness) ? (
             <span className="muted small">
-              Runs the {harness} CLI with its native auth.{" "}
-              {harness === "claude"
-                ? "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host)."
-                : "Needs host mode — run make app-host."}
+              {m.runsHostedAuth(harness)}{" "}
+              {harness === "claude" ? m.claudeAuthHelp : m.otherHostHelp}
             </span>
           ) : null}
         </label>
         {designVariants.length > 0 ? (
           <div className="field">
-            <span>Prompt variants</span>
-            <p className="muted small">
-              Fixed by the design: {designVariants.join(", ")} — every arm runs
-              each of them.
-            </p>
+            <span>{m.promptVariants}</span>
+            <p className="muted small">{m.promptVariantsFixed(designVariants.join(", "))}</p>
           </div>
         ) : (
           <label className="field">
-            <span>Prompt variant</span>
+            <span>{m.promptVariant}</span>
             {variantOptions.length > 0 ? (
               <select
                 onChange={(event) => setPromptVariant(event.target.value)}
@@ -901,14 +1330,11 @@ function LaunchPanel({
                 value={promptVariant}
               />
             )}
-            <span className="muted small">
-              Union of the variants the experiment&apos;s cases define. A case
-              without the chosen variant contributes no runs for it.
-            </span>
+            <span className="muted small">{m.promptVariantsUnion}</span>
           </label>
         )}
         <label className="field">
-          <span>Step budget</span>
+          <span>{m.stepBudget}</span>
           <select
             onChange={(event) => setMaxSteps(Number(event.target.value))}
             value={maxSteps}
@@ -919,15 +1345,13 @@ function LaunchPanel({
               </option>
             ))}
           </select>
-          <span className="muted small">
-            Defaults to the largest budget any selected case declares.
-          </span>
+          <span className="muted small">{m.stepBudgetHint}</span>
         </label>
       </div>
 
       <div className="field-row">
         <ModelPicker
-          label="Executor model"
+          label={m.executorModel}
           directErrors={directErrors}
           nativeOptions={HARNESS_NATIVE_MODELS[harness]}
           onChange={setExecutorModel}
@@ -938,13 +1362,13 @@ function LaunchPanel({
         >
           <small className="muted">
             {HARNESS_NATIVE_MODELS[harness]
-              ? `Native ${harness} CLI models (passed to --model).`
-              : "Held fixed across every arm — the experiment varies the harness, never the model."}
+              ? m.nativeModelsHint(harness)
+              : m.heldFixedHint}
           </small>
         </ModelPicker>
         <ModelPicker
           allowNone
-          label="Planner model"
+          label={m.plannerModel}
           directErrors={directErrors}
           onChange={setPlannerModel}
           options={modelOptions}
@@ -958,18 +1382,19 @@ function LaunchPanel({
           onChange={(event) => setDryRun(event.target.checked)}
           type="checkbox"
         />
-        <span>Dry run — build the commands without executing them</span>
+        <span>{m.dryRun}</span>
       </label>
 
       {error ? <ErrorBanner message={error} onDismiss={() => setError(null)} /> : null}
       {check ? (
         <p className={`callout ${check.ok ? "callout--ok" : "callout--warning"}`}>
-          <strong>{check.ok ? "Ready" : "Blocked"}</strong> — {check.detail}
+          <strong>{check.ok ? m.ready : m.blocked}</strong> — {check.detail}
         </p>
       ) : null}
       {notice ? (
         <p className="callout callout--ok">
-          {notice} <Link to="/advanced/runs">Watch them in Runs</Link>.
+          {notice}{" "}
+          {m.watchThemInRuns(<Link to="/advanced/runs">{m.runsLink}</Link>)}
         </p>
       ) : null}
 
@@ -980,7 +1405,7 @@ function LaunchPanel({
           onClick={() => void handleCheck()}
           type="button"
         >
-          {checking ? "Checking…" : "Check configuration"}
+          {checking ? m.checking : m.checkConfiguration}
         </button>
         <button
           className="primary"
@@ -988,7 +1413,7 @@ function LaunchPanel({
           onClick={() => void launch()}
           type="button"
         >
-          {busy ? "Queueing…" : "Launch runs"}
+          {busy ? m.queueing : m.launchRuns}
         </button>
       </div>
     </div>
@@ -1011,6 +1436,7 @@ function ExperimentAuditPanel({
   experimentId: string;
   finished: boolean;
 }) {
+  const m = useMessages(MESSAGES);
   const [audit, setAudit] = useState<ExperimentAuditRecord | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1048,7 +1474,7 @@ function ExperimentAuditPanel({
       .then(() => api.getExperimentAudit(experimentId))
       .then(setAudit)
       .catch((runError: unknown) =>
-        setError(runError instanceof Error ? runError.message : "Unable to audit")
+        setError(runError instanceof Error ? runError.message : m.unableToAudit)
       )
       .finally(() => setPending(false));
   };
@@ -1056,38 +1482,32 @@ function ExperimentAuditPanel({
   return (
     <div className="card">
       <div className="row space-between">
-        <h3>Reading</h3>
+        <h3>{m.reading}</h3>
         <div className="button-row">
           {audit ? <span className="badge">{audit.status}</span> : null}
           <button
             disabled={!finished || pending || audit?.status === "running"}
             onClick={handleRun}
-            title={
-              finished
-                ? "An LLM reads the summary's evidence and writes what was compared, what came out, what each arm used, and whether to trust it."
-                : "Available once every run has stopped."
-            }
+            title={finished ? m.readyToReadTitle : m.notYetReadableTitle}
             type="button"
           >
             {audit?.status === "running"
-              ? "Reading…"
+              ? m.readingEllipsis
               : audit?.status === "done"
-                ? "Read again"
-                : "Read this experiment"}
+                ? m.readAgain
+                : m.readThisExperiment}
           </button>
         </div>
       </div>
       {error !== null && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
       {audit === null ? (
         <p className="muted">
-          {finished
-            ? "No reading yet. Ask for one to get the verdict, the result per arm, what each arm read and invoked, and why the comparison can or cannot be trusted — in plain language."
-            : "The reading becomes available once every run has stopped."}
+          {finished ? m.noReadingYetFinished : m.noReadingYetUnfinished}
         </p>
       ) : audit.status === "running" ? (
-        <p className="muted">Reading with {audit.auditor_model || "the default model"}…</p>
+        <p className="muted">{m.readingWith(audit.auditor_model || m.theDefaultModel)}</p>
       ) : audit.status === "failed" ? (
-        <ErrorBanner message={audit.error ?? "The reading failed"} />
+        <ErrorBanner message={audit.error ?? m.readingFailed} />
       ) : (
         <>
           <Markdown>{audit.markdown}</Markdown>
@@ -1098,7 +1518,7 @@ function ExperimentAuditPanel({
               onClick={() => setShowEvidence((value) => !value)}
               type="button"
             >
-              {showEvidence ? "hide the evidence it was given" : "show the evidence it was given"}
+              {showEvidence ? m.hideEvidence : m.showEvidence}
             </button>
           </p>
           {showEvidence && audit.evidence_json ? (
@@ -1125,6 +1545,7 @@ function ExperimentDetail({
   onAbandon: (experimentId: string) => void;
   onDelete: (experimentId: string, runCount: number) => void;
 }) {
+  const m = useMessages(MESSAGES);
   const runCount = record?.run_count ?? 0;
   return (
     <div className="stack">
@@ -1142,10 +1563,10 @@ function ExperimentDetail({
               <button
                 className="secondary"
                 onClick={() => onAbandon(summary.experiment_id)}
-                title="Hide from the list. Its runs stay in the corpus — this is 'stop showing me this', not 'this never happened'."
+                title={m.abandonTitle}
                 type="button"
               >
-                Abandon
+                {m.abandon}
               </button>
             ) : null}
             <button
@@ -1153,23 +1574,23 @@ function ExperimentDetail({
               onClick={() => onDelete(summary.experiment_id, runCount)}
               title={
                 runCount > 0
-                  ? `Erase this experiment and its ${runCount} run(s) — artifacts and scores leave every dashboard.`
-                  : "Erase this draft."
+                  ? m.deleteTitleWithRuns(runCount)
+                  : m.deleteTitleDraft
               }
               type="button"
             >
-              Delete
+              {m.delete}
             </button>
           </div>
         </div>
         <p className="muted">
-          {MODE_LABEL[summary.mode] ?? summary.mode} · {summary.repetitions} repetition
-          {summary.repetitions === 1 ? "" : "s"} per arm
+          {m.modeLabel[summary.mode] ?? summary.mode} ·{" "}
+          {m.repetitionsSuffix(summary.repetitions)}
         </p>
-        <p className="muted small">{MODE_CAVEAT[summary.mode]}</p>
+        <p className="muted small">{m.modeCaveat[summary.mode]}</p>
         {summary.subject ? (
           <p className="muted">
-            Subject under test: <strong>{summary.subject}</strong>
+            {m.subjectUnderTest(<strong>{summary.subject}</strong>)}
           </p>
         ) : null}
         {summary.conditions.flatMap((condition) => condition.warnings).length > 0 && (
@@ -1186,7 +1607,7 @@ function ExperimentDetail({
       </div>
 
       <div className="card">
-        <h3>Conditions</h3>
+        <h3>{m.conditions}</h3>
         <ConditionTable conditions={summary.conditions} />
         {summary.repetition_plan ? (
           <RepetitionHint
@@ -1208,20 +1629,20 @@ function ExperimentDetail({
 
       {summary.comparisons.map((comparison) => (
         <div className="card" key={`${comparison.control}-${comparison.treatment}`}>
-          <h3>
-            {comparison.treatment} vs {comparison.control}
-          </h3>
+          <h3>{m.vs(comparison.treatment, comparison.control)}</h3>
           <p className="muted">
-            Success rate {formatPercent(comparison.success.control)} →{" "}
-            {formatPercent(comparison.success.treatment)}
+            {m.successRateMove(
+              formatPercent(comparison.success.control),
+              formatPercent(comparison.success.treatment)
+            )}
             {comparison.success.points !== null && (
               <>
                 {" "}
                 (<strong>{comparison.success.points > 0 ? "+" : ""}
-                {comparison.success.points.toFixed(0)} pp</strong>
+                {comparison.success.points.toFixed(0)}{m.pp}</strong>
                 {deltaInterval(comparison.success) ? (
-                  <span title="95% interval for the delta, resampled by case and then by repetition. Descriptive, not a test.">
-                    {", 95% interval "}
+                  <span title={m.pp95Title}>
+                    {m.interval95Label}
                     {deltaInterval(comparison.success)}
                   </span>
                 ) : null}
@@ -1230,21 +1651,17 @@ function ExperimentDetail({
             )}
           </p>
           {comparison.success.interval_crosses_zero ? (
-            <p className="muted small">
-              The interval includes zero: these runs are also compatible with no
-              effect on success. More repetitions narrow it; the interval describes
-              the runs, it does not test them.
-            </p>
+            <p className="muted small">{m.crossesZero}</p>
           ) : null}
 
           <table className="data-table">
             <thead>
               <tr>
-                <th>Metric</th>
+                <th>{m.metric}</th>
                 <th>{comparison.control}</th>
                 <th>{comparison.treatment}</th>
-                <th>Δ</th>
-                <th>Beyond noise?</th>
+                <th>{m.deltaTitle}</th>
+                <th>{m.beyondNoise}</th>
               </tr>
             </thead>
             <tbody>
@@ -1258,25 +1675,22 @@ function ExperimentDetail({
                   </td>
                   <td className="small">
                     {delta.exceeds_spread === null
-                      ? "unknown"
+                      ? m.unknown
                       : delta.exceeds_spread
-                        ? "yes"
-                        : "no — within run-to-run variance"}
+                        ? m.yes
+                        : m.noWithinVariance}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
 
-          <h4>Case matrix</h4>
-          <p className="muted small">
-            Where the treatment helps, and where it does not. An average of "+8
-            points" can be "fixed four cases, broke two" — only this says which.
-          </p>
+          <h4>{m.caseMatrix}</h4>
+          <p className="muted small">{m.caseMatrixHint}</p>
           <table className="data-table">
             <thead>
               <tr>
-                <th>Case</th>
+                <th>{m.case}</th>
                 <th>{comparison.control}</th>
                 <th>{comparison.treatment}</th>
                 <th />
@@ -1293,7 +1707,9 @@ function ExperimentDetail({
                     <Outcome value={row.treatment} />
                   </td>
                   <td className="small">
-                    <span className={MOVEMENT_CLASS[row.movement]}>{row.movement}</span>
+                    <span className={MOVEMENT_CLASS[row.movement]}>
+                      {m.movementLabel[row.movement]}
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -1306,6 +1722,7 @@ function ExperimentDetail({
 }
 
 export function Experiments() {
+  const m = useMessages(MESSAGES);
   const [params, setParams] = useSearchParams();
   const [experiments, setExperiments] = useState<ExperimentRecord[]>([]);
   // A ladder is read as one family (ADR-0051): `?family=<id>` narrows the
@@ -1334,7 +1751,7 @@ export function Experiments() {
       })
       .catch((loadError: unknown) =>
         setError(
-          loadError instanceof Error ? loadError.message : "Unable to load experiments"
+          loadError instanceof Error ? loadError.message : m.unableToLoadExperiments
         )
       )
       .finally(() => setIsLoading(false));
@@ -1350,11 +1767,10 @@ export function Experiments() {
       .then(setSummary)
       .catch((summaryError: unknown) =>
         setError(
-          summaryError instanceof Error
-            ? summaryError.message
-            : "Unable to summarize experiment"
+          summaryError instanceof Error ? summaryError.message : m.unableToSummarize
         )
       );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, refresh]);
 
   const handleAbandon = async (experimentId: string) => {
@@ -1363,7 +1779,7 @@ export function Experiments() {
       setRefresh((value) => value + 1);
     } catch (abandonError) {
       setError(
-        abandonError instanceof Error ? abandonError.message : "Unable to abandon"
+        abandonError instanceof Error ? abandonError.message : m.unableToAbandon
       );
     }
   };
@@ -1371,10 +1787,8 @@ export function Experiments() {
   const handleDelete = async (experimentId: string, runCount: number) => {
     const message =
       runCount > 0
-        ? `Delete "${experimentId}" AND its ${runCount} run(s)? Their artifacts ` +
-          "and scores disappear from every dashboard and aggregate. This cannot " +
-          "be undone."
-        : `Delete the draft "${experimentId}"? This cannot be undone.`;
+        ? m.deleteConfirmWithRuns(experimentId, runCount)
+        : m.deleteConfirmDraft(experimentId);
     if (!window.confirm(message)) {
       return;
     }
@@ -1385,7 +1799,7 @@ export function Experiments() {
       setRefresh((value) => value + 1);
     } catch (deleteError) {
       setError(
-        deleteError instanceof Error ? deleteError.message : "Unable to delete"
+        deleteError instanceof Error ? deleteError.message : m.unableToDelete
       );
     }
   };
@@ -1394,26 +1808,14 @@ export function Experiments() {
     <section className="stack">
       <header className="page-header">
         <div>
-          <h1>Experiments</h1>
-          <p className="muted">
-            A stated question, declared arms, and the runs that answer it.
-          </p>
+          <h1>{m.experimentsTitle}</h1>
+          <p className="muted">{m.experimentsLede}</p>
         </div>
       </header>
 
-      <HelpPanel title="What an experiment is, and what a batch is not">
-        <p>
-          An experiment states its <strong>question</strong> before anything runs, and
-          declares its arms up front — a control and its treatments, or, for subject
-          validation, peer arms with no control. The lab
-          checks the design against the mode and refuses one that cannot answer the
-          question it claims to: a comparison that varies both the harness and the
-          repository produces a number that cannot be attributed to either.
-        </p>
-        <p className="muted">
-          A batch is still the right tool for an ad-hoc sweep. The difference is that
-          an experiment makes a claim, so it has to earn it.
-        </p>
+      <HelpPanel title={m.helpTitle}>
+        <p>{m.helpParagraph1}</p>
+        <p className="muted">{m.helpParagraph2}</p>
       </HelpPanel>
 
       {launchNotice !== null && (
@@ -1426,17 +1828,17 @@ export function Experiments() {
           <h2>
             {familyFilter ? (
               <>
-                Family <code>{familyFilter}</code>{" "}
+                {m.familyLabel(familyFilter)}
                 <button
                   className="link"
                   onClick={() => setParams({})}
                   type="button"
                 >
-                  show all
+                  {m.showAll}
                 </button>
               </>
             ) : (
-              "All experiments"
+              m.allExperiments
             )}
           </h2>
           {experiments.some((item) => item.status === "abandoned") ? (
@@ -1447,8 +1849,9 @@ export function Experiments() {
                 type="checkbox"
               />
               <span>
-                Show abandoned (
-                {experiments.filter((item) => item.status === "abandoned").length})
+                {m.showAbandoned(
+                  experiments.filter((item) => item.status === "abandoned").length
+                )}
               </span>
             </label>
           ) : null}
@@ -1460,29 +1863,29 @@ export function Experiments() {
             action={
               <div className="empty-state-buttons">
                 <Link className="primary" to="/evaluate/new?mode=harness_evaluation">
-                  Evaluate a harness change
+                  {m.evaluateHarnessChange}
                 </Link>
                 <Link className="secondary" to="/evaluate/audit">
-                  Audit a repository
+                  {m.auditRepository}
                 </Link>
                 <Link className="secondary" to="/evaluate/new?mode=cross_repo">
-                  Cross-repo evaluation
+                  {m.crossRepoEvaluation}
                 </Link>
               </div>
             }
-            description="Start by choosing what you want to learn. An experiment needs a question, a mode, cases and at least one arm."
-            title="No experiments yet."
+            description={m.noExperimentsDescription}
+            title={m.noExperimentsTitle}
           />
         ) : (
           <table className="data-table">
             <thead>
               <tr>
-                <th>Id</th>
-                <th>Question</th>
-                <th>Mode</th>
-                <th>Arms</th>
-                <th>Runs</th>
-                <th>Reps</th>
+                <th>{m.id}</th>
+                <th>{m.question}</th>
+                <th>{m.mode}</th>
+                <th>{m.arms}</th>
+                <th>{m.runs}</th>
+                <th>{m.reps}</th>
                 <th />
               </tr>
             </thead>
@@ -1501,17 +1904,17 @@ export function Experiments() {
                   <td>
                     <strong>{experiment.experiment_id}</strong>
                     <div className="muted small">
-                      {experiment.status}
+                      {m.experimentStatus[experiment.status] ?? experiment.status}
                       {experiment.family_id && !familyFilter ? (
                         <>
                           {" · "}
                           <button
                             className="link"
                             onClick={() => setParams({ family: experiment.family_id ?? "" })}
-                            title="Read this experiment with the rest of its ladder"
+                            title={m.familyButtonTitle}
                             type="button"
                           >
-                            family {experiment.family_id}
+                            {m.familyButton(experiment.family_id)}
                           </button>
                         </>
                       ) : null}
@@ -1519,16 +1922,16 @@ export function Experiments() {
                   </td>
                   <td className="small">{experiment.question}</td>
                   <td className="small">
-                    {MODE_LABEL[experiment.mode] ?? experiment.mode}
+                    {m.modeLabel[experiment.mode] ?? experiment.mode}
                   </td>
                   <td>{experiment.condition_count ?? "—"}</td>
                   <td>{experiment.run_count ?? "—"}</td>
                   <td>
                     {experiment.repetitions}
                     {experiment.repetitions < 2 ? (
-                      <div className="muted small">exploratory</div>
+                      <div className="muted small">{m.exploratory}</div>
                     ) : experiment.repetitions < 5 ? (
-                      <div className="muted small">judgement</div>
+                      <div className="muted small">{m.judgement}</div>
                     ) : null}
                   </td>
                   <td>
@@ -1543,7 +1946,7 @@ export function Experiments() {
                       }}
                       type="button"
                     >
-                      {selected === experiment.experiment_id ? "Hide" : "Open"}
+                      {selected === experiment.experiment_id ? m.hide : m.open}
                     </button>
                   </td>
                 </tr>

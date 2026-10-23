@@ -887,3 +887,40 @@ def test_no_starter_dir_seeds_nothing(tmp_path):
     ws.mkdir()
     assert bench_run.seed_workspace(ws, {}) == 0
     assert bench_run.seed_workspace(ws, None) == 0
+
+
+def test_a_harness_error_names_its_cause_in_one_short_line(tmp_path):
+    """K-006 stored 1000 chars of tail and the cause was not in them: LiteLLM
+    repeats the provider error twice with its fallback table. The verdict line
+    must carry the provider's error code on its own, short enough to survive."""
+    log = tmp_path / "step-1.log"
+    log.write_text(
+        "# claude session init (model claude-opus-5-5)\n"
+        'API Error: 400 litellm.BadRequestError: AnthropicException - {"type":"error",'
+        '"error":{"type":"invalid_request_error","message":"Claude Code 2.1.197 does not '
+        'support this model; version 2.1.280 or newer is required.","details":'
+        '{"error_code":"claude_code_version_too_old"}}}'
+        + " Fallbacks=[...]" * 80
+        + "\n"
+    )
+    line = bench_run.harness_error_cause(log)
+    assert line is not None
+    assert "claude_code_version_too_old" in line
+    assert "2.1.280" in line
+    assert len(line) <= 300
+
+
+def test_a_rejected_model_is_named_too(tmp_path):
+    log = tmp_path / "step-1.log"
+    log.write_text(
+        "API Error: 400 anthropic_messages: Invalid model name passed in "
+        "model=claude-haiku-5-5. Call `/v1/models` to view available models.\n"
+    )
+    line = bench_run.harness_error_cause(log)
+    assert line is not None and "Invalid model name" in line
+
+
+def test_no_api_error_means_no_cause_line(tmp_path):
+    log = tmp_path / "step-1.log"
+    log.write_text("# claude session init\nTraceback: SyntaxError\n")
+    assert bench_run.harness_error_cause(log) is None

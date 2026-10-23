@@ -2120,4 +2120,16 @@ answer for every order — run its test under `PYTHONHASHSEED=1..3`. And a readi
 cannot be established yet (a tier with too few cases) must say *why* on the page, not
 only in a tooltip: "none yet" on every row read as "the model failed".
 
+## 2026-10-23 — A warning in one form is not a guard
+
+The harness x model form marked `claude-haiku-5-5` "not on your gateway"; New
+evaluation did not, and the backend preflight for the `claude` harness checked only
+that a token existed. A team member launched it from New evaluation: eight runs died
+in under a second on `Invalid model name` and were listed as "agent error".
+
+**How to apply:** a condition that makes a run impossible belongs in
+`RunService.preflight`, which every launch path shares — the forms only explain it.
+And a failure the model never got to cause must be labelled as the lab's, or the
+run list and the leaderboard read infrastructure as capability.
+
 <!-- Add new learnings above this line -->

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { defineMessages, useMessages } from "../i18n";
 import type { SandboxRecord } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
 import { Spinner } from "./Spinner";
@@ -9,16 +10,52 @@ type SandboxPanelProps = {
   kind: "terminal" | "desktop";
 };
 
-const HINTS: Record<string, string> = {
-  terminal:
-    "A shell in a container with a copy of this run's workspace. Try: " +
-    "`uv pip install -e . && pytest` (SWE-bench) or `python main.py` (headless).",
-  desktop:
-    "A Linux desktop in your browser (Xvfb + noVNC). Open the terminal on the " +
-    "desktop and run `python main.py` to see the window (e.g. Tetris)."
-};
+const MESSAGES = defineMessages({
+  en: {
+    kindLabel: { terminal: "Terminal", desktop: "Desktop" },
+    hints: {
+      terminal:
+        "A shell in a container with a copy of this run's workspace. Try: " +
+        "`uv pip install -e . && pytest` (SWE-bench) or `python main.py` (headless).",
+      desktop:
+        "A Linux desktop in your browser (Xvfb + noVNC). Open the terminal on the " +
+        "desktop and run `python main.py` to see the window (e.g. Tetris)."
+    },
+    openInTab: "Open in tab",
+    stop: "Stop",
+    starting: "Starting…",
+    launch: "Launch",
+    sandboxTitle: (label: string) => `${label} sandbox`,
+    startingSandbox: (label: string) =>
+      `Starting the ${label} sandbox (copying workspace, launching container)…`,
+    noneRunning: (label: string) =>
+      `No ${label} running. Click Launch to open a sandbox with a copy of this run's workspace.`
+  },
+  es: {
+    kindLabel: { terminal: "Terminal", desktop: "Escritorio" },
+    hints: {
+      terminal:
+        "Una terminal en un contenedor con una copia del workspace de esta corrida. " +
+        "Probá: `uv pip install -e . && pytest` (SWE-bench) o `python main.py` (sin interfaz).",
+      desktop:
+        "Un escritorio Linux en tu navegador (Xvfb + noVNC). Abrí la terminal del " +
+        "escritorio y corré `python main.py` para ver la ventana (por ejemplo, Tetris)."
+    },
+    openInTab: "Abrir en una pestaña",
+    stop: "Detener",
+    starting: "Iniciando…",
+    launch: "Lanzar",
+    sandboxTitle: (label: string) => `Sandbox de ${label.toLowerCase()}`,
+    startingSandbox: (label: string) =>
+      `Iniciando el sandbox de ${label.toLowerCase()} (copiando el workspace, lanzando el contenedor)…`,
+    noneRunning: (label: string) =>
+      `No hay ${label.toLowerCase()} corriendo. Hacé clic en Lanzar para abrir un sandbox ` +
+      "con una copia del workspace de esta corrida."
+  }
+});
 
 export function SandboxPanel({ runId, kind }: SandboxPanelProps) {
+  const m = useMessages(MESSAGES);
   const [sandbox, setSandbox] = useState<SandboxRecord | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,27 +145,29 @@ export function SandboxPanel({ runId, kind }: SandboxPanelProps) {
   const status = sandbox?.status;
   const running = status === "running" && sandbox?.url;
 
+  const kindLabel = m.kindLabel[kind];
+
   return (
     <section className="sandbox-panel">
       <div className="panel-head">
         <div>
-          <h3>{kind === "terminal" ? "Terminal" : "Desktop"}</h3>
-          <p className="muted">{HINTS[kind]}</p>
+          <h3>{kindLabel}</h3>
+          <p className="muted">{m.hints[kind]}</p>
         </div>
         <div className="run-actions">
           {status ? <span className={`badge badge--${status === "running" ? "completed" : status === "failed" ? "failed" : "running"}`}>{status}</span> : null}
           {running ? (
             <a className="button-link" href={sandbox!.url} rel="noreferrer" target="_blank">
-              Open in tab
+              {m.openInTab}
             </a>
           ) : null}
           {running ? (
             <button disabled={pending} onClick={handleStop} type="button">
-              Stop
+              {m.stop}
             </button>
           ) : (
             <button className="primary" disabled={pending || status === "starting"} onClick={handleLaunch} type="button">
-              {status === "starting" ? "Starting…" : "Launch"}
+              {status === "starting" ? m.starting : m.launch}
             </button>
           )}
         </div>
@@ -142,16 +181,13 @@ export function SandboxPanel({ runId, kind }: SandboxPanelProps) {
       {status === "starting" ? (
         <div className="sandbox-empty">
           <Spinner />
-          <p className="muted">Starting the {kind} sandbox (copying workspace, launching container)…</p>
+          <p className="muted">{m.startingSandbox(kindLabel)}</p>
         </div>
       ) : running ? (
-        <iframe className="sandbox-frame" src={sandbox!.url} title={`${kind} sandbox`} />
+        <iframe className="sandbox-frame" src={sandbox!.url} title={m.sandboxTitle(kindLabel)} />
       ) : (
         <div className="sandbox-empty">
-          <p className="muted">
-            No {kind} running. Click Launch to open a sandbox with a copy of this run's
-            workspace.
-          </p>
+          <p className="muted">{m.noneRunning(kindLabel)}</p>
         </div>
       )}
     </section>

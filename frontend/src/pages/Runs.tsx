@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "../api";
@@ -6,10 +7,13 @@ import { caseOptionLabel } from "../caseLabels";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
 import { ModelPicker } from "../components/ModelPicker";
+import { defineMessages, useMessages } from "../i18n";
 import {
+  defaultNativeModel,
   HARNESS_NATIVE_MODELS,
   HARNESS_OPTIONS,
-  HOST_HARNESSES
+  HOST_HARNESSES,
+  useNativeModelIndex
 } from "../harnesses";
 import { RunTable } from "../components/RunTable";
 import type {
@@ -56,6 +60,375 @@ const FALLBACK_EXECUTOR_MODEL = "gateway/lmstudio-qwen3.6-35b-build";
 const MAX_STEPS_OPTIONS = [3, 6, 10] as const;
 const DEFAULT_MAX_STEPS = 10;
 
+const MESSAGES = defineMessages({
+  en: {
+    eyebrow: "Runs",
+    title: "Recent runs",
+    lede: "Follow queue state, outcomes, and generated command previews.",
+    help: {
+      title: "How to launch and compare a run",
+      step1: (caseLabel: ReactNode, promptLabel: ReactNode, harnessLabel: ReactNode) => (
+        <>
+          Pick a {caseLabel} (the task), then a {promptLabel} and a {harnessLabel}.
+        </>
+      ),
+      step2: (modelLabel: ReactNode) => (
+        <>
+          {modelLabel} — Gateway models come live from LiteLLM (press Reload here, or
+          Refresh from gateway in Settings); Direct models are read off your LM Studio /
+          Ollama host; claude and codex use their native ids.
+        </>
+      ),
+      step3: (skillsLabel: ReactNode) => (
+        <>Optionally toggle {skillsLabel} to A/B the harness for this run only (a distinct arm).</>
+      ),
+      step4: (createLabel: ReactNode, compareLabel: ReactNode) => (
+        <>
+          {createLabel}, watch it stream, then score it (SWE-bench auto-scores). Open{" "}
+          {compareLabel} to line runs up across models.
+        </>
+      )
+    },
+    newRun: "New run",
+    noCaseSelected: "No case selected",
+    compareLinkLabel: "Compare",
+    presetFullSdlc: "Preset: Full SDLC + Qwen",
+    leaveBatchMode: "Leave batch mode",
+    batchMode: "Batch mode",
+    batch: {
+      intro: (count: number) => (
+        <>
+          Each list below is a dimension: every combination of the selected cases,
+          prompts, harnesses and executor models is queued, repeated <strong>{count}</strong>{" "}
+          {count === 1 ? "time" : "times"}. Planner model, max steps, dry run and the
+          skill ablation are shared by every run in the batch.
+        </>
+      ),
+      cases: (count: number) => `Cases (${count})`,
+      promptVariants: (count: number) => `Prompt variants (${count})`,
+      promptVariantsHelp:
+        "Union of the variants defined by the selected cases. A case without a selected variant contributes no runs for it.",
+      harnesses: (count: number) => `Harnesses (${count})`,
+      executorModels: (count: number) => `Executor models (${count})`,
+      executorModelsHelp:
+        'None selected means "do not vary the model" — the harness default is used for every run.',
+      targetRepositories: (count: number) => `Target repositories (${count})`,
+      targetRepositoriesHelp:
+        "Vary the repository to test whether the harness holds outside the repo it was designed in. Scores across different repositories are not comparable as though conditions were identical — read them per repository, not pooled.",
+      harnessAxis: (count: number) => `Harness (${count})`,
+      harnessAxisHelpWithTargets: (
+        <>
+          Selecting <code>native</code> and <code>injected</code> together on one
+          repository is the harness A/B: same repo, same case, same model, harness
+          varied. Both require a target repository.
+        </>
+      ),
+      harnessAxisHelpWithoutTargets: (
+        <>
+          Selecting <code>bare</code> and <code>lab_root</code> together is the
+          bare-versus-governed A/B: one arm sees the prompt and nothing else, the other
+          sees the whole harness.
+        </>
+      ),
+      repetitions: "Repetitions",
+      repetitionsHelp: "Trials per combination. Repeat to separate a real difference from run-to-run variance."
+    },
+    fields: {
+      runTemplate: "Run template (optional)",
+      runTemplateNone: "None — leave Run ID blank for auto",
+      runId: "Run ID (optional)",
+      runIdPlaceholder: (caseId: string) => `auto (${caseId}-K-NNN)`,
+      runIdHelp: (caseId: string) => `Leave blank to auto-generate the next ${caseId}-K-NNN id.`,
+      customLabel: "Custom label (optional)",
+      customLabelPlaceholder: "e.g. sdlc-qwen-smoke",
+      customLabelHelp: "Overrides Run ID as the persisted run identifier when set.",
+      case: "Case",
+      promptVariant: "Prompt variant",
+      harness: "Harness",
+      hostHarnessHelp: (harness: string, tail: string) => (
+        <>
+          Runs the {harness} CLI with its native auth; pick the model below. {tail}
+        </>
+      ),
+      claudeAuthHelp:
+        "Works in Docker (put CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host).",
+      otherHostHelp: "Needs host mode — run make app-host.",
+      plannerModel: "Planner model",
+      executorModel: "Executor model",
+      nativeModelsHint: (harness: string) =>
+        `Native ${harness} CLI models (passed to --model). Edit the list in harnesses.ts as versions ship.`,
+      gatewayUnreachable: "Gateway unreachable — showing opencode.json models.",
+      gatewayModelsHint:
+        "AI Gateway models are routed through LiteLLM; Direct models are read off your LM Studio host, where an alias cannot rename them in transit.",
+      loadingModels: "Loading models…",
+      scoreMode: "Score mode",
+      scoreModeManual: "Manual",
+      scoreModeHelp:
+        "Interactive scoring is CLI-only. A case with a validation command scores itself, a case with a rubric is LLM-judged; otherwise the run stops in awaiting_manual_score and you score it from the run page.",
+      maxSteps: "Max steps",
+      resume: "Resume",
+      dryRun: "Dry run",
+      targetRepository: "Target repository",
+      targetRepositoryNone: "None — run in the lab workspace",
+      targetRepositoryBatchHint: "Varied as a batch axis below.",
+      targetRepositoryHint:
+        "The repository the agent works in. Provisioned from the pinned local checkout for each run.",
+      ref: "Ref",
+      checkingPin: "Checking…",
+      checkCommit: "Check commit",
+      couldNotResolve: "Could not resolve",
+      pinsTo: (commit: string) => <>Pins to {commit}</>,
+      governanceSource: "Governance source",
+      governanceLab: "Lab harness (from the lab repo)",
+      governanceBare: "Bare — nothing, not even governance",
+      governanceNative: "Native — the target's own conventions",
+      governanceInjected: "Injected — our harness inside the target",
+      governanceHintLab:
+        "The agent works from the lab repo, so it sees CLAUDE.md, the hooks, the subagents and .github/.",
+      governanceHintBare:
+        "Control arm: an empty workspace with the lab's governance masked in the container — the agent sees the prompt and nothing else. Needs the docker backend.",
+      governanceHintNative:
+        "Control arm: the agent works inside the repo with only what that repo ships.",
+      governanceHintInjected:
+        "Treatment arm: the agent works inside the repo with our harness projected into it."
+    },
+    skills: {
+      summary: (enabled: number, total: number, experimental: number) =>
+        `Skills — ${enabled}/${total} enabled${experimental > 0 ? ` + ${experimental} experimental` : ""}`,
+      ablation: "ablation",
+      description:
+        "Unchecked skills are hidden from the agent for this run only (symlinks and the adapter-file skill list are regenerated, then restored). A non-empty ablation changes the run's condition_hash — that is the point: compare against a full-harness baseline of the same case/model.",
+      enableAll: "Enable all",
+      disableAll: "Disable all",
+      experimentalTitle: "Experimental (staged, off by default)",
+      askAgent: "Ask the agent to use them",
+      askAgentHint: "at the start of every step"
+    },
+    actions: {
+      validating: "Validating...",
+      validateConfig: "Validate config",
+      queueing: "Queueing...",
+      queueRuns: (count: number) => `Queue ${count} ${count === 1 ? "run" : "runs"}`,
+      creating: "Creating...",
+      createRun: "Create run"
+    },
+    batchStatus: {
+      selectAtLeastOne: "Select at least one case, prompt variant and harness.",
+      casesWithoutVariant: (names: string) =>
+        `${names} defines none of the selected prompt variants. Select a variant it has, or deselect the case.`,
+      overCap: (count: number, cap: number) =>
+        `${count} runs exceeds the limit of ${cap}. Narrow a dimension, or raise HARNESS_LAB_MAX_BATCH_RUNS.`,
+      willQueue: (count: number) => (
+        <>
+          This queues <strong>{count}</strong> containerised {count === 1 ? "run" : "runs"},
+          each spending model budget. Each case runs only the selected variants it
+          defines, so the count can be lower than the product of the axes. Nothing is
+          created unless every combination passes preflight.
+        </>
+      )
+    },
+    batchResult: (count: number, batchId: ReactNode) => (
+      <>
+        <span className="badge ok">queued</span> {count} {count === 1 ? "run" : "runs"} as{" "}
+        {batchId}. They appear in the table below as the queue drains.
+      </>
+    ),
+    validationReady: "ready",
+    validationBlocked: "blocked",
+    validationHelp:
+      "Validate config runs the same checks as Create run — case files, harness availability, model routing, and the context window the executor is actually serving — without creating anything. On a cold model the first check can take up to ~40s while the backend loads it.",
+    equivalentCliCommand: "Equivalent CLI command",
+    sweBenchCliNote:
+      "SWE-bench cases are provisioned by the web worker (case_spec.json + repo checkout); the CLI line above is a reference, not a runnable equivalent.",
+    manualScoringNote:
+      "Interactive scoring is CLI-only. A case with a validation command scores itself, a case with a rubric is LLM-judged; otherwise the run stops in awaiting_manual_score and you score it from the run page."
+  },
+  es: {
+    eyebrow: "Corridas",
+    title: "Corridas recientes",
+    lede: "Seguí el estado de la cola, los resultados y las vistas previas de comandos generados.",
+    help: {
+      title: "Cómo lanzar y comparar una corrida",
+      step1: (caseLabel: ReactNode, promptLabel: ReactNode, harnessLabel: ReactNode) => (
+        <>
+          Elegí un {caseLabel} (la tarea), después una {promptLabel} y un {harnessLabel}.
+        </>
+      ),
+      step2: (modelLabel: ReactNode) => (
+        <>
+          {modelLabel} — los modelos de Gateway llegan en vivo desde LiteLLM (presioná
+          Recargar acá, o Actualizar desde el gateway en Configuración); los modelos
+          Direct se leen de tu host LM Studio / Ollama; claude y codex usan sus ids
+          nativos.
+        </>
+      ),
+      step3: (skillsLabel: ReactNode) => (
+        <>Opcionalmente, activá {skillsLabel} para hacer un A/B del arnés solo en esta corrida (un brazo distinto).</>
+      ),
+      step4: (createLabel: ReactNode, compareLabel: ReactNode) => (
+        <>
+          {createLabel}, mirá cómo transmite, y después puntuala (SWE-bench se puntúa
+          solo). Abrí {compareLabel} para alinear corridas entre modelos.
+        </>
+      )
+    },
+    newRun: "Nueva corrida",
+    noCaseSelected: "Ningún caso seleccionado",
+    compareLinkLabel: "Comparar",
+    presetFullSdlc: "Preset: SDLC completo + Qwen",
+    leaveBatchMode: "Salir del modo lote",
+    batchMode: "Modo lote",
+    batch: {
+      intro: (count: number) => (
+        <>
+          Cada lista de abajo es una dimensión: se encola cada combinación de los casos,
+          prompts, arneses y modelos ejecutores seleccionados, repetida{" "}
+          <strong>{count}</strong> {count === 1 ? "vez" : "veces"}. El modelo
+          planificador, el máximo de pasos, el ensayo en seco y la ablación de skills son
+          compartidos por toda corrida del lote.
+        </>
+      ),
+      cases: (count: number) => `Casos (${count})`,
+      promptVariants: (count: number) => `Variantes de prompt (${count})`,
+      promptVariantsHelp:
+        "Unión de las variantes que definen los casos seleccionados. Un caso sin ninguna variante seleccionada no aporta corridas para él.",
+      harnesses: (count: number) => `Arneses (${count})`,
+      executorModels: (count: number) => `Modelos ejecutores (${count})`,
+      executorModelsHelp:
+        'Ninguno seleccionado significa "no variar el modelo" — se usa el modelo por defecto del arnés en cada corrida.',
+      targetRepositories: (count: number) => `Repositorios destino (${count})`,
+      targetRepositoriesHelp:
+        "Variá el repositorio para probar si el arnés se sostiene fuera del repositorio donde fue diseñado. Los puntajes entre repositorios distintos no son comparables como si las condiciones fueran idénticas — leelos por repositorio, no agrupados.",
+      harnessAxis: (count: number) => `Arnés (${count})`,
+      harnessAxisHelpWithTargets: (
+        <>
+          Seleccionar <code>native</code> e <code>injected</code> juntos sobre un mismo
+          repositorio es el A/B de arnés: mismo repositorio, mismo caso, mismo modelo,
+          arnés variado. Ambos requieren un repositorio destino.
+        </>
+      ),
+      harnessAxisHelpWithoutTargets: (
+        <>
+          Seleccionar <code>bare</code> y <code>lab_root</code> juntos es el A/B de
+          desnudo contra gobernado: un brazo ve solo el prompt y nada más, el otro ve el
+          arnés completo.
+        </>
+      ),
+      repetitions: "Repeticiones",
+      repetitionsHelp: "Pruebas por combinación. Repetí para separar una diferencia real de la variación entre corridas."
+    },
+    fields: {
+      runTemplate: "Plantilla de corrida (opcional)",
+      runTemplateNone: "Ninguna — dejá el ID de corrida en blanco para automático",
+      runId: "ID de corrida (opcional)",
+      runIdPlaceholder: (caseId: string) => `automático (${caseId}-K-NNN)`,
+      runIdHelp: (caseId: string) => `Dejalo en blanco para autogenerar el próximo id ${caseId}-K-NNN.`,
+      customLabel: "Etiqueta personalizada (opcional)",
+      customLabelPlaceholder: "ej. sdlc-qwen-smoke",
+      customLabelHelp: "Reemplaza el ID de corrida como identificador persistido cuando se completa.",
+      case: "Caso",
+      promptVariant: "Variante de prompt",
+      harness: "Arnés",
+      hostHarnessHelp: (harness: string, tail: string) => (
+        <>
+          Corre la CLI de {harness} con su propia autenticación; elegí el modelo abajo. {tail}
+        </>
+      ),
+      claudeAuthHelp:
+        "Funciona en Docker (poné CLAUDE_CODE_OAUTH_TOKEN o ANTHROPIC_API_KEY en .env) o en modo host (make app-host).",
+      otherHostHelp: "Necesita modo host — corré make app-host.",
+      plannerModel: "Modelo planificador",
+      executorModel: "Modelo ejecutor",
+      nativeModelsHint: (harness: string) =>
+        `Modelos nativos de la CLI de ${harness} (pasados a --model). Editá la lista en harnesses.ts cuando salgan versiones nuevas.`,
+      gatewayUnreachable: "Gateway inalcanzable — mostrando modelos de opencode.json.",
+      gatewayModelsHint:
+        "Los modelos de AI Gateway se enrutan por LiteLLM; los modelos Direct se leen de tu host LM Studio, donde un alias no puede renombrarlos en tránsito.",
+      loadingModels: "Cargando modelos…",
+      scoreMode: "Modo de puntuación",
+      scoreModeManual: "Manual",
+      scoreModeHelp:
+        "La puntuación interactiva es solo por CLI. Un caso con comando de validación se puntúa solo, uno con rúbrica es juzgado por LLM; si no, la corrida queda en awaiting_manual_score y la puntuás desde la página de la corrida.",
+      maxSteps: "Máximo de pasos",
+      resume: "Reanudar",
+      dryRun: "Ensayo en seco",
+      targetRepository: "Repositorio destino",
+      targetRepositoryNone: "Ninguno — corre en el workspace del lab",
+      targetRepositoryBatchHint: "Varía como un eje del lote abajo.",
+      targetRepositoryHint:
+        "El repositorio donde trabaja el agente. Provisionado desde el checkout local fijado para cada corrida.",
+      ref: "Ref",
+      checkingPin: "Verificando…",
+      checkCommit: "Verificar commit",
+      couldNotResolve: "No se pudo resolver",
+      pinsTo: (commit: string) => <>Fija en {commit}</>,
+      governanceSource: "Fuente de gobernanza",
+      governanceLab: "Arnés del lab (desde el repositorio del lab)",
+      governanceBare: "Desnudo — nada, ni siquiera gobernanza",
+      governanceNative: "Nativo — las propias convenciones del destino",
+      governanceInjected: "Inyectado — nuestro arnés dentro del destino",
+      governanceHintLab:
+        "El agente trabaja desde el repositorio del lab, así que ve el CLAUDE.md, los hooks, los subagentes y .github/.",
+      governanceHintBare:
+        "Brazo de control: un workspace vacío con la gobernanza del lab oculta en el contenedor — el agente ve el prompt y nada más. Necesita el backend de docker.",
+      governanceHintNative:
+        "Brazo de control: el agente trabaja dentro del repositorio con solo lo que ese repositorio trae.",
+      governanceHintInjected:
+        "Brazo de tratamiento: el agente trabaja dentro del repositorio con nuestro arnés proyectado dentro de él."
+    },
+    skills: {
+      summary: (enabled: number, total: number, experimental: number) =>
+        `Skills — ${enabled}/${total} habilitadas${experimental > 0 ? ` + ${experimental} experimentales` : ""}`,
+      ablation: "ablación",
+      description:
+        "Las skills destildadas se ocultan del agente solo para esta corrida (los symlinks y la lista de skills del adaptador se regeneran y después se restauran). Una ablación no vacía cambia el condition_hash de la corrida — ese es el punto: compará contra una línea base con el arnés completo del mismo caso/modelo.",
+      enableAll: "Habilitar todas",
+      disableAll: "Deshabilitar todas",
+      experimentalTitle: "Experimentales (staged, desactivadas por defecto)",
+      askAgent: "Pedirle al agente que las use",
+      askAgentHint: "al comienzo de cada paso"
+    },
+    actions: {
+      validating: "Validando...",
+      validateConfig: "Validar configuración",
+      queueing: "Encolando...",
+      queueRuns: (count: number) => `Encolar ${count} ${count === 1 ? "corrida" : "corridas"}`,
+      creating: "Creando...",
+      createRun: "Crear corrida"
+    },
+    batchStatus: {
+      selectAtLeastOne: "Seleccioná al menos un caso, una variante de prompt y un arnés.",
+      casesWithoutVariant: (names: string) =>
+        `${names} no define ninguna de las variantes de prompt seleccionadas. Elegí una variante que tenga, o deseleccioná el caso.`,
+      overCap: (count: number, cap: number) =>
+        `${count} corridas supera el límite de ${cap}. Angostá alguna dimensión, o subí HARNESS_LAB_MAX_BATCH_RUNS.`,
+      willQueue: (count: number) => (
+        <>
+          Esto encola <strong>{count}</strong> {count === 1 ? "corrida containerizada" : "corridas containerizadas"},
+          cada una gastando presupuesto de modelo. Cada caso corre solo las variantes
+          seleccionadas que define, así que el total puede ser menor al producto de los
+          ejes. No se crea nada a menos que cada combinación pase el preflight.
+        </>
+      )
+    },
+    batchResult: (count: number, batchId: ReactNode) => (
+      <>
+        <span className="badge ok">encolada</span> {count} {count === 1 ? "corrida" : "corridas"} como{" "}
+        {batchId}. Aparecen en la tabla de abajo a medida que se drena la cola.
+      </>
+    ),
+    validationReady: "lista",
+    validationBlocked: "bloqueada",
+    validationHelp:
+      "Validar configuración corre los mismos chequeos que Crear corrida — archivos del caso, disponibilidad del arnés, enrutamiento de modelo y la ventana de contexto que el ejecutor realmente está sirviendo — sin crear nada. Con un modelo frío, el primer chequeo puede tardar hasta ~40s mientras el backend lo carga.",
+    equivalentCliCommand: "Comando CLI equivalente",
+    sweBenchCliNote:
+      "Los casos de SWE-bench son provistos por el worker web (case_spec.json + checkout del repositorio); la línea de CLI de arriba es una referencia, no un equivalente ejecutable.",
+    manualScoringNote:
+      "La puntuación interactiva es solo por CLI. Un caso con comando de validación se puntúa solo, uno con rúbrica es juzgado por LLM; si no, la corrida queda en awaiting_manual_score y la puntuás desde la página de la corrida."
+  }
+});
+
 export function Runs({
   cases,
   onCancelRun,
@@ -65,6 +438,7 @@ export function Runs({
   onDeleteRun,
   runs
 }: RunsProps) {
+  const m = useMessages(MESSAGES);
   const navigate = useNavigate();
   const [runId, setRunId] = useState("");
   const [label, setLabel] = useState("");
@@ -237,10 +611,11 @@ export function Runs({
 
   // Switching harness swaps the executor menu (native CLI models vs gateway), so
   // reset the executor to that harness's default to avoid a stale/invalid pick.
+  const nativeIndex = useNativeModelIndex();
   const handleHarnessChange = (next: string) => {
     setHarness(next);
-    const native = HARNESS_NATIVE_MODELS[next];
-    setExecutorModel(native ? native[0].id : gatewayDefault);
+    // The first native model the gateway serves, never one it would refuse.
+    setExecutorModel(defaultNativeModel(next, nativeIndex) ?? gatewayDefault);
   };
 
   const toggleExtraSkill = (name: string) => {
@@ -536,56 +911,43 @@ export function Runs({
     <section className="page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Runs</p>
-          <h1>Recent runs</h1>
-          <p className="lede">Follow queue state, outcomes, and generated command previews.</p>
+          <p className="eyebrow">{m.eyebrow}</p>
+          <h1>{m.title}</h1>
+          <p className="lede">{m.lede}</p>
         </div>
       </header>
 
-      <HelpPanel title="How to launch and compare a run" docHref="docs/guide-web-ui.md">
+      <HelpPanel title={m.help.title} docHref="docs/guide-web-ui.md">
         <ol className="skills-howto">
-          <li>Pick a <strong>Case</strong> (the task), then a <strong>Prompt
-            variant</strong> and a <strong>Harness</strong>.</li>
-          <li><strong>Executor / Planner model</strong> — Gateway models come live
-            from LiteLLM (press Reload here, or Refresh from gateway in Settings);
-            Direct models are read off your LM Studio / Ollama host; claude and codex
-            use their native ids.</li>
-          <li>Optionally toggle <strong>Skills</strong> to A/B the harness for this
-            run only (a distinct arm).</li>
-          <li><strong>Create run</strong>, watch it stream, then score it (SWE-bench
-            auto-scores). Open <strong>Compare</strong> to line runs up across
-            models.</li>
+          <li>{m.help.step1(<strong>{m.fields.case}</strong>, <strong>{m.fields.promptVariant}</strong>, <strong>{m.fields.harness}</strong>)}</li>
+          <li>{m.help.step2(<strong>{m.fields.executorModel} / {m.fields.plannerModel}</strong>)}</li>
+          <li>{m.help.step3(<strong>Skills</strong>)}</li>
+          <li>{m.help.step4(<strong>{m.actions.createRun}</strong>, <strong>{m.compareLinkLabel}</strong>)}</li>
         </ol>
       </HelpPanel>
 
       <section className="panel">
         <div className="panel-head">
-          <h2>New run</h2>
-          <span className="muted">{selectedCase ? selectedCase.name : "No case selected"}</span>
+          <h2>{m.newRun}</h2>
+          <span className="muted">{selectedCase ? selectedCase.name : m.noCaseSelected}</span>
         </div>
         <div className="panel-actions run-presets">
           <button className="primary" onClick={applySdlcQwenPreset} type="button">
-            Preset: Full SDLC + Qwen
+            {m.presetFullSdlc}
           </button>
           <button
             onClick={() => (batchMode ? setBatchMode(false) : enterBatchMode())}
             type="button"
           >
-            {batchMode ? "Leave batch mode" : "Batch mode"}
+            {batchMode ? m.leaveBatchMode : m.batchMode}
           </button>
         </div>
         {batchMode ? (
           <div className="batch-section">
-            <p className="muted">
-              Each list below is a dimension: every combination of the selected cases,
-              prompts, harnesses and executor models is queued, repeated{" "}
-              <strong>{repetitions}</strong>{" "}
-              {repetitions === 1 ? "time" : "times"}. Planner model, max steps, dry run
-              and the skill ablation are shared by every run in the batch.
-            </p>
+            <p className="muted">{m.batch.intro(repetitions)}</p>
             <div className="form-grid">
               <fieldset className="batch-axis">
-                <legend>Cases ({batchCases.size})</legend>
+                <legend>{m.batch.cases(batchCases.size)}</legend>
                 <div className="batch-options">
                   {cases.map((item) => (
                     <label className="skill-checkbox" key={item.case_id}>
@@ -602,7 +964,7 @@ export function Runs({
                 </div>
               </fieldset>
               <fieldset className="batch-axis">
-                <legend>Prompt variants ({batchPrompts.size})</legend>
+                <legend>{m.batch.promptVariants(batchPrompts.size)}</legend>
                 <div className="batch-options">
                   {batchPromptNames.map((variant) => (
                     <label className="skill-checkbox" key={variant}>
@@ -617,13 +979,10 @@ export function Runs({
                     </label>
                   ))}
                 </div>
-                <small className="muted">
-                  Union of the variants defined by the selected cases. A case without a
-                  selected variant contributes no runs for it.
-                </small>
+                <small className="muted">{m.batch.promptVariantsHelp}</small>
               </fieldset>
               <fieldset className="batch-axis">
-                <legend>Harnesses ({batchHarnesses.size})</legend>
+                <legend>{m.batch.harnesses(batchHarnesses.size)}</legend>
                 <div className="batch-options">
                   {HARNESS_OPTIONS.map((item) => (
                     <label className="skill-checkbox" key={item}>
@@ -640,7 +999,7 @@ export function Runs({
                 </div>
               </fieldset>
               <fieldset className="batch-axis">
-                <legend>Executor models ({batchExecutors.size})</legend>
+                <legend>{m.batch.executorModels(batchExecutors.size)}</legend>
                 <div className="batch-options">
                   {modelOptions.map((option) => (
                     <label className="skill-checkbox" key={option.id}>
@@ -655,14 +1014,11 @@ export function Runs({
                     </label>
                   ))}
                 </div>
-                <small className="muted">
-                  None selected means "do not vary the model" — the harness default is
-                  used for every run.
-                </small>
+                <small className="muted">{m.batch.executorModelsHelp}</small>
               </fieldset>
               {targets.length > 0 ? (
                 <fieldset className="batch-axis">
-                  <legend>Target repositories ({batchTargets.size})</legend>
+                  <legend>{m.batch.targetRepositories(batchTargets.size)}</legend>
                   <div className="batch-options">
                     {targets.map((target) => (
                       <label className="skill-checkbox" key={target.target_id}>
@@ -679,16 +1035,11 @@ export function Runs({
                       </label>
                     ))}
                   </div>
-                  <small className="muted">
-                    Vary the repository to test whether the harness holds outside the
-                    repo it was designed in. Scores across different repositories are
-                    not comparable as though conditions were identical — read them per
-                    repository, not pooled.
-                  </small>
+                  <small className="muted">{m.batch.targetRepositoriesHelp}</small>
                 </fieldset>
               ) : null}
               <fieldset className="batch-axis">
-                  <legend>Harness ({batchHarnessSources.size})</legend>
+                  <legend>{m.batch.harnessAxis(batchHarnessSources.size)}</legend>
                   <div className="batch-options">
                     {(
                       targets.length > 0
@@ -712,24 +1063,13 @@ export function Runs({
                     )}
                   </div>
                   <small className="muted">
-                    {targets.length > 0 ? (
-                      <>
-                        Selecting <code>native</code> and <code>injected</code>{" "}
-                        together on one repository is the harness A/B: same repo, same
-                        case, same model, harness varied. Both require a target
-                        repository.
-                      </>
-                    ) : (
-                      <>
-                        Selecting <code>bare</code> and <code>lab_root</code> together
-                        is the bare-versus-governed A/B: one arm sees the prompt and
-                        nothing else, the other sees the whole harness.
-                      </>
-                    )}
+                    {targets.length > 0
+                      ? m.batch.harnessAxisHelpWithTargets
+                      : m.batch.harnessAxisHelpWithoutTargets}
                   </small>
                 </fieldset>
               <label>
-                <span>Repetitions</span>
+                <span>{m.batch.repetitions}</span>
                 <input
                   min={1}
                   onChange={(event) =>
@@ -738,23 +1078,20 @@ export function Runs({
                   type="number"
                   value={repetitions}
                 />
-                <small className="muted">
-                  Trials per combination. Repeat to separate a real difference from
-                  run-to-run variance.
-                </small>
+                <small className="muted">{m.batch.repetitionsHelp}</small>
               </label>
             </div>
           </div>
         ) : null}
         <div className="form-grid">
           <label>
-            <span>Run template (optional)</span>
+            <span>{m.fields.runTemplate}</span>
             <select
               disabled={caseRunIds.length === 0}
               value={caseRunIds.includes(runId) ? runId : ""}
               onChange={(event) => setRunId(event.target.value)}
             >
-              <option value="">None — leave Run ID blank for auto</option>
+              <option value="">{m.fields.runTemplateNone}</option>
               {caseRunIds.map((item) => (
                 <option key={item} value={item}>
                   {item}
@@ -763,25 +1100,25 @@ export function Runs({
             </select>
           </label>
           <label>
-            <span>Run ID (optional)</span>
+            <span>{m.fields.runId}</span>
             <input
               onChange={(event) => setRunId(event.target.value)}
-              placeholder={`auto (${caseId}-K-NNN)`}
+              placeholder={m.fields.runIdPlaceholder(caseId)}
               value={runId}
             />
-            <small className="muted">Leave blank to auto-generate the next {caseId}-K-NNN id.</small>
+            <small className="muted">{m.fields.runIdHelp(caseId)}</small>
           </label>
           <label>
-            <span>Custom label (optional)</span>
+            <span>{m.fields.customLabel}</span>
             <input
               onChange={(event) => setLabel(event.target.value)}
-              placeholder="e.g. sdlc-qwen-smoke"
+              placeholder={m.fields.customLabelPlaceholder}
               value={label}
             />
-            <small className="muted">Overrides Run ID as the persisted run identifier when set.</small>
+            <small className="muted">{m.fields.customLabelHelp}</small>
           </label>
           <label>
-            <span>Case</span>
+            <span>{m.fields.case}</span>
             <select value={caseId} onChange={(event) => setCaseId(event.target.value)}>
               {cases.map((item) => (
                 <option key={item.case_id} value={item.case_id}>
@@ -791,7 +1128,7 @@ export function Runs({
             </select>
           </label>
           <label>
-            <span>Prompt variant</span>
+            <span>{m.fields.promptVariant}</span>
             <select value={promptVariant} onChange={(event) => setPromptVariant(event.target.value)}>
               {promptVariantNames.map((variant) => (
                 <option key={variant} value={variant}>
@@ -801,7 +1138,7 @@ export function Runs({
             </select>
           </label>
           <label>
-            <span>Harness</span>
+            <span>{m.fields.harness}</span>
             <select value={harness} onChange={(event) => handleHarnessChange(event.target.value)}>
               {HARNESS_OPTIONS.map((item) => (
                 <option key={item} value={item}>
@@ -811,23 +1148,23 @@ export function Runs({
             </select>
             {HOST_HARNESSES.has(harness) ? (
               <small className="muted">
-                Runs the {harness} CLI with its native auth; pick the model below.{" "}
-                {harness === "claude"
-                  ? "Works in Docker (put CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host)."
-                  : "Needs host mode — run make app-host."}
+                {m.fields.hostHarnessHelp(
+                  harness,
+                  harness === "claude" ? m.fields.claudeAuthHelp : m.fields.otherHostHelp
+                )}
               </small>
             ) : null}
           </label>
           <ModelPicker
             allowNone
-            label="Planner model"
+            label={m.fields.plannerModel}
             directErrors={directErrors}
             onChange={setPlannerModel}
             options={modelOptions}
             value={plannerModel}
           />
           <ModelPicker
-            label="Executor model"
+            label={m.fields.executorModel}
             directErrors={directErrors}
             nativeOptions={HARNESS_NATIVE_MODELS[harness]}
             onChange={setExecutorModel}
@@ -838,27 +1175,23 @@ export function Runs({
           >
             <small className="muted">
               {HARNESS_NATIVE_MODELS[harness]
-                ? `Native ${harness} CLI models (passed to --model). Edit the list in harnesses.ts as versions ship.`
+                ? m.fields.nativeModelsHint(harness)
                 : modelSource === "opencode.json"
-                  ? "Gateway unreachable — showing opencode.json models."
+                  ? m.fields.gatewayUnreachable
                   : modelSource === "gateway"
-                    ? "AI Gateway models are routed through LiteLLM; Direct models are read off your LM Studio host, where an alias cannot rename them in transit."
-                    : "Loading models…"}
+                    ? m.fields.gatewayModelsHint
+                    : m.fields.loadingModels}
             </small>
           </ModelPicker>
           <label>
-            <span>Score mode</span>
+            <span>{m.fields.scoreMode}</span>
             <select value={scoreMode} disabled>
-              <option value="manual">Manual</option>
+              <option value="manual">{m.fields.scoreModeManual}</option>
             </select>
-            <small className="muted">
-              Interactive scoring is CLI-only. A case with a validation command scores
-              itself, a case with a rubric is LLM-judged; otherwise the run stops in
-              awaiting_manual_score and you score it from the run page.
-            </small>
+            <small className="muted">{m.fields.scoreModeHelp}</small>
           </label>
           <label>
-            <span>Max steps</span>
+            <span>{m.fields.maxSteps}</span>
             <select value={maxSteps} onChange={(event) => setMaxSteps(Number(event.target.value))}>
               {maxStepsOptions.map((item) => (
                 <option key={item} value={item}>
@@ -868,23 +1201,23 @@ export function Runs({
             </select>
           </label>
           <label className="switch">
-            <span>Resume</span>
+            <span>{m.fields.resume}</span>
             <input checked={resume} onChange={(event) => setResume(event.target.checked)} type="checkbox" />
           </label>
           <label className="switch">
-            <span>Dry run</span>
+            <span>{m.fields.dryRun}</span>
             <input checked={dryRun} onChange={(event) => setDryRun(event.target.checked)} type="checkbox" />
           </label>
           {targets.length > 0 ? (
             <>
               <label>
-                <span>Target repository</span>
+                <span>{m.fields.targetRepository}</span>
                 <select
                   disabled={batchMode}
                   onChange={(event) => setTargetRepoId(event.target.value)}
                   value={targetRepoId}
                 >
-                  <option value="">None — run in the lab workspace</option>
+                  <option value="">{m.fields.targetRepositoryNone}</option>
                   {targets.map((target) => (
                     <option key={target.target_id} value={target.target_id}>
                       {target.target_id}
@@ -893,13 +1226,13 @@ export function Runs({
                 </select>
                 <small className="muted">
                   {batchMode
-                    ? "Varied as a batch axis below."
-                    : "The repository the agent works in. Provisioned from the pinned local checkout for each run."}
+                    ? m.fields.targetRepositoryBatchHint
+                    : m.fields.targetRepositoryHint}
                 </small>
               </label>
               {targetRepoId !== "" || batchTargets.size > 0 ? (
                 <label>
-                  <span>Ref</span>
+                  <span>{m.fields.ref}</span>
                   <input
                     onChange={(event) => setTargetRef(event.target.value)}
                     placeholder={
@@ -921,56 +1254,52 @@ export function Runs({
                               setTargetPin(
                                 error instanceof Error
                                   ? error.message
-                                  : "Could not resolve"
+                                  : m.fields.couldNotResolve
                               )
                             )
                             .finally(() => setCheckingPin(false));
                         }}
                         type="button"
                       >
-                        {checkingPin ? "Checking…" : "Check commit"}
+                        {checkingPin ? m.fields.checkingPin : m.fields.checkCommit}
                       </button>
                     ) : typeof targetPin === "string" ? (
                       <span className="error-text">{targetPin}</span>
                     ) : (
-                      <>Pins to {targetPin.commit.slice(0, 10)}</>
+                      m.fields.pinsTo(targetPin.commit.slice(0, 10))
                     )}
                   </small>
                 </label>
               ) : null}
               {!batchMode ? (
                 <label>
-                  <span>Governance source</span>
+                  <span>{m.fields.governanceSource}</span>
                   <select
                     onChange={(event) =>
                       setHarnessSource(event.target.value as HarnessSource)
                     }
                     value={harnessSource}
                   >
-                    <option value="lab_root">Lab harness (from the lab repo)</option>
+                    <option value="lab_root">{m.fields.governanceLab}</option>
                     {/* The in-target pair needs a repository to be inside;
                         `bare` needs the absence of one (ADR-0049). */}
                     {targetRepoId === "" ? (
-                      <option value="bare">Bare — nothing, not even governance</option>
+                      <option value="bare">{m.fields.governanceBare}</option>
                     ) : (
                       <>
-                        <option value="native">
-                          Native — the target's own conventions
-                        </option>
-                        <option value="injected">
-                          Injected — our harness inside the target
-                        </option>
+                        <option value="native">{m.fields.governanceNative}</option>
+                        <option value="injected">{m.fields.governanceInjected}</option>
                       </>
                     )}
                   </select>
                   <small className="muted">
                     {harnessSource === "lab_root"
-                      ? "The agent works from the lab repo, so it sees CLAUDE.md, the hooks, the subagents and .github/."
+                      ? m.fields.governanceHintLab
                       : harnessSource === "bare"
-                        ? "Control arm: an empty workspace with the lab's governance masked in the container — the agent sees the prompt and nothing else. Needs the docker backend."
+                        ? m.fields.governanceHintBare
                         : harnessSource === "native"
-                          ? "Control arm: the agent works inside the repo with only what that repo ships."
-                          : "Treatment arm: the agent works inside the repo with our harness projected into it."}
+                          ? m.fields.governanceHintNative
+                          : m.fields.governanceHintInjected}
                   </small>
                 </label>
               ) : null}
@@ -980,30 +1309,28 @@ export function Runs({
         {harnessSkills.length > 0 ? (
           <div className="skills-section">
             <button className="skills-toggle" onClick={() => setSkillsOpen((open) => !open)} type="button">
-              {skillsOpen ? "▾" : "▸"} Skills — {harnessSkills.length - disabledSkills.size}/
-              {harnessSkills.length} enabled
-              {extraSkills.size > 0 ? ` + ${extraSkills.size} experimental` : ""}
+              {skillsOpen ? "▾" : "▸"}{" "}
+              {m.skills.summary(
+                harnessSkills.length - disabledSkills.size,
+                harnessSkills.length,
+                extraSkills.size
+              )}
               {disabledSkills.size > 0 || extraSkills.size > 0 ? (
-                <span className="badge error">ablation</span>
+                <span className="badge error">{m.skills.ablation}</span>
               ) : null}
             </button>
             {skillsOpen ? (
               <>
-                <p className="muted">
-                  Unchecked skills are hidden from the agent for this run only (symlinks and
-                  the adapter-file skill list are regenerated, then restored). A non-empty
-                  ablation changes the run's condition_hash — that is the point: compare
-                  against a full-harness baseline of the same case/model.
-                </p>
+                <p className="muted">{m.skills.description}</p>
                 <div className="panel-actions">
                   <button onClick={() => setDisabledSkills(new Set())} type="button">
-                    Enable all
+                    {m.skills.enableAll}
                   </button>
                   <button
                     onClick={() => setDisabledSkills(new Set(harnessSkills.map((skill) => skill.name)))}
                     type="button"
                   >
-                    Disable all
+                    {m.skills.disableAll}
                   </button>
                 </div>
                 <div className="skills-grid">
@@ -1023,7 +1350,7 @@ export function Runs({
                 </div>
                 {stagedSkills.length > 0 ? (
                   <>
-                    <p className="sidebar-label">Experimental (staged, off by default)</p>
+                    <p className="sidebar-label">{m.skills.experimentalTitle}</p>
                     <div className="skills-grid">
                       {stagedSkills.map((skill) => (
                         <label
@@ -1051,8 +1378,8 @@ export function Runs({
                         type="checkbox"
                       />
                       <span>
-                        Ask the agent to use them
-                        <small className="muted"> at the start of every step</small>
+                        {m.skills.askAgent}
+                        <small className="muted"> {m.skills.askAgentHint}</small>
                       </span>
                     </label>
                   </>
@@ -1067,7 +1394,7 @@ export function Runs({
             onClick={handleValidateRun}
             type="button"
           >
-            {isValidating ? "Validating..." : "Validate config"}
+            {isValidating ? m.actions.validating : m.actions.validateConfig}
           </button>
           {batchMode ? (
             <button
@@ -1081,9 +1408,7 @@ export function Runs({
               onClick={handleCreateBatch}
               type="button"
             >
-              {isSaving
-                ? "Queueing..."
-                : `Queue ${batchRunCount} ${batchRunCount === 1 ? "run" : "runs"}`}
+              {isSaving ? m.actions.queueing : m.actions.queueRuns(batchRunCount)}
             </button>
           ) : (
             <button
@@ -1092,75 +1417,50 @@ export function Runs({
               onClick={handleCreateRun}
               type="button"
             >
-              {isSaving ? "Creating..." : "Create run"}
+              {isSaving ? m.actions.creating : m.actions.createRun}
             </button>
           )}
         </div>
         {batchMode ? (
           <p className="muted">
             {batchRunCount === 0 ? (
-              <span className="badge error">
-                Select at least one case, prompt variant and harness.
-              </span>
+              <span className="badge error">{m.batchStatus.selectAtLeastOne}</span>
             ) : casesWithoutVariant.length > 0 ? (
               <span className="badge error">
-                {casesWithoutVariant.join(", ")} defines none of the selected prompt
-                variants. Select a variant it has, or deselect the case.
+                {m.batchStatus.casesWithoutVariant(casesWithoutVariant.join(", "))}
               </span>
             ) : overBatchCap ? (
               <span className="badge error">
-                {batchRunCount} runs exceeds the limit of {maxBatchRuns}. Narrow a
-                dimension, or raise HARNESS_LAB_MAX_BATCH_RUNS.
+                {m.batchStatus.overCap(batchRunCount, maxBatchRuns ?? 0)}
               </span>
             ) : (
-              <>
-                This queues <strong>{batchRunCount}</strong> containerised{" "}
-                {batchRunCount === 1 ? "run" : "runs"}, each spending model budget.
-                Each case runs only the selected variants it defines, so the count
-                can be lower than the product of the axes. Nothing is created unless
-                every combination passes preflight.
-              </>
+              m.batchStatus.willQueue(batchRunCount)
             )}
           </p>
         ) : null}
         {batchResult ? (
           <p className="muted">
-            <span className="badge ok">queued</span> {batchResult.count}{" "}
-            {batchResult.count === 1 ? "run" : "runs"} as{" "}
-            <code>{batchResult.batch_id}</code>. They appear in the table below as the
-            queue drains.
+            {m.batchResult(batchResult.count, <code>{batchResult.batch_id}</code>)}
           </p>
         ) : null}
         {validation ? (
           <p className="muted">
             <span className={validation.ok ? "badge ok" : "badge error"}>
-              {validation.ok ? "ready" : "blocked"}
+              {validation.ok ? m.validationReady : m.validationBlocked}
             </span>{" "}
             {validation.detail}
           </p>
         ) : (
-          <p className="muted">
-            Validate config runs the same checks as Create run — case files, harness
-            availability, model routing, and the context window the executor is actually
-            serving — without creating anything. On a cold model the first check can take
-            up to ~40s while the backend loads it.
-          </p>
+          <p className="muted">{m.validationHelp}</p>
         )}
         {createError ? <ErrorBanner message={createError} onDismiss={() => setCreateError(null)} /> : null}
         <div>
-          <p className="sidebar-label">Equivalent CLI command</p>
+          <p className="sidebar-label">{m.equivalentCliCommand}</p>
           <code className="command-preview">{commandPreview}</code>
           {selectedCase?.type === "swe_bench_instance" ? (
-            <p className="muted">
-              SWE-bench cases are provisioned by the web worker (case_spec.json + repo
-              checkout); the CLI line above is a reference, not a runnable equivalent.
-            </p>
+            <p className="muted">{m.sweBenchCliNote}</p>
           ) : null}
-          <p className="muted">
-            Interactive scoring is CLI-only. A case with a validation command scores
-            itself, a case with a rubric is LLM-judged; otherwise the run stops in
-            awaiting_manual_score and you score it from the run page.
-          </p>
+          <p className="muted">{m.manualScoringNote}</p>
         </div>
       </section>
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { ArtifactsPanel } from "../components/ArtifactsPanel";
@@ -10,6 +11,7 @@ import { Markdown } from "../components/Markdown";
 import { SandboxPanel } from "../components/SandboxPanel";
 import { StateBadge } from "../components/StateBadge";
 import { formatDuration, formatRunDate } from "../dates";
+import { defineMessages, useMessages } from "../i18n";
 import type {
   AttributionRecord,
   AuditRecord,
@@ -54,17 +56,556 @@ const CONTINUE_STEP_OPTIONS = [1, 3, 6, 10];
 // to the summary-only note when its attribution carries no signals (old runs).
 const SUMMARY_ONLY_HARNESSES = new Set(["claude", "codex"]);
 
-const HARNESS_SOURCE_BLURB: Record<string, string> = {
-  native:
-    "The agent saw the target repository's own setup. The lab injected nothing, " +
-    "so this is the control for any governance comparison.",
-  injected:
-    "The lab's harness was copied into the target workspace. Whatever this run " +
-    "did with governance, it did with the lab's, not the repository's.",
-  lab_root:
-    "The agent ran inside the lab repository itself — no external target " +
-    "workspace was materialised."
-};
+const MESSAGES = defineMessages({
+  en: {
+    backToRuns: "← Runs",
+    selectRun: "Select a run to view status, artifacts, score, and audit.",
+    condition: {
+      title: "Condition",
+      adHoc: "Ad-hoc run — not part of an experiment",
+      arm: "Arm",
+      case: "Case",
+      repository: "Repository",
+      repositoryFallback: "the lab itself",
+      commit: "Commit",
+      harness: "Harness",
+      governance: "Governance",
+      executorModel: "Executor model",
+      stepBudget: "Step budget",
+      sourceBlurb: {
+        native:
+          "The agent saw the target repository's own setup. The lab injected nothing, " +
+          "so this is the control for any governance comparison.",
+        injected:
+          "The lab's harness was copied into the target workspace. Whatever this run " +
+          "did with governance, it did with the lab's, not the repository's.",
+        lab_root:
+          "The agent ran inside the lab repository itself — no external target " +
+          "workspace was materialised."
+      },
+      validatedBy: (commands: ReactNode) => <>Validated by: {commands}</>,
+      noValidationGate: "No validation gate — this run can only ever be scored by hand."
+    },
+    header: {
+      eyebrow: "Run detail",
+      continues: (parent: ReactNode) => <>Continues {parent}</>,
+      continuedBy: (children: ReactNode) => <>Continued by {children}</>,
+      cancel: "Cancel",
+      retry: "Retry",
+      sending: "Sending…",
+      sendTraces: "Send traces",
+      viewInLangfuse: "View in Langfuse ↗",
+      session: (id: ReactNode) => <>Session {id}</>,
+      noDirectLink: " — set LANGFUSE_PROJECT_URL in Settings for a direct link.",
+      sentSpans: (spans: number, sessionId: string) => `Sent ${spans} spans to session ${sessionId}.`,
+      exportFailed: "Export failed."
+    },
+    tabs: { detail: "Detail", terminal: "Terminal", desktop: "Desktop" },
+    summary: {
+      score: "Score",
+      interventions: "Interventions",
+      exitCode: "Exit code",
+      started: "Started",
+      ended: "Ended",
+      queuedFor: "Queued for",
+      execution: "Execution",
+      failure: "Failure",
+      none: "None",
+      running: "running"
+    },
+    manualScore: {
+      title: "Manual score",
+      swebenchNote: "SWE-bench runs auto-score from validation — use Re-validate below instead",
+      alreadyScored: "Already scored objectively — add your judgement of the work",
+      requiredToComplete: "Required to complete run",
+      scoreLabel: "Score (0-10)",
+      interventionsLabel: "Interventions",
+      notesLabel: "Notes",
+      saving: "Saving...",
+      submitScore: "Submit score"
+    },
+    continue: {
+      title: "Continue",
+      subtitle: "Starts a child run from this workspace — this run is not modified",
+      followUpPrompt: "Follow-up prompt",
+      placeholder: "What should the agent do next, starting from what is already there?",
+      maxSteps: "Max steps",
+      note:
+        "A continuation counts as a human intervention: the child is hidden from the " +
+        "dashboard by default so it is not compared against one-shot runs.",
+      queueing: "Queueing...",
+      continueRun: "Continue run"
+    },
+    validation: {
+      title: "Validation & score",
+      sweBenchResolved: "SWE-bench: RESOLVED",
+      sweBenchNotResolved: "SWE-bench: NOT RESOLVED",
+      objectivePass: "objective: pass",
+      objectiveFail: "objective: fail",
+      objectiveInconclusive: "objective: inconclusive",
+      objectiveManual: "objective: manual",
+      revalidate: "Re-validate",
+      noValidationYet:
+        "No validation yet. Objective validation runs automatically when a run " +
+        "finishes; use Re-validate to run it now.",
+      composite: "Composite",
+      functional: "Functional",
+      objective: "Objective",
+      tokens: "Tokens",
+      costUsd: "Cost (USD)",
+      steps: "Steps",
+      interventions: "Interventions",
+      timeMin: "Time (min)",
+      llmJudged: "LLM-judged",
+      autoTests: "auto (tests)",
+      manual: "manual",
+      didNotMeasure: (reason: string | null) => `did not measure${reason ? `: ${reason}` : ""}`,
+      checkLine: (name: ReactNode, exitCode: ReactNode, detail: ReactNode) => (
+        <>
+          {name} (exit {exitCode}) {detail}
+        </>
+      ),
+      sweBenchExplainer:
+        "SWE-bench scoring is objective and binary: resolved iff every FAIL_TO_PASS " +
+        "test passes and no PASS_TO_PASS test regresses, evaluated by reinstalling " +
+        "the archived workspace and running the subset (swebench_validate.py). The " +
+        "run is auto-scored from this verdict — no manual score needed.",
+      objectiveExplainer:
+        "Objective validation runs the case's — or the target repository's — " +
+        "validation commands against the archived workspace in a runner container. " +
+        "The functional level is the subjective dimension; the composite is gated by " +
+        "the objective floor."
+    },
+    attribution: {
+      title: "Harness attribution",
+      governanceBadge: (value: ReactNode) => <>governance {value}</>,
+      reindex: "Re-index",
+      summaryOnlyExplainer: (harness: ReactNode) => (
+        <>
+          Tool-level attribution isn&apos;t available for the <strong>{harness}</strong>{" "}
+          harness: its CLI reports a final summary per step, not the per-tool logs
+          (<code>permission=edit</code>, <code>read</code>, <code>bash</code>…) that
+          opencode emits. Counts would all read 0 — not because the agent did
+          nothing, but because the harness doesn&apos;t expose them. Only the step count
+          is observable; judge behaviour from the LLM audit below.
+        </>
+      ),
+      stepsParsed: "Steps parsed",
+      noAttributionYet:
+        "No attribution yet. It is computed automatically after a run from the " +
+        "opencode step logs; use Re-index to compute it now.",
+      tools: "Tools",
+      agentModes: "Agent modes",
+      governanceRead: "Governance read",
+      skillsConsulted: "Skills consulted",
+      bash: "Bash",
+      governanceReadList: (docs: string) => `Governance read: ${docs}`,
+      noGovernanceRead: "No governance docs were read in this run.",
+      governanceSourceLabel: {
+        target_workspace: "target repository's own",
+        bare: "empty",
+        lab: "lab repository's"
+      },
+      denominator: (label: ReactNode, harnessSource: ReactNode, fingerprintSuffix: string) => (
+        <>
+          Denominator: the <strong>{label}</strong> governance surface, under {harnessSource}
+          {fingerprintSuffix}.
+        </>
+      ),
+      bareWarning:
+        "A bare run had no governance to read: the runner masked the lab's " +
+        "CLAUDE.md, hooks, subagents and .github/, so read coverage is not a " +
+        "measure of anything here (ADR-0049)."
+    },
+    audit: {
+      title: "LLM audit",
+      auditorPlaceholder: "auditor model — empty uses the transport default",
+      auditing: "Auditing...",
+      runAudit: "Run audit",
+      noAuditYet:
+        "No audit yet. A strong LLM reads this run's logs, diff, usage and score " +
+        "and writes a qualitative diagnostic (skill/rule usage, efficiency, SDLC " +
+        "adherence, failure points). Runs in the worker; this may take a minute.",
+      auditingWith: (model: ReactNode) => <>Auditing with {model}…</>,
+      defaultModel: "default model",
+      auditFailed: "Audit failed",
+      judgedAgainstSourceLabel: {
+        target_workspace: "the target repository's own governance",
+        lab: "the lab repository's governance"
+      },
+      judgedAgainst: (sourceLabel: ReactNode, fileCount: number, fingerprint: ReactNode) => (
+        <>
+          Judged against {sourceLabel} · {fileCount} file(s) · {fingerprint}
+        </>
+      ),
+      rulebook: (rulesFile: ReactNode, harnessSource: ReactNode, truncatedSuffix: string) => (
+        <>
+          Rulebook: {rulesFile} · {harnessSource}
+          {truncatedSuffix}
+        </>
+      ),
+      rulebookTruncated: " · file list truncated for the fingerprint",
+      predatesGovernance:
+        "This audit predates per-run governance surfaces, so what it was judged " +
+        "against was not recorded. Re-run the audit to pin it."
+    },
+    improvements: {
+      title: "Improvement proposals",
+      proposalsCount: (count: number) => `${count} proposal(s)`,
+      strictnessAriaLabel: "Synthesis strictness",
+      strictnessTitle:
+        "Filter strictness: strict keeps only proposals with strong evidence; lenient admits more.",
+      strictOptions: { strict: "strict", balanced: "balanced", lenient: "lenient" },
+      synthesising: "Synthesising...",
+      resynthesize: "Re-synthesize",
+      proposeImprovements: "Propose improvements",
+      auditFirstTitle: "Run the LLM audit first — proposals are synthesized from it.",
+      saveTitle:
+        "Save these proposals to the cross-run table (Improvements) so they can be " +
+        "grouped into one combined issue.",
+      saving: "Saving…",
+      save: "Save",
+      openSavedTitle: "Open Improvements with the saved proposals",
+      savedCount: (n: number) => `Saved ${n} · view table ↗`,
+      synthesisDidNotProduce: "Synthesis did not produce proposals — check the run logs.",
+      runAuditFirstForIssues:
+        "Turn this audit's findings into concrete GitHub issue proposals for the " +
+        "template/harness repos (LLM synthesis in the worker).",
+      runAuditFirstForProposals: "Run the LLM audit first; proposals are synthesized from its findings.",
+      withinExpectedRange: (reason: ReactNode, cmd: ReactNode) => (
+        <>
+          This run was within the expected range for this case and model — {reason} You can
+          force the synthesis with {cmd}.
+        </>
+      ),
+      nothingActionable: "The synthesis found nothing actionable to improve from this audit.",
+      runsLinkLabel: "Runs",
+      noProposalsToSave: (runsLink: ReactNode) => (
+        <>
+          No proposals to save. This run is already recorded as{" "}
+          <span className="badge neutral">no</span> in the {runsLink} list (Improvements column).
+        </>
+      ),
+      issueLink: "issue ↗",
+      notFiled: "not filed",
+      reviewEditNote: (path: ReactNode, ghCode: ReactNode, cmd: ReactNode) => (
+        <>
+          Review/edit {path} (repo routing, wording), then file the issues from the host (needs{" "}
+          {ghCode} auth): {cmd}
+        </>
+      )
+    },
+    sanitisedIssue: {
+      title: "Sanitised issue (ml-python-base)",
+      generating: "Generating…",
+      generateButton: "Generate sanitised issue (ml-python-base)",
+      proposalPending:
+        "Synthesising a sanitised issue from the audit (this runs an LLM on the server " +
+        "and can take 15 to 40 seconds).",
+      generatePrompt:
+        "Generate a sanitised GitHub issue for ml-python-base from this run's audit. " +
+        "Run the audit first if it is not ready yet.",
+      openPrefilled: "Open prefilled issue on GitHub ↗",
+      linkExplainer: (template: ReactNode, repository: ReactNode) => (
+        <>
+          The link opens the {template} form on {repository} with every field already filled
+          in. Confirm the two fields marked <strong>recommended</strong> (channel and SemVer)
+          and tick the sanitisation boxes before creating it. Each field can also be copied on
+          its own if you would rather paste by hand.
+        </>
+      ),
+      recommendedBadge: "recommended",
+      copyField: "Copy",
+      copiedField: "Copied",
+      viewAsMarkdown: "View as a single markdown block (manual copy and paste)",
+      issueForRepo: (repository: ReactNode) => <>Issue for {repository}</>,
+      copyAll: "Copy all"
+    },
+    catalog: { title: "Harness catalog", subtitle: "available · observed · LLM verdict" },
+    commandPreview: "Command preview",
+    logs: { title: "Logs", live: "live", history: "history" },
+    artifacts: { title: "Artifacts" }
+  },
+  es: {
+    backToRuns: "← Corridas",
+    selectRun: "Seleccioná una corrida para ver su estado, artefactos, puntaje y auditoría.",
+    condition: {
+      title: "Condición",
+      adHoc: "Corrida suelta — no forma parte de un experimento",
+      arm: "Brazo",
+      case: "Caso",
+      repository: "Repositorio",
+      repositoryFallback: "el lab mismo",
+      commit: "Commit",
+      harness: "Arnés",
+      governance: "Gobernanza",
+      executorModel: "Modelo ejecutor",
+      stepBudget: "Presupuesto de pasos",
+      sourceBlurb: {
+        native:
+          "El agente vio la configuración propia del repositorio destino. El lab no " +
+          "inyectó nada, así que esta es la referencia para cualquier comparación de " +
+          "gobernanza.",
+        injected:
+          "El arnés del lab se copió al workspace destino. Lo que esta corrida haya " +
+          "hecho con la gobernanza, lo hizo con la del lab, no la del repositorio.",
+        lab_root:
+          "El agente corrió dentro del propio repositorio del lab — no se materializó " +
+          "ningún workspace destino externo."
+      },
+      validatedBy: (commands: ReactNode) => <>Validado por: {commands}</>,
+      noValidationGate: "Sin puerta de validación — esta corrida solo puede puntuarse a mano."
+    },
+    header: {
+      eyebrow: "Detalle de la corrida",
+      continues: (parent: ReactNode) => <>Continúa {parent}</>,
+      continuedBy: (children: ReactNode) => <>Continuada por {children}</>,
+      cancel: "Cancelar",
+      retry: "Reintentar",
+      sending: "Enviando…",
+      sendTraces: "Enviar trazas",
+      viewInLangfuse: "Ver en Langfuse ↗",
+      session: (id: ReactNode) => <>Sesión {id}</>,
+      noDirectLink: " — configurá LANGFUSE_PROJECT_URL en Configuración para un enlace directo.",
+      sentSpans: (spans: number, sessionId: string) => `Se enviaron ${spans} spans a la sesión ${sessionId}.`,
+      exportFailed: "Falló la exportación."
+    },
+    tabs: { detail: "Detalle", terminal: "Terminal", desktop: "Escritorio" },
+    summary: {
+      score: "Puntaje",
+      interventions: "Intervenciones",
+      exitCode: "Código de salida",
+      started: "Iniciada",
+      ended: "Finalizada",
+      queuedFor: "En cola",
+      execution: "Ejecución",
+      failure: "Falla",
+      none: "Ninguna",
+      running: "en curso"
+    },
+    manualScore: {
+      title: "Puntaje manual",
+      swebenchNote:
+        "Las corridas de SWE-bench se puntúan automáticamente a partir de la validación " +
+        "— usá Re-validar más abajo",
+      alreadyScored: "Ya tiene puntaje objetivo — agregá tu juicio sobre el trabajo",
+      requiredToComplete: "Necesario para completar la corrida",
+      scoreLabel: "Puntaje (0-10)",
+      interventionsLabel: "Intervenciones",
+      notesLabel: "Notas",
+      saving: "Guardando...",
+      submitScore: "Enviar puntaje"
+    },
+    continue: {
+      title: "Continuar",
+      subtitle: "Inicia una corrida hija desde este workspace — esta corrida no se modifica",
+      followUpPrompt: "Prompt de seguimiento",
+      placeholder: "¿Qué debería hacer el agente a continuación, partiendo de lo que ya existe?",
+      maxSteps: "Pasos máximos",
+      note:
+        "Una continuación cuenta como intervención humana: la corrida hija queda oculta " +
+        "del dashboard por defecto para no compararla contra corridas de un solo intento.",
+      queueing: "Encolando...",
+      continueRun: "Continuar corrida"
+    },
+    validation: {
+      title: "Validación y puntaje",
+      sweBenchResolved: "SWE-bench: RESUELTO",
+      sweBenchNotResolved: "SWE-bench: NO RESUELTO",
+      objectivePass: "objetivo: pasó",
+      objectiveFail: "objetivo: falló",
+      objectiveInconclusive: "objetivo: no concluyente",
+      objectiveManual: "objetivo: manual",
+      revalidate: "Re-validar",
+      noValidationYet:
+        "Todavía no hay validación. La validación objetiva corre automáticamente cuando " +
+        "una corrida termina; usá Re-validar para correrla ahora.",
+      composite: "Compuesto",
+      functional: "Funcional",
+      objective: "Objetivo",
+      tokens: "Tokens",
+      costUsd: "Costo (USD)",
+      steps: "Pasos",
+      interventions: "Intervenciones",
+      timeMin: "Tiempo (min)",
+      llmJudged: "Juzgado por LLM",
+      autoTests: "automático (tests)",
+      manual: "manual",
+      didNotMeasure: (reason: string | null) => `no se midió${reason ? `: ${reason}` : ""}`,
+      checkLine: (name: ReactNode, exitCode: ReactNode, detail: ReactNode) => (
+        <>
+          {name} (salida {exitCode}) {detail}
+        </>
+      ),
+      sweBenchExplainer:
+        "El puntaje de SWE-bench es objetivo y binario: resuelto si y solo si todos los " +
+        "tests FAIL_TO_PASS pasan y ningún test PASS_TO_PASS retrocede, evaluado " +
+        "reinstalando el workspace archivado y corriendo el subconjunto " +
+        "(swebench_validate.py). La corrida se puntúa automáticamente a partir de este " +
+        "veredicto — no hace falta puntaje manual.",
+      objectiveExplainer:
+        "La validación objetiva corre los comandos de validación del caso — o del " +
+        "repositorio destino — contra el workspace archivado en un contenedor runner. " +
+        "El nivel funcional es la dimensión subjetiva; el compuesto queda limitado por " +
+        "el piso objetivo."
+    },
+    attribution: {
+      title: "Atribución del arnés",
+      governanceBadge: (value: ReactNode) => <>gobernanza {value}</>,
+      reindex: "Re-indexar",
+      summaryOnlyExplainer: (harness: ReactNode) => (
+        <>
+          La atribución a nivel de herramienta no está disponible para el arnés{" "}
+          <strong>{harness}</strong>: su CLI reporta un resumen final por paso, no los logs
+          por herramienta (<code>permission=edit</code>, <code>read</code>,{" "}
+          <code>bash</code>…) que emite opencode. Los conteos darían todos 0 — no porque el
+          agente no hizo nada, sino porque el arnés no los expone. Solo se puede observar la
+          cantidad de pasos; juzgá el comportamiento con la auditoría LLM de abajo.
+        </>
+      ),
+      stepsParsed: "Pasos parseados",
+      noAttributionYet:
+        "Todavía no hay atribución. Se calcula automáticamente después de una corrida a " +
+        "partir de los logs de pasos de opencode; usá Re-indexar para calcularla ahora.",
+      tools: "Herramientas",
+      agentModes: "Modos de agente",
+      governanceRead: "Gobernanza leída",
+      skillsConsulted: "Skills consultadas",
+      bash: "Bash",
+      governanceReadList: (docs: string) => `Gobernanza leída: ${docs}`,
+      noGovernanceRead: "No se leyó ningún documento de gobernanza en esta corrida.",
+      governanceSourceLabel: {
+        target_workspace: "propia del repositorio destino",
+        bare: "vacía",
+        lab: "del repositorio del lab"
+      },
+      denominator: (label: ReactNode, harnessSource: ReactNode, fingerprintSuffix: string) => (
+        <>
+          Denominador: la superficie de gobernanza <strong>{label}</strong>, bajo{" "}
+          {harnessSource}
+          {fingerprintSuffix}.
+        </>
+      ),
+      bareWarning:
+        "Una corrida bare no tuvo gobernanza para leer: el runner ocultó el CLAUDE.md, " +
+        "los hooks, los subagentes y .github/ del lab, así que la cobertura de lectura " +
+        "no mide nada acá (ADR-0049)."
+    },
+    audit: {
+      title: "Auditoría LLM",
+      auditorPlaceholder: "modelo auditor — vacío usa el default del transporte",
+      auditing: "Auditando...",
+      runAudit: "Correr auditoría",
+      noAuditYet:
+        "Todavía no hay auditoría. Un LLM potente lee los logs, el diff, el uso y el " +
+        "puntaje de esta corrida y escribe un diagnóstico cualitativo (uso de " +
+        "skills/reglas, eficiencia, adherencia al SDLC, puntos de falla). Corre en el " +
+        "worker; puede tardar un minuto.",
+      auditingWith: (model: ReactNode) => <>Auditando con {model}…</>,
+      defaultModel: "modelo por defecto",
+      auditFailed: "Falló la auditoría",
+      judgedAgainstSourceLabel: {
+        target_workspace: "la gobernanza propia del repositorio destino",
+        lab: "la gobernanza del repositorio del lab"
+      },
+      judgedAgainst: (sourceLabel: ReactNode, fileCount: number, fingerprint: ReactNode) => (
+        <>
+          Juzgada contra {sourceLabel} · {fileCount} archivo(s) · {fingerprint}
+        </>
+      ),
+      rulebook: (rulesFile: ReactNode, harnessSource: ReactNode, truncatedSuffix: string) => (
+        <>
+          Reglas: {rulesFile} · {harnessSource}
+          {truncatedSuffix}
+        </>
+      ),
+      rulebookTruncated: " · lista de archivos truncada para el fingerprint",
+      predatesGovernance:
+        "Esta auditoría es anterior a las superficies de gobernanza por corrida, así " +
+        "que no quedó registrado contra qué se juzgó. Volvé a correr la auditoría para " +
+        "fijarlo."
+    },
+    improvements: {
+      title: "Propuestas de mejora",
+      proposalsCount: (count: number) => `${count} propuesta(s)`,
+      strictnessAriaLabel: "Rigurosidad de la síntesis",
+      strictnessTitle:
+        "Rigurosidad del filtro: estricto deja solo propuestas con evidencia fuerte; " +
+        "flexible admite más.",
+      strictOptions: { strict: "estricto", balanced: "equilibrado", lenient: "flexible" },
+      synthesising: "Sintetizando...",
+      resynthesize: "Re-sintetizar",
+      proposeImprovements: "Proponer mejoras",
+      auditFirstTitle: "Corré primero la auditoría LLM — las propuestas se sintetizan a partir de ella.",
+      saveTitle:
+        "Guardá estas propuestas en la tabla entre corridas (Mejoras) para poder " +
+        "agruparlas en un solo issue combinado.",
+      saving: "Guardando…",
+      save: "Guardar",
+      openSavedTitle: "Abrir Mejoras con las propuestas guardadas",
+      savedCount: (n: number) => `Guardadas ${n} · ver tabla ↗`,
+      synthesisDidNotProduce: "La síntesis no produjo propuestas — revisá los logs de la corrida.",
+      runAuditFirstForIssues:
+        "Convertí los hallazgos de esta auditoría en propuestas concretas de issues de " +
+        "GitHub para los repos de template/harness (síntesis LLM en el worker).",
+      runAuditFirstForProposals:
+        "Corré primero la auditoría LLM; las propuestas se sintetizan a partir de sus hallazgos.",
+      withinExpectedRange: (reason: ReactNode, cmd: ReactNode) => (
+        <>
+          Esta corrida estuvo dentro del rango esperado para este caso y modelo — {reason}{" "}
+          Podés forzar la síntesis con {cmd}.
+        </>
+      ),
+      nothingActionable: "La síntesis no encontró nada concreto para mejorar a partir de esta auditoría.",
+      runsLinkLabel: "Corridas",
+      noProposalsToSave: (runsLink: ReactNode) => (
+        <>
+          No hay propuestas para guardar. Esta corrida ya está registrada como{" "}
+          <span className="badge neutral">no</span> en la lista de {runsLink} (columna
+          Mejoras).
+        </>
+      ),
+      issueLink: "issue ↗",
+      notFiled: "sin crear",
+      reviewEditNote: (path: ReactNode, ghCode: ReactNode, cmd: ReactNode) => (
+        <>
+          Revisá/editá {path} (ruteo de repos, redacción), y después creá los issues desde
+          el host (necesita auth de {ghCode}): {cmd}
+        </>
+      )
+    },
+    sanitisedIssue: {
+      title: "Issue saneado (ml-python-base)",
+      generating: "Generando…",
+      generateButton: "Generar issue saneado (ml-python-base)",
+      proposalPending:
+        "Sintetizando un issue saneado a partir de la auditoría (esto corre un LLM en el " +
+        "servidor y puede tardar entre 15 y 40 segundos).",
+      generatePrompt:
+        "Generá un issue saneado de GitHub para ml-python-base a partir de la auditoría " +
+        "de esta corrida. Corré primero la auditoría si todavía no está lista.",
+      openPrefilled: "Abrir issue precargado en GitHub ↗",
+      linkExplainer: (template: ReactNode, repository: ReactNode) => (
+        <>
+          El enlace abre el formulario {template} en {repository} con todos los campos ya
+          completados. Confirmá los dos campos marcados como <strong>recomendado</strong>{" "}
+          (canal y SemVer) y marcá las casillas de saneamiento antes de crearlo. Cada campo
+          también se puede copiar por separado si preferís pegarlo a mano.
+        </>
+      ),
+      recommendedBadge: "recomendado",
+      copyField: "Copiar",
+      copiedField: "Copiado",
+      viewAsMarkdown: "Ver como un solo bloque markdown (copiar y pegar a mano)",
+      issueForRepo: (repository: ReactNode) => <>Issue para {repository}</>,
+      copyAll: "Copiar todo"
+    },
+    catalog: { title: "Catálogo del arnés", subtitle: "disponible · observado · veredicto LLM" },
+    commandPreview: "Vista previa del comando",
+    logs: { title: "Logs", live: "en vivo", history: "historial" },
+    artifacts: { title: "Artefactos" }
+  }
+});
 
 /**
  * What condition this run was, above the outcome and far above the logs (§16).
@@ -74,16 +615,17 @@ const HARNESS_SOURCE_BLURB: Record<string, string> = {
  * is how a pile of runs gets mistaken for a measurement.
  */
 function RunConditionStrip({ context }: { context: RunContext }) {
+  const m = useMessages(MESSAGES);
   return (
     <div className="panel run-condition">
       <div className="panel-head">
-        <h3>Condition</h3>
+        <h3>{m.condition.title}</h3>
         {context.experiment_id ? (
           <Link to={`/evaluate/experiments?experiment=${context.experiment_id}`}>
             {context.experiment_id} ↗
           </Link>
         ) : (
-          <span className="badge neutral">Ad-hoc run — not part of an experiment</span>
+          <span className="badge neutral">{m.condition.adHoc}</span>
         )}
       </div>
       {context.experiment_question ? (
@@ -91,51 +633,49 @@ function RunConditionStrip({ context }: { context: RunContext }) {
       ) : null}
       <div className="detail-grid">
         <div>
-          <span>Arm</span>
+          <span>{m.condition.arm}</span>
           <strong>{context.condition_label || "—"}</strong>
         </div>
         <div>
-          <span>Case</span>
+          <span>{m.condition.case}</span>
           <strong>{context.case_name || context.case_id || "—"}</strong>
         </div>
         <div>
-          <span>Repository</span>
-          <strong>{context.target_repo_id || "the lab itself"}</strong>
+          <span>{m.condition.repository}</span>
+          <strong>{context.target_repo_id || m.condition.repositoryFallback}</strong>
         </div>
         <div>
-          <span>Commit</span>
+          <span>{m.condition.commit}</span>
           <strong className="mono">
             {context.target_commit ? context.target_commit.slice(0, 10) : "—"}
           </strong>
         </div>
         <div>
-          <span>Harness</span>
+          <span>{m.condition.harness}</span>
           <strong>{context.harness}</strong>
         </div>
         <div>
-          <span>Governance</span>
+          <span>{m.condition.governance}</span>
           <strong>{context.harness_source}</strong>
         </div>
         <div>
-          <span>Executor model</span>
+          <span>{m.condition.executorModel}</span>
           <strong>{context.executor_model || "—"}</strong>
         </div>
         <div>
-          <span>Step budget</span>
+          <span>{m.condition.stepBudget}</span>
           <strong>{context.max_steps}</strong>
         </div>
       </div>
       <p className="muted small">
-        {HARNESS_SOURCE_BLURB[context.harness_source] ?? ""}
+        {m.condition.sourceBlurb[context.harness_source as keyof typeof m.condition.sourceBlurb] ?? ""}
       </p>
       {context.validation_commands.length > 0 ? (
         <p className="muted small">
-          Validated by: <code>{context.validation_commands.join(" && ")}</code>
+          {m.condition.validatedBy(<code>{context.validation_commands.join(" && ")}</code>)}
         </p>
       ) : (
-        <p className="muted small">
-          No validation gate — this run can only ever be scored by hand.
-        </p>
+        <p className="muted small">{m.condition.noValidationGate}</p>
       )}
     </div>
   );
@@ -156,6 +696,7 @@ export function RunDetail({
   onContinueRun
 }: RunDetailProps) {
   const navigate = useNavigate();
+  const m = useMessages(MESSAGES);
   const harness = harnessFromCommand(run?.command);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
   const [actionPending, setActionPending] = useState(false);
@@ -389,9 +930,9 @@ export function RunDetail({
     return (
       <section className="run-detail-page">
         <Link className="run-detail-back" to="/advanced/runs">
-          ← Runs
+          {m.backToRuns}
         </Link>
-        <p className="muted">Select a run to view status, artifacts, score, and audit.</p>
+        <p className="muted">{m.selectRun}</p>
       </section>
     );
   }
@@ -481,19 +1022,19 @@ export function RunDetail({
 
   const objectiveBadge = (passed: boolean | null | undefined) => {
     if (isSwebench) {
-      if (passed === true) return <span className="badge ok">SWE-bench: RESOLVED</span>;
-      if (passed === false) return <span className="badge error">SWE-bench: NOT RESOLVED</span>;
+      if (passed === true) return <span className="badge ok">{m.validation.sweBenchResolved}</span>;
+      if (passed === false) return <span className="badge error">{m.validation.sweBenchNotResolved}</span>;
     }
-    if (passed === true) return <span className="badge ok">objective: pass</span>;
-    if (passed === false) return <span className="badge error">objective: fail</span>;
-    if (hasChecks) return <span className="badge warn">objective: inconclusive</span>;
-    return <span className="badge">objective: manual</span>;
+    if (passed === true) return <span className="badge ok">{m.validation.objectivePass}</span>;
+    if (passed === false) return <span className="badge error">{m.validation.objectiveFail}</span>;
+    if (hasChecks) return <span className="badge warn">{m.validation.objectiveInconclusive}</span>;
+    return <span className="badge">{m.validation.objectiveManual}</span>;
   };
 
   const scoreSourceBadge = (source: string | undefined) => {
-    if (source === "llm_judge") return <span className="badge">LLM-judged</span>;
-    if (source === "objective") return <span className="badge">auto (tests)</span>;
-    if (source === "manual") return <span className="badge">manual</span>;
+    if (source === "llm_judge") return <span className="badge">{m.validation.llmJudged}</span>;
+    if (source === "objective") return <span className="badge">{m.validation.autoTests}</span>;
+    if (source === "manual") return <span className="badge">{m.validation.manual}</span>;
     return null;
   };
 
@@ -572,9 +1113,7 @@ export function RunDetail({
                 window.setTimeout(poll, 3000);
               } else {
                 setImproving(false);
-                setImproveError(
-                  "Synthesis did not produce proposals — check the run logs."
-                );
+                setImproveError(m.improvements.synthesisDidNotProduce);
               }
             });
         };
@@ -660,9 +1199,7 @@ export function RunDetail({
       .exportLangfuse(run.run_id)
       .then((result) => {
         setLangfuseNotice(
-          result.ok
-            ? `Sent ${result.spans} spans to session ${result.session_id}.`
-            : result.reason
+          result.ok ? m.header.sentSpans(result.spans, result.session_id) : result.reason
         );
         if (result.session_url) {
           setLangfuse((current) =>
@@ -671,7 +1208,7 @@ export function RunDetail({
         }
       })
       .catch((error: unknown) => {
-        setLangfuseNotice(error instanceof ApiError ? error.message : "Export failed.");
+        setLangfuseNotice(error instanceof ApiError ? error.message : m.header.exportFailed);
       })
       .finally(() => setLangfuseSending(false));
   };
@@ -685,45 +1222,44 @@ export function RunDetail({
   return (
     <section className="run-detail-page">
       <Link className="run-detail-back" to="/advanced/runs">
-        ← Runs
+        {m.backToRuns}
       </Link>
       <div className="run-detail-header">
-        <p className="eyebrow">Run detail</p>
+        <p className="eyebrow">{m.header.eyebrow}</p>
         <h2>{run.run_id}</h2>
         <StateBadge state={run.state} />
         {run.parent_run_id || children.length > 0 ? (
           <p className="muted run-lineage">
-            {run.parent_run_id ? (
-              <>
-                Continues <Link to={`/advanced/runs/${run.parent_run_id}`}>{run.parent_run_id}</Link>
-              </>
-            ) : null}
+            {run.parent_run_id
+              ? m.header.continues(
+                  <Link to={`/advanced/runs/${run.parent_run_id}`}>{run.parent_run_id}</Link>
+                )
+              : null}
             {run.parent_run_id && children.length > 0 ? " · " : null}
-            {children.length > 0 ? (
-              <>
-                Continued by{" "}
-                {children.map((child, index) => (
-                  <span key={child.run_id}>
-                    {index > 0 ? ", " : ""}
-                    <Link to={`/advanced/runs/${child.run_id}`}>{child.run_id}</Link>
-                  </span>
-                ))}
-              </>
-            ) : null}
+            {children.length > 0
+              ? m.header.continuedBy(
+                  children.map((child, index) => (
+                    <span key={child.run_id}>
+                      {index > 0 ? ", " : ""}
+                      <Link to={`/advanced/runs/${child.run_id}`}>{child.run_id}</Link>
+                    </span>
+                  ))
+                )
+              : null}
           </p>
         ) : null}
         <div className="run-actions">
           <button disabled={!canCancel || actionPending} onClick={handleCancel} type="button">
-            Cancel
+            {m.header.cancel}
           </button>
           <button disabled={!canRetry || actionPending} onClick={handleRetry} type="button">
-            Retry
+            {m.header.retry}
           </button>
           {/* Only shown when tracing is on: a lab without Langfuse gets no dead buttons. */}
           {langfuse?.enabled ? (
             <>
               <button disabled={langfuseSending} onClick={handleLangfuseExport} type="button">
-                {langfuseSending ? "Sending…" : "Send traces"}
+                {langfuseSending ? m.header.sending : m.header.sendTraces}
               </button>
               {langfuse.session_url ? (
                 <a
@@ -732,7 +1268,7 @@ export function RunDetail({
                   rel="noreferrer"
                   target="_blank"
                 >
-                  View in Langfuse ↗
+                  {m.header.viewInLangfuse}
                 </a>
               ) : null}
             </>
@@ -740,8 +1276,8 @@ export function RunDetail({
         </div>
         {langfuse?.enabled ? (
           <p className="muted run-langfuse-note">
-            Session <code>{langfuse.session_id}</code>
-            {langfuse.session_url ? null : " — set LANGFUSE_PROJECT_URL in Settings for a direct link."}
+            {m.header.session(<code>{langfuse.session_id}</code>)}
+            {langfuse.session_url ? null : m.header.noDirectLink}
             {langfuseNotice ? ` · ${langfuseNotice}` : null}
           </p>
         ) : null}
@@ -755,7 +1291,7 @@ export function RunDetail({
             onClick={() => setTab(name)}
             type="button"
           >
-            {name === "detail" ? "Detail" : name === "terminal" ? "Terminal" : "Desktop"}
+            {m.tabs[name]}
           </button>
         ))}
       </div>
@@ -765,23 +1301,23 @@ export function RunDetail({
       {runContext ? <RunConditionStrip context={runContext} /> : null}
       <div className="detail-grid">
         <div>
-          <span>Score</span>
+          <span>{m.summary.score}</span>
           <strong>{run.score ?? "—"}</strong>
         </div>
         <div>
-          <span>Interventions</span>
+          <span>{m.summary.interventions}</span>
           <strong>{run.interventions ?? "—"}</strong>
         </div>
         <div>
-          <span>Exit code</span>
+          <span>{m.summary.exitCode}</span>
           <strong>{run.exit_code ?? "—"}</strong>
         </div>
         <div>
-          <span>Started</span>
+          <span>{m.summary.started}</span>
           <strong>{formatRunDate(run.started_at)}</strong>
         </div>
         <div>
-          <span>Ended</span>
+          <span>{m.summary.ended}</span>
           <strong>{formatRunDate(run.ended_at)}</strong>
         </div>
         {/*
@@ -792,39 +1328,39 @@ export function RunDetail({
           distinguishable from a busy one.
         */}
         <div>
-          <span>Queued for</span>
+          <span>{m.summary.queuedFor}</span>
           <strong>{formatDuration(run.created_at, run.started_at) || "—"}</strong>
         </div>
         <div>
-          <span>Execution</span>
+          <span>{m.summary.execution}</span>
           <strong>
             {formatDuration(run.started_at, run.ended_at) ||
-              (run.started_at ? "running" : "—")}
+              (run.started_at ? m.summary.running : "—")}
           </strong>
         </div>
         <div>
-          <span>Failure</span>
-          <strong>{run.failure_reason ?? "None"}</strong>
+          <span>{m.summary.failure}</span>
+          <strong>{run.failure_reason ?? m.summary.none}</strong>
         </div>
       </div>
       {run.state === "awaiting_manual_score" || run.state === "completed" ? (
         <div className="panel subtle">
           <div className="panel-head">
-            <h3>Manual score</h3>
+            <h3>{m.manualScore.title}</h3>
             <span className="muted">
               {isSwebench
-                ? "SWE-bench runs auto-score from validation — use Re-validate below instead"
+                ? m.manualScore.swebenchNote
                 : run.state === "completed"
                   ? // A run with objective validation completes on its own, so this
                     // form would never appear for it — and the human judgement of
                     // *how* it did is exactly what the objective verdict cannot say.
-                    "Already scored objectively — add your judgement of the work"
-                  : "Required to complete run"}
+                    m.manualScore.alreadyScored
+                  : m.manualScore.requiredToComplete}
             </span>
           </div>
           <div className="form-grid score-form-grid">
             <label>
-              <span>Score (0-10)</span>
+              <span>{m.manualScore.scoreLabel}</span>
               <input
                 max={10}
                 min={0}
@@ -834,7 +1370,7 @@ export function RunDetail({
               />
             </label>
             <label>
-              <span>Interventions</span>
+              <span>{m.manualScore.interventionsLabel}</span>
               <input
                 min={0}
                 onChange={(event) => setInterventionsValue(Number(event.target.value))}
@@ -843,13 +1379,13 @@ export function RunDetail({
               />
             </label>
             <label className="full">
-              <span>Notes</span>
+              <span>{m.manualScore.notesLabel}</span>
               <textarea onChange={(event) => setNotesValue(event.target.value)} value={notesValue} />
             </label>
           </div>
           <div className="panel-actions score-panel-actions">
             <button className="primary" disabled={actionPending} onClick={handleScore} type="button">
-              {actionPending ? "Saving..." : "Submit score"}
+              {actionPending ? m.manualScore.saving : m.manualScore.submitScore}
             </button>
           </div>
         </div>
@@ -857,23 +1393,21 @@ export function RunDetail({
       {canContinue ? (
         <div className="panel subtle">
           <div className="panel-head">
-            <h3>Continue</h3>
-            <span className="muted">
-              Starts a child run from this workspace — this run is not modified
-            </span>
+            <h3>{m.continue.title}</h3>
+            <span className="muted">{m.continue.subtitle}</span>
           </div>
           <div className="form-grid score-form-grid">
             <label className="full">
-              <span>Follow-up prompt</span>
+              <span>{m.continue.followUpPrompt}</span>
               <textarea
                 onChange={(event) => setContinuePrompt(event.target.value)}
-                placeholder="What should the agent do next, starting from what is already there?"
+                placeholder={m.continue.placeholder}
                 rows={4}
                 value={continuePrompt}
               />
             </label>
             <label>
-              <span>Max steps</span>
+              <span>{m.continue.maxSteps}</span>
               <select
                 onChange={(event) => setContinueSteps(Number(event.target.value))}
                 value={continueSteps}
@@ -886,10 +1420,7 @@ export function RunDetail({
               </select>
             </label>
           </div>
-          <p className="muted">
-            A continuation counts as a human intervention: the child is hidden from the
-            dashboard by default so it is not compared against one-shot runs.
-          </p>
+          <p className="muted">{m.continue.note}</p>
           <div className="panel-actions score-panel-actions">
             <button
               className="primary"
@@ -897,7 +1428,7 @@ export function RunDetail({
               onClick={handleContinue}
               type="button"
             >
-              {actionPending ? "Queueing..." : "Continue run"}
+              {actionPending ? m.continue.queueing : m.continue.continueRun}
             </button>
           </div>
         </div>
@@ -905,55 +1436,52 @@ export function RunDetail({
       <div className="run-detail-grid">
       <div className="panel subtle">
         <div className="panel-head">
-          <h3>Validation & score</h3>
+          <h3>{m.validation.title}</h3>
           <div className="run-actions">
             {validation ? objectiveBadge(validation.objective?.passed) : null}
             <button disabled={actionPending} onClick={handleRevalidate} type="button">
-              Re-validate
+              {m.validation.revalidate}
             </button>
           </div>
         </div>
         {validation === null ? (
-          <p className="muted">
-            No validation yet. Objective validation runs automatically when a run
-            finishes; use Re-validate to run it now.
-          </p>
+          <p className="muted">{m.validation.noValidationYet}</p>
         ) : (
           <>
             <div className="detail-grid">
               <div>
-                <span>Composite</span>
+                <span>{m.validation.composite}</span>
                 <strong>{validation.composite ?? "—"}</strong>
               </div>
               <div>
-                <span>Functional</span>
+                <span>{m.validation.functional}</span>
                 <strong>
                   {validation.subjective?.functional_score ?? "—"}{" "}
                   {scoreSourceBadge(validation.subjective?.score_source)}
                 </strong>
               </div>
               <div>
-                <span>Objective</span>
+                <span>{m.validation.objective}</span>
                 <strong>{validation.objective?.summary ?? "—"}</strong>
               </div>
               <div>
-                <span>Tokens</span>
+                <span>{m.validation.tokens}</span>
                 <strong>{validation.cost?.total_tokens ?? "—"}</strong>
               </div>
               <div>
-                <span>Cost (USD)</span>
+                <span>{m.validation.costUsd}</span>
                 <strong>{validation.cost?.cost_usd ?? "—"}</strong>
               </div>
               <div>
-                <span>Steps</span>
+                <span>{m.validation.steps}</span>
                 <strong>{validation.effort?.steps ?? "—"}</strong>
               </div>
               <div>
-                <span>Interventions</span>
+                <span>{m.validation.interventions}</span>
                 <strong>{validation.effort?.interventions ?? "—"}</strong>
               </div>
               <div>
-                <span>Time (min)</span>
+                <span>{m.validation.timeMin}</span>
                 <strong>{validation.cost?.time_minutes ?? "—"}</strong>
               </div>
             </div>
@@ -968,14 +1496,18 @@ export function RunDetail({
                       <span
                         title={
                           inconclusive
-                            ? `did not measure${check.inconclusive_reason ? `: ${check.inconclusive_reason.replace(/_/g, " ")}` : ""}`
+                            ? m.validation.didNotMeasure(
+                                check.inconclusive_reason
+                                  ? check.inconclusive_reason.replace(/_/g, " ")
+                                  : null
+                              )
                             : undefined
                         }
                       >
                         {mark}
                       </span>
                       <span>
-                        {check.name} (exit {check.exit_code ?? "?"}) {check.detail}
+                        {m.validation.checkLine(check.name, check.exit_code ?? "?", check.detail)}
                       </span>
                     </div>
                   );
@@ -985,97 +1517,79 @@ export function RunDetail({
           </>
         )}
         {isSwebench ? (
-          <p className="muted">
-            SWE-bench scoring is objective and binary: resolved iff every FAIL_TO_PASS
-            test passes and no PASS_TO_PASS test regresses, evaluated by reinstalling
-            the archived workspace and running the subset (swebench_validate.py). The
-            run is auto-scored from this verdict — no manual score needed.
-          </p>
+          <p className="muted">{m.validation.sweBenchExplainer}</p>
         ) : (
-          <p className="muted">
-            Objective validation runs the case&apos;s — or the target repository&apos;s —
-            validation commands against the archived workspace in a runner container.
-            The functional level is the subjective dimension; the composite is gated by
-            the objective floor.
-          </p>
+          <p className="muted">{m.validation.objectiveExplainer}</p>
         )}
       </div>
       <div className="panel subtle">
         <div className="panel-head">
-          <h3>Harness attribution</h3>
+          <h3>{m.attribution.title}</h3>
           <div className="run-actions">
             {attribution && !summaryOnlyHarness ? (
               <span className="badge">
-                governance {attribution.harness_usage?.governance_coverage ?? "—"}
+                {m.attribution.governanceBadge(attribution.harness_usage?.governance_coverage ?? "—")}
               </span>
             ) : null}
             {!summaryOnlyHarness ? (
               <button disabled={actionPending} onClick={handleIndexAttribution} type="button">
-                Re-index
+                {m.attribution.reindex}
               </button>
             ) : null}
           </div>
         </div>
         {summaryOnlyHarness ? (
           <>
-            <p className="muted">
-              Tool-level attribution isn't available for the <strong>{harness}</strong>{" "}
-              harness: its CLI reports a final summary per step, not the per-tool logs
-              (<code>permission=edit</code>, <code>read</code>, <code>bash</code>…) that
-              opencode emits. Counts would all read 0 — not because the agent did
-              nothing, but because the harness doesn't expose them. Only the step count
-              is observable; judge behaviour from the LLM audit below.
-            </p>
+            <p className="muted">{m.attribution.summaryOnlyExplainer(harness)}</p>
             <div className="detail-grid">
               <div>
-                <span>Steps parsed</span>
+                <span>{m.attribution.stepsParsed}</span>
                 <strong>{attribution?.steps_parsed ?? "—"}</strong>
               </div>
             </div>
           </>
         ) : attribution === null ? (
-          <p className="muted">
-            No attribution yet. It is computed automatically after a run from the
-            opencode step logs; use Re-index to compute it now.
-          </p>
+          <p className="muted">{m.attribution.noAttributionYet}</p>
         ) : (
           <>
             <div className="detail-grid">
               <div>
-                <span>Tools</span>
+                <span>{m.attribution.tools}</span>
                 <strong>{countEntries(attribution.tools) || "—"}</strong>
               </div>
               <div>
-                <span>Agent modes</span>
+                <span>{m.attribution.agentModes}</span>
                 <strong>{countEntries(attribution.agent_modes) || "—"}</strong>
               </div>
               <div>
-                <span>Governance read</span>
+                <span>{m.attribution.governanceRead}</span>
                 <strong>{attribution.harness_usage?.governance_coverage ?? "—"}</strong>
               </div>
               <div>
-                <span>Skills consulted</span>
+                <span>{m.attribution.skillsConsulted}</span>
                 <strong>
                   {(attribution.harness_usage?.skills_consulted?.length ?? 0)}/
                   {attribution.harness_usage?.skills_available?.length ?? 0}
                 </strong>
               </div>
               <div>
-                <span>Bash</span>
+                <span>{m.attribution.bash}</span>
                 <strong>{countEntries(attribution.bash_commands) || "—"}</strong>
               </div>
               <div>
-                <span>Steps parsed</span>
+                <span>{m.attribution.stepsParsed}</span>
                 <strong>{attribution.steps_parsed}</strong>
               </div>
             </div>
             {attribution.harness_usage?.governance_docs_read &&
             attribution.harness_usage.governance_docs_read.length > 0 ? (
               <p className="muted">
-                Governance read: {attribution.harness_usage.governance_docs_read.join(", ")}
+                {m.attribution.governanceReadList(
+                  attribution.harness_usage.governance_docs_read.join(", ")
+                )}
               </p>
             ) : (
-              <p className="muted">No governance docs were read in this run.</p>
+              <p className="muted">{m.attribution.noGovernanceRead}</p>
             )}
             {/*
               The denominator's provenance. "2/9" against a client's own
@@ -1086,28 +1600,21 @@ export function RunDetail({
             */}
             {attribution.harness_usage?.governance_source ? (
               <p className="muted small">
-                Denominator: the{" "}
-                <strong>
-                  {attribution.harness_usage.governance_source === "target_workspace"
-                    ? "target repository's own"
+                {m.attribution.denominator(
+                  attribution.harness_usage.governance_source === "target_workspace"
+                    ? m.attribution.governanceSourceLabel.target_workspace
                     : attribution.harness_usage.governance_source === "bare"
-                      ? "empty"
-                      : "lab repository's"}
-                </strong>{" "}
-                governance surface, under{" "}
-                <code>harness_source={attribution.harness_usage.harness_source}</code>
-                {attribution.harness_usage.governance_fingerprint
-                  ? ` · fingerprint ${attribution.harness_usage.governance_fingerprint.slice(0, 12)}`
-                  : ""}
-                .
+                      ? m.attribution.governanceSourceLabel.bare
+                      : m.attribution.governanceSourceLabel.lab,
+                  <code>harness_source={attribution.harness_usage.harness_source}</code>,
+                  attribution.harness_usage.governance_fingerprint
+                    ? ` · fingerprint ${attribution.harness_usage.governance_fingerprint.slice(0, 12)}`
+                    : ""
+                )}
               </p>
             ) : null}
             {attribution.harness_usage?.governance_source === "bare" ? (
-              <p className="muted small">
-                A bare run had no governance to read: the runner masked the lab's
-                CLAUDE.md, hooks, subagents and <code>.github/</code>, so read
-                coverage is not a measure of anything here (ADR-0049).
-              </p>
+              <p className="muted small">{m.attribution.bareWarning}</p>
             ) : null}
             {attribution.harness_usage?.governance_warning ? (
               <p className="callout callout--warning small">
@@ -1120,13 +1627,13 @@ export function RunDetail({
       </div>
       <div className="panel subtle">
         <div className="panel-head">
-          <h3>LLM audit</h3>
+          <h3>{m.audit.title}</h3>
           <div className="run-actions">
             {audit ? <span className="badge">{audit.status}</span> : null}
             <input
               className="audit-model-input"
               onChange={(event) => setAuditModel(event.target.value)}
-              placeholder="auditor model — empty uses the transport default"
+              placeholder={m.audit.auditorPlaceholder}
               type="text"
               value={auditModel}
             />
@@ -1135,20 +1642,16 @@ export function RunDetail({
               onClick={handleRunAudit}
               type="button"
             >
-              {audit?.status === "running" ? "Auditing..." : "Run audit"}
+              {audit?.status === "running" ? m.audit.auditing : m.audit.runAudit}
             </button>
           </div>
         </div>
         {audit === null ? (
-          <p className="muted">
-            No audit yet. A strong LLM reads this run's logs, diff, usage and score
-            and writes a qualitative diagnostic (skill/rule usage, efficiency, SDLC
-            adherence, failure points). Runs in the worker; this may take a minute.
-          </p>
+          <p className="muted">{m.audit.noAuditYet}</p>
         ) : audit.status === "running" ? (
-          <p className="muted">Auditing with {audit.auditor_model || "default model"}…</p>
+          <p className="muted">{m.audit.auditingWith(audit.auditor_model || m.audit.defaultModel)}</p>
         ) : audit.status === "failed" ? (
-          <ErrorBanner message={audit.error ?? "Audit failed"} />
+          <ErrorBanner message={audit.error ?? m.audit.auditFailed} />
         ) : (
           <div className="audit-body">
             {/*
@@ -1161,19 +1664,20 @@ export function RunDetail({
             {audit.governance_json && "fingerprint" in audit.governance_json ? (
               <details className="governance-surface">
                 <summary>
-                  Judged against{" "}
-                  {audit.governance_json.source === "target_workspace"
-                    ? "the target repository's own governance"
-                    : "the lab repository's governance"}{" "}
-                  · {audit.governance_json.file_count} file(s) ·{" "}
-                  <code>{audit.governance_json.fingerprint.slice(0, 12)}</code>
+                  {m.audit.judgedAgainst(
+                    audit.governance_json.source === "target_workspace"
+                      ? m.audit.judgedAgainstSourceLabel.target_workspace
+                      : m.audit.judgedAgainstSourceLabel.lab,
+                    audit.governance_json.file_count,
+                    <code>{audit.governance_json.fingerprint.slice(0, 12)}</code>
+                  )}
                 </summary>
                 <p className="muted small">
-                  Rulebook: <code>{audit.governance_json.rules_file}</code> ·{" "}
-                  <code>harness_source={audit.governance_json.harness_source}</code>
-                  {audit.governance_json.truncated
-                    ? " · file list truncated for the fingerprint"
-                    : ""}
+                  {m.audit.rulebook(
+                    <code>{audit.governance_json.rules_file}</code>,
+                    <code>harness_source={audit.governance_json.harness_source}</code>,
+                    audit.governance_json.truncated ? m.audit.rulebookTruncated : ""
+                  )}
                 </p>
                 {audit.governance_json.warning ? (
                   <p className="callout callout--warning small">
@@ -1189,10 +1693,7 @@ export function RunDetail({
                 </ul>
               </details>
             ) : (
-              <p className="muted small">
-                This audit predates per-run governance surfaces, so what it was
-                judged against was not recorded. Re-run the audit to pin it.
-              </p>
+              <p className="muted small">{m.audit.predatesGovernance}</p>
             )}
             <Markdown>{audit.markdown}</Markdown>
           </div>
@@ -1200,54 +1701,50 @@ export function RunDetail({
       </div>
       <div className="panel subtle">
         <div className="panel-head">
-          <h3>Improvement proposals</h3>
+          <h3>{m.improvements.title}</h3>
           <div className="run-actions">
             {improvements ? (
-              <span className="badge ok">{improvements.proposals.length} proposal(s)</span>
+              <span className="badge ok">{m.improvements.proposalsCount(improvements.proposals.length)}</span>
             ) : null}
             <select
-              aria-label="Synthesis strictness"
+              aria-label={m.improvements.strictnessAriaLabel}
               onChange={(e) => setImproveStrictness(e.target.value)}
-              title="Filter strictness: strict keeps only proposals with strong evidence; lenient admits more."
+              title={m.improvements.strictnessTitle}
               value={improveStrictness}
             >
-              <option value="strict">strict</option>
-              <option value="balanced">balanced</option>
-              <option value="lenient">lenient</option>
+              <option value="strict">{m.improvements.strictOptions.strict}</option>
+              <option value="balanced">{m.improvements.strictOptions.balanced}</option>
+              <option value="lenient">{m.improvements.strictOptions.lenient}</option>
             </select>
             <button
               disabled={improving || audit?.status !== "done"}
               onClick={handleImprove}
-              title={
-                audit?.status !== "done"
-                  ? "Run the LLM audit first — proposals are synthesized from it."
-                  : undefined
-              }
+              title={audit?.status !== "done" ? m.improvements.auditFirstTitle : undefined}
               type="button"
             >
               {improving
-                ? "Synthesising..."
+                ? m.improvements.synthesising
                 : improvements
-                  ? "Re-synthesize"
-                  : "Propose improvements"}
+                  ? m.improvements.resynthesize
+                  : m.improvements.proposeImprovements}
             </button>
             {improvements !== null && improvements.proposals.length > 0 ? (
               <button
                 disabled={savingProposals}
                 onClick={handleSaveProposals}
-                title="Save these proposals to the cross-run table (Improvements) so they can be grouped into one combined issue."
+                title={m.improvements.saveTitle}
                 type="button"
               >
-                {savingProposals ? "Saving…" : "Save"}
+                {savingProposals ? m.improvements.saving : m.improvements.save}
               </button>
             ) : null}
             {saveResult !== null ? (
               <Link
                 className="badge ok save-feedback"
-                title="Open Improvements with the saved proposals"
+                title={m.improvements.openSavedTitle}
                 to="/advanced/improvements"
               >
-                Saved {saveResult.saved + saveResult.updated} · view table ↗
+                {m.improvements.savedCount(saveResult.saved + saveResult.updated)}
               </Link>
             ) : null}
           </div>
@@ -1256,8 +1753,8 @@ export function RunDetail({
         {improvements === null ? (
           <p className="muted">
             {audit?.status === "done"
-              ? "Turn this audit's findings into concrete GitHub issue proposals for the template/harness repos (LLM synthesis in the worker)."
-              : "Run the LLM audit first; proposals are synthesized from its findings."}
+              ? m.improvements.runAuditFirstForIssues
+              : m.improvements.runAuditFirstForProposals}
           </p>
         ) : (
           <>
@@ -1265,22 +1762,21 @@ export function RunDetail({
               <>
                 {improvements.gate?.skipped ? (
                   <p className="muted">
-                    This run was within the expected range for this case and model —{" "}
-                    {improvements.gate.reason} You can force the synthesis with{" "}
-                    <code>make improve RUN={run.run_id} IMPROVE_FORCE=1</code>.
+                    {m.improvements.withinExpectedRange(
+                      improvements.gate.reason,
+                      <code>make improve RUN={run.run_id} IMPROVE_FORCE=1</code>
+                    )}
                   </p>
                 ) : (
-                  <p className="muted">
-                    The synthesis found nothing actionable to improve from this audit.
-                  </p>
+                  <p className="muted">{m.improvements.nothingActionable}</p>
                 )}
                 {/* Close the loop: 0 proposals still persists improvements.json,
                     so the Runs list already reflects this run as "no" — say so,
                     since there is nothing to save into the cross-run worklist. */}
                 <p className="muted">
-                  No proposals to save. This run is already recorded as{" "}
-                  <span className="badge neutral">no</span> in the{" "}
-                  <Link to="/advanced/runs">Runs</Link> list (Improvements column).
+                  {m.improvements.noProposalsToSave(
+                    <Link to="/advanced/runs">{m.improvements.runsLinkLabel}</Link>
+                  )}
                 </p>
               </>
             ) : (
@@ -1298,10 +1794,10 @@ export function RunDetail({
                     <span>
                       {proposal.created_issue_url ? (
                         <a href={proposal.created_issue_url} rel="noreferrer" target="_blank">
-                          issue ↗
+                          {m.improvements.issueLink}
                         </a>
                       ) : (
-                        <span className="muted">not filed</span>
+                        <span className="muted">{m.improvements.notFiled}</span>
                       )}
                     </span>
                   </div>
@@ -1309,20 +1805,21 @@ export function RunDetail({
               </div>
             )}
             <p className="muted">
-              Review/edit <code>data/runs/{run.run_id}/improvements.json</code> (repo
-              routing, wording), then file the issues from the host (needs{" "}
-              <code>gh</code> auth):{" "}
-              <code>make improve RUN={run.run_id} CREATE=1</code>
+              {m.improvements.reviewEditNote(
+                <code>data/runs/{run.run_id}/improvements.json</code>,
+                <code>gh</code>,
+                <code>make improve RUN={run.run_id} CREATE=1</code>
+              )}
             </p>
           </>
         )}
       </div>
       <div className="panel subtle">
         <div className="panel-head">
-          <h3>Sanitised issue (ml-python-base)</h3>
+          <h3>{m.sanitisedIssue.title}</h3>
           <div className="run-actions">
             <button disabled={proposalLoading} onClick={handleGenerateIssue} type="button">
-              {proposalLoading ? "Generating…" : "Generate sanitised issue (ml-python-base)"}
+              {proposalLoading ? m.sanitisedIssue.generating : m.sanitisedIssue.generateButton}
             </button>
           </div>
         </div>
@@ -1336,8 +1833,8 @@ export function RunDetail({
         {proposalIssue === null ? (
           <p className="muted">
             {proposalLoading
-              ? "Synthesising a sanitised issue from the audit (this runs an LLM on the server and can take 15 to 40 seconds)."
-              : "Generate a sanitised GitHub issue for ml-python-base from this run's audit. Run the audit first if it is not ready yet."}
+              ? m.sanitisedIssue.proposalPending
+              : m.sanitisedIssue.generatePrompt}
           </p>
         ) : (
           <>
@@ -1354,15 +1851,14 @@ export function RunDetail({
                   textDecoration: "none"
                 }}
               >
-                Open prefilled issue on GitHub ↗
+                {m.sanitisedIssue.openPrefilled}
               </a>
             </div>
             <p className="muted" style={{ fontSize: "0.85rem" }}>
-              The link opens the <code>{proposalIssue.form.template}</code> form on{" "}
-              {proposalIssue.repository} with every field already filled in. Confirm the two
-              fields marked <strong>recommended</strong> (channel and SemVer) and tick the
-              sanitisation boxes before creating it. Each field can also be copied on its
-              own if you would rather paste by hand.
+              {m.sanitisedIssue.linkExplainer(
+                <code>{proposalIssue.form.template}</code>,
+                proposalIssue.repository
+              )}
             </p>
             <div className="proposal-fields" style={{ display: "grid", gap: "0.75rem" }}>
               {proposalIssue.form.fields.map((field) => (
@@ -1371,14 +1867,14 @@ export function RunDetail({
                     <h4 style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
                       {field.label}
                       {field.recommended ? (
-                        <span className="badge ok">recommended</span>
+                        <span className="badge ok">{m.sanitisedIssue.recommendedBadge}</span>
                       ) : null}
                     </h4>
                     <button
                       onClick={() => handleCopyField(field.id, field.value)}
                       type="button"
                     >
-                      {copiedField === field.id ? "Copied" : "Copy"}
+                      {copiedField === field.id ? m.sanitisedIssue.copiedField : m.sanitisedIssue.copyField}
                     </button>
                   </div>
                   {field.reason ? (
@@ -1399,11 +1895,11 @@ export function RunDetail({
               ))}
             </div>
             <details style={{ marginTop: "1rem" }}>
-              <summary>View as a single markdown block (manual copy and paste)</summary>
+              <summary>{m.sanitisedIssue.viewAsMarkdown}</summary>
               <div className="panel-head" style={{ marginTop: "0.5rem" }}>
-                <span className="muted">Issue for {proposalIssue.repository}</span>
+                <span className="muted">{m.sanitisedIssue.issueForRepo(proposalIssue.repository)}</span>
                 <button onClick={handleCopyIssue} type="button">
-                  {proposalCopied ? "Copied" : "Copy all"}
+                  {proposalCopied ? m.sanitisedIssue.copiedField : m.sanitisedIssue.copyAll}
                 </button>
               </div>
               <pre
@@ -1422,19 +1918,19 @@ export function RunDetail({
       </div>
       <div className="panel subtle">
         <div className="panel-head">
-          <h3>Harness catalog</h3>
-          <span className="muted">available · observed · LLM verdict</span>
+          <h3>{m.catalog.title}</h3>
+          <span className="muted">{m.catalog.subtitle}</span>
         </div>
         <HarnessCatalog attribution={attribution} audit={audit} metadata={metadata} />
       </div>
       <div>
-        <p className="sidebar-label">Command preview</p>
+        <p className="sidebar-label">{m.commandPreview}</p>
         <code className="command-preview">{run.command.join(" ")}</code>
       </div>
       <div className="panel subtle">
         <div className="panel-head">
-          <h3>Logs</h3>
-          <span className="muted">{run.state === "running" ? "live" : "history"}</span>
+          <h3>{m.logs.title}</h3>
+          <span className="muted">{run.state === "running" ? m.logs.live : m.logs.history}</span>
         </div>
         <div ref={consoleRef}>
           <LogViewer events={events} />
@@ -1442,7 +1938,7 @@ export function RunDetail({
       </div>
       <div className="panel subtle">
         <div className="panel-head">
-          <h3>Artifacts</h3>
+          <h3>{m.artifacts.title}</h3>
           <span className="muted">data/runs/{run.run_id}</span>
         </div>
         <ScoresPanel runId={run.run_id} />

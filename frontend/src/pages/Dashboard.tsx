@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { api } from "../api";
 import { Link } from "react-router-dom";
 
+import { defineMessages, useMessages } from "../i18n";
 import type {
   CaseRecord,
   LeaderboardRunRow,
@@ -27,6 +29,237 @@ function usd(value: number | null | undefined): string {
   return value === null || value === undefined ? "—" : `$${value.toFixed(2)}`;
 }
 
+const MESSAGES = defineMessages({
+  en: {
+    trend: {
+      notEnough: "Not enough weeks with a validated run to draw a trend yet.",
+      ariaLabel: "Weekly success rate",
+      tooltip: (weekEnding: string, rate: string, n: number) =>
+        `${weekEnding}: ${rate} over ${n} run${n === 1 ? "" : "s"}`
+    },
+    harnessSignal: {
+      heading: "Harness signal",
+      noScores:
+        "No scores recorded yet. Runs are scored against the registry when they finish; older runs can be scored from their detail page.",
+      overRuns: (n: number) => `over ${n} scored run${n === 1 ? "" : "s"}`,
+      skillAdherence: "Skill adherence",
+      shareJudgedUsed: "share of the harness judged used · judgement",
+      itemsUseful: "Items useful / run",
+      judgedRedundant: (n: string) => `${n} judged redundant`,
+      diffSize: "Diff size",
+      lines: (n: number) => `${n} lines`,
+      medianObservation: "median · observation",
+      boundaryViolations: "Boundary violations",
+      forbiddenWorst: "forbidden paths touched, worst run",
+      lowAdherenceWarning: (
+        <>
+          Agents are judged to use under half of the harness available to them. That is a
+          finding about the <em>harness</em>, not the model: an item nothing ever reaches is
+          cost without effect. Read the per-item verdicts in a run&apos;s{" "}
+          <strong>Harness catalog</strong>, then ablate the ones that never earn their keep and
+          measure the difference.
+        </>
+      )
+    },
+    overview: {
+      harnessVersion: "Harness version",
+      successRate: (days: number) => `Success rate (${days}d)`,
+      overValidated: (n: number) => `over ${n} validated run${n === 1 ? "" : "s"}`,
+      regressions: "Regressions",
+      ofCasesHistory: (n: number) => `of ${n} case${n === 1 ? "" : "s"} with a history`,
+      medianCost: "Median cost",
+      perSuccess: (cost: string) => `${cost} per success`,
+      regressionSuite: "Regression suite",
+      ofActiveCases: (n: number) => `of ${n} active case${n === 1 ? "" : "s"}`,
+      experiments: "Experiments",
+      thisWindowTotal: (n: number) => `this window · ${n} total`,
+      qualityOverTime: "Quality over time",
+      weeklyShareDesc:
+        "Weekly share of objectively-validated runs that passed. A week with no validated run is left blank rather than drawn as zero.",
+      worthAttention: "Worth attention",
+      regressedSince: "Regressed since a previous pass:",
+      unscoredRuns: (n: number) =>
+        `${n} finished run${n === 1 ? "" : "s"} have no scores yet — scoring is on demand, so they are absent from every experiment summary.`,
+      openFindings: (n: number, link: ReactNode) => (
+        <>
+          {n} open {link} with nothing testing them yet.
+        </>
+      ),
+      findingsLink: (n: number) => `finding${n === 1 ? "" : "s"}`,
+      noRegressionGate:
+        "No case carries its own objective validation, so nothing here can gate a change to the harness.",
+      nothingOutstanding: "Nothing outstanding."
+    },
+    page: {
+      eyebrow: "Benchmarks",
+      title: "Harness quality",
+      lede: "Is the harness getting better, is anything regressing, and what does a success cost. Every figure carries its denominator — a rate over four runs and one over four hundred are different claims.",
+      cases: "Cases",
+      runs: "Runs",
+      running: "Running",
+      completed: "Completed"
+    },
+    leaderboard: {
+      heading: "Leaderboard — ranking by condition",
+      conditionsRuns: (conditions: number, runs: number) =>
+        `${conditions} condition${conditions === 1 ? "" : "s"} · ${runs} run${runs === 1 ? "" : "s"}`,
+      filterLane: "Filter by lane",
+      laneAll: "lane: all",
+      filterHarness: "Filter by harness",
+      harnessAll: "harness: all",
+      filterModel: "Filter by model",
+      modelAll: "model: all",
+      filterPrompt: "Filter by prompt",
+      promptAll: "prompt: all",
+      filterVersion: "Filter by harness version",
+      versionAll: "version: all",
+      officialTooltip:
+        "Reference rows from the official leaderboard (data/reference/swebench_official.json).",
+      officialReference: "official reference",
+      continuationsTooltip:
+        "Runs continued from another run (ADR-0026). A human read the workspace and wrote a new prompt, so they are not comparable to one-shot attempts.",
+      includeContinuations: "include continuations",
+      noRuns: "No terminal runs yet — launch a case from the Runs page to populate the ranking.",
+      colRank: "#",
+      colCondition: "Condition",
+      colPctResolved: "% resolved",
+      colRuns: "Runs",
+      colAvgScore: "Avg score",
+      colBest: "Best",
+      colAvgCost: "Avg cost",
+      officialBadge: "official",
+      officialBadgeTooltip:
+        "Reference row from the official leaderboard — different subset and infrastructure, indicative comparison only.",
+      source: "source ↗",
+      officialPctTooltip: "Official pass@1 over the 500 Verified instances",
+      resolvedTooltip: (count: number, total: number) =>
+        `${count}/${total} objectively-validated runs resolved`,
+      resolvedCount: (count: number, total: number) => `${count}/${total} resolved`,
+      footerNote: (
+        <>
+          ⚠️ Indicative comparison: your % runs over the lab&apos;s curated subset and your
+          conditions; official rows are pass@1 over the 500 SWE-bench Verified instances. Update
+          the reference by editing <code>data/reference/swebench_official.json</code>.
+        </>
+      )
+    }
+  },
+  es: {
+    trend: {
+      notEnough: "Todavía no hay suficientes semanas con una corrida validada para trazar una tendencia.",
+      ariaLabel: "Tasa de éxito semanal",
+      tooltip: (weekEnding: string, rate: string, n: number) =>
+        `${weekEnding}: ${rate} sobre ${n} corrida${n === 1 ? "" : "s"}`
+    },
+    harnessSignal: {
+      heading: "Señal del arnés",
+      noScores:
+        "Todavía no hay puntajes registrados. Las corridas se puntúan contra el registro cuando terminan; las corridas anteriores se pueden puntuar desde su página de detalle.",
+      overRuns: (n: number) => `sobre ${n} corrida${n === 1 ? "" : "s"} puntuada${n === 1 ? "" : "s"}`,
+      skillAdherence: "Adherencia a skills",
+      shareJudgedUsed: "parte del arnés juzgada como usada · juicio",
+      itemsUseful: "Ítems útiles / corrida",
+      judgedRedundant: (n: string) => `${n} juzgados redundantes`,
+      diffSize: "Tamaño del diff",
+      lines: (n: number) => `${n} líneas`,
+      medianObservation: "mediana · observación",
+      boundaryViolations: "Violaciones de límites",
+      forbiddenWorst: "rutas prohibidas tocadas, peor corrida",
+      lowAdherenceWarning: (
+        <>
+          Se juzga que los agentes usan menos de la mitad del arnés disponible. Eso es un
+          hallazgo sobre el <em>arnés</em>, no sobre el modelo: un ítem al que nunca se llega es
+          costo sin efecto. Leé los veredictos por ítem en el <strong>catálogo de arnés</strong>{" "}
+          de una corrida, después quitá los que nunca se ganan su lugar y medí la diferencia.
+        </>
+      )
+    },
+    overview: {
+      harnessVersion: "Versión del arnés",
+      successRate: (days: number) => `Tasa de éxito (${days}d)`,
+      overValidated: (n: number) => `sobre ${n} corrida${n === 1 ? "" : "s"} validada${n === 1 ? "" : "s"}`,
+      regressions: "Regresiones",
+      ofCasesHistory: (n: number) => `de ${n} caso${n === 1 ? "" : "s"} con historial`,
+      medianCost: "Costo mediano",
+      perSuccess: (cost: string) => `${cost} por éxito`,
+      regressionSuite: "Suite de regresión",
+      ofActiveCases: (n: number) => `de ${n} caso${n === 1 ? "" : "s"} activo${n === 1 ? "" : "s"}`,
+      experiments: "Experimentos",
+      thisWindowTotal: (n: number) => `esta ventana · ${n} en total`,
+      qualityOverTime: "Calidad a lo largo del tiempo",
+      weeklyShareDesc:
+        "Parte semanal de corridas objetivamente validadas que pasaron. Una semana sin corrida validada queda en blanco en lugar de dibujarse como cero.",
+      worthAttention: "Vale la pena atender",
+      regressedSince: "Regresionó desde un pase anterior:",
+      unscoredRuns: (n: number) =>
+        `${n} corrida${n === 1 ? "" : "s"} terminada${n === 1 ? "" : "s"} todavía no tiene${n === 1 ? "" : "n"} puntaje — la puntuación es a demanda, así que están ausentes de todo resumen de experimento.`,
+      openFindings: (n: number, link: ReactNode) => (
+        <>
+          {n} {link} abierto{n === 1 ? "" : "s"} sin nada que lo{n === 1 ? "" : "s"} pruebe todavía.
+        </>
+      ),
+      findingsLink: (n: number) => `hallazgo${n === 1 ? "" : "s"}`,
+      noRegressionGate:
+        "Ningún caso trae su propia validación objetiva, así que nada acá puede condicionar un cambio al arnés.",
+      nothingOutstanding: "Nada pendiente."
+    },
+    page: {
+      eyebrow: "Benchmarks",
+      title: "Calidad del arnés",
+      lede: "Si el arnés está mejorando, si algo está regresionando, y cuánto cuesta un éxito. Cada cifra lleva su denominador — una tasa sobre cuatro corridas y otra sobre cuatrocientas son afirmaciones distintas.",
+      cases: "Casos",
+      runs: "Corridas",
+      running: "Corriendo",
+      completed: "Completadas"
+    },
+    leaderboard: {
+      heading: "Leaderboard — ranking por condición",
+      conditionsRuns: (conditions: number, runs: number) =>
+        `${conditions} condición${conditions === 1 ? "" : "es"} · ${runs} corrida${runs === 1 ? "" : "s"}`,
+      filterLane: "Filtrar por carril",
+      laneAll: "carril: todos",
+      filterHarness: "Filtrar por arnés",
+      harnessAll: "arnés: todos",
+      filterModel: "Filtrar por modelo",
+      modelAll: "modelo: todos",
+      filterPrompt: "Filtrar por prompt",
+      promptAll: "prompt: todos",
+      filterVersion: "Filtrar por versión de arnés",
+      versionAll: "versión: todas",
+      officialTooltip:
+        "Filas de referencia del leaderboard oficial (data/reference/swebench_official.json).",
+      officialReference: "referencia oficial",
+      continuationsTooltip:
+        "Corridas continuadas desde otra corrida (ADR-0026). Una persona leyó el workspace y escribió un prompt nuevo, así que no son comparables con un intento de un solo paso.",
+      includeContinuations: "incluir continuaciones",
+      noRuns: "Todavía no hay corridas terminales — lanzá un caso desde la página de Corridas para poblar el ranking.",
+      colRank: "#",
+      colCondition: "Condición",
+      colPctResolved: "% resuelto",
+      colRuns: "Corridas",
+      colAvgScore: "Puntaje prom.",
+      colBest: "Mejor",
+      colAvgCost: "Costo prom.",
+      officialBadge: "oficial",
+      officialBadgeTooltip:
+        "Fila de referencia del leaderboard oficial — subconjunto e infraestructura distintos, comparación indicativa únicamente.",
+      source: "fuente ↗",
+      officialPctTooltip: "pass@1 oficial sobre las 500 instancias Verified",
+      resolvedTooltip: (count: number, total: number) =>
+        `${count}/${total} corridas objetivamente validadas resueltas`,
+      resolvedCount: (count: number, total: number) => `${count}/${total} resueltas`,
+      footerNote: (
+        <>
+          ⚠️ Comparación indicativa: tu % de corridas es sobre el subconjunto curado del lab y
+          tus condiciones; las filas oficiales son pass@1 sobre las 500 instancias SWE-bench
+          Verified. Actualizá la referencia editando{" "}
+          <code>data/reference/swebench_official.json</code>.
+        </>
+      )
+    }
+  }
+});
+
 /**
  * A sparkline of weekly success rate.
  *
@@ -34,20 +267,17 @@ function usd(value: number | null | undefined): string {
  * baseline would show a collapse that never happened.
  */
 function Trend({ points }: { points: OverviewReport["trend"] }) {
+  const m = useMessages(MESSAGES);
   const measured = points.filter((point) => point.rate !== null);
   if (measured.length < 2) {
-    return (
-      <p className="muted small">
-        Not enough weeks with a validated run to draw a trend yet.
-      </p>
-    );
+    return <p className="muted small">{m.trend.notEnough}</p>;
   }
   const width = 240;
   const height = 44;
   const step = width / Math.max(points.length - 1, 1);
   return (
     <svg
-      aria-label="Weekly success rate"
+      aria-label={m.trend.ariaLabel}
       height={height}
       role="img"
       viewBox={`0 0 ${width} ${height}`}
@@ -62,9 +292,7 @@ function Trend({ points }: { points: OverviewReport["trend"] }) {
             key={point.week_ending}
             r={2.5}
           >
-            <title>
-              {point.week_ending}: {pct(point.rate)} over {point.n} run(s)
-            </title>
+            <title>{m.trend.tooltip(point.week_ending, pct(point.rate), point.n)}</title>
           </circle>
         )
       )}
@@ -94,14 +322,12 @@ function Trend({ points }: { points: OverviewReport["trend"] }) {
  * which nothing else on this page would ever surface.
  */
 function HarnessSignal({ scores }: { scores: OverviewReport["scores"] }) {
+  const m = useMessages(MESSAGES);
   if (scores.runs === 0) {
     return (
       <section className="panel">
-        <h2>Harness signal</h2>
-        <p className="muted">
-          No scores recorded yet. Runs are scored against the registry when they
-          finish; older runs can be scored from their detail page.
-        </p>
+        <h2>{m.harnessSignal.heading}</h2>
+        <p className="muted">{m.harnessSignal.noScores}</p>
       </section>
     );
   }
@@ -114,108 +340,98 @@ function HarnessSignal({ scores }: { scores: OverviewReport["scores"] }) {
   return (
     <section className="panel">
       <div className="row space-between">
-        <h2>Harness signal</h2>
-        <span className="muted small">over {scores.runs} scored run(s)</span>
+        <h2>{m.harnessSignal.heading}</h2>
+        <span className="muted small">{m.harnessSignal.overRuns(scores.runs)}</span>
       </div>
 
       <div className="metrics">
         <div className="metric">
-          <span>Skill adherence</span>
+          <span>{m.harnessSignal.skillAdherence}</span>
           <strong>{adherence?.mean === null || adherence === null
             ? "—"
             : pct(adherence.mean)}</strong>
-          <small className="muted">
-            share of the harness judged used · judgement
-          </small>
+          <small className="muted">{m.harnessSignal.shareJudgedUsed}</small>
         </div>
         <div className="metric">
-          <span>Items useful / run</span>
+          <span>{m.harnessSignal.itemsUseful}</span>
           <strong>{useful === null ? "—" : useful.toFixed(1)}</strong>
           <small className="muted">
-            {redundant === null ? "" : `${redundant.toFixed(1)} judged redundant`}
+            {redundant === null ? "" : m.harnessSignal.judgedRedundant(redundant.toFixed(1))}
           </small>
         </div>
         <div className="metric">
-          <span>Diff size</span>
+          <span>{m.harnessSignal.diffSize}</span>
           <strong>
             {scores.diff_size?.median === null || !scores.diff_size
               ? "—"
-              : `${scores.diff_size.median} lines`}
+              : m.harnessSignal.lines(scores.diff_size.median)}
           </strong>
-          <small className="muted">median · observation</small>
+          <small className="muted">{m.harnessSignal.medianObservation}</small>
         </div>
         <div className="metric">
-          <span>Boundary violations</span>
+          <span>{m.harnessSignal.boundaryViolations}</span>
           <strong>{forbidden?.mean ? forbidden.maximum : 0}</strong>
-          <small className="muted">forbidden paths touched, worst run</small>
+          <small className="muted">{m.harnessSignal.forbiddenWorst}</small>
         </div>
       </div>
 
       {adherence !== null && adherence.mean !== null && adherence.mean < 0.4 && (
-        <p className="muted small">
-          Agents are judged to use under half of the harness available to them.
-          That is a finding about the <em>harness</em>, not the model: an item
-          nothing ever reaches is cost without effect. Read the per-item verdicts
-          in a run&apos;s <strong>Harness catalog</strong>, then ablate the ones
-          that never earn their keep and measure the difference.
-        </p>
+        <p className="muted small">{m.harnessSignal.lowAdherenceWarning}</p>
       )}
     </section>
   );
 }
 
 function Overview({ report }: { report: OverviewReport }) {
+  const m = useMessages(MESSAGES);
   const unscored = report.scoring.terminal - report.scoring.scored;
   return (
     <>
       <div className="metrics">
         <div className="metric">
-          <span>Harness version</span>
+          <span>{m.overview.harnessVersion}</span>
           <strong>{report.harness_version ?? "—"}</strong>
         </div>
         <div className="metric">
-          <span>Success rate ({report.window_days}d)</span>
+          <span>{m.overview.successRate(report.window_days)}</span>
           <strong>{pct(report.success.rate)}</strong>
-          <small className="muted">over {report.success.n} validated run(s)</small>
+          <small className="muted">{m.overview.overValidated(report.success.n)}</small>
         </div>
         <div className="metric">
-          <span>Regressions</span>
+          <span>{m.overview.regressions}</span>
           <strong>{report.regressions.count}</strong>
           <small className="muted">
-            of {report.regressions.eligible_cases} case(s) with a history
+            {m.overview.ofCasesHistory(report.regressions.eligible_cases)}
           </small>
         </div>
         <div className="metric">
-          <span>Median cost</span>
+          <span>{m.overview.medianCost}</span>
           <strong>{usd(report.cost.median_usd)}</strong>
           <small className="muted">
-            {usd(report.cost.cost_per_success)} per success
+            {m.overview.perSuccess(usd(report.cost.cost_per_success))}
           </small>
         </div>
         <div className="metric">
-          <span>Regression suite</span>
+          <span>{m.overview.regressionSuite}</span>
           <strong>{report.regression_suite.cases}</strong>
           <small className="muted">
-            of {report.regression_suite.of_active} active case(s)
+            {m.overview.ofActiveCases(report.regression_suite.of_active)}
           </small>
         </div>
         <div className="metric">
-          <span>Experiments</span>
+          <span>{m.overview.experiments}</span>
           <strong>{report.experiments.recent}</strong>
           <small className="muted">
-            this window · {report.experiments.total} total
+            {m.overview.thisWindowTotal(report.experiments.total)}
           </small>
         </div>
       </div>
 
       <div className="row gap wrap">
         <section className="panel">
-          <h2>Quality over time</h2>
+          <h2>{m.overview.qualityOverTime}</h2>
           <Trend points={report.trend} />
-          <p className="muted small">
-            Weekly share of objectively-validated runs that passed. A week with no
-            validated run is left blank rather than drawn as zero.
-          </p>
+          <p className="muted small">{m.overview.weeklyShareDesc}</p>
         </section>
 
         <HarnessSignal scores={report.scores} />
@@ -223,40 +439,34 @@ function Overview({ report }: { report: OverviewReport }) {
 
       <div className="row gap wrap">
         <section className="panel">
-          <h2>Worth attention</h2>
+          <h2>{m.overview.worthAttention}</h2>
           <ul className="warning-list">
             {report.success.note && <li>⚠ {report.success.note}</li>}
             {report.regressions.count > 0 && (
               <li>
-                ⚠ Regressed since a previous pass:{" "}
+                ⚠ {m.overview.regressedSince}{" "}
                 <span className="mono small">
                   {report.regressions.cases.join(", ")}
                 </span>
               </li>
             )}
-            {unscored > 0 && (
-              <li>
-                {unscored} finished run(s) have no scores yet — scoring is on demand,
-                so they are absent from every experiment summary.
-              </li>
-            )}
+            {unscored > 0 && <li>{m.overview.unscoredRuns(unscored)}</li>}
             {report.findings.open > 0 && (
               <li>
-                {report.findings.open} open <Link to="/evidence/findings">finding(s)</Link>{" "}
-                with nothing testing them yet.
+                {m.overview.openFindings(
+                  report.findings.open,
+                  <Link to="/evidence/findings">
+                    {m.overview.findingsLink(report.findings.open)}
+                  </Link>
+                )}
               </li>
             )}
-            {report.regression_suite.cases === 0 && (
-              <li>
-                No case carries its own objective validation, so nothing here can
-                gate a change to the harness.
-              </li>
-            )}
+            {report.regression_suite.cases === 0 && <li>{m.overview.noRegressionGate}</li>}
             {report.success.note === "" &&
               report.regressions.count === 0 &&
               unscored === 0 &&
               report.findings.open === 0 &&
-              report.regression_suite.cases > 0 && <li>Nothing outstanding.</li>}
+              report.regression_suite.cases > 0 && <li>{m.overview.nothingOutstanding}</li>}
           </ul>
         </section>
       </div>
@@ -358,6 +568,7 @@ function fmtNum(value: number | null, digits = 1): string {
 }
 
 export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
+  const m = useMessages(MESSAGES);
   const [rows, setRows] = useState<LeaderboardRunRow[]>([]);
   const [overview, setOverview] = useState<OverviewReport | null>(null);
   const [reference, setReference] = useState<OfficialReferenceRow[]>([]);
@@ -428,13 +639,9 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
     <section className="page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Benchmarks</p>
-          <h1>Harness quality</h1>
-          <p className="lede">
-            Is the harness getting better, is anything regressing, and what does a
-            success cost. Every figure carries its denominator — a rate over four
-            runs and one over four hundred are different claims.
-          </p>
+          <p className="eyebrow">{m.page.eyebrow}</p>
+          <h1>{m.page.title}</h1>
+          <p className="lede">{m.page.lede}</p>
         </div>
         <div className="status-chip">{apiStatus}</div>
       </header>
@@ -444,19 +651,19 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
       ) : (
         <div className="metrics">
           <div className="metric">
-            <span>Cases</span>
+            <span>{m.page.cases}</span>
             <strong>{cases.length}</strong>
           </div>
           <div className="metric">
-            <span>Runs</span>
+            <span>{m.page.runs}</span>
             <strong>{runs.length}</strong>
           </div>
           <div className="metric">
-            <span>Running</span>
+            <span>{m.page.running}</span>
             <strong>{countByState(runs, "running")}</strong>
           </div>
           <div className="metric">
-            <span>Completed</span>
+            <span>{m.page.completed}</span>
             <strong>{countByState(runs, "completed")}</strong>
           </div>
         </div>
@@ -464,19 +671,21 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
 
       <section className="panel">
         <div className="panel-head">
-          <h2>Leaderboard — ranking by condition</h2>
+          <h2>{m.leaderboard.heading}</h2>
           <span className="muted">
-            {board.filter((r) => !r.official).length} condition(s) ·{" "}
-            {filtered.length} run(s)
+            {m.leaderboard.conditionsRuns(
+              board.filter((r) => !r.official).length,
+              filtered.length
+            )}
           </span>
         </div>
         <div className="improvements-toolbar">
           <select
-            aria-label="Filter by lane"
+            aria-label={m.leaderboard.filterLane}
             onChange={(e) => setLaneFilter(e.target.value)}
             value={laneFilter}
           >
-            <option value={ALL}>lane: all</option>
+            <option value={ALL}>{m.leaderboard.laneAll}</option>
             {distinct(rows.map((r) => r.case_type)).map((lane) => (
               <option key={lane} value={lane}>
                 {lane}
@@ -484,11 +693,11 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
             ))}
           </select>
           <select
-            aria-label="Filter by harness"
+            aria-label={m.leaderboard.filterHarness}
             onChange={(e) => setHarnessFilter(e.target.value)}
             value={harnessFilter}
           >
-            <option value={ALL}>harness: all</option>
+            <option value={ALL}>{m.leaderboard.harnessAll}</option>
             {distinct(rows.map((r) => r.harness)).map((harness) => (
               <option key={harness} value={harness}>
                 {harness}
@@ -496,11 +705,11 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
             ))}
           </select>
           <select
-            aria-label="Filter by model"
+            aria-label={m.leaderboard.filterModel}
             onChange={(e) => setModelFilter(e.target.value)}
             value={modelFilter}
           >
-            <option value={ALL}>model: all</option>
+            <option value={ALL}>{m.leaderboard.modelAll}</option>
             {distinct(rows.map((r) => r.executor_model ?? "")).map((model) => (
               <option key={model} value={model}>
                 {model}
@@ -508,11 +717,11 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
             ))}
           </select>
           <select
-            aria-label="Filter by prompt"
+            aria-label={m.leaderboard.filterPrompt}
             onChange={(e) => setPromptFilter(e.target.value)}
             value={promptFilter}
           >
-            <option value={ALL}>prompt: all</option>
+            <option value={ALL}>{m.leaderboard.promptAll}</option>
             {distinct(rows.map((r) => r.prompt_variant)).map((prompt) => (
               <option key={prompt} value={prompt}>
                 {prompt}
@@ -520,53 +729,47 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
             ))}
           </select>
           <select
-            aria-label="Filter by harness version"
+            aria-label={m.leaderboard.filterVersion}
             onChange={(e) => setVersionFilter(e.target.value)}
             value={versionFilter}
           >
-            <option value={ALL}>version: all</option>
+            <option value={ALL}>{m.leaderboard.versionAll}</option>
             {distinct(rows.map((r) => r.harness_version)).map((version) => (
               <option key={version} value={version}>
                 {version}
               </option>
             ))}
           </select>
-          <label className="switch" title="Reference rows from the official leaderboard (data/reference/swebench_official.json).">
+          <label className="switch" title={m.leaderboard.officialTooltip}>
             <input
               checked={showOfficial}
               onChange={(e) => setShowOfficial(e.target.checked)}
               type="checkbox"
             />
-            <span>official reference</span>
+            <span>{m.leaderboard.officialReference}</span>
           </label>
-          <label
-            className="switch"
-            title="Runs continued from another run (ADR-0026). A human read the workspace and wrote a new prompt, so they are not comparable to one-shot attempts."
-          >
+          <label className="switch" title={m.leaderboard.continuationsTooltip}>
             <input
               checked={showContinuations}
               onChange={(e) => setShowContinuations(e.target.checked)}
               type="checkbox"
             />
-            <span>include continuations</span>
+            <span>{m.leaderboard.includeContinuations}</span>
           </label>
         </div>
         {board.length === 0 ? (
-          <p className="muted">
-            No terminal runs yet — launch a case from the Runs page to populate the
-            ranking.
-          </p>
+          <p className="muted">{m.leaderboard.noRuns}</p>
         ) : (
           <div className="table-scroll">
             <div className="table table--leaderboard">
               <div className="table-row table-head">
-                <span>#</span>
-                <span>Condition</span>
-                <span>% resolved</span>
-                <span>Runs</span>
-                <span>Avg score</span>
-                <span>Best</span>
-                <span>Avg cost</span>
+                <span>{m.leaderboard.colRank}</span>
+                <span>{m.leaderboard.colCondition}</span>
+                <span>{m.leaderboard.colPctResolved}</span>
+                <span>{m.leaderboard.colRuns}</span>
+                <span>{m.leaderboard.colAvgScore}</span>
+                <span>{m.leaderboard.colBest}</span>
+                <span>{m.leaderboard.colAvgCost}</span>
               </div>
               {board.map((row, index) => (
                 <div
@@ -578,8 +781,8 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
                     <strong>
                       {row.label}{" "}
                       {row.official ? (
-                        <span className="badge neutral" title="Reference row from the official leaderboard — different subset and infrastructure, indicative comparison only.">
-                          official
+                        <span className="badge neutral" title={m.leaderboard.officialBadgeTooltip}>
+                          {m.leaderboard.officialBadge}
                         </span>
                       ) : null}
                     </strong>
@@ -589,7 +792,7 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
                         <>
                           {" · "}
                           <a href={row.sourceUrl} rel="noreferrer" target="_blank">
-                            source ↗
+                            {m.leaderboard.source}
                           </a>
                         </>
                       ) : null}
@@ -598,8 +801,8 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
                   <span className="cell-stack">
                     <span className="pct-bar" title={
                       row.official
-                        ? "Official pass@1 over the 500 Verified instances"
-                        : `${row.resolvedCount}/${row.objectiveAttempts} objectively-validated runs resolved`
+                        ? m.leaderboard.officialPctTooltip
+                        : m.leaderboard.resolvedTooltip(row.resolvedCount, row.objectiveAttempts)
                     }>
                       <span
                         className={`pct-bar-fill${row.official ? " official" : ""}`}
@@ -609,7 +812,7 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
                     </span>
                     {!row.official && row.objectiveAttempts > 0 ? (
                       <small className="muted">
-                        {row.resolvedCount}/{row.objectiveAttempts} resolved
+                        {m.leaderboard.resolvedCount(row.resolvedCount, row.objectiveAttempts)}
                       </small>
                     ) : null}
                   </span>
@@ -622,12 +825,7 @@ export function Dashboard({ cases, runs, apiStatus }: DashboardProps) {
             </div>
           </div>
         )}
-        <p className="muted">
-          ⚠️ Indicative comparison: your % runs over the lab&apos;s curated subset and
-          your conditions; official rows are pass@1 over the 500 SWE-bench Verified
-          instances. Update the reference by editing{" "}
-          <code>data/reference/swebench_official.json</code>.
-        </p>
+        <p className="muted">{m.leaderboard.footerNote}</p>
       </section>
     </section>
   );

@@ -95,7 +95,13 @@ RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" \
 # lab in Docker). Auth comes from .env at runtime — CLAUDE_CODE_OAUTH_TOKEN
 # (long-lived subscription token from `claude setup-token`) or ANTHROPIC_API_KEY.
 # See docs/harness-adapters.md.
-RUN npm install -g @anthropic-ai/claude-code && claude --version
+# Pinned: an unpinned install is cached by Docker, and stayed on 2.1.197 long
+# after the API began refusing it for the 5.5 models (needs 2.1.280+). Bumping
+# this ARG is what rebuilds the layer; the label lets the lab read the version
+# without starting a container (native_models.MIN_CLAUDE_CLI_VERSION).
+ARG CLAUDE_CODE_VERSION=2.1.309
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" && claude --version
+LABEL claude-code.version="${CLAUDE_CODE_VERSION}"
 
 # Fallback copy of the repo; at runtime the host repo is bind-mounted over /app
 # so runs.yaml/workspace/data land on the host filesystem.

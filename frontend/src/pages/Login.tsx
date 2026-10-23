@@ -1,18 +1,40 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 
 import { api, ApiError } from "../api";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { XmartlabsLogo } from "../components/XmartlabsLogo";
+import { defineMessages, useMessages } from "../i18n";
 
 type LoginProps = {
   onAuthenticated: () => void;
 };
+
+const MESSAGES = defineMessages({
+  en: {
+    unreachable: "Could not reach the API.",
+    intro: "Sign in to manage runs, models and skills.",
+    password: "Password",
+    signingIn: "Signing in…",
+    signIn: "Sign in",
+    lostPassword: (cmd: ReactNode) => <>Lost the password? Run {cmd} on the server.</>
+  },
+  es: {
+    unreachable: "No se pudo acceder a la API.",
+    intro: "Iniciá sesión para administrar corridas, modelos y skills.",
+    password: "Contraseña",
+    signingIn: "Iniciando sesión…",
+    signIn: "Iniciar sesión",
+    lostPassword: (cmd: ReactNode) => <>¿Perdiste la contraseña? Corré {cmd} en el servidor.</>
+  }
+});
 
 /**
  * Single-user gate (ADR-0015). There is no username: the lab has one operator,
  * and the password is set from the server with `make set-password`.
  */
 export function Login({ onAuthenticated }: LoginProps) {
+  const m = useMessages(MESSAGES);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -26,9 +48,7 @@ export function Login({ onAuthenticated }: LoginProps) {
       setPassword("");
       onAuthenticated();
     } catch (exc) {
-      setError(
-        exc instanceof ApiError ? exc.message : "Could not reach the API."
-      );
+      setError(exc instanceof ApiError ? exc.message : m.unreachable);
     } finally {
       setBusy(false);
     }
@@ -43,10 +63,10 @@ export function Login({ onAuthenticated }: LoginProps) {
         <div className="panel-head login-panel-head">
           <h2>Agentic Harness Lab</h2>
         </div>
-        <p className="muted">Sign in to manage runs, models and skills.</p>
+        <p className="muted">{m.intro}</p>
         {error !== null ? <ErrorBanner message={error} /> : null}
         <label>
-          <span>Password</span>
+          <span>{m.password}</span>
           <input
             autoFocus
             autoComplete="current-password"
@@ -56,11 +76,9 @@ export function Login({ onAuthenticated }: LoginProps) {
           />
         </label>
         <button className="primary" disabled={busy || password === ""} type="submit">
-          {busy ? "Signing in…" : "Sign in"}
+          {busy ? m.signingIn : m.signIn}
         </button>
-        <p className="muted">
-          Lost the password? Run <code>make set-password</code> on the server.
-        </p>
+        <p className="muted">{m.lostPassword(<code>make set-password</code>)}</p>
       </form>
     </main>
   );

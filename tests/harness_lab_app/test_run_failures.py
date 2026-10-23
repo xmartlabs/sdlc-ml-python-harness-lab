@@ -163,3 +163,42 @@ def test_the_watchdog_verdict_for_a_quiet_gateway_is_a_lab_failure():
     """
     assert classify_failure("No model response: the endpoint accepted") == "lab"
     assert is_unmeasured("No model response: the endpoint accepted") is True
+
+
+# Verbatim tail of todo-web-v1-K-001 (2026-10-23): the gateway had no card for
+# the model, the CLI died on its first request, and the run list called it an
+# "agent error" — a failure charged to a model that was never asked anything.
+REJECTED_MODEL_TAIL = (
+    "essages: Invalid model name passed in model=claude-haiku-5-5. Call "
+    "`/v1/models` to view available models for your key.\n"
+    "# result: success turns=1 cost=$0.0000 duration_ms=599\n"
+    "  ⚠️  Exiting non-zero: claude failed (stop_reason=harness_error). This run "
+    "measured the connection, not the subject."
+)
+
+
+def test_a_model_the_provider_rejects_is_a_lab_failure_not_an_agent_error():
+    assert classify_failure(REJECTED_MODEL_TAIL) == "lab"
+    assert failure_label(REJECTED_MODEL_TAIL) == "model not served"
+    assert is_unmeasured(REJECTED_MODEL_TAIL)
+
+
+def test_a_harness_error_exit_is_never_charged_to_the_agent():
+    tail = (
+        "API Error: 401 authentication_error\n"
+        "  ⚠️  Exiting non-zero: claude failed (stop_reason=harness_error). This run "
+        "measured the connection, not the subject."
+    )
+    assert classify_failure(tail) == "lab"
+    assert failure_label(tail) == "harness error"
+
+
+def test_a_cli_too_old_for_the_model_is_named_as_such():
+    tail = (
+        'AnthropicException - {"type":"error","error":{"type":"invalid_request_error",'
+        '"message":"Claude Code 2.1.197 does not support this model; version 2.1.280 '
+        'or newer is required.","details":{"error_code":"claude_code_version_too_old"}}}\n'
+        "  ⚠️  Exiting non-zero: claude failed (stop_reason=harness_error)."
+    )
+    assert classify_failure(tail) == "lab"
+    assert failure_label(tail) == "CLI too old"

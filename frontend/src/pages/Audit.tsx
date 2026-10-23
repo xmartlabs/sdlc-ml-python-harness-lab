@@ -11,6 +11,7 @@ import { ReadinessReportView } from "../components/ReadinessReportView";
 import { Spinner } from "../components/Spinner";
 import { IconAlert, IconArrowRight, IconCheck, IconSparkles } from "../components/icons";
 import { HARNESS_NATIVE_MODELS, HARNESS_OPTIONS, HOST_HARNESSES } from "../harnesses";
+import { defineMessages, pickMessages, useMessages } from "../i18n";
 import type {
   CaseCandidate,
   CaseCandidates,
@@ -33,10 +34,10 @@ import type {
 } from "../types";
 
 const STEPS = [
-  { key: "clone", label: "Point at the repository" },
-  { key: "audit", label: "Harness audit" },
-  { key: "case", label: "One case" },
-  { key: "experiment", label: "Run an experiment" }
+  { key: "clone" },
+  { key: "audit" },
+  { key: "case" },
+  { key: "experiment" }
 ] as const;
 
 type StepKey = (typeof STEPS)[number]["key"];
@@ -70,42 +71,18 @@ const MAX_STEP_OPTIONS = [5, 10, 20, 40];
 // How the lab's per-case verdict reads. "Static" is not a lesser outcome: a
 // case answered by reading the repository is settled, and no runtime can block
 // it — which is why a Shell repository is evaluable at all.
-const CASE_STATUS_LABEL: Record<RepositoryAuditCaseStatus, string> = {
-  runnable: "runnable",
-  static: "static",
-  blocked: "blocked",
-};
-
 const CASE_STATUS_BADGE: Record<RepositoryAuditCaseStatus, string> = {
   runnable: "badge ok",
   static: "badge neutral",
   blocked: "badge warn",
 };
 
-const SHAPE_LABEL: Record<string, string> = {
-  in_place: "governs this repository",
-  installable: "installed into another project",
-  both: "governs this repository and installs into others",
-  unknown: "undetermined"
-};
-
-const MEASURES_LABEL: Record<string, string> = {
-  harness_claim: "measures a harness claim",
-  harness_development: "measures work on the harness",
-  unknown: "unclassified"
-};
-
-const COVERAGE_LABEL: Record<"none" | "partial" | "full", string> = {
-  none: "none",
-  partial: "partial",
-  full: "full",
-};
-
 /** "1 fail · 5 warn · 2 pass" — the deterministic checks at a glance (ADR-0065). */
 function checkTally(checks: HarnessCheck[]): string {
+  const m = pickMessages(MESSAGES);
   const count = (status: HarnessCheck["status"]) =>
     checks.filter((check) => check.status === status).length;
-  return `${count("fail")} fail · ${count("warn")} warn · ${count("pass")} pass`;
+  return `${count("fail")} ${m.checks.fail} · ${count("warn")} ${m.checks.warn} · ${count("pass")} ${m.checks.pass}`;
 }
 
 function slugify(value: string): string {
@@ -146,6 +123,885 @@ function candidateToCase(candidate: CaseCandidate, target: TargetRecord) {
     origin_target_id: target.target_id
   };
 }
+
+const MESSAGES = defineMessages({
+  en: {
+    steps: {
+      clone: "Point at the repository",
+      audit: "Harness audit",
+      case: "One case",
+      experiment: "Run an experiment"
+    } as Record<StepKey, string>,
+    checks: { fail: "fail", warn: "warn", pass: "pass" },
+    caseStatus: { runnable: "runnable", static: "static", blocked: "blocked" } as Record<
+      RepositoryAuditCaseStatus,
+      string
+    >,
+    shape: {
+      in_place: "governs this repository",
+      installable: "installed into another project",
+      both: "governs this repository and installs into others",
+      unknown: "undetermined"
+    } as Record<string, string>,
+    measures: {
+      harness_claim: "measures a harness claim",
+      harness_development: "measures work on the harness",
+      unknown: "unclassified"
+    } as Record<string, string>,
+    coverage: { none: "none", partial: "partial", full: "full" } as Record<
+      "none" | "partial" | "full",
+      string
+    >,
+    errors: {
+      loadRepositories: "Unable to load repositories.",
+      somethingFailed: "Something failed",
+      noLocalRemote:
+        "This folder has no `origin` remote, so the lab has no URL to record " +
+        "for it. Put one in the field below and pick the folder again.",
+      noRunnableDraft:
+        "The draft has no runnable validation command. Write one below, or " +
+        "describe the check you want and draft it again.",
+      caseIdTaken: (id: string) =>
+        `A case called '${id}' already exists. Pick another id, or reuse it ` +
+        "from the Existing case tab.",
+      noFreeExperimentId: "Unable to find a free experiment id."
+    },
+    notices: {
+      usingClone: (name: string) => `Using the clone in ${name}. Pin it to freeze the repository at a commit.`,
+      copiedAndFrozen: (commit: string) =>
+        `Copied and frozen at ${commit}. Your folder was only read, and only ` +
+        "committed work came across. Everything from here reads that commit " +
+        "until you pick the folder again.",
+      registeredCopiedFrozen: (name: string, commit: string) =>
+        `${name} is registered, copied and frozen at ${commit}. Your folder was ` +
+        "only read, and only committed work came across. Everything from here " +
+        "reads that commit until you pick the folder again.",
+      pinned: (commit: string) =>
+        `Pinned at ${commit}. Everything downstream reads that commit until ` +
+        "somebody re-pins.",
+      adopted:
+        "Adopted. Future runs against this repository validate with its own " +
+        "commands — edit them any time under Evidence → Repositories.",
+      caseCreated: (id: string) => `Case '${id}' created. Run it against the repository.`,
+      caseReused: (id: string) => `'${id}' already existed — reusing it.`,
+      caseSelected: (id: string) => `Case '${id}' selected.`,
+      runQueuedNoControl: "Run queued. It reads the pinned commit, with no control arm.",
+      comparisonQueued:
+        "Comparison queued: this repository as it is, against the lab harness " +
+        "injected into the same workspace."
+    },
+    gateErrorSuffix: (message: string) =>
+      `${message} Adopt the inferred gate above first — with no validation ` +
+      "command there is nothing for the check to run.",
+    header: {
+      title: "Set up a repository for audit",
+      lede:
+        "Four steps: you point the lab at the repository and it freezes a commit, " +
+        "an LLM reads what harness it ships and what it could be tried on, you " +
+        "settle on one case, and then an experiment runs it — either alone or " +
+        "against the lab's own harness injected into the same workspace."
+    },
+    clone: {
+      pickFolderTitle: "Pick the folder you want audited",
+      pickFolderBody:
+        "Browse to the repository you already have on this machine. The lab reads " +
+        "its remote and branch off the folder, copies it into its own folder and " +
+        "freezes it at the commit it is on — no URL to type, no credentials, no " +
+        "network.",
+      frozenWarning:
+        "The folder you pick is frozen at the commit it is on right now. " +
+        "Commits you make afterwards do not reach the lab — every run, report " +
+        "and case reads the frozen copy until you come back to this step and " +
+        "pick the folder again.",
+      copyMethodNote: (
+        <>
+          The copy is made with <code>git clone --no-hardlinks</code>: local, no
+          network, no credentials, and your working copy is only read. Only
+          committed work comes across — uncommitted files stay where they are.
+        </>
+      ),
+      auditThisFolder: "Audit this folder",
+      registeringAndFreezing: "Registering and freezing…",
+      auditThisFolderHint: "Registers it, copies it in, and freezes it at its current commit.",
+      opening: "Opening…",
+      browseMyRepositories: "Browse my repositories",
+      registerCloneTitle: "Or register one the lab has to clone",
+      registerCloneBody:
+        "For a repository that is not on this machine yet. The lab records it so " +
+        "runs can name it; fetching the code is the next step, and it happens in " +
+        "your terminal.",
+      repositoryId: "Repository id",
+      name: "Name",
+      repositoryUrl: "Repository URL",
+      defaultRef: "Default ref",
+      registering: "Registering…",
+      registerRepository: "Register this repository",
+      pickRegisteredTitle: "Or pick one already registered",
+      repositoriesLink: "Repositories",
+      noneYetTitle: "No repositories yet.",
+      noneYetDescription: "Nothing registered yet. Fill in the form above — it takes the URL and a name.",
+      pinnedTag: (commit: string) => `pinned ${commit}`,
+      pointLabTitle: "Point the lab at the repository",
+      statusPinned: "Pinned",
+      statusCloneFound: "Clone found",
+      statusNothingYet: "Nothing picked yet",
+      findFolder: (name: string) => (
+        <>
+          Find the folder where you already have <strong>{name}</strong> on this
+          machine. The lab copies it into its own folder and freezes it at the
+          commit it is on: your working copy is only read, never written to, and
+          the remote is never contacted. If the repository is not here yet, the
+          other two tabs clone it.
+        </>
+      ),
+      readingCheckout: "Reading the checkout",
+      tabPickFolder: "Pick a folder on this machine",
+      tabExistingClone: "A clone I already have",
+      tabRemote: "Clone from the remote",
+      localNote: (
+        <>
+          <p>
+            The folder you pick is copied and frozen at the commit it is on
+            right now. Commits you make afterwards do not reach the lab —
+            every run, report and case reads the frozen copy until you come
+            back to this step and pick the folder again.
+          </p>
+          <p className="muted small">
+            The copy is made with <code>git clone --no-hardlinks</code>:
+            local, no network, no credentials, and your working copy is only
+            read. Only committed work comes across — uncommitted files stay
+            where they are. It exists because a run container mounts the
+            lab&apos;s own folder and nothing else.
+          </p>
+        </>
+      ),
+      useThisFolder: "Use this folder",
+      copyingAndFreezing: "Copying and freezing…",
+      useThisFolderHint: "Copies it in and freezes it at its current commit.",
+      orRunYourself: "Or run it yourself, from any path on this machine:",
+      noDirectoryToBrowse: (
+        <>
+          The folder picker has no directory to browse. It normally opens on
+          the directory the lab sits in; set{" "}
+          <code>HARNESS_LAB_LOCAL_SOURCES_DIR</code> in <code>.env</code> to
+          the directory that holds your repositories and restart the lab.
+          Meanwhile this command does the same job from your own terminal:
+        </>
+      ),
+      absolutePathLabel: "Absolute path of the repository you already have",
+      writing: "Writing…",
+      writeCommand: "Write the command",
+      copied: "Copied",
+      copy: "Copy",
+      existingClonesBody:
+        "Clones already in the lab's folder. A repository is often " +
+        "cloned once and audited twice, so attaching one is not a second " +
+        "copy of anybody's code — both targets read the same checkout.",
+      noClonesTitle: "No clones on disk.",
+      noClonesDescription:
+        "Nothing under data/checkouts yet. Clone from the remote, or copy a folder you already have.",
+      usedBy: (names: string) => `used by ${names}`,
+      noRemote: "no remote",
+      remoteBody:
+        "The lab has no credentials for this repository, and a run container " +
+        "has none either. You clone it here, where your ssh agent and tokens " +
+        "already work; the lab then reads your clone and never contacts the " +
+        "remote again.",
+      remoteStep1: "Open a terminal on this machine (the one running the lab).",
+      remoteStep2: (
+        <>
+          Paste the command below and run it. It clones into the lab&apos;s own
+          folder, which is where the lab looks.
+        </>
+      ),
+      remoteStep3: "Leave this page open — it notices the clone within a few seconds.",
+      landsIn: (path: string) => (
+        <>
+          It lands in <code>{path}</code>. Nothing else in the command needs
+          changing — the destination is already the path the lab watches.
+        </>
+      ),
+      watchingForClone: "Watching for the clone",
+      checkNow: "Check now",
+      stillNothing: (path: string) => (
+        <>
+          Still nothing at <code>{path}</code>. The lab watches that one
+          directory, so a clone made anywhere else — or under another name —
+          never shows up here.
+        </>
+      ),
+      diagnosisDirExists: "The directory is there but it is not a git repository.",
+      diagnosisDirMissing: "The directory does not exist yet.",
+      diagnosisTail: (hasCheckouts: boolean) => (
+        <>
+          {" "}
+          If the clone is still running, leave this open. Otherwise:{" "}
+          {hasCheckouts
+            ? "attach one of the clones already on disk"
+            : "copy a folder you already have"}{" "}
+          from the tabs above. The page keeps watching either way.
+        </>
+      ),
+      head: "HEAD",
+      branch: "Branch",
+      pinned: "Pinned",
+      readingAttached: (path: string) => (
+        <>
+          Reading <code>{path}</code> — a clone that was already there, not one
+          named after this repository. That is deliberate; the pin and every
+          run read this directory.
+        </>
+      ),
+      dirtyFiles: (count: number) =>
+        `${count} uncommitted file(s) in your clone. They never enter a run: the ` +
+        "runner clones git objects, so it sees the committed tree and nothing " +
+        "else. Commit them if the run is meant to see them.",
+      pinStale:
+        "Your clone has moved since the pin. Re-pin to measure the commit you " +
+        "are looking at, or leave it to keep comparing against the old one.",
+      pinExplainer:
+        "Pinning freezes the repository at the commit your clone is on. Every run, " +
+        "report and derived case reads that commit until somebody re-pins, so two " +
+        "experiments a week apart compare agents rather than a moving branch.",
+      pinning: "Pinning…",
+      pinAgain: "Pin this commit again",
+      pin: "Pin this commit",
+      harnessAudit: "Harness audit"
+    },
+    audit: {
+      statusLabel: { running: "running", done: "done", failed: "failed" } as Record<
+        "running" | "done" | "failed",
+        string
+      >,
+      whatHarnessTitle: "What harness this repository ships",
+      whatHarnessBody:
+        "The lab reads the repository at the pinned commit — rules files, skills, " +
+        "agents, commands, hooks, CI, build files, README — and an LLM writes a " +
+        "short report: which harness parts exist, the language, and what could be " +
+        "tried here. Whether the wizard can continue past this step is decided " +
+        "from that evidence, not by the model.",
+      notGenerated: "Not generated yet.",
+      reading: "Reading the repository with the auditor",
+      auditFailed: "The audit failed",
+      commit: "Commit",
+      language: "Language",
+      notDetected: "not detected",
+      harness: "Harness",
+      unknown: "unknown",
+      runner: "Runner",
+      notProbed: "not probed",
+      coverageLabel: "Coverage",
+      runnableCount: (count: number) => `${count} runnable`,
+      staticCount: (count: number) => `${count} static`,
+      blockedCount: (count: number) => `${count} blocked`,
+      checksLabel: "Checks",
+      model: "Model",
+      unsupportedTitle: "The lab cannot run cases here.",
+      unsupportedTail:
+        "This is the end of the wizard for this repository — the runner " +
+        "cannot execute anything in its runtime. The readiness and gate " +
+        "check below still work; neither one runs an agent.",
+      noHarnessTitle: "No harness to evaluate.",
+      continueAnyway: "Continue anyway — compare it against the lab harness",
+      canEvaluateTitle: "This repository can be evaluated here.",
+      chooseOrCreateCase: "Choose or create a case",
+      shapeLabel: "Harness shape",
+      notFound: "not found",
+      unitOfWork: "Unit of work",
+      suiteAtPin: "Suite at the pin",
+      passedFailed: (passed: number, failed: number) => `${passed} passed, ${failed} failed`,
+      componentMapTitle: "Component map",
+      componentMapBody:
+        "What each harness component claims, what would show it helped, " +
+        "and whether this lab can evaluate it. Evaluability is the lab's " +
+        "verdict from declared services, not the auditor's opinion.",
+      colComponent: "Component",
+      colClaims: "Claims",
+      colObservable: "Observable",
+      colLabCounterpart: "Lab counterpart",
+      colNeeds: "Needs",
+      colEvaluable: "Evaluable",
+      yes: "yes",
+      no: "no",
+      warningsSummary: (count: number) => `${count} contract warning(s)`,
+      casesProposedTitle: "Cases the auditor proposes",
+      exercises: "Exercises:",
+      dropped: (reason: string) => `Dropped: ${reason}`,
+      check: "Check:",
+      derivedArms: "Derived arms:",
+      draftThisAsCase: "Draft this as a case",
+      useCasesProposedTitle: "Use cases the auditor proposes",
+      partial: "partial",
+      vs: "vs",
+      generateAudit: "Generate the audit",
+      auditing: "Auditing…",
+      auditAgain: "Audit again",
+      whatHasTitle: "What this repository already has",
+      ready: "Ready to run",
+      notReady: "Not runnable yet",
+      readingRepository: "Reading the repository",
+      readRepository: "Read the repository",
+      gateCheckTitle: "Gate check",
+      gateRunning: "Running",
+      gateOk: "ok",
+      gateError: "error",
+      gateBody:
+        "This runs the repository's own gate at the pinned commit with no agent in " +
+        "the picture. It is what separates \"the agent failed\" from \"this repository " +
+        "does not build here\" — after a green gate check, a red run is a fact about " +
+        "the agent.",
+      commitMeasured: "Commit measured",
+      failedAt: "Failed at",
+      runningGate: "Running the repository's own gate",
+      exit: (code: string) => `exit ${code}`,
+      running: "Running…",
+      runGateCheck: "Run the gate check",
+      gateFootnote:
+        "Recommended, not required. You can go on with it red or unrun — it only " +
+        "changes how you read the first failure."
+    },
+    case: {
+      title: "One case that passes",
+      tabAi: "AI draft",
+      tabHistory: "From history",
+      tabManual: "By hand",
+      tabExisting: "Existing case",
+      draftFromDescription: "Draft it from a description",
+      readAgainst: (targetId: string) => (
+        <>
+          Read against <code>{targetId}</code> at the pin
+        </>
+      ),
+      describeScenario: "Describe the scenario, in plain language",
+      describeScenarioPlaceholder:
+        "e.g. Add a retry to the billing webhook client and keep the existing tests green.",
+      draftingLabel: "Drafting…",
+      draftIt: "Draft it",
+      leftOutTitle: "Left out of the draft — the lab would not run these:",
+      subject: "Subject",
+      instructionLabel: "The instruction the agent gets",
+      validationCommandsLabel: "Validation commands — one per line",
+      rubricLabel: "Scoring rubric — what a judge should look for (optional)",
+      maxSteps: "Max steps",
+      measurementNote:
+        "The command is the whole measurement: it runs after the agent stops, and " +
+        "its exit code is the pass. Read it before saving — a check that cannot " +
+        "fail reports a pass that means nothing.",
+      saving: "Saving…",
+      createCase: "Create the case",
+      subjectPlaceholder: "Fix the failing serializer test",
+      instructionPlaceholder:
+        "Make the failing test in tests/test_serializer.py pass without changing the test.",
+      rubricPlaceholder:
+        "Score 10 when the check passes and the change stays inside the declared files; 0 when it does not.",
+      historyBody:
+        "Proposed from the repository's own history — real changes this team " +
+        "already made, each one a commit that paired a source change with a test " +
+        "change. Read the prompt before creating the case.",
+      readingHistory: "Reading history…",
+      readHistory: "Read the history",
+      scannedOf: (count: number, scanned: number) => `${count} of ${scanned} commits scanned`,
+      nothingDerivableTitle: "Nothing derivable here.",
+      nothingDerivableDescription:
+        "No commit in the scanned range paired a source change with a test change, which is what makes a commit reproducible as a case.",
+      sourceCount: (count: number) => `${count} source`,
+      testCount: (count: number) => `${count} test`,
+      inCatalog: "Case in the catalog",
+      createThisCase: "Create this case",
+      caseId: "Case id",
+      existingBody:
+        "A case already in the catalog, run against this repository. Nothing new " +
+        "is created — the case keeps whichever repository it came from.",
+      noCasesTitle: "No cases to reuse.",
+      noCasesDescription: "The catalog is empty, or it could not be read. Draft one on the first tab instead.",
+      noDescription: "No description",
+      runExperiment: "Run an experiment",
+      selectedForExperiment: (ids: string) => `Selected for the experiment: ${ids}`,
+      noneYet: "none yet"
+    },
+    experiment: {
+      title: "Run an experiment against this repository",
+      fromThisRepository: "from this repository",
+      oneArmTitle: "This repository only — one arm",
+      oneArmBody: "No control arm: it answers whether the case passes here at all.",
+      twoArmTitle: "This repository vs the lab harness (ml-python-base)",
+      twoArmBody:
+        "Control: the repository's own governance, nothing injected. " +
+        "Treatment: the lab's harness (the synced ml-python-base release) " +
+        "injected into the same workspace at the same commit. The only thing " +
+        "that varies is the harness.",
+      bareArmNote:
+        "A bare arm (empty workspace, governance masked) only exists in the " +
+        "lab venue — it cannot be put inside somebody else's repository (ADR-0049). " +
+        "The honest control here is the repository as it is.",
+      repetitions: "Repetitions",
+      repetitionsHint:
+        "1 is exploratory; 5 or more per arm is what a comparison needs to be " +
+        "trusted.",
+      harnessLabel: "Harness",
+      hostHarnessHintClaude:
+        "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host).",
+      hostHarnessHintOther: "Needs host mode — run make app-host.",
+      hostHarnessHintPrefix: (harness: string) => `Runs the ${harness} CLI with its native auth. `,
+      executorModel: "Executor model",
+      cliDefault: "CLI default",
+      pickModelHint: (harness: string) => `Pick a model the ${harness} CLI accepts, or leave it on its own default.`,
+      noDefaultHint: "opencode has no default of its own — this run needs a model named here.",
+      maxSteps: "Max steps",
+      queueing: "Queueing…",
+      createAndLaunch: "Create and launch",
+      watchRun: "Watch the run",
+      openWorkbench: "Open this repository's workbench",
+      firstPassName: (name: string) => `First pass: ${name}`,
+      firstPassQuestion: (name: string) => `Do the selected cases pass against ${name} at the pinned commit?`,
+      thisRepositoryDescription: "The repository as it is, at the pinned commit.",
+      harnessAuditName: (name: string) => `Harness audit: ${name}`,
+      harnessAuditQuestion: (name: string) => `Does the injected lab harness improve over ${name}'s own setup?`,
+      nativeDescription: "The repository's own governance, with nothing injected.",
+      injectedDescription: "The lab harness (ml-python-base) injected into the workspace."
+    }
+  },
+  es: {
+    steps: {
+      clone: "Apuntar al repositorio",
+      audit: "Auditoría de arnés",
+      case: "Un caso",
+      experiment: "Correr un experimento"
+    } as Record<StepKey, string>,
+    checks: { fail: "falló", warn: "aviso", pass: "pasó" },
+    caseStatus: { runnable: "corrible", static: "estático", blocked: "bloqueado" } as Record<
+      RepositoryAuditCaseStatus,
+      string
+    >,
+    shape: {
+      in_place: "gobierna este repositorio",
+      installable: "se instala en otro proyecto",
+      both: "gobierna este repositorio y se instala en otros",
+      unknown: "indeterminado"
+    } as Record<string, string>,
+    measures: {
+      harness_claim: "mide una promesa del arnés",
+      harness_development: "mide trabajo sobre el arnés",
+      unknown: "sin clasificar"
+    } as Record<string, string>,
+    coverage: { none: "ninguna", partial: "parcial", full: "completa" } as Record<
+      "none" | "partial" | "full",
+      string
+    >,
+    errors: {
+      loadRepositories: "No se pudieron cargar los repositorios.",
+      somethingFailed: "Algo falló",
+      noLocalRemote:
+        "Esta carpeta no tiene remoto `origin`, así que el lab no tiene URL para " +
+        "registrarle. Poné una en el campo de abajo y volvé a elegir la carpeta.",
+      noRunnableDraft:
+        "El borrador no tiene un comando de validación corrible. Escribí uno " +
+        "abajo, o describí el chequeo que querés y volvé a redactarlo.",
+      caseIdTaken: (id: string) =>
+        `Ya existe un caso llamado '${id}'. Elegí otro id, o reusalo desde la ` +
+        "pestaña Caso existente.",
+      noFreeExperimentId: "No se encontró un id de experimento libre."
+    },
+    notices: {
+      usingClone: (name: string) => `Usando el clon en ${name}. Fijalo para congelar el repositorio en un commit.`,
+      copiedAndFrozen: (commit: string) =>
+        `Copiado y congelado en ${commit}. Tu carpeta solo se leyó, y solo el ` +
+        "trabajo confirmado pasó. De acá en más todo lee ese commit hasta que " +
+        "vuelvas a elegir la carpeta.",
+      registeredCopiedFrozen: (name: string, commit: string) =>
+        `${name} está registrado, copiado y congelado en ${commit}. Tu carpeta ` +
+        "solo se leyó, y solo el trabajo confirmado pasó. De acá en más todo lee " +
+        "ese commit hasta que vuelvas a elegir la carpeta.",
+      pinned: (commit: string) =>
+        `Fijado en ${commit}. Todo lo que sigue lee ese commit hasta que alguien ` +
+        "lo vuelva a fijar.",
+      adopted:
+        "Adoptado. Las próximas corridas contra este repositorio validan con sus " +
+        "propios comandos — editalos cuando quieras desde Evidencia → Repositorios.",
+      caseCreated: (id: string) => `Caso '${id}' creado. Corré contra el repositorio.`,
+      caseReused: (id: string) => `'${id}' ya existía — reusándolo.`,
+      caseSelected: (id: string) => `Caso '${id}' seleccionado.`,
+      runQueuedNoControl: "Corrida encolada. Lee el commit fijado, sin brazo de control.",
+      comparisonQueued:
+        "Comparación encolada: este repositorio tal cual está, contra el arnés " +
+        "del lab inyectado en el mismo workspace."
+    },
+    gateErrorSuffix: (message: string) =>
+      `${message} Adoptá primero el gate inferido de arriba — sin un comando de ` +
+      "validación no hay nada que el chequeo pueda correr.",
+    header: {
+      title: "Configurar un repositorio para auditar",
+      lede:
+        "Cuatro pasos: apuntás el lab al repositorio y congela un commit, un LLM " +
+        "lee qué arnés trae y en qué se lo podría probar, elegís un caso, y " +
+        "después un experimento lo corre — solo o contra el arnés propio del lab " +
+        "inyectado en el mismo workspace."
+    },
+    clone: {
+      pickFolderTitle: "Elegí la carpeta que querés auditar",
+      pickFolderBody:
+        "Navegá hasta el repositorio que ya tenés en esta máquina. El lab lee su " +
+        "remoto y su rama desde la carpeta, la copia a su propia carpeta y la " +
+        "congela en el commit en el que está — sin tipear URL, sin credenciales, " +
+        "sin red.",
+      frozenWarning:
+        "La carpeta que elijas queda congelada en el commit en el que está ahora " +
+        "mismo. Los commits que hagas después no llegan al lab — cada corrida, " +
+        "reporte y caso lee la copia congelada hasta que vuelvas a este paso y " +
+        "vuelvas a elegir la carpeta.",
+      copyMethodNote: (
+        <>
+          La copia se hace con <code>git clone --no-hardlinks</code>: local, sin
+          red, sin credenciales, y tu copia de trabajo solo se lee. Solo pasa el
+          trabajo confirmado — los archivos sin confirmar quedan donde están.
+        </>
+      ),
+      auditThisFolder: "Auditar esta carpeta",
+      registeringAndFreezing: "Registrando y congelando…",
+      auditThisFolderHint: "La registra, la copia y la congela en su commit actual.",
+      opening: "Abriendo…",
+      browseMyRepositories: "Explorar mis repositorios",
+      registerCloneTitle: "O registrá uno que el lab tenga que clonar",
+      registerCloneBody:
+        "Para un repositorio que todavía no está en esta máquina. El lab lo " +
+        "registra para que las corridas lo puedan nombrar; traer el código es el " +
+        "próximo paso, y pasa en tu terminal.",
+      repositoryId: "Id del repositorio",
+      name: "Nombre",
+      repositoryUrl: "URL del repositorio",
+      defaultRef: "Ref por defecto",
+      registering: "Registrando…",
+      registerRepository: "Registrar este repositorio",
+      pickRegisteredTitle: "O elegí uno ya registrado",
+      repositoriesLink: "Repositorios",
+      noneYetTitle: "Todavía no hay repositorios.",
+      noneYetDescription: "Nada registrado todavía. Completá el formulario de arriba — pide la URL y un nombre.",
+      pinnedTag: (commit: string) => `fijado ${commit}`,
+      pointLabTitle: "Apuntá el lab al repositorio",
+      statusPinned: "Fijado",
+      statusCloneFound: "Clon encontrado",
+      statusNothingYet: "Todavía nada elegido",
+      findFolder: (name: string) => (
+        <>
+          Encontrá la carpeta donde ya tenés <strong>{name}</strong> en esta
+          máquina. El lab la copia a su propia carpeta y la congela en el commit
+          en el que está: tu copia de trabajo solo se lee, nunca se escribe, y el
+          remoto nunca se contacta. Si el repositorio todavía no está acá, las
+          otras dos pestañas lo clonan.
+        </>
+      ),
+      readingCheckout: "Leyendo el checkout",
+      tabPickFolder: "Elegir una carpeta en esta máquina",
+      tabExistingClone: "Un clon que ya tengo",
+      tabRemote: "Clonar desde el remoto",
+      localNote: (
+        <>
+          <p>
+            La carpeta que elijas queda copiada y congelada en el commit en el
+            que está ahora mismo. Los commits que hagas después no llegan al
+            lab — cada corrida, reporte y caso lee la copia congelada hasta que
+            vuelvas a este paso y vuelvas a elegir la carpeta.
+          </p>
+          <p className="muted small">
+            La copia se hace con <code>git clone --no-hardlinks</code>: local,
+            sin red, sin credenciales, y tu copia de trabajo solo se lee. Solo
+            pasa el trabajo confirmado — los archivos sin confirmar quedan
+            donde están. Existe porque un contenedor de corrida monta solo la
+            carpeta propia del lab.
+          </p>
+        </>
+      ),
+      useThisFolder: "Usar esta carpeta",
+      copyingAndFreezing: "Copiando y congelando…",
+      useThisFolderHint: "La copia y la congela en su commit actual.",
+      orRunYourself: "O corré esto vos mismo, desde cualquier ruta en esta máquina:",
+      noDirectoryToBrowse: (
+        <>
+          El selector de carpetas no tiene directorio para explorar. Normalmente
+          abre en el directorio donde está el lab; configurá{" "}
+          <code>HARNESS_LAB_LOCAL_SOURCES_DIR</code> en <code>.env</code> con el
+          directorio que contiene tus repositorios y reiniciá el lab. Mientras
+          tanto este comando hace lo mismo desde tu propia terminal:
+        </>
+      ),
+      absolutePathLabel: "Ruta absoluta del repositorio que ya tenés",
+      writing: "Escribiendo…",
+      writeCommand: "Escribir el comando",
+      copied: "Copiado",
+      copy: "Copiar",
+      existingClonesBody:
+        "Clones que ya están en la carpeta del lab. Un repositorio a menudo se " +
+        "clona una vez y se audita dos, así que adjuntar uno no es una segunda " +
+        "copia del código de nadie — ambos repositorios leen el mismo checkout.",
+      noClonesTitle: "No hay clones en disco.",
+      noClonesDescription:
+        "Todavía no hay nada en data/checkouts. Cloná desde el remoto, o copiá una carpeta que ya tengas.",
+      usedBy: (names: string) => `usado por ${names}`,
+      noRemote: "sin remoto",
+      remoteBody:
+        "El lab no tiene credenciales para este repositorio, y un contenedor de " +
+        "corrida tampoco. Lo clonás acá, donde tu agente ssh y tus tokens ya " +
+        "funcionan; el lab después lee tu clon y nunca vuelve a contactar el " +
+        "remoto.",
+      remoteStep1: "Abrí una terminal en esta máquina (la que corre el lab).",
+      remoteStep2: (
+        <>
+          Pegá el comando de abajo y corrélo. Clona hacia la carpeta propia del
+          lab, que es donde el lab mira.
+        </>
+      ),
+      remoteStep3: "Dejá esta página abierta — nota el clon en unos segundos.",
+      landsIn: (path: string) => (
+        <>
+          Termina en <code>{path}</code>. No hay nada más que cambiar en
+          el comando — el destino ya es la ruta que el lab observa.
+        </>
+      ),
+      watchingForClone: "Esperando el clon",
+      checkNow: "Revisar ahora",
+      stillNothing: (path: string) => (
+        <>
+          Todavía nada en <code>{path}</code>. El lab observa ese único
+          directorio, así que un clon hecho en otro lado — o con otro nombre —
+          nunca aparece acá.
+        </>
+      ),
+      diagnosisDirExists: "El directorio está pero no es un repositorio git.",
+      diagnosisDirMissing: "El directorio todavía no existe.",
+      diagnosisTail: (hasCheckouts: boolean) => (
+        <>
+          {" "}
+          Si el clon todavía está corriendo, dejá esto abierto. Si no:{" "}
+          {hasCheckouts
+            ? "adjuntá uno de los clones que ya hay en disco"
+            : "copiá una carpeta que ya tengas"}{" "}
+          desde las pestañas de arriba. La página sigue observando de todos modos.
+        </>
+      ),
+      head: "HEAD",
+      branch: "Rama",
+      pinned: "Fijado",
+      readingAttached: (path: string) => (
+        <>
+          Leyendo <code>{path}</code> — un clon que ya estaba ahí, no uno nombrado
+          por este repositorio. Es deliberado; el fijado y cada corrida leen este
+          directorio.
+        </>
+      ),
+      dirtyFiles: (count: number) =>
+        `${count} archivo(s) sin confirmar en tu clon. Nunca entran a una corrida: ` +
+        "el runner clona objetos git, así que ve el árbol confirmado y nada más. " +
+        "Confirmalos si querés que la corrida los vea.",
+      pinStale:
+        "Tu clon se movió desde el fijado. Volvé a fijar para medir el commit que " +
+        "estás mirando, o dejalo así para seguir comparando contra el anterior.",
+      pinExplainer:
+        "Fijar congela el repositorio en el commit en el que está tu clon. Cada " +
+        "corrida, reporte y caso derivado lee ese commit hasta que alguien vuelva " +
+        "a fijar, así que dos experimentos con una semana de diferencia comparan " +
+        "agentes y no una rama que se mueve.",
+      pinning: "Fijando…",
+      pinAgain: "Volver a fijar este commit",
+      pin: "Fijar este commit",
+      harnessAudit: "Auditoría de arnés"
+    },
+    audit: {
+      statusLabel: { running: "corriendo", done: "lista", failed: "falló" } as Record<
+        "running" | "done" | "failed",
+        string
+      >,
+      whatHarnessTitle: "Qué arnés trae este repositorio",
+      whatHarnessBody:
+        "El lab lee el repositorio en el commit fijado — archivos de reglas, " +
+        "skills, agentes, comandos, hooks, CI, archivos de build, README — y un " +
+        "LLM escribe un reporte corto: qué partes de arnés existen, el lenguaje, " +
+        "y en qué se lo podría probar acá. Si el wizard puede seguir después de " +
+        "este paso se decide a partir de esa evidencia, no del modelo.",
+      notGenerated: "Todavía no se generó.",
+      reading: "Leyendo el repositorio con el auditor",
+      auditFailed: "La auditoría falló",
+      commit: "Commit",
+      language: "Lenguaje",
+      notDetected: "no detectado",
+      harness: "Arnés",
+      unknown: "desconocido",
+      runner: "Runner",
+      notProbed: "no probado",
+      coverageLabel: "Cobertura",
+      runnableCount: (count: number) => `${count} corrible(s)`,
+      staticCount: (count: number) => `${count} estático(s)`,
+      blockedCount: (count: number) => `${count} bloqueado(s)`,
+      checksLabel: "Chequeos",
+      model: "Modelo",
+      unsupportedTitle: "El lab no puede correr casos acá.",
+      unsupportedTail:
+        "Este es el final del wizard para este repositorio — el runner no puede " +
+        "ejecutar nada en su runtime. La lectura de estado y el gate check de " +
+        "abajo igual funcionan; ninguno de los dos corre un agente.",
+      noHarnessTitle: "No hay arnés para evaluar.",
+      continueAnyway: "Seguir de todos modos — comparalo contra el arnés del lab",
+      canEvaluateTitle: "Este repositorio se puede evaluar acá.",
+      chooseOrCreateCase: "Elegir o crear un caso",
+      shapeLabel: "Forma del arnés",
+      notFound: "no encontrado",
+      unitOfWork: "Unidad de trabajo",
+      suiteAtPin: "Suite en el fijado",
+      passedFailed: (passed: number, failed: number) => `${passed} pasaron, ${failed} fallaron`,
+      componentMapTitle: "Mapa de componentes",
+      componentMapBody:
+        "Qué promete cada componente del arnés, qué mostraría que ayudó, y si " +
+        "este lab lo puede evaluar. La evaluabilidad es el veredicto del lab a " +
+        "partir de los servicios declarados, no la opinión del auditor.",
+      colComponent: "Componente",
+      colClaims: "Promesa",
+      colObservable: "Observable",
+      colLabCounterpart: "Contraparte en el lab",
+      colNeeds: "Necesita",
+      colEvaluable: "Evaluable",
+      yes: "sí",
+      no: "no",
+      warningsSummary: (count: number) => `${count} advertencia(s) de contrato`,
+      casesProposedTitle: "Casos que propone el auditor",
+      exercises: "Ejercita:",
+      dropped: (reason: string) => `Descartado: ${reason}`,
+      check: "Chequeo:",
+      derivedArms: "Brazos derivados:",
+      draftThisAsCase: "Redactar esto como caso",
+      useCasesProposedTitle: "Casos de uso que propone el auditor",
+      partial: "parcial",
+      vs: "vs",
+      generateAudit: "Generar la auditoría",
+      auditing: "Auditando…",
+      auditAgain: "Auditar de nuevo",
+      whatHasTitle: "Qué tiene ya este repositorio",
+      ready: "Lista para correr",
+      notReady: "Todavía no corrible",
+      readingRepository: "Leyendo el repositorio",
+      readRepository: "Leer el repositorio",
+      gateCheckTitle: "Gate check",
+      gateRunning: "Corriendo",
+      gateOk: "ok",
+      gateError: "error",
+      gateBody:
+        "Esto corre el propio gate del repositorio en el commit fijado, sin " +
+        "ningún agente de por medio. Es lo que separa \"falló el agente\" de " +
+        "\"este repositorio no compila acá\" — después de un gate check en verde, " +
+        "una corrida en rojo es un hecho sobre el agente.",
+      commitMeasured: "Commit medido",
+      failedAt: "Falló en",
+      runningGate: "Corriendo el propio gate del repositorio",
+      exit: (code: string) => `salida ${code}`,
+      running: "Corriendo…",
+      runGateCheck: "Correr el gate check",
+      gateFootnote:
+        "Recomendado, no obligatorio. Podés seguir con el gate en rojo o sin " +
+        "correr — solo cambia cómo interpretás la primera falla."
+    },
+    case: {
+      title: "Un caso que pasa",
+      tabAi: "Borrador con IA",
+      tabHistory: "Desde el historial",
+      tabManual: "A mano",
+      tabExisting: "Caso existente",
+      draftFromDescription: "Redactalo a partir de una descripción",
+      readAgainst: (targetId: string) => (
+        <>
+          Leído contra <code>{targetId}</code> en el fijado
+        </>
+      ),
+      describeScenario: "Describí el escenario, en lenguaje simple",
+      describeScenarioPlaceholder:
+        "ej.: Agregá un retry al cliente del webhook de facturación y mantené los tests existentes en verde.",
+      draftingLabel: "Redactando…",
+      draftIt: "Redactarlo",
+      leftOutTitle: "Fuera del borrador — el lab no correría esto:",
+      subject: "Asunto",
+      instructionLabel: "La instrucción que recibe el agente",
+      validationCommandsLabel: "Comandos de validación — uno por línea",
+      rubricLabel: "Rúbrica de puntuación — qué debería buscar un juez (opcional)",
+      maxSteps: "Pasos máximos",
+      measurementNote:
+        "El comando es toda la medición: corre después de que el agente se " +
+        "detiene, y su código de salida es el resultado. Leelo antes de " +
+        "guardar — un chequeo que no puede fallar reporta un éxito que no " +
+        "significa nada.",
+      saving: "Guardando…",
+      createCase: "Crear el caso",
+      subjectPlaceholder: "Arreglar el test de serialización que falla",
+      instructionPlaceholder:
+        "Hacé que pase el test que falla en tests/test_serializer.py sin cambiar el test.",
+      rubricPlaceholder:
+        "Puntaje 10 cuando el chequeo pasa y el cambio se mantiene dentro de los archivos declarados; 0 cuando no.",
+      historyBody:
+        "Propuestos a partir del propio historial del repositorio — cambios " +
+        "reales que este equipo ya hizo, cada uno un commit que emparejó un " +
+        "cambio de código con un cambio de test. Leé el prompt antes de crear " +
+        "el caso.",
+      readingHistory: "Leyendo el historial…",
+      readHistory: "Leer el historial",
+      scannedOf: (count: number, scanned: number) => `${count} de ${scanned} commits analizados`,
+      nothingDerivableTitle: "Nada que derivar acá.",
+      nothingDerivableDescription:
+        "Ningún commit en el rango analizado emparejó un cambio de código con un cambio de test, que es lo que hace a un commit reproducible como caso.",
+      sourceCount: (count: number) => `${count} de código`,
+      testCount: (count: number) => `${count} de test`,
+      inCatalog: "Caso en el catálogo",
+      createThisCase: "Crear este caso",
+      caseId: "Id del caso",
+      existingBody:
+        "Un caso ya en el catálogo, corrido contra este repositorio. No se crea " +
+        "nada nuevo — el caso conserva el repositorio del que vino.",
+      noCasesTitle: "No hay casos para reusar.",
+      noCasesDescription: "El catálogo está vacío, o no se pudo leer. Redactá uno en la primera pestaña.",
+      noDescription: "Sin descripción",
+      runExperiment: "Correr un experimento",
+      selectedForExperiment: (ids: string) => `Seleccionados para el experimento: ${ids}`,
+      noneYet: "ninguno todavía"
+    },
+    experiment: {
+      title: "Correr un experimento contra este repositorio",
+      fromThisRepository: "de este repositorio",
+      oneArmTitle: "Solo este repositorio — un brazo",
+      oneArmBody: "Sin brazo de control: responde si el caso pasa acá siquiera.",
+      twoArmTitle: "Este repositorio vs el arnés del lab (ml-python-base)",
+      twoArmBody:
+        "Control: la gobernanza propia del repositorio, sin nada inyectado. " +
+        "Tratamiento: el arnés del lab (el release ml-python-base sincronizado) " +
+        "inyectado en el mismo workspace en el mismo commit. Lo único que varía " +
+        "es el arnés.",
+      bareArmNote:
+        "Un brazo desnudo (workspace vacío, gobernanza enmascarada) solo existe " +
+        "en el venue del lab — no se puede poner dentro del repositorio de otra " +
+        "persona (ADR-0049). El control honesto acá es el repositorio tal cual " +
+        "está.",
+      repetitions: "Repeticiones",
+      repetitionsHint:
+        "1 es exploratorio; 5 o más por brazo es lo que necesita una comparación " +
+        "para ser confiable.",
+      harnessLabel: "Arnés",
+      hostHarnessHintClaude:
+        "Funciona en Docker (CLAUDE_CODE_OAUTH_TOKEN o ANTHROPIC_API_KEY en .env) o en modo host (make app-host).",
+      hostHarnessHintOther: "Necesita modo host — corré make app-host.",
+      hostHarnessHintPrefix: (harness: string) => `Corre la CLI de ${harness} con su propia autenticación. `,
+      executorModel: "Modelo ejecutor",
+      cliDefault: "Default de la CLI",
+      pickModelHint: (harness: string) => `Elegí un modelo que la CLI de ${harness} acepte, o dejalo en su propio default.`,
+      noDefaultHint: "opencode no tiene un default propio — esta corrida necesita un modelo nombrado acá.",
+      maxSteps: "Pasos máximos",
+      queueing: "Encolando…",
+      createAndLaunch: "Crear y lanzar",
+      watchRun: "Ver la corrida",
+      openWorkbench: "Abrir el workbench de este repositorio",
+      firstPassName: (name: string) => `Primera pasada: ${name}`,
+      firstPassQuestion: (name: string) => `¿Los casos seleccionados pasan contra ${name} en el commit fijado?`,
+      thisRepositoryDescription: "El repositorio tal cual está, en el commit fijado.",
+      harnessAuditName: (name: string) => `Auditoría de arnés: ${name}`,
+      harnessAuditQuestion: (name: string) => `¿El arnés del lab inyectado mejora el setup propio de ${name}?`,
+      nativeDescription: "La gobernanza propia del repositorio, sin nada inyectado.",
+      injectedDescription: "El arnés del lab (ml-python-base) inyectado en el workspace."
+    }
+  }
+});
 
 /**
  * Onboarding a third-party repository, in the order the work actually happens.
@@ -242,13 +1098,15 @@ export function Audit() {
     [commandText]
   );
 
+  const m = useMessages(MESSAGES);
+
   const run = async (label: string, work: () => Promise<void>) => {
     setBusy(label);
     setError(null);
     try {
       await work();
     } catch (workError) {
-      setError(workError instanceof Error ? workError.message : "Something failed");
+      setError(workError instanceof Error ? workError.message : m.errors.somethingFailed);
     } finally {
       setBusy("");
     }
@@ -258,7 +1116,8 @@ export function Audit() {
     api
       .listTargets()
       .then(setTargets)
-      .catch(() => setError("Unable to load repositories."));
+      .catch(() => setError(m.errors.loadRepositories));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
@@ -537,9 +1396,7 @@ export function Audit() {
     run("attach", async () => {
       const state = await api.attachCheckout(targetId, name);
       setCheckout(state);
-      setNotice(
-        `Using the clone in ${name}. Pin it to freeze the repository at a commit.`
-      );
+      setNotice(m.notices.usingClone(name));
     });
 
   // The lab cannot see the operator's own folders, so when the picker is off
@@ -564,11 +1421,7 @@ export function Audit() {
       await api.cloneFromLocal(targetId, source);
       const state = await api.pinCheckout(targetId);
       setCheckout(state);
-      setNotice(
-        `Copied and frozen at ${state.pinned_commit.slice(0, 8)}. Your folder was ` +
-          "only read, and only committed work came across. Everything from here " +
-          "reads that commit until you pick the folder again."
-      );
+      setNotice(m.notices.copiedAndFrozen(state.pinned_commit.slice(0, 8)));
     });
 
   /**
@@ -583,10 +1436,7 @@ export function Audit() {
     const folder = path.split("/").filter(Boolean).pop() ?? "";
     const url = (source.remote_url ?? "").trim() || newUrl.trim();
     if (!url) {
-      throw new Error(
-        "This folder has no `origin` remote, so the lab has no URL to record " +
-          "for it. Put one in the field below and pick the folder again."
-      );
+      throw new Error(m.errors.noLocalRemote);
     }
     const taken = new Set(targets.map((item) => item.target_id));
     const base = slugify(folder) || "repository";
@@ -605,12 +1455,7 @@ export function Audit() {
     await api.cloneFromLocal(created.target_id, path);
     const state = await api.pinCheckout(created.target_id);
     setCheckout(state);
-    setNotice(
-      `${created.name} is registered, copied and frozen at ` +
-        `${state.pinned_commit.slice(0, 8)}. Your folder was only read, and only ` +
-        "committed work came across. Everything from here reads that commit until " +
-        "you pick the folder again."
-    );
+    setNotice(m.notices.registeredCopiedFrozen(created.name, state.pinned_commit.slice(0, 8)));
   };
 
   /**
@@ -665,7 +1510,7 @@ export function Audit() {
           onClick={() => void browseLocal("")}
           type="button"
         >
-          {busy === "browse" ? "Opening…" : "Browse my repositories"}
+          {busy === "browse" ? m.clone.opening : m.clone.browseMyRepositories}
         </button>
       </div>
     );
@@ -679,10 +1524,7 @@ export function Audit() {
     run("pin", async () => {
       const state = await api.pinCheckout(targetId);
       setCheckout(state);
-      setNotice(
-        `Pinned at ${state.pinned_commit.slice(0, 8)}. Everything downstream reads ` +
-          "that commit until somebody re-pins."
-      );
+      setNotice(m.notices.pinned(state.pinned_commit.slice(0, 8)));
     });
 
   const loadReadiness = () =>
@@ -710,10 +1552,7 @@ export function Audit() {
   }) =>
     run("adopt", async () => {
       await api.updateTarget(targetId, payload);
-      setNotice(
-        "Adopted. Future runs against this repository validate with its own " +
-          "commands — edit them any time under Evidence → Repositories."
-      );
+      setNotice(m.notices.adopted);
       setReadiness(await api.getTargetReadiness(targetId));
     });
 
@@ -724,10 +1563,7 @@ export function Audit() {
         setGate(await api.startGateCheck(targetId));
       } catch (startError) {
         if (startError instanceof ApiError && startError.status === 422) {
-          setGateError(
-            `${startError.message} Adopt the inferred gate above first — with no ` +
-              "validation command there is nothing for the check to run."
-          );
+          setGateError(m.gateErrorSuffix(startError.message));
           return;
         }
         throw startError;
@@ -838,10 +1674,7 @@ export function Audit() {
       }
       setAiDropped(draft.dropped_commands ?? []);
       if ((draft.validation_commands ?? []).length === 0) {
-        setError(
-          "The draft has no runnable validation command. Write one below, or " +
-            "describe the check you want and draft it again."
-        );
+        setError(m.errors.noRunnableDraft);
       }
     });
 
@@ -875,7 +1708,7 @@ export function Audit() {
         try {
           const created = await api.createCase(payload(candidate));
           selectCase(created.case_id);
-          setNotice(`Case '${created.case_id}' created. Run it against the repository.`);
+          setNotice(m.notices.caseCreated(created.case_id));
           return;
         } catch (createError) {
           if (!isDuplicateId(createError)) {
@@ -883,10 +1716,7 @@ export function Audit() {
           }
         }
       }
-      throw new Error(
-        `A case called '${baseId}' already exists. Pick another id, or reuse it ` +
-          "from the Existing case tab."
-      );
+      throw new Error(m.errors.caseIdTaken(baseId));
     });
 
   const derive = () =>
@@ -910,7 +1740,7 @@ export function Audit() {
           throw createError;
         }
         selectCase(payload.case_id);
-        setNotice(`'${payload.case_id}' already existed — reusing it.`);
+        setNotice(m.notices.caseReused(payload.case_id));
       }
       setCaseName(candidate.subject.slice(0, 100));
       setInstruction(candidate.suggested_prompt);
@@ -925,7 +1755,7 @@ export function Audit() {
     if (record.max_steps) {
       setMaxSteps(record.max_steps);
     }
-    setNotice(`Case '${record.case_id}' selected.`);
+    setNotice(m.notices.caseSelected(record.case_id));
   };
 
   /**
@@ -949,9 +1779,7 @@ export function Audit() {
         lastError = createError;
       }
     }
-    throw lastError instanceof Error
-      ? lastError
-      : new Error("Unable to find a free experiment id.");
+    throw lastError instanceof Error ? lastError : new Error(m.errors.noFreeExperimentId);
   };
 
   /**
@@ -987,17 +1815,18 @@ export function Audit() {
           (experimentId) =>
             api.createExperiment({
               experiment_id: experimentId,
-              name: `First pass: ${target?.name ?? targetId}`,
-              question: `Do the selected cases pass against ${target?.name ?? targetId} at the pinned commit?`,
+              name: m.experiment.firstPassName(target?.name ?? targetId),
+              question: m.experiment.firstPassQuestion(target?.name ?? targetId),
               mode: "subject_validation",
               subject: target?.name ?? targetId,
               case_ids: caseIds,
               repetitions,
               conditions: [
                 {
+                  // A condition label is an identifier: run records and archives key on it.
                   label: "this repository",
                   role: "treatment",
-                  description: "The repository as it is, at the pinned commit.",
+                  description: m.experiment.thisRepositoryDescription,
                   overrides: {
                     target_repo_id: targetId,
                     target_ref: pinnedCommit,
@@ -1011,7 +1840,7 @@ export function Audit() {
         );
         await api.launchExperiment(created.experiment_id, launchConfig);
         setExperimentId(created.experiment_id);
-        setNotice("Run queued. It reads the pinned commit, with no control arm.");
+        setNotice(m.notices.runQueuedNoControl);
         return;
       }
 
@@ -1020,8 +1849,8 @@ export function Audit() {
         (experimentId) =>
           api.createExperiment({
             experiment_id: experimentId,
-            name: `Harness audit: ${target?.name ?? targetId}`,
-            question: `Does the injected lab harness improve over ${target?.name ?? targetId}'s own setup?`,
+            name: m.experiment.harnessAuditName(target?.name ?? targetId),
+            question: m.experiment.harnessAuditQuestion(target?.name ?? targetId),
             mode: "harness_evaluation",
             case_ids: caseIds,
             repetitions,
@@ -1029,7 +1858,7 @@ export function Audit() {
               {
                 label: "native",
                 role: "control",
-                description: "The repository's own governance, with nothing injected.",
+                description: m.experiment.nativeDescription,
                 overrides: {
                   target_repo_id: targetId,
                   target_ref: pinnedCommit,
@@ -1041,7 +1870,7 @@ export function Audit() {
               {
                 label: "injected",
                 role: "treatment",
-                description: "The lab harness (ml-python-base) injected into the workspace.",
+                description: m.experiment.injectedDescription,
                 overrides: {
                   target_repo_id: targetId,
                   target_ref: pinnedCommit,
@@ -1055,10 +1884,7 @@ export function Audit() {
       );
       await api.launchExperiment(created.experiment_id, launchConfig);
       setExperimentId(created.experiment_id);
-      setNotice(
-        "Comparison queued: this repository as it is, against the lab harness " +
-          "injected into the same workspace."
-      );
+      setNotice(m.notices.comparisonQueued);
     });
 
   const stepIndex = STEPS.findIndex((item) => item.key === step);
@@ -1078,24 +1904,24 @@ export function Audit() {
   const caseFields = (
     <div className="form-grid">
       <label className="full">
-        <span>Subject</span>
+        <span>{m.case.subject}</span>
         <input
           onChange={(event) => setCaseName(event.target.value)}
-          placeholder="Fix the failing serializer test"
+          placeholder={m.case.subjectPlaceholder}
           value={caseName}
         />
       </label>
       <label className="full">
-        <span>The instruction the agent gets</span>
+        <span>{m.case.instructionLabel}</span>
         <textarea
           onChange={(event) => setInstruction(event.target.value)}
-          placeholder="Make the failing test in tests/test_serializer.py pass without changing the test."
+          placeholder={m.case.instructionPlaceholder}
           rows={4}
           value={instruction}
         />
       </label>
       <label className="full">
-        <span>Validation commands — one per line</span>
+        <span>{m.case.validationCommandsLabel}</span>
         <textarea
           onChange={(event) => setCommandText(event.target.value)}
           placeholder={"make test\npytest tests/test_serializer.py"}
@@ -1104,16 +1930,16 @@ export function Audit() {
         />
       </label>
       <label className="full">
-        <span>Scoring rubric — what a judge should look for (optional)</span>
+        <span>{m.case.rubricLabel}</span>
         <textarea
           onChange={(event) => setScoringRubric(event.target.value)}
-          placeholder="Score 10 when the check passes and the change stays inside the declared files; 0 when it does not."
+          placeholder={m.case.rubricPlaceholder}
           rows={3}
           value={scoringRubric}
         />
       </label>
       <label>
-        <span>Max steps</span>
+        <span>{m.case.maxSteps}</span>
         <select
           onChange={(event) => setMaxSteps(Number(event.target.value))}
           value={maxSteps}
@@ -1151,13 +1977,8 @@ export function Audit() {
     <section className="page audit">
       <header className="page-header">
         <div>
-          <h1>Set up a repository for audit</h1>
-          <p className="lede">
-            Four steps: you point the lab at the repository and it freezes a commit,
-            an LLM reads what harness it ships and what it could be tried on, you
-            settle on one case, and then an experiment runs it — either alone or
-            against the lab's own harness injected into the same workspace.
-          </p>
+          <h1>{m.header.title}</h1>
+          <p className="lede">{m.header.lede}</p>
         </div>
       </header>
 
@@ -1179,7 +2000,7 @@ export function Audit() {
               type="button"
             >
               <span className="stepper-index">{index + 1}</span>
-              <span>{item.label}</span>
+              <span>{m.steps[item.key]}</span>
             </button>
           </li>
         ))}
@@ -1192,51 +2013,33 @@ export function Audit() {
         <>
           <div className="panel">
             <div className="panel-head">
-              <h2>Pick the folder you want audited</h2>
+              <h2>{m.clone.pickFolderTitle}</h2>
             </div>
-            <p className="muted">
-              Browse to the repository you already have on this machine. The lab reads
-              its remote and branch off the folder, copies it into its own folder and
-              freezes it at the commit it is on — no URL to type, no credentials, no
-              network.
-            </p>
+            <p className="muted">{m.clone.pickFolderBody}</p>
             <div className="callout">
               <IconAlert size={16} />
               <div>
-                <p>
-                  The folder you pick is frozen at the commit it is on right now.
-                  Commits you make afterwards do not reach the lab — every run, report
-                  and case reads the frozen copy until you come back to this step and
-                  pick the folder again.
-                </p>
-                <p className="muted small">
-                  The copy is made with <code>git clone --no-hardlinks</code>: local, no
-                  network, no credentials, and your working copy is only read. Only
-                  committed work comes across — uncommitted files stay where they are.
-                </p>
+                <p>{m.clone.frozenWarning}</p>
+                <p className="muted small">{m.clone.copyMethodNote}</p>
               </div>
             </div>
             {folderPicker(
               (path) => void auditFolderAt(path),
-              "Audit this folder",
-              "Registering and freezing…",
-              "Registers it, copies it in, and freezes it at its current commit.",
+              m.clone.auditThisFolder,
+              m.clone.registeringAndFreezing,
+              m.clone.auditThisFolderHint,
               busy === "adopt"
             )}
           </div>
 
           <div className="panel">
             <div className="panel-head">
-              <h2>Or register one the lab has to clone</h2>
+              <h2>{m.clone.registerCloneTitle}</h2>
             </div>
-            <p className="muted">
-              For a repository that is not on this machine yet. The lab records it so
-              runs can name it; fetching the code is the next step, and it happens in
-              your terminal.
-            </p>
+            <p className="muted">{m.clone.registerCloneBody}</p>
             <div className="form-grid">
               <label>
-                <span>Repository id</span>
+                <span>{m.clone.repositoryId}</span>
                 <input
                   onChange={(event) => setNewTargetId(event.target.value)}
                   placeholder="acme-billing"
@@ -1244,7 +2047,7 @@ export function Audit() {
                 />
               </label>
               <label>
-                <span>Name</span>
+                <span>{m.clone.name}</span>
                 <input
                   onChange={(event) => setNewName(event.target.value)}
                   placeholder="Acme billing service"
@@ -1252,7 +2055,7 @@ export function Audit() {
                 />
               </label>
               <label className="full">
-                <span>Repository URL</span>
+                <span>{m.clone.repositoryUrl}</span>
                 <input
                   onChange={(event) => setNewUrl(event.target.value)}
                   placeholder="git@github.com:acme/billing.git"
@@ -1260,7 +2063,7 @@ export function Audit() {
                 />
               </label>
               <label>
-                <span>Default ref</span>
+                <span>{m.clone.defaultRef}</span>
                 <input
                   onChange={(event) => setNewRef(event.target.value)}
                   placeholder="main"
@@ -1275,7 +2078,7 @@ export function Audit() {
                 onClick={() => void createTarget()}
                 type="button"
               >
-                {busy === "target" ? "Registering…" : "Register this repository"}
+                {busy === "target" ? m.clone.registering : m.clone.registerRepository}
                 <IconArrowRight size={15} />
               </button>
             </div>
@@ -1283,15 +2086,15 @@ export function Audit() {
 
           <div className="panel">
             <div className="panel-head">
-              <h2>Or pick one already registered</h2>
+              <h2>{m.clone.pickRegisteredTitle}</h2>
               <Link className="button-link" to="/evidence/repositories">
-                Repositories
+                {m.clone.repositoriesLink}
               </Link>
             </div>
             {targets.length === 0 ? (
               <EmptyState
-                description="Nothing registered yet. Fill in the form above — it takes the URL and a name."
-                title="No repositories yet."
+                description={m.clone.noneYetDescription}
+                title={m.clone.noneYetTitle}
               />
             ) : (
               <ul className="pick-list">
@@ -1306,7 +2109,7 @@ export function Audit() {
                         {item.name}
                         {item.pinned_commit ? (
                           <span className="badge pick-tag">
-                            pinned {item.pinned_commit.slice(0, 8)}
+                            {m.clone.pinnedTag(item.pinned_commit.slice(0, 8))}
                           </span>
                         ) : null}
                       </strong>
@@ -1323,19 +2126,13 @@ export function Audit() {
       {step === "clone" && targetId ? (
         <div className="panel">
           <div className="panel-head">
-            <h2>Point the lab at the repository</h2>
+            <h2>{m.clone.pointLabTitle}</h2>
             <span className={`badge ${pinnedCommit ? "ok" : cloneFound ? "warn" : "neutral"}`}>
-              {pinnedCommit ? "Pinned" : cloneFound ? "Clone found" : "Nothing picked yet"}
+              {pinnedCommit ? m.clone.statusPinned : cloneFound ? m.clone.statusCloneFound : m.clone.statusNothingYet}
             </span>
           </div>
-          <p className="muted">
-            Find the folder where you already have{" "}
-            <strong>{target?.name ?? targetId}</strong> on this machine. The lab copies it
-            into its own folder and freezes it at the commit it is on: your working copy
-            is only read, never written to, and the remote is never contacted. If the
-            repository is not here yet, the other two tabs clone it.
-          </p>
-          {!checkout ? <Spinner label="Reading the checkout" /> : null}
+          <p className="muted">{m.clone.findFolder(target?.name ?? targetId)}</p>
+          {!checkout ? <Spinner label={m.clone.readingCheckout} /> : null}
 
           {checkout && !cloneFound ? (
             <>
@@ -1350,14 +2147,14 @@ export function Audit() {
                   }}
                   type="button"
                 >
-                  Pick a folder on this machine
+                  {m.clone.tabPickFolder}
                 </button>
                 <button
                   className={`tab ${cloneSource === "existing" ? "tab--active" : ""}`}
                   onClick={() => setCloneSource("existing")}
                   type="button"
                 >
-                  A clone I already have
+                  {m.clone.tabExistingClone}
                   {checkouts.length ? (
                     <span className="badge pick-tag">{checkouts.length}</span>
                   ) : null}
@@ -1367,7 +2164,7 @@ export function Audit() {
                   onClick={() => setCloneSource("remote")}
                   type="button"
                 >
-                  Clone from the remote
+                  {m.clone.tabRemote}
                 </button>
               </div>
 
@@ -1375,49 +2172,27 @@ export function Audit() {
                 <>
                   <div className="callout">
                     <IconAlert size={16} />
-                    <div>
-                      <p>
-                        The folder you pick is copied and frozen at the commit it is on
-                        right now. Commits you make afterwards do not reach the lab —
-                        every run, report and case reads the frozen copy until you come
-                        back to this step and pick the folder again.
-                      </p>
-                      <p className="muted small">
-                        The copy is made with <code>git clone --no-hardlinks</code>:
-                        local, no network, no credentials, and your working copy is only
-                        read. Only committed work comes across — uncommitted files stay
-                        where they are. It exists because a run container mounts the
-                        lab&apos;s own folder and nothing else.
-                      </p>
-                    </div>
+                    <div>{m.clone.localNote}</div>
                   </div>
 
                   {checkout.local_sources_enabled ? (
                     <>
                       {folderPicker(
                         (path) => void useThisFolder(path),
-                        "Use this folder",
-                        "Copying and freezing…",
-                        "Copies it in and freezes it at its current commit.",
+                        m.clone.useThisFolder,
+                        m.clone.copyingAndFreezing,
+                        m.clone.useThisFolderHint,
                         busy === "from-local"
                       )}
-                      <p className="muted small">
-                        Or run it yourself, from any path on this machine:
-                      </p>
+                      <p className="muted small">{m.clone.orRunYourself}</p>
                     </>
                   ) : (
-                    <p className="muted small">
-                      The folder picker has no directory to browse. It normally opens on
-                      the directory the lab sits in; set{" "}
-                      <code>HARNESS_LAB_LOCAL_SOURCES_DIR</code> in <code>.env</code> to
-                      the directory that holds your repositories and restart the lab.
-                      Meanwhile this command does the same job from your own terminal:
-                    </p>
+                    <p className="muted small">{m.clone.noDirectoryToBrowse}</p>
                   )}
 
                   <div className="field">
                     <label htmlFor="local-source">
-                      Absolute path of the repository you already have
+                      {m.clone.absolutePathLabel}
                     </label>
                     <input
                       id="local-source"
@@ -1433,7 +2208,7 @@ export function Audit() {
                       onClick={() => void buildLocalCommand()}
                       type="button"
                     >
-                      {busy === "local-command" ? "Writing…" : "Write the command"}
+                      {busy === "local-command" ? m.clone.writing : m.clone.writeCommand}
                     </button>
                   </div>
                   {localCommand ? (
@@ -1444,7 +2219,7 @@ export function Audit() {
                         onClick={() => copyText(localCommand)}
                         type="button"
                       >
-                        {copied ? "Copied" : "Copy"}
+                        {copied ? m.clone.copied : m.clone.copy}
                       </button>
                     </div>
                   ) : null}
@@ -1453,15 +2228,11 @@ export function Audit() {
 
               {cloneSource === "existing" ? (
                 <>
-                  <p className="muted">
-                    Clones already in the lab&apos;s folder. A repository is often
-                    cloned once and audited twice, so attaching one is not a second
-                    copy of anybody&apos;s code — both targets read the same checkout.
-                  </p>
+                  <p className="muted">{m.clone.existingClonesBody}</p>
                   {checkouts.length === 0 ? (
                     <EmptyState
-                      description="Nothing under data/checkouts yet. Clone from the remote, or copy a folder you already have."
-                      title="No clones on disk."
+                      description={m.clone.noClonesDescription}
+                      title={m.clone.noClonesTitle}
                     />
                   ) : (
                     <ul className="pick-list">
@@ -1477,12 +2248,12 @@ export function Audit() {
                               {item.name}
                               {item.claimed_by.length ? (
                                 <span className="badge pick-tag">
-                                  used by {item.claimed_by.join(", ")}
+                                  {m.clone.usedBy(item.claimed_by.join(", "))}
                                 </span>
                               ) : null}
                             </strong>
                             <span className="muted">
-                              {item.remote_url || "no remote"} · {item.branch} ·{" "}
+                              {item.remote_url || m.clone.noRemote} · {item.branch} ·{" "}
                               {item.head.slice(0, 8)}
                             </span>
                           </button>
@@ -1495,18 +2266,11 @@ export function Audit() {
 
               {cloneSource === "remote" ? (
                 <>
-                  <p className="muted">
-                    The lab has no credentials for this repository, and a run container
-                    has none either. You clone it here, where your ssh agent and tokens
-                    already work; the lab then reads your clone and never contacts the
-                    remote again.
-                  </p>
+                  <p className="muted">{m.clone.remoteBody}</p>
                   <ol className="numbered-steps">
-                    <li>Open a terminal on this machine (the one running the lab).</li>
-                    <li>Paste the command below and run it. It clones into the
-                      lab&apos;s own folder, which is where the lab looks.</li>
-                    <li>Leave this page open — it notices the clone within a few
-                      seconds.</li>
+                    <li>{m.clone.remoteStep1}</li>
+                    <li>{m.clone.remoteStep2}</li>
+                    <li>{m.clone.remoteStep3}</li>
                   </ol>
                   <div className="command-block">
                     <pre>{checkout.command}</pre>
@@ -1515,14 +2279,10 @@ export function Audit() {
                       onClick={() => copyText(checkout.command)}
                       type="button"
                     >
-                      {copied ? "Copied" : "Copy"}
+                      {copied ? m.clone.copied : m.clone.copy}
                     </button>
                   </div>
-                  <p className="muted small">
-                    It lands in <code>{checkout.host_path}</code>. Nothing else in the
-                    command needs changing — the destination is already the path the
-                    lab watches.
-                  </p>
+                  <p className="muted small">{m.clone.landsIn(checkout.host_path)}</p>
                 </>
               ) : null}
             </>
@@ -1537,14 +2297,14 @@ export function Audit() {
 
           {checkout && !cloneFound ? (
             <div className="panel-actions">
-              <Spinner label="Watching for the clone" />
+              <Spinner label={m.clone.watchingForClone} />
               <button
                 className="ghost"
                 disabled={busy !== ""}
                 onClick={() => void refreshCheckout()}
                 type="button"
               >
-                Check now
+                {m.clone.checkNow}
               </button>
             </div>
           ) : null}
@@ -1553,20 +2313,12 @@ export function Audit() {
             <div className="callout callout--warning">
               <IconAlert size={16} />
               <div>
-                <p>
-                  Still nothing at <code>{checkout.host_path}</code>. The lab watches
-                  that one directory, so a clone made anywhere else — or under another
-                  name — never shows up here.
-                </p>
+                <p>{m.clone.stillNothing(checkout.host_path)}</p>
                 <p className="muted small">
                   {checkout.exists
-                    ? "The directory is there but it is not a git repository."
-                    : "The directory does not exist yet."}{" "}
-                  If the clone is still running, leave this open. Otherwise:{" "}
-                  {checkouts.length
-                    ? "attach one of the clones already on disk"
-                    : "copy a folder you already have"}{" "}
-                  from the tabs above. The page keeps watching either way.
+                    ? m.clone.diagnosisDirExists
+                    : m.clone.diagnosisDirMissing}
+                  {m.clone.diagnosisTail(checkouts.length > 0)}
                 </p>
               </div>
             </div>
@@ -1576,55 +2328,40 @@ export function Audit() {
             <>
               <div className="fact-row">
                 <div>
-                  <span className="muted small">HEAD</span>
+                  <span className="muted small">{m.clone.head}</span>
                   <code>{checkout.head.slice(0, 8) || "—"}</code>
                 </div>
                 <div>
-                  <span className="muted small">Branch</span>
+                  <span className="muted small">{m.clone.branch}</span>
                   <code>{checkout.branch || "—"}</code>
                 </div>
                 {pinnedCommit ? (
                   <div>
-                    <span className="muted small">Pinned</span>
+                    <span className="muted small">{m.clone.pinned}</span>
                     <code>{pinnedCommit.slice(0, 8)}</code>
                   </div>
                 ) : null}
               </div>
 
               {checkout.attached ? (
-                <p className="muted small">
-                  Reading <code>{checkout.host_path}</code> — a clone that was already
-                  there, not one named after this repository. That is deliberate; the
-                  pin and every run read this directory.
-                </p>
+                <p className="muted small">{m.clone.readingAttached(checkout.host_path)}</p>
               ) : null}
 
               {checkout.dirty ? (
                 <div className="callout callout--warning">
                   <IconAlert size={16} />
-                  <span>
-                    {checkout.dirty_files} uncommitted file(s) in your clone. They never
-                    enter a run: the runner clones git objects, so it sees the committed
-                    tree and nothing else. Commit them if the run is meant to see them.
-                  </span>
+                  <span>{m.clone.dirtyFiles(checkout.dirty_files)}</span>
                 </div>
               ) : null}
 
               {checkout.pin_is_stale ? (
                 <div className="callout callout--warning">
                   <IconAlert size={16} />
-                  <span>
-                    Your clone has moved since the pin. Re-pin to measure the commit you
-                    are looking at, or leave it to keep comparing against the old one.
-                  </span>
+                  <span>{m.clone.pinStale}</span>
                 </div>
               ) : null}
 
-              <p className="muted">
-                Pinning freezes the repository at the commit your clone is on. Every run,
-                report and derived case reads that commit until somebody re-pins, so two
-                experiments a week apart compare agents rather than a moving branch.
-              </p>
+              <p className="muted">{m.clone.pinExplainer}</p>
 
               <div className="panel-actions">
                 <button
@@ -1634,10 +2371,10 @@ export function Audit() {
                   type="button"
                 >
                   {busy === "pin"
-                    ? "Pinning…"
+                    ? m.clone.pinning
                     : pinnedCommit
-                      ? "Pin this commit again"
-                      : "Pin this commit"}
+                      ? m.clone.pinAgain
+                      : m.clone.pin}
                 </button>
                 {pinnedCommit ? (
                   <button
@@ -1648,7 +2385,7 @@ export function Audit() {
                     }}
                     type="button"
                   >
-                    Harness audit
+                    {m.clone.harnessAudit}
                     <IconArrowRight size={15} />
                   </button>
                 ) : null}
@@ -1662,7 +2399,7 @@ export function Audit() {
         <>
           <div className="panel">
             <div className="panel-head">
-              <h2>What harness this repository ships</h2>
+              <h2>{m.audit.whatHarnessTitle}</h2>
               {repositoryAudit ? (
                 <span
                   className={`badge ${
@@ -1673,52 +2410,46 @@ export function Audit() {
                         : "error"
                   }`}
                 >
-                  {repositoryAudit.status}
+                  {m.audit.statusLabel[repositoryAudit.status]}
                 </span>
               ) : null}
             </div>
-            <p className="muted">
-              The lab reads the repository at the pinned commit — rules files, skills,
-              agents, commands, hooks, CI, build files, README — and an LLM writes a
-              short report: which harness parts exist, the language, and what could be
-              tried here. Whether the wizard can continue past this step is decided
-              from that evidence, not by the model.
-            </p>
+            <p className="muted">{m.audit.whatHarnessBody}</p>
 
-            {!repositoryAudit ? <p className="muted small">Not generated yet.</p> : null}
+            {!repositoryAudit ? <p className="muted small">{m.audit.notGenerated}</p> : null}
 
             {repositoryAudit?.status === "running" ? (
-              <Spinner label="Reading the repository with the auditor" />
+              <Spinner label={m.audit.reading} />
             ) : null}
 
             {repositoryAudit?.status === "failed" ? (
-              <ErrorBanner message={repositoryAudit.error ?? "The audit failed"} />
+              <ErrorBanner message={repositoryAudit.error ?? m.audit.auditFailed} />
             ) : null}
 
             {repositoryAudit?.status === "done" ? (
               <>
                 <div className="fact-row">
                   <div>
-                    <span className="muted small">Commit</span>
+                    <span className="muted small">{m.audit.commit}</span>
                     <code>{repositoryAudit.commit.slice(0, 8)}</code>
                   </div>
                   <div>
-                    <span className="muted small">Language</span>
+                    <span className="muted small">{m.audit.language}</span>
                     <code>
                       {repositoryAudit.evidence_json.runtime?.ecosystems.join(", ") ||
-                        "not detected"}
+                        m.audit.notDetected}
                     </code>
                   </div>
                   <div>
-                    <span className="muted small">Harness</span>
+                    <span className="muted small">{m.audit.harness}</span>
                     <code>
                       {"harness_verdict" in repositoryAudit.findings_json
                         ? repositoryAudit.findings_json.harness_verdict
-                        : "unknown"}
+                        : m.audit.unknown}
                     </code>
                   </div>
                   <div>
-                    <span className="muted small">Runner</span>
+                    <span className="muted small">{m.audit.runner}</span>
                     <code>
                       {(repositoryAudit.evidence_json.runtime?.capabilities ?? [])
                         .filter(
@@ -1732,31 +2463,31 @@ export function Audit() {
                             ? `${capability.runtime} ${capability.version}`
                             : capability.runtime
                         )
-                        .join(" · ") || "not probed"}
+                        .join(" · ") || m.audit.notProbed}
                     </code>
                   </div>
                   {repositoryAudit.evidence_json.case_plan ? (
                     <div>
-                      <span className="muted small">Coverage</span>
+                      <span className="muted small">{m.audit.coverageLabel}</span>
                       <code>
-                        {COVERAGE_LABEL[repositoryAudit.evidence_json.case_plan.coverage]}
+                        {m.coverage[repositoryAudit.evidence_json.case_plan.coverage]}
                         {" · "}
-                        {repositoryAudit.evidence_json.case_plan.runnable} runnable ·{" "}
-                        {repositoryAudit.evidence_json.case_plan.static} static ·{" "}
-                        {repositoryAudit.evidence_json.case_plan.blocked} blocked
+                        {m.audit.runnableCount(repositoryAudit.evidence_json.case_plan.runnable)} ·{" "}
+                        {m.audit.staticCount(repositoryAudit.evidence_json.case_plan.static)} ·{" "}
+                        {m.audit.blockedCount(repositoryAudit.evidence_json.case_plan.blocked)}
                       </code>
                     </div>
                   ) : null}
                   {repositoryAudit.evidence_json.harness_checks?.length ? (
                     <div>
-                      <span className="muted small">Checks</span>
+                      <span className="muted small">{m.audit.checksLabel}</span>
                       <code>
                         {checkTally(repositoryAudit.evidence_json.harness_checks)}
                       </code>
                     </div>
                   ) : null}
                   <div>
-                    <span className="muted small">Model</span>
+                    <span className="muted small">{m.audit.model}</span>
                     <code>{repositoryAudit.auditor_model}</code>
                   </div>
                 </div>
@@ -1768,14 +2499,10 @@ export function Audit() {
                     <IconAlert size={16} />
                     <div>
                       <p>
-                        <strong>The lab cannot run cases here.</strong>{" "}
+                        <strong>{m.audit.unsupportedTitle}</strong>{" "}
                         {repositoryAudit.evidence_json.next_step_reason}
                       </p>
-                      <p className="muted small">
-                        This is the end of the wizard for this repository — the runner
-                        cannot execute anything in its runtime. The readiness and gate
-                        check below still work; neither one runs an agent.
-                      </p>
+                      <p className="muted small">{m.audit.unsupportedTail}</p>
                     </div>
                   </div>
                 ) : null}
@@ -1786,7 +2513,7 @@ export function Audit() {
                       <IconAlert size={16} />
                       <div>
                         <p>
-                          <strong>No harness to evaluate.</strong>{" "}
+                          <strong>{m.audit.noHarnessTitle}</strong>{" "}
                           {repositoryAudit.evidence_json.next_step_reason}
                         </p>
                       </div>
@@ -1797,7 +2524,7 @@ export function Audit() {
                         onClick={() => setStep("case")}
                         type="button"
                       >
-                        Continue anyway — compare it against the lab harness
+                        {m.audit.continueAnyway}
                       </button>
                     </div>
                   </>
@@ -1809,7 +2536,7 @@ export function Audit() {
                       <IconCheck size={16} />
                       <div>
                         <p>
-                          <strong>This repository can be evaluated here.</strong>{" "}
+                          <strong>{m.audit.canEvaluateTitle}</strong>{" "}
                           {repositoryAudit.evidence_json.next_step_reason}
                         </p>
                       </div>
@@ -1820,7 +2547,7 @@ export function Audit() {
                         onClick={() => setStep("case")}
                         type="button"
                       >
-                        Choose or create a case
+                        {m.audit.chooseOrCreateCase}
                         <IconArrowRight size={15} />
                       </button>
                     </div>
@@ -1832,15 +2559,15 @@ export function Audit() {
                   <div className="fact-row">
                     {repositoryAudit.findings_json.shape ? (
                       <div>
-                        <span className="muted small">Harness shape</span>
+                        <span className="muted small">{m.audit.shapeLabel}</span>
                         <code>
-                          {SHAPE_LABEL[repositoryAudit.findings_json.shape.shape] ??
+                          {m.shape[repositoryAudit.findings_json.shape.shape] ??
                             repositoryAudit.findings_json.shape.shape}
                           {repositoryAudit.findings_json.shape.install_entry
                             ? ` · ${repositoryAudit.findings_json.shape.install_entry}${
                                 repositoryAudit.findings_json.shape.install_entry_exists
                                   ? ""
-                                  : " (not found)"
+                                  : ` (${m.audit.notFound})`
                               }`
                             : ""}
                         </code>
@@ -1848,17 +2575,20 @@ export function Audit() {
                     ) : null}
                     {repositoryAudit.findings_json.shape?.unit_of_work ? (
                       <div>
-                        <span className="muted small">Unit of work</span>
+                        <span className="muted small">{m.audit.unitOfWork}</span>
                         <code>{repositoryAudit.findings_json.shape.unit_of_work}</code>
                       </div>
                     ) : null}
                     {repositoryAudit.evidence_json.health_at_pin ? (
                       <div>
-                        <span className="muted small">Suite at the pin</span>
+                        <span className="muted small">{m.audit.suiteAtPin}</span>
                         <code>
                           {repositoryAudit.evidence_json.health_at_pin.status}
                           {repositoryAudit.evidence_json.health_at_pin.counts
-                            ? ` · ${repositoryAudit.evidence_json.health_at_pin.counts.passed} passed, ${repositoryAudit.evidence_json.health_at_pin.counts.failed} failed`
+                            ? ` · ${m.audit.passedFailed(
+                                repositoryAudit.evidence_json.health_at_pin.counts.passed,
+                                repositoryAudit.evidence_json.health_at_pin.counts.failed
+                              )}`
                             : ""}
                           {repositoryAudit.evidence_json.health_at_pin.reason
                             ? ` — ${repositoryAudit.evidence_json.health_at_pin.reason}`
@@ -1872,22 +2602,18 @@ export function Audit() {
                 {repositoryAudit.findings_json.component_map &&
                 repositoryAudit.findings_json.component_map.length > 0 ? (
                   <>
-                    <h3>Component map</h3>
-                    <p className="muted small">
-                      What each harness component claims, what would show it helped,
-                      and whether this lab can evaluate it. Evaluability is the lab's
-                      verdict from declared services, not the auditor's opinion.
-                    </p>
+                    <h3>{m.audit.componentMapTitle}</h3>
+                    <p className="muted small">{m.audit.componentMapBody}</p>
                     <div className="table-scroll">
                       <table className="data-table">
                         <thead>
                           <tr>
-                            <th>Component</th>
-                            <th>Claims</th>
-                            <th>Observable</th>
-                            <th>Lab counterpart</th>
-                            <th>Needs</th>
-                            <th>Evaluable</th>
+                            <th>{m.audit.colComponent}</th>
+                            <th>{m.audit.colClaims}</th>
+                            <th>{m.audit.colObservable}</th>
+                            <th>{m.audit.colLabCounterpart}</th>
+                            <th>{m.audit.colNeeds}</th>
+                            <th>{m.audit.colEvaluable}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1915,7 +2641,7 @@ export function Audit() {
                                   className={row.evaluable_here ? "badge ok" : "badge warn"}
                                   title={row.evaluable_reason || undefined}
                                 >
-                                  {row.evaluable_here ? "yes" : "no"}
+                                  {row.evaluable_here ? m.audit.yes : m.audit.no}
                                 </span>
                                 {!row.evaluable_here && row.evaluable_reason ? (
                                   <div className="muted small">{row.evaluable_reason}</div>
@@ -1930,7 +2656,7 @@ export function Audit() {
                     repositoryAudit.findings_json.warnings.length > 0 ? (
                       <details>
                         <summary className="muted small">
-                          {repositoryAudit.findings_json.warnings.length} contract warning(s)
+                          {m.audit.warningsSummary(repositoryAudit.findings_json.warnings.length)}
                         </summary>
                         <ul className="check-list">
                           {repositoryAudit.findings_json.warnings.map((warning) => (
@@ -1947,7 +2673,7 @@ export function Audit() {
                 {repositoryAudit.findings_json.cases &&
                 repositoryAudit.findings_json.cases.length > 0 ? (
                   <>
-                    <h3>Cases the auditor proposes</h3>
+                    <h3>{m.audit.casesProposedTitle}</h3>
                     <ul className="check-list">
                       {repositoryAudit.findings_json.cases.map((proposal) => {
                         const cases = repositoryAudit.evidence_json.case_plan?.cases;
@@ -1957,18 +2683,18 @@ export function Audit() {
                           <li key={proposal.title}>
                             <strong>{proposal.title}</strong>{" "}
                             <span className="badge">
-                              {MEASURES_LABEL[proposal.measures] ?? proposal.measures}
+                              {m.measures[proposal.measures] ?? proposal.measures}
                             </span>
                             {planned && !dropped ? (
                               <>
                                 {" "}
                                 <span className={CASE_STATUS_BADGE[planned.status]}>
-                                  {CASE_STATUS_LABEL[planned.status]}
+                                  {m.caseStatus[planned.status]}
                                 </span>
                               </>
                             ) : null}
                             <p className="small muted">
-                              Exercises:{" "}
+                              {m.audit.exercises}{" "}
                               {proposal.exercises.length > 0
                                 ? proposal.exercises.map((name) => (
                                     <code key={name}>{name} </code>
@@ -1976,14 +2702,14 @@ export function Audit() {
                                 : "—"}
                             </p>
                             {dropped ? (
-                              <p className="small warn">Dropped: {proposal.dropped_reason}</p>
+                              <p className="small warn">{m.audit.dropped(proposal.dropped_reason)}</p>
                             ) : (
                               <>
                                 {proposal.observable ? (
                                   <p className="muted">{proposal.observable}</p>
                                 ) : null}
                                 <p className="small muted">
-                                  Check:{" "}
+                                  {m.audit.check}{" "}
                                   {planned?.validation_command ? (
                                     <code>{planned.validation_command}</code>
                                   ) : (
@@ -1992,7 +2718,7 @@ export function Audit() {
                                 </p>
                                 {proposal.conditions && proposal.conditions.length > 0 ? (
                                   <p className="small muted">
-                                    Derived arms:{" "}
+                                    {m.audit.derivedArms}{" "}
                                     {proposal.conditions.map((arm) => (
                                       <span
                                         key={arm.label}
@@ -2016,7 +2742,7 @@ export function Audit() {
                                     onClick={() => seedCaseFromProposal(proposal)}
                                     type="button"
                                   >
-                                    Draft this as a case
+                                    {m.audit.draftThisAsCase}
                                   </button>
                                 ) : null}
                               </>
@@ -2031,7 +2757,7 @@ export function Audit() {
                 {repositoryAudit.findings_json.use_cases &&
                 repositoryAudit.findings_json.use_cases.length > 0 ? (
                   <>
-                    <h3>Use cases the auditor proposes</h3>
+                    <h3>{m.audit.useCasesProposedTitle}</h3>
                     <ul className="check-list">
                       {repositoryAudit.findings_json.use_cases.map((useCase, index) => {
                         // The lab's own verdict on this one case. Absent on audits
@@ -2053,19 +2779,19 @@ export function Audit() {
                               <>
                                 {" "}
                                 <span className={CASE_STATUS_BADGE[planned.status]}>
-                                  {CASE_STATUS_LABEL[planned.status]}
+                                  {m.caseStatus[planned.status]}
                                 </span>
                                 {planned.compatibility === "partial" ? (
                                   <span className="badge warn">
-                                    {planned.runtime} {planned.runtime_version} vs{" "}
-                                    {planned.required_runtime_version} — partial
+                                    {planned.runtime} {planned.runtime_version} {m.audit.vs}{" "}
+                                    {planned.required_runtime_version} — {m.audit.partial}
                                   </span>
                                 ) : null}
                               </>
                             ) : null}
                             <p className="muted">{useCase.why}</p>
                             <p className="small muted">
-                              Check:{" "}
+                              {m.audit.check}{" "}
                               {planned?.validation_command ? (
                                 <code>{planned.validation_command}</code>
                               ) : (
@@ -2101,7 +2827,7 @@ export function Audit() {
                                 }}
                                 type="button"
                               >
-                                Draft this as a case
+                                {m.audit.draftThisAsCase}
                               </button>
                             ) : null}
                           </li>
@@ -2121,24 +2847,24 @@ export function Audit() {
                 type="button"
               >
                 {busy === "repo-audit" || repositoryAudit?.status === "running"
-                  ? "Auditing…"
+                  ? m.audit.auditing
                   : repositoryAudit?.status === "done"
-                    ? "Audit again"
-                    : "Generate the audit"}
+                    ? m.audit.auditAgain
+                    : m.audit.generateAudit}
               </button>
             </div>
           </div>
 
           <div className="panel">
             <div className="panel-head">
-              <h2>What this repository already has</h2>
+              <h2>{m.audit.whatHasTitle}</h2>
               {readiness ? (
                 <span className={`badge ${readiness.ready ? "ok" : "warn"}`}>
-                  {readiness.ready ? "Ready to run" : "Not runnable yet"}
+                  {readiness.ready ? m.audit.ready : m.audit.notReady}
                 </span>
               ) : null}
             </div>
-            {busy === "readiness" ? <Spinner label="Reading the repository" /> : null}
+            {busy === "readiness" ? <Spinner label={m.audit.readingRepository} /> : null}
             {readiness ? (
               <ReadinessReportView
                 adopting={busy === "adopt"}
@@ -2153,7 +2879,7 @@ export function Audit() {
                   onClick={() => void loadReadiness()}
                   type="button"
                 >
-                  Read the repository
+                  {m.audit.readRepository}
                 </button>
               </div>
             )}
@@ -2161,23 +2887,18 @@ export function Audit() {
 
           <div className="panel">
             <div className="panel-head">
-              <h2>Gate check</h2>
+              <h2>{m.audit.gateCheckTitle}</h2>
               {gate ? (
                 <span
                   className={`badge ${
                     gate.status === "running" ? "neutral" : gate.passed ? "ok" : "error"
                   }`}
                 >
-                  {gate.status === "running" ? "Running" : gate.passed ? "ok" : "error"}
+                  {gate.status === "running" ? m.audit.gateRunning : gate.passed ? m.audit.gateOk : m.audit.gateError}
                 </span>
               ) : null}
             </div>
-            <p className="muted">
-              This runs the repository's own gate at the pinned commit with no agent in
-              the picture. It is what separates "the agent failed" from "this repository
-              does not build here" — after a green gate check, a red run is a fact about
-              the agent.
-            </p>
+            <p className="muted">{m.audit.gateBody}</p>
 
             {gateError ? (
               <div className="callout callout--warning">
@@ -2190,18 +2911,18 @@ export function Audit() {
               <>
                 <div className="fact-row">
                   <div>
-                    <span className="muted small">Commit measured</span>
+                    <span className="muted small">{m.audit.commitMeasured}</span>
                     <code>{gate.commit.slice(0, 8)}</code>
                   </div>
                   {gate.failed_phase ? (
                     <div>
-                      <span className="muted small">Failed at</span>
+                      <span className="muted small">{m.audit.failedAt}</span>
                       <code>{gate.failed_phase}</code>
                     </div>
                   ) : null}
                 </div>
                 {gate.status === "running" ? (
-                  <Spinner label="Running the repository's own gate" />
+                  <Spinner label={m.audit.runningGate} />
                 ) : null}
                 {gate.error ? (
                   <div className="callout callout--warning">
@@ -2221,7 +2942,7 @@ export function Audit() {
                         </span>
                         <code>{check.command}</code>
                         <span className="muted small">
-                          exit {check.exit_code === null ? "—" : check.exit_code}
+                          {m.audit.exit(check.exit_code === null ? "—" : String(check.exit_code))}
                         </span>
                       </div>
                       {!check.passed && check.detail ? (
@@ -2240,13 +2961,10 @@ export function Audit() {
                 onClick={() => void startGate()}
                 type="button"
               >
-                {busy === "gate" || gateRunning ? "Running…" : "Run the gate check"}
+                {busy === "gate" || gateRunning ? m.audit.running : m.audit.runGateCheck}
               </button>
             </div>
-            <p className="muted small">
-              Recommended, not required. You can go on with it red or unrun — it only
-              changes how you read the first failure.
-            </p>
+            <p className="muted small">{m.audit.gateFootnote}</p>
           </div>
         </>
       ) : null}
@@ -2255,35 +2973,35 @@ export function Audit() {
         <>
           <div className="panel">
             <div className="panel-head">
-              <h2>One case that passes</h2>
+              <h2>{m.case.title}</h2>
               <div className="tab-bar tab-bar--inline">
                 <button
                   className={`tab ${caseTab === "ai" ? "tab--active" : ""}`}
                   onClick={() => setCaseTab("ai")}
                   type="button"
                 >
-                  AI draft
+                  {m.case.tabAi}
                 </button>
                 <button
                   className={`tab ${caseTab === "history" ? "tab--active" : ""}`}
                   onClick={() => setCaseTab("history")}
                   type="button"
                 >
-                  From history
+                  {m.case.tabHistory}
                 </button>
                 <button
                   className={`tab ${caseTab === "manual" ? "tab--active" : ""}`}
                   onClick={() => setCaseTab("manual")}
                   type="button"
                 >
-                  By hand
+                  {m.case.tabManual}
                 </button>
                 <button
                   className={`tab ${caseTab === "existing" ? "tab--active" : ""}`}
                   onClick={() => setCaseTab("existing")}
                   type="button"
                 >
-                  Existing case
+                  {m.case.tabExisting}
                 </button>
               </div>
             </div>
@@ -2293,17 +3011,15 @@ export function Audit() {
                 <div className="assist-card">
                   <div className="assist-card-head">
                     <strong className="assist-card-title">
-                      <IconSparkles size={16} /> Draft it from a description
+                      <IconSparkles size={16} /> {m.case.draftFromDescription}
                     </strong>
-                    <span className="muted small">
-                      Read against <code>{targetId}</code> at the pin
-                    </span>
+                    <span className="muted small">{m.case.readAgainst(targetId)}</span>
                   </div>
                   <label>
-                    <span>Describe the scenario, in plain language</span>
+                    <span>{m.case.describeScenario}</span>
                     <textarea
                       onChange={(event) => setAiDescription(event.target.value)}
-                      placeholder="e.g. Add a retry to the billing webhook client and keep the existing tests green."
+                      placeholder={m.case.describeScenarioPlaceholder}
                       rows={3}
                       value={aiDescription}
                     />
@@ -2316,10 +3032,10 @@ export function Audit() {
                       type="button"
                     >
                       {busy === "draft" ? (
-                        <Spinner label="Drafting…" />
+                        <Spinner label={m.case.draftingLabel} />
                       ) : (
                         <>
-                          <IconSparkles size={14} /> Draft it
+                          <IconSparkles size={14} /> {m.case.draftIt}
                         </>
                       )}
                     </button>
@@ -2328,7 +3044,7 @@ export function Audit() {
                     <div className="callout callout--warning">
                       <IconAlert size={16} />
                       <div>
-                        <strong>Left out of the draft — the lab would not run these:</strong>
+                        <strong>{m.case.leftOutTitle}</strong>
                         <ul className="blocking-list dropped-list">
                           {aiDropped.map((item) => (
                             <li key={item.command}>
@@ -2343,11 +3059,7 @@ export function Audit() {
                   ) : null}
                 </div>
                 {caseFields}
-                <p className="muted">
-                  The command is the whole measurement: it runs after the agent stops, and
-                  its exit code is the pass. Read it before saving — a check that cannot
-                  fail reports a pass that means nothing.
-                </p>
+                <p className="muted">{m.case.measurementNote}</p>
                 <div className="panel-actions">
                   <button
                     className="primary"
@@ -2360,7 +3072,7 @@ export function Audit() {
                     onClick={() => void saveCase(slugify(caseName), true)}
                     type="button"
                   >
-                    {busy === "case" ? "Saving…" : "Create the case"}
+                    {busy === "case" ? m.case.saving : m.case.createCase}
                   </button>
                 </div>
               </>
@@ -2368,11 +3080,7 @@ export function Audit() {
 
             {caseTab === "history" ? (
               <>
-                <p className="muted">
-                  Proposed from the repository's own history — real changes this team
-                  already made, each one a commit that paired a source change with a test
-                  change. Read the prompt before creating the case.
-                </p>
+                <p className="muted">{m.case.historyBody}</p>
                 <div className="panel-actions">
                   <button
                     className="secondary"
@@ -2380,19 +3088,18 @@ export function Audit() {
                     onClick={() => void derive()}
                     type="button"
                   >
-                    {busy === "derive" ? "Reading history…" : "Read the history"}
+                    {busy === "derive" ? m.case.readingHistory : m.case.readHistory}
                   </button>
                   {candidates ? (
                     <span className="badge neutral">
-                      {candidates.candidates.length} of {candidates.scanned} commits
-                      scanned
+                      {m.case.scannedOf(candidates.candidates.length, candidates.scanned)}
                     </span>
                   ) : null}
                 </div>
                 {candidates && candidates.candidates.length === 0 ? (
                   <EmptyState
-                    description="No commit in the scanned range paired a source change with a test change, which is what makes a commit reproducible as a case."
-                    title="Nothing derivable here."
+                    description={m.case.nothingDerivableDescription}
+                    title={m.case.nothingDerivableTitle}
                   />
                 ) : null}
                 <ul className="candidate-list">
@@ -2402,13 +3109,13 @@ export function Audit() {
                         <strong>{candidate.subject}</strong>
                         <p className="muted">
                           <code>{candidate.commit.slice(0, 8)}</code> ·{" "}
-                          {candidate.source_files.length} source ·{" "}
-                          {candidate.test_files.length} test
+                          {m.case.sourceCount(candidate.source_files.length)} ·{" "}
+                          {m.case.testCount(candidate.test_files.length)}
                         </p>
                         <pre className="candidate-prompt">{candidate.suggested_prompt}</pre>
                       </div>
                       {caseId === candidate.suggested_case_id ? (
-                        <span className="badge ok">Case in the catalog</span>
+                        <span className="badge ok">{m.case.inCatalog}</span>
                       ) : (
                         <button
                           className="secondary"
@@ -2416,7 +3123,7 @@ export function Audit() {
                           onClick={() => void acceptCandidate(candidate)}
                           type="button"
                         >
-                          Create this case
+                          {m.case.createThisCase}
                         </button>
                       )}
                     </li>
@@ -2429,7 +3136,7 @@ export function Audit() {
               <>
                 <div className="form-grid">
                   <label>
-                    <span>Case id</span>
+                    <span>{m.case.caseId}</span>
                     <input
                       onChange={(event) => setManualCaseId(event.target.value)}
                       placeholder="acme-billing-retry"
@@ -2450,7 +3157,7 @@ export function Audit() {
                     onClick={() => void saveCase(slugify(manualCaseId), false)}
                     type="button"
                   >
-                    {busy === "case" ? "Saving…" : "Create the case"}
+                    {busy === "case" ? m.case.saving : m.case.createCase}
                   </button>
                 </div>
               </>
@@ -2458,14 +3165,11 @@ export function Audit() {
 
             {caseTab === "existing" ? (
               <>
-                <p className="muted">
-                  A case already in the catalog, run against this repository. Nothing new
-                  is created — the case keeps whichever repository it came from.
-                </p>
+                <p className="muted">{m.case.existingBody}</p>
                 {existingCases.length === 0 ? (
                   <EmptyState
-                    description="The catalog is empty, or it could not be read. Draft one on the first tab instead."
-                    title="No cases to reuse."
+                    description={m.case.noCasesDescription}
+                    title={m.case.noCasesTitle}
                   />
                 ) : (
                   <ul className="pick-list">
@@ -2483,7 +3187,7 @@ export function Audit() {
                           </strong>
                           <span className="muted">
                             <code>{record.case_id}</code> —{" "}
-                            {record.description || "No description"}
+                            {record.description || m.case.noDescription}
                           </span>
                         </button>
                       </li>
@@ -2500,12 +3204,12 @@ export function Audit() {
                 onClick={() => setStep("experiment")}
                 type="button"
               >
-                Run an experiment
+                {m.case.runExperiment}
                 <IconArrowRight size={15} />
               </button>
             </div>
             <p className="muted small">
-              Selected for the experiment: {caseIds.length > 0 ? caseIds.join(", ") : "none yet"}
+              {m.case.selectedForExperiment(caseIds.length > 0 ? caseIds.join(", ") : m.case.noneYet)}
             </p>
           </div>
         </>
@@ -2514,7 +3218,7 @@ export function Audit() {
       {step === "experiment" ? (
         <div className="panel">
           <div className="panel-head">
-            <h2>Run an experiment against this repository</h2>
+            <h2>{m.experiment.title}</h2>
             {experimentId ? <span className="badge neutral">{experimentId}</span> : null}
           </div>
 
@@ -2530,7 +3234,7 @@ export function Audit() {
                   {record.name || record.case_id}
                   {record.type ? <span className="badge pick-tag">{record.type}</span> : null}
                   {record.origin_target_id === targetId ? (
-                    <span className="badge pick-tag">from this repository</span>
+                    <span className="badge pick-tag">{m.experiment.fromThisRepository}</span>
                   ) : null}
                 </span>
               </label>
@@ -2546,10 +3250,8 @@ export function Audit() {
                 type="radio"
               />
               <span>
-                <strong>This repository only — one arm</strong>
-                <p className="muted small">
-                  No control arm: it answers whether the case passes here at all.
-                </p>
+                <strong>{m.experiment.oneArmTitle}</strong>
+                <p className="muted small">{m.experiment.oneArmBody}</p>
               </span>
             </label>
             <label className="checkbox full">
@@ -2560,25 +3262,16 @@ export function Audit() {
                 type="radio"
               />
               <span>
-                <strong>This repository vs the lab harness (ml-python-base)</strong>
-                <p className="muted small">
-                  Control: the repository's own governance, nothing injected.
-                  Treatment: the lab's harness (the synced ml-python-base release)
-                  injected into the same workspace at the same commit. The only thing
-                  that varies is the harness.
-                </p>
+                <strong>{m.experiment.twoArmTitle}</strong>
+                <p className="muted small">{m.experiment.twoArmBody}</p>
               </span>
             </label>
           </div>
-          <p className="muted small">
-            A <em>bare</em> arm (empty workspace, governance masked) only exists in the
-            lab venue — it cannot be put inside somebody else's repository (ADR-0049).
-            The honest control here is the repository as it is.
-          </p>
+          <p className="muted small">{m.experiment.bareArmNote}</p>
 
           <div className="form-grid">
             <label className="field">
-              <span>Repetitions</span>
+              <span>{m.experiment.repetitions}</span>
               <select
                 onChange={(event) => setRepetitions(Number(event.target.value))}
                 value={repetitions}
@@ -2589,13 +3282,10 @@ export function Audit() {
                   </option>
                 ))}
               </select>
-              <span className="muted small">
-                1 is exploratory; 5 or more per arm is what a comparison needs to be
-                trusted.
-              </span>
+              <span className="muted small">{m.experiment.repetitionsHint}</span>
             </label>
             <label className="field">
-              <span>Harness</span>
+              <span>{m.experiment.harnessLabel}</span>
               <select
                 onChange={(event) =>
                   chooseHarness(event.target.value as (typeof HARNESS_OPTIONS)[number])
@@ -2610,10 +3300,10 @@ export function Audit() {
               </select>
               {HOST_HARNESSES.has(harness) ? (
                 <span className="muted small">
-                  Runs the {harness} CLI with its native auth.{" "}
+                  {m.experiment.hostHarnessHintPrefix(harness)}
                   {harness === "claude"
-                    ? "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host)."
-                    : "Needs host mode — run make app-host."}
+                    ? m.experiment.hostHarnessHintClaude
+                    : m.experiment.hostHarnessHintOther}
                 </span>
               ) : null}
             </label>
@@ -2621,9 +3311,9 @@ export function Audit() {
               <ModelPicker
                 allowNone={HOST_HARNESSES.has(harness)}
                 directErrors={directErrors}
-                label="Executor model"
+                label={m.experiment.executorModel}
                 nativeOptions={HARNESS_NATIVE_MODELS[harness]}
-                noneLabel="CLI default"
+                noneLabel={m.experiment.cliDefault}
                 onChange={setExecutorModel}
                 onReload={
                   HOST_HARNESSES.has(harness) ? undefined : () => void loadModels(true)
@@ -2634,13 +3324,13 @@ export function Audit() {
               >
                 <small className="muted">
                   {HOST_HARNESSES.has(harness)
-                    ? `Pick a model the ${harness} CLI accepts, or leave it on its own default.`
-                    : "opencode has no default of its own — this run needs a model named here."}
+                    ? m.experiment.pickModelHint(harness)
+                    : m.experiment.noDefaultHint}
                 </small>
               </ModelPicker>
             </div>
             <label className="field">
-              <span>Max steps</span>
+              <span>{m.experiment.maxSteps}</span>
               <select
                 onChange={(event) => setMaxSteps(Number(event.target.value))}
                 value={maxSteps}
@@ -2666,7 +3356,7 @@ export function Audit() {
               onClick={() => void runExperiment()}
               type="button"
             >
-              {busy === "run-experiment" ? "Queueing…" : "Create and launch"}
+              {busy === "run-experiment" ? m.experiment.queueing : m.experiment.createAndLaunch}
               <IconArrowRight size={15} />
             </button>
           </div>
@@ -2676,10 +3366,10 @@ export function Audit() {
                 className="button-link"
                 to={`/evaluate/experiments?experiment=${experimentId}`}
               >
-                Watch the run
+                {m.experiment.watchRun}
               </Link>
               <Link className="button-link" to={`/evidence/repositories/${targetId}`}>
-                Open this repository's workbench
+                {m.experiment.openWorkbench}
               </Link>
             </div>
           ) : null}

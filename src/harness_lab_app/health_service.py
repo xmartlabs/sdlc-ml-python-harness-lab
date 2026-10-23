@@ -223,7 +223,39 @@ def _check_docker(facts: dict[str, Any]) -> tuple[str, str, list[str]]:
             "runs cannot start. Use Build runner image to build it here.",
             [],
         )
-    return OK, f"Docker {facts.get('docker_version', '?')}, runner image present.", []
+    cli = str(facts.get("claude_cli_version") or "")
+    stale = _claude_cli_floor(cli)
+    if stale:
+        return (
+            WARN,
+            f"Runner image has Claude Code {cli}; the current Claude models need "
+            f"{stale} or newer, so claude runs on them are refused. Use Build "
+            "runner image to rebuild it with the version Dockerfile.runner pins.",
+            [],
+        )
+    suffix = f", Claude Code {cli}" if cli else ""
+    return (
+        OK,
+        f"Docker {facts.get('docker_version', '?')}, runner image present{suffix}.",
+        [],
+    )
+
+
+def _claude_cli_floor(cli_version: str) -> str | None:
+    """The highest CLI floor among current Claude models that ``cli_version`` misses."""
+    from harness_lab_app.native_models import NATIVE_MODELS, claude_cli_too_old
+
+    floors = [
+        required
+        for model in NATIVE_MODELS["claude"]
+        if model["generation"] == "current"
+        and (required := claude_cli_too_old(model["id"], cli_version))
+    ]
+    return (
+        max(floors, key=lambda v: tuple(int(p) for p in v.split(".")))
+        if floors
+        else None
+    )
 
 
 def _check_skills_drift() -> tuple[str, str, list[str]]:

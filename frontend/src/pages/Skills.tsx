@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { defineMessages, useMessages } from "../i18n";
 import type {
   HarnessSkill,
   StagedSkillFileRecord,
@@ -30,6 +32,274 @@ const STATUS_BADGE: Record<StagedSkillRecord["status"], string> = {
   archived: "badge"
 };
 
+const MESSAGES = defineMessages({
+  en: {
+    eyebrow: "Skills",
+    title: "Skill catalog & staging",
+    lede: "Governed skills the harness ships with, plus a staging area to trial new skills before promoting them.",
+    howto: {
+      heading: "How to validate a new skill",
+      step1: (
+        <>
+          Import a skill from a URL, upload an archive, or write one below. Multi-file skills
+          (<code>scripts/</code>, <code>references/</code>) are supported.
+        </>
+      ),
+      step2: (
+        <>
+          Test it from <strong>New evaluation</strong> (factor <strong>Add skills</strong>:
+          baseline vs baseline + this skill) or from <strong>Validate your tool</strong>.
+          Advanced → Runs also lists it under <strong>Experimental</strong>.
+        </>
+      ),
+      step3: (
+        <>
+          Compare the two runs (validation score, attribution, LLM audit verdicts) — they have
+          different <code>condition_hash</code> values, so they are distinct arms.
+        </>
+      ),
+      step4: (
+        <>
+          If it earns its keep, <strong>Promote</strong>: the files land in
+          <code> .github/skills-external/</code> and views re-sync. Review and commit manually.
+        </>
+      )
+    },
+    importSection: {
+      heading: "Import a skill",
+      hint: "nothing is written until you confirm the preview",
+      sourceLabel: "Source — a URL, an install command, or the owner/repo shorthand",
+      sourcePlaceholder:
+        "https://github.com/anthropics/skills/tree/main/skills/frontend-design",
+      sourceHelp: (
+        <>
+          Also accepted: <code>https://skills.sh/owner/repo/my-skill</code>,{" "}
+          <code>npx skills add &lt;repo&gt; --skill &lt;name&gt;</code>,{" "}
+          <code>owner/repo</code>, a link to a <code>SKILL.md</code>, or a
+          .zip/.tar.gz archive. A repo holding several skills will ask which one.
+        </>
+      ),
+      refLabel: "Ref (branch, tag or commit — optional)",
+      refPlaceholder: "main",
+      nameOverrideLabel: "Name override (optional)",
+      nameOverridePlaceholder: "taken from the frontmatter",
+      fetching: "Fetching...",
+      previewImport: "Preview import",
+      uploadLabel: "or upload a .md / .zip / .tar.gz",
+      choicesIntro: (count: number) => (
+        <>
+          <strong>This source holds {count} skills.</strong> Pick the one to stage — nothing is
+          written until you confirm its preview.
+        </>
+      ),
+      noDescription: "no description",
+      cancel: "Cancel",
+      metaLine: (sourceKind: string, ref: string, fileCount: number, bytes: string) =>
+        `${sourceKind}${ref ? ` @ ${ref}` : ""} · ${fileCount} file${fileCount === 1 ? "" : "s"} · ${bytes}`,
+      replaceLabel: "Replace the staged skill if it already exists (discards local edits)",
+      importing: "Importing...",
+      importBtn: "Import"
+    },
+    form: {
+      editHeading: (name: string) => `Edit staged skill: ${name}`,
+      newHeading: "New staged skill",
+      newInstead: "New instead",
+      nameLabel: "Name (kebab-case)",
+      namePlaceholder: "my-new-skill",
+      descriptionLabel: "Description",
+      descriptionPlaceholder: "When should an agent reach for this skill?",
+      contentLabel: "SKILL.md content",
+      addFilePlaceholder: "scripts/run.sh",
+      addFile: "Add file",
+      binaryAsset: (path: ReactNode, size: string) => (
+        <>
+          {path} is a binary asset ({size}); it is stored and materialized but cannot be edited
+          here.
+        </>
+      ),
+      saving: "Saving...",
+      saveFile: (path: string) => `Save ${path}`,
+      saveDescription: "Save description",
+      createSkill: "Create staged skill"
+    },
+    staged: {
+      heading: "Staged skills",
+      total: (count: number) => `${count} total`,
+      emptyTitle: "No staged skills yet.",
+      emptyDescription:
+        "Import one above, then A/B it from New evaluation (factor 'Add skills') or Validate your tool.",
+      noDescription: "no description",
+      edit: "Edit",
+      promote: "Promote",
+      archive: "Archive",
+      unarchive: "Unarchive",
+      delete: "Delete",
+      status: {
+        draft: "draft",
+        testing: "testing",
+        promoted: "promoted",
+        archived: "archived"
+      },
+      confirmDelete: (name: string) => `Delete staged skill "${name}"? This cannot be undone.`,
+      confirmPromote: (name: string) =>
+        `Promote "${name}" into .github/skills-external/? Files are written and views re-synced, but nothing is committed — you review and commit.`,
+      confirmDeleteFile: (path: string, skill: string) => `Delete "${path}" from ${skill}?`
+    },
+    governed: {
+      heading: "Governed catalog",
+      count: (count: number) => `${count} skills (read-only)`,
+      noDescription: "no description",
+      editVia: "edit via .github/skills + make sync-skills"
+    },
+    notices: {
+      savedDescription: (name: string) =>
+        `Saved ${name}. Runs that include it will pick up the new content (and a new condition_hash).`,
+      created: (name: string) =>
+        `Created ${name}. Test it from New evaluation (factor 'Add skills': baseline vs baseline + this skill) or from Validate your tool. Advanced → Runs also lists it under Experimental.`,
+      promoted: (name: string, count: number, nextSteps: string) =>
+        `Promoted ${name}: wrote ${count} file${count === 1 ? "" : "s"}. ${nextSteps}`,
+      savedFile: (path: string) =>
+        `Saved ${path}. The skill's content hash changed, so it is a new arm.`,
+      imported: (name: string, count: number) =>
+        `Imported ${name} (${count} file${count === 1 ? "" : "s"}). Test it from New evaluation (factor 'Add skills': baseline vs baseline + this skill) or from Validate your tool. Advanced → Runs also lists it under Experimental.`
+    }
+  },
+  es: {
+    eyebrow: "Skills",
+    title: "Catálogo y preparación de skills",
+    lede: "Skills gobernadas que vienen con el arnés, más un área de preparación para probar skills nuevas antes de promoverlas.",
+    howto: {
+      heading: "Cómo validar una skill nueva",
+      step1: (
+        <>
+          Importá una skill desde una URL, subí un archivo comprimido, o escribí una abajo. Se
+          admiten skills multiarchivo (<code>scripts/</code>, <code>references/</code>).
+        </>
+      ),
+      step2: (
+        <>
+          Probala desde <strong>Nueva evaluación</strong> (factor <strong>Agregar skills</strong>:
+          base vs. base + esta skill) o desde <strong>Validá tu herramienta</strong>.
+          Avanzado → Corridas también la lista en <strong>Experimental</strong>.
+        </>
+      ),
+      step3: (
+        <>
+          Comparó las dos corridas (puntaje de validación, atribución, veredictos de auditoría
+          LLM) — tienen valores de <code>condition_hash</code> distintos, así que son brazos
+          distintos.
+        </>
+      ),
+      step4: (
+        <>
+          Si se gana su lugar, <strong>Promové</strong>: los archivos quedan en
+          <code> .github/skills-external/</code> y las vistas se resincronizan. Revisá y
+          commiteá manualmente.
+        </>
+      )
+    },
+    importSection: {
+      heading: "Importar una skill",
+      hint: "nada se escribe hasta que confirmes la vista previa",
+      sourceLabel: "Origen — una URL, un comando de instalación, o el atajo owner/repo",
+      sourcePlaceholder:
+        "https://github.com/anthropics/skills/tree/main/skills/frontend-design",
+      sourceHelp: (
+        <>
+          También se acepta: <code>https://skills.sh/owner/repo/my-skill</code>,{" "}
+          <code>npx skills add &lt;repo&gt; --skill &lt;name&gt;</code>,{" "}
+          <code>owner/repo</code>, un link a un <code>SKILL.md</code>, o un
+          archivo .zip/.tar.gz. Un repo con varias skills va a preguntar cuál.
+        </>
+      ),
+      refLabel: "Ref (rama, tag o commit — opcional)",
+      refPlaceholder: "main",
+      nameOverrideLabel: "Nombre alternativo (opcional)",
+      nameOverridePlaceholder: "tomado del frontmatter",
+      fetching: "Buscando...",
+      previewImport: "Previsualizar importación",
+      uploadLabel: "o subí un .md / .zip / .tar.gz",
+      choicesIntro: (count: number) => (
+        <>
+          <strong>Este origen tiene {count} skills.</strong> Elegí la que querés preparar —
+          nada se escribe hasta que confirmes su vista previa.
+        </>
+      ),
+      noDescription: "sin descripción",
+      cancel: "Cancelar",
+      metaLine: (sourceKind: string, ref: string, fileCount: number, bytes: string) =>
+        `${sourceKind}${ref ? ` @ ${ref}` : ""} · ${fileCount} archivo${fileCount === 1 ? "" : "s"} · ${bytes}`,
+      replaceLabel: "Reemplazar la skill preparada si ya existe (descarta las ediciones locales)",
+      importing: "Importando...",
+      importBtn: "Importar"
+    },
+    form: {
+      editHeading: (name: string) => `Editar skill preparada: ${name}`,
+      newHeading: "Nueva skill preparada",
+      newInstead: "Nueva en su lugar",
+      nameLabel: "Nombre (kebab-case)",
+      namePlaceholder: "my-new-skill",
+      descriptionLabel: "Descripción",
+      descriptionPlaceholder: "¿Cuándo debería un agente recurrir a esta skill?",
+      contentLabel: "Contenido de SKILL.md",
+      addFilePlaceholder: "scripts/run.sh",
+      addFile: "Agregar archivo",
+      binaryAsset: (path: ReactNode, size: string) => (
+        <>
+          {path} es un archivo binario ({size}); se almacena y materializa pero no se puede
+          editar acá.
+        </>
+      ),
+      saving: "Guardando...",
+      saveFile: (path: string) => `Guardar ${path}`,
+      saveDescription: "Guardar descripción",
+      createSkill: "Crear skill preparada"
+    },
+    staged: {
+      heading: "Skills preparadas",
+      total: (count: number) => `${count} en total`,
+      emptyTitle: "Todavía no hay skills preparadas.",
+      emptyDescription:
+        "Importá una arriba y probala con A/B desde Nueva evaluación (factor 'Agregar skills') o Validá tu herramienta.",
+      noDescription: "sin descripción",
+      edit: "Editar",
+      promote: "Promover",
+      archive: "Archivar",
+      unarchive: "Desarchivar",
+      delete: "Eliminar",
+      status: {
+        draft: "borrador",
+        testing: "en prueba",
+        promoted: "promovida",
+        archived: "archivada"
+      },
+      confirmDelete: (name: string) =>
+        `¿Eliminar la skill preparada "${name}"? Esto no se puede deshacer.`,
+      confirmPromote: (name: string) =>
+        `¿Promover "${name}" a .github/skills-external/? Los archivos se escriben y las vistas se resincronizan, pero nada se commitea — vos revisás y commiteás.`,
+      confirmDeleteFile: (path: string, skill: string) => `¿Eliminar "${path}" de ${skill}?`
+    },
+    governed: {
+      heading: "Catálogo gobernado",
+      count: (count: number) => `${count} skills (de solo lectura)`,
+      noDescription: "sin descripción",
+      editVia: "editar vía .github/skills + make sync-skills"
+    },
+    notices: {
+      savedDescription: (name: string) =>
+        `Se guardó ${name}. Las corridas que la incluyan van a tomar el contenido nuevo (y un condition_hash nuevo).`,
+      created: (name: string) =>
+        `Se creó ${name}. Probala desde Nueva evaluación (factor 'Agregar skills': base vs. base + esta skill) o desde Validá tu herramienta. Avanzado → Corridas también la lista en Experimental.`,
+      promoted: (name: string, count: number, nextSteps: string) =>
+        `Se promovió ${name}: se escribieron ${count} archivo${count === 1 ? "" : "s"}. ${nextSteps}`,
+      savedFile: (path: string) =>
+        `Se guardó ${path}. El hash de contenido de la skill cambió, así que es un brazo nuevo.`,
+      imported: (name: string, count: number) =>
+        `Se importó ${name} (${count} archivo${count === 1 ? "" : "s"}). Probala desde Nueva evaluación (factor 'Agregar skills': base vs. base + esta skill) o desde Validá tu herramienta. Avanzado → Corridas también la lista en Experimental.`
+    }
+  }
+});
+
 function formatBytes(size: number): string {
   if (size < 1024) {
     return `${size} B`;
@@ -56,6 +326,7 @@ function isChoices(value: ImportResult): value is StagedSkillImportChoices {
 }
 
 export function Skills() {
+  const m = useMessages(MESSAGES);
   const [governed, setGoverned] = useState<HarnessSkill[]>([]);
   const [staged, setStaged] = useState<StagedSkillRecord[]>([]);
   const [name, setName] = useState("");
@@ -128,9 +399,7 @@ export function Skills() {
     action
       .then((saved) => {
         setNotice(
-          editing
-            ? `Saved ${saved.name}. Runs that include it will pick up the new content (and a new condition_hash).`
-            : `Created ${saved.name}. Test it from New evaluation (factor 'Add skills': baseline vs baseline + this skill) or from Validate your tool. Advanced → Runs also lists it under Experimental.`
+          editing ? m.notices.savedDescription(saved.name) : m.notices.created(saved.name)
         );
         resetForm();
         refresh();
@@ -159,7 +428,7 @@ export function Skills() {
   };
 
   const handleDelete = (skill: StagedSkillRecord) => {
-    if (!window.confirm(`Delete staged skill "${skill.name}"? This cannot be undone.`)) {
+    if (!window.confirm(m.staged.confirmDelete(skill.name))) {
       return;
     }
     setBusy(true);
@@ -177,11 +446,7 @@ export function Skills() {
   };
 
   const handlePromote = (skill: StagedSkillRecord) => {
-    if (
-      !window.confirm(
-        `Promote "${skill.name}" into .github/skills-external/? Files are written and views re-synced, but nothing is committed — you review and commit.`
-      )
-    ) {
+    if (!window.confirm(m.staged.confirmPromote(skill.name))) {
       return;
     }
     setBusy(true);
@@ -190,9 +455,7 @@ export function Skills() {
     api
       .promoteStagedSkill(skill.name)
       .then((result) => {
-        setNotice(
-          `Promoted ${skill.name}: wrote ${result.written.length} file(s). ${result.next_steps}`
-        );
+        setNotice(m.notices.promoted(skill.name, result.written.length, result.next_steps));
         refresh();
       })
       .catch((err: Error) => setError(err.message))
@@ -280,9 +543,7 @@ export function Skills() {
         );
     action
       .then(() => {
-        setNotice(
-          `Imported ${preview.name} (${preview.files.length} file(s)). Test it from New evaluation (factor 'Add skills': baseline vs baseline + this skill) or from Validate your tool. Advanced → Runs also lists it under Experimental.`
-        );
+        setNotice(m.notices.imported(preview.name, preview.files.length));
         cancelPreview();
         setImportUrl("");
         setImportRef("");
@@ -308,7 +569,7 @@ export function Skills() {
     api
       .writeStagedSkillFile(editing, activePath, fileContent)
       .then(() => {
-        setNotice(`Saved ${activePath}. The skill's content hash changed, so it is a new arm.`);
+        setNotice(m.notices.savedFile(activePath));
         loadFiles(editing, activePath);
         refresh();
       })
@@ -334,7 +595,7 @@ export function Skills() {
   };
 
   const handleDeleteFile = (path: string) => {
-    if (!editing || !window.confirm(`Delete "${path}" from ${editing}?`)) {
+    if (!editing || !window.confirm(m.staged.confirmDeleteFile(path, editing))) {
       return;
     }
     setBusy(true);
@@ -352,74 +613,53 @@ export function Skills() {
     <section className="page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Skills</p>
-          <h1>Skill catalog &amp; staging</h1>
-          <p className="lede">
-            Governed skills the harness ships with, plus a staging area to trial new skills
-            before promoting them.
-          </p>
+          <p className="eyebrow">{m.eyebrow}</p>
+          <h1>{m.title}</h1>
+          <p className="lede">{m.lede}</p>
         </div>
       </header>
 
       <section className="panel">
         <div className="panel-head">
-          <h2>How to validate a new skill</h2>
+          <h2>{m.howto.heading}</h2>
           <span className="muted">docs/guide-skill-validation.md</span>
         </div>
         <ol className="skills-howto">
-          <li>
-            Import a skill from a URL, upload an archive, or write one below. Multi-file skills
-            (<code>scripts/</code>, <code>references/</code>) are supported.
-          </li>
-          <li>
-            Test it from <strong>New evaluation</strong> (factor <strong>Add skills</strong>:
-            baseline vs baseline + this skill) or from <strong>Validate your tool</strong>.
-            Advanced → Runs also lists it under <strong>Experimental</strong>.
-          </li>
-          <li>
-            Compare the two runs (validation score, attribution, LLM audit verdicts) — they have
-            different <code>condition_hash</code> values, so they are distinct arms.
-          </li>
-          <li>
-            If it earns its keep, <strong>Promote</strong>: the files land in
-            <code> .github/skills-external/</code> and views re-sync. Review and commit manually.
-          </li>
+          <li>{m.howto.step1}</li>
+          <li>{m.howto.step2}</li>
+          <li>{m.howto.step3}</li>
+          <li>{m.howto.step4}</li>
         </ol>
       </section>
 
       <section className="panel">
         <div className="panel-head">
-          <h2>Import a skill</h2>
-          <span className="muted">nothing is written until you confirm the preview</span>
+          <h2>{m.importSection.heading}</h2>
+          <span className="muted">{m.importSection.hint}</span>
         </div>
         <div className="form-grid">
           <label className="full">
-            <span>Source — a URL, an install command, or the owner/repo shorthand</span>
+            <span>{m.importSection.sourceLabel}</span>
             <input
               onChange={(event) => setImportUrl(event.target.value)}
-              placeholder="https://github.com/anthropics/skills/tree/main/skills/frontend-design"
+              placeholder={m.importSection.sourcePlaceholder}
               value={importUrl}
             />
-            <small className="muted">
-              Also accepted: <code>https://skills.sh/owner/repo/my-skill</code>,{" "}
-              <code>npx skills add &lt;repo&gt; --skill &lt;name&gt;</code>,{" "}
-              <code>owner/repo</code>, a link to a <code>SKILL.md</code>, or a
-              .zip/.tar.gz archive. A repo holding several skills will ask which one.
-            </small>
+            <small className="muted">{m.importSection.sourceHelp}</small>
           </label>
           <label>
-            <span>Ref (branch, tag or commit — optional)</span>
+            <span>{m.importSection.refLabel}</span>
             <input
               onChange={(event) => setImportRef(event.target.value)}
-              placeholder="main"
+              placeholder={m.importSection.refPlaceholder}
               value={importRef}
             />
           </label>
           <label>
-            <span>Name override (optional)</span>
+            <span>{m.importSection.nameOverrideLabel}</span>
             <input
               onChange={(event) => setImportName(event.target.value)}
-              placeholder="taken from the frontmatter"
+              placeholder={m.importSection.nameOverridePlaceholder}
               value={importName}
             />
           </label>
@@ -431,10 +671,10 @@ export function Skills() {
             onClick={() => handlePreviewUrl("")}
             type="button"
           >
-            {busy ? "Fetching..." : "Preview import"}
+            {busy ? m.importSection.fetching : m.importSection.previewImport}
           </button>
           <label className="upload-label">
-            <span>or upload a .md / .zip / .tar.gz</span>
+            <span>{m.importSection.uploadLabel}</span>
             <input
               accept=".md,.zip,.tar,.tar.gz,.tgz"
               disabled={busy}
@@ -452,10 +692,7 @@ export function Skills() {
 
         {choices ? (
           <div className="import-preview">
-            <p>
-              <strong>This source holds {choices.length} skills.</strong> Pick the one
-              to stage — nothing is written until you confirm its preview.
-            </p>
+            <p>{m.importSection.choicesIntro(choices.length)}</p>
             <ul className="choice-list">
               {choices.map((choice) => (
                 <li key={choice.path || choice.name}>
@@ -467,7 +704,7 @@ export function Skills() {
                   >
                     <strong>{choice.name}</strong>
                     <span className="muted">
-                      {choice.description || choice.path || "no description"}
+                      {choice.description || choice.path || m.importSection.noDescription}
                     </span>
                   </button>
                 </li>
@@ -475,7 +712,7 @@ export function Skills() {
             </ul>
             <div className="panel-actions">
               <button disabled={busy} onClick={cancelPreview} type="button">
-                Cancel
+                {m.importSection.cancel}
               </button>
             </div>
           </div>
@@ -484,12 +721,15 @@ export function Skills() {
         {preview ? (
           <div className="import-preview">
             <p>
-              <strong>{preview.name}</strong> — {preview.description || "no description"}
+              <strong>{preview.name}</strong> — {preview.description || m.importSection.noDescription}
             </p>
             <p className="muted">
-              {preview.source_kind}
-              {preview.source_ref ? ` @ ${preview.source_ref}` : ""} ·{" "}
-              {preview.files.length} file(s) · {formatBytes(preview.total_bytes)}
+              {m.importSection.metaLine(
+                preview.source_kind,
+                preview.source_ref,
+                preview.files.length,
+                formatBytes(preview.total_bytes)
+              )}
             </p>
             {preview.warnings.length > 0 ? (
               <ul className="warning-list">
@@ -511,14 +751,14 @@ export function Skills() {
                 onChange={(event) => setReplace(event.target.checked)}
                 type="checkbox"
               />
-              <span>Replace the staged skill if it already exists (discards local edits)</span>
+              <span>{m.importSection.replaceLabel}</span>
             </label>
             <div className="panel-actions">
               <button className="primary" disabled={busy} onClick={handleConfirmImport} type="button">
-                {busy ? "Importing..." : "Import"}
+                {busy ? m.importSection.importing : m.importSection.importBtn}
               </button>
               <button disabled={busy} onClick={cancelPreview} type="button">
-                Cancel
+                {m.importSection.cancel}
               </button>
             </div>
           </div>
@@ -527,34 +767,34 @@ export function Skills() {
 
       <section className="panel">
         <div className="panel-head">
-          <h2>{editing ? `Edit staged skill: ${editing}` : "New staged skill"}</h2>
+          <h2>{editing ? m.form.editHeading(editing) : m.form.newHeading}</h2>
           {editing ? (
             <button onClick={resetForm} type="button">
-              New instead
+              {m.form.newInstead}
             </button>
           ) : null}
         </div>
         <div className="form-grid">
           <label>
-            <span>Name (kebab-case)</span>
+            <span>{m.form.nameLabel}</span>
             <input
               disabled={editing !== null}
               onChange={(event) => setName(event.target.value)}
-              placeholder="my-new-skill"
+              placeholder={m.form.namePlaceholder}
               value={name}
             />
           </label>
           <label>
-            <span>Description</span>
+            <span>{m.form.descriptionLabel}</span>
             <input
               onChange={(event) => setDescription(event.target.value)}
-              placeholder="When should an agent reach for this skill?"
+              placeholder={m.form.descriptionPlaceholder}
               value={description}
             />
           </label>
           {editing ? null : (
             <label className="full">
-              <span>SKILL.md content</span>
+              <span>{m.form.contentLabel}</span>
               <textarea
                 className="skill-editor"
                 onChange={(event) => setContent(event.target.value)}
@@ -589,7 +829,7 @@ export function Skills() {
               <div className="file-add">
                 <input
                   onChange={(event) => setNewFilePath(event.target.value)}
-                  placeholder="scripts/run.sh"
+                  placeholder={m.form.addFilePlaceholder}
                   value={newFilePath}
                 />
                 <button
@@ -597,15 +837,14 @@ export function Skills() {
                   onClick={handleAddFile}
                   type="button"
                 >
-                  Add file
+                  {m.form.addFile}
                 </button>
               </div>
             </div>
             <div className="file-editor">
               {activeFile && activeFile.encoding === "base64" ? (
                 <p className="muted">
-                  <code>{activeFile.path}</code> is a binary asset ({formatBytes(activeFile.size)});
-                  it is stored and materialized but cannot be edited here.
+                  {m.form.binaryAsset(<code>{activeFile.path}</code>, formatBytes(activeFile.size))}
                 </p>
               ) : (
                 <textarea
@@ -627,10 +866,10 @@ export function Skills() {
                 onClick={handleSaveFile}
                 type="button"
               >
-                {busy ? "Saving..." : `Save ${activePath || "file"}`}
+                {busy ? m.form.saving : m.form.saveFile(activePath || "file")}
               </button>
               <button disabled={busy} onClick={handleSave} type="button">
-                Save description
+                {m.form.saveDescription}
               </button>
             </>
           ) : (
@@ -640,7 +879,7 @@ export function Skills() {
               onClick={handleSave}
               type="button"
             >
-              {busy ? "Saving..." : "Create staged skill"}
+              {busy ? m.form.saving : m.form.createSkill}
             </button>
           )}
         </div>
@@ -650,21 +889,18 @@ export function Skills() {
 
       <section className="panel">
         <div className="panel-head">
-          <h2>Staged skills</h2>
-          <span className="muted">{staged.length} total</span>
+          <h2>{m.staged.heading}</h2>
+          <span className="muted">{m.staged.total(staged.length)}</span>
         </div>
         {staged.length === 0 ? (
-          <EmptyState
-            description="Import one above, then A/B it from New evaluation (factor 'Add skills') or Validate your tool."
-            title="No staged skills yet."
-          />
+          <EmptyState description={m.staged.emptyDescription} title={m.staged.emptyTitle} />
         ) : (
           <div className="table table--staged">
             {staged.map((skill) => (
               <div className="table-row harness-row" key={skill.name}>
                 <span className="harness-name">
                   <strong>{skill.name}</strong>
-                  <small>{skill.description || "no description"}</small>
+                  <small>{skill.description || m.staged.noDescription}</small>
                   {skill.source_url ? (
                     <small className="muted">
                       {skill.source_kind}: {skill.source_url}
@@ -672,14 +908,14 @@ export function Skills() {
                     </small>
                   ) : null}
                 </span>
-                <span className={STATUS_BADGE[skill.status]}>{skill.status}</span>
+                <span className={STATUS_BADGE[skill.status]}>{m.staged.status[skill.status]}</span>
                 <span className="row-actions">
                   <button disabled={busy} onClick={() => handleEdit(skill)} type="button">
-                    Edit
+                    {m.staged.edit}
                   </button>
                   {skill.status !== "promoted" ? (
                     <button disabled={busy} onClick={() => handlePromote(skill)} type="button">
-                      Promote
+                      {m.staged.promote}
                     </button>
                   ) : null}
                   <button
@@ -689,10 +925,10 @@ export function Skills() {
                     }
                     type="button"
                   >
-                    {skill.status === "archived" ? "Unarchive" : "Archive"}
+                    {skill.status === "archived" ? m.staged.unarchive : m.staged.archive}
                   </button>
                   <button disabled={busy} onClick={() => handleDelete(skill)} type="button">
-                    Delete
+                    {m.staged.delete}
                   </button>
                 </span>
               </div>
@@ -703,18 +939,18 @@ export function Skills() {
 
       <section className="panel">
         <div className="panel-head">
-          <h2>Governed catalog</h2>
-          <span className="muted">{governed.length} skills (read-only)</span>
+          <h2>{m.governed.heading}</h2>
+          <span className="muted">{m.governed.count(governed.length)}</span>
         </div>
         <div className="table">
           {governed.map((skill) => (
             <div className="table-row harness-row" key={skill.name}>
               <span className="harness-name">
                 <strong>{skill.name}</strong>
-                <small>{skill.description || "no description"}</small>
+                <small>{skill.description || m.governed.noDescription}</small>
               </span>
               <span className="badge neutral">{skill.kind}</span>
-              <span className="muted">edit via .github/skills + make sync-skills</span>
+              <span className="muted">{m.governed.editVia}</span>
             </div>
           ))}
         </div>

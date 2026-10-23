@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { defineMessages, useMessages } from "../i18n";
 import type { RunEventRecord } from "../types";
 
 type LogViewerProps = {
@@ -16,6 +17,25 @@ type ParsedLine = {
 
 const LEVELS = ["ALL", "INFO", "WARN", "ERROR"] as const;
 type LevelFilter = (typeof LEVELS)[number];
+
+const MESSAGES = defineMessages({
+  en: {
+    all: (count: number) => `All (${count})`,
+    levelCount: (level: string, count: number) => `${level} (${count})`,
+    hideFields: "Hide fields",
+    showFields: "Show fields",
+    noEventsYet: "No log events yet.",
+    noLinesForFilter: (filter: string) => `No ${filter} lines.`
+  },
+  es: {
+    all: (count: number) => `Todas (${count})`,
+    levelCount: (level: string, count: number) => `${level} (${count})`,
+    hideFields: "Ocultar campos",
+    showFields: "Mostrar campos",
+    noEventsYet: "Todavía no hay eventos de log.",
+    noLinesForFilter: (filter: string) => `No hay líneas ${filter}.`
+  }
+});
 
 // opencode --print-logs emits logfmt lines:
 //   timestamp=2026-07-07T23:58:14.255Z level=INFO run=xx message="creating instance" directory=/app
@@ -73,6 +93,7 @@ function levelClass(level: string): string {
 }
 
 export function LogViewer({ events }: LogViewerProps) {
+  const m = useMessages(MESSAGES);
   const [filter, setFilter] = useState<LevelFilter>("ALL");
   const [showExtras, setShowExtras] = useState(false);
 
@@ -94,7 +115,7 @@ export function LogViewer({ events }: LogViewerProps) {
   }, [parsed, filter]);
 
   if (events.length === 0) {
-    return <p className="muted">No log events yet.</p>;
+    return <p className="muted">{m.noEventsYet}</p>;
   }
 
   return (
@@ -107,7 +128,7 @@ export function LogViewer({ events }: LogViewerProps) {
             onClick={() => setFilter(level)}
             type="button"
           >
-            {level === "ALL" ? `All (${parsed.length})` : `${level} (${counts[level] ?? 0})`}
+            {level === "ALL" ? m.all(parsed.length) : m.levelCount(level, counts[level] ?? 0)}
           </button>
         ))}
         <button
@@ -115,12 +136,12 @@ export function LogViewer({ events }: LogViewerProps) {
           onClick={() => setShowExtras((current) => !current)}
           type="button"
         >
-          {showExtras ? "Hide fields" : "Show fields"}
+          {showExtras ? m.hideFields : m.showFields}
         </button>
       </div>
       <div className="run-console log-viewer-lines">
         {visible.length === 0 ? (
-          <p className="muted">No {filter} lines.</p>
+          <p className="muted">{m.noLinesForFilter(filter)}</p>
         ) : (
           visible.map((line) => (
             <div className={`run-console-line ${levelClass(line.level)}`} key={line.id}>

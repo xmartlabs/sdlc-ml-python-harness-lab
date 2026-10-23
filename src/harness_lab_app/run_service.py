@@ -379,6 +379,8 @@ class RunService:
                     "CLAUDE_CODE_OAUTH_TOKEN"
                 ) or read_env_file_value("ANTHROPIC_API_KEY")
                 if token:
+                    self._check_claude_cli_version(config.executor_model)
+                    self._check_claude_model_served(config.executor_model)
                     return
                 raise RunPreflightError(
                     "The 'claude' harness in Docker needs credentials in .env: "
@@ -684,6 +686,80 @@ class RunService:
                 "server-wide OLLAMA_CONTEXT_LENGTH, so raise it there (for "
                 f"example OLLAMA_CONTEXT_LENGTH={MIN_CONTEXT_TOKENS}), restart "
                 "Ollama, and retry."
+            )
+
+    def _check_claude_cli_version(self, executor_model: str | None) -> None:
+        """Refuse a model the runner image's Claude Code is too old to address.
+
+        The version is read from the image's ``claude-code.version`` label, which
+        the worker reports with its other facts — no container is started. Runs
+        K-006/007 of 2026-10-23 died in a second on the API's
+        ``claude_code_version_too_old``: the image's unpinned install had stayed
+        on a cached 2.1.197.
+        """
+        from harness_lab_app.health_service import worker_facts
+        from harness_lab_app.native_models import claude_cli_too_old
+
+        model = (executor_model or "").strip()
+        if not model:
+            return
+        facts = worker_facts()
+        cli_version = str(facts.get("claude_cli_version") or "") if facts else ""
+        required = claude_cli_too_old(model, cli_version)
+        if required:
+            raise RunPreflightError(
+                f"The runner image has Claude Code {cli_version}, and '{model}' "
+                f"needs {required} or newer — every run would be refused by the "
+                "API on its first request. Rebuild the runner image "
+                "(Health → Build runner image, or `docker compose build runner`) "
+                "with CLAUDE_CODE_VERSION in Dockerfile.runner at or above it."
+            )
+
+    def _gateway_routing(self) -> dict[str, Any] | None:
+        """The gateway's model cards, or ``None`` when it cannot be asked.
+
+        ``None`` covers no gateway configured, the probe disabled, and a gateway
+        that did not answer — unknown, never "serves nothing". Extracted for
+        tests.
+        """
+        if os.environ.get("HARNESS_LAB_DISABLE_GATEWAY_PROBE"):
+            return None
+        from harness_lab_app.executors import rewrite_localhost
+        from harness_lab_app.gateway_models import fetch_gateway_routing_cached
+
+        base = read_env_file_value("GATEWAY_BASE_URL") or ""
+        token = read_env_file_value("GATEWAY_TOKEN") or ""
+        if not base or not token or token in _PLACEHOLDER_TOKENS:
+            return None
+        if Path("/.dockerenv").exists():
+            base = rewrite_localhost(base, get_settings().docker_host_alias)
+        return fetch_gateway_routing_cached(base, token) or None
+
+    def _check_claude_model_served(self, executor_model: str | None) -> None:
+        """Refuse a Claude model the gateway has no card for.
+
+        In Docker the claude CLI reaches Anthropic through the lab's gateway
+        (``ANTHROPIC_BASE_URL``, see ``executors.claude_settings_env``), so a
+        model without a card dies on its first request with "Invalid model
+        name" — eight runs of claude-haiku-5-5 did exactly that on 2026-10-23.
+        An empty model is the CLI's own default and is left alone.
+        """
+        model = (executor_model or "").strip()
+        if not model:
+            return
+        routing = self._gateway_routing()
+        if routing is None:
+            return
+        from harness_lab_app.native_models import gateway_coverage, served_claude_models
+
+        coverage = gateway_coverage("claude", routing)
+        if model in coverage and coverage[model] is False:
+            served = served_claude_models(routing)
+            raise RunPreflightError(
+                f"The gateway has no card for '{model}', so every run would die "
+                "on its first request with 'Invalid model name'. Add the model to "
+                "the gateway, or pick one it serves"
+                + (f": {', '.join(served)}." if served else ".")
             )
 
     def _check_routable(self, executor: str) -> None:

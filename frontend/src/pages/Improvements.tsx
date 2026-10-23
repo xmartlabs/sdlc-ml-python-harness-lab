@@ -5,9 +5,133 @@ import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { formatRunDate } from "../dates";
 import { IssueFormView } from "../components/IssueFormView";
+import { defineMessages, useMessages } from "../i18n";
 import type { GroupIssueResult, SavedProposalRecord } from "../types";
 
 const ALL = "all";
+
+const MESSAGES = defineMessages({
+  en: {
+    eyebrow: "Improvements",
+    title: "Saved proposals",
+    lede: (
+      <>
+        Proposals saved from individual runs (the &quot;Save&quot; button in the Improvement
+        proposals panel). Select one or several — they may come from different runs — and
+        generate a single combined, sanitised issue for ml-python-base.
+      </>
+    ),
+    emptyTitle: "No saved proposals yet.",
+    emptyDescription:
+      'Run a case, generate its improvement proposals, and use the panel\'s "Save" button to bring them here.',
+    worklist: "Worklist",
+    selectedCount: (selected: number, total: number) => `${selected} of ${total} selected`,
+    proposalCount: (n: number) => `${n} proposal${n === 1 ? "" : "s"}`,
+    filterRepo: "Filter by repository",
+    repoAll: "repo: all",
+    filterKind: "Filter by kind",
+    kindAll: "kind: all",
+    filterCase: "Filter by case",
+    caseAll: "case: all",
+    filterHarness: "Filter by harness",
+    harnessAll: "harness: all",
+    harnessTooltip:
+      "The tool that drove the harness — it decides whether an issue touches CLAUDE.md, opencode, or the shared .github/ layer.",
+    recurrentTooltip: (min: number) =>
+      `Only themes proposed from ${min} or more distinct runs (same kind and target).`,
+    recurrentOnly: "recurrent only",
+    selectAtLeastOne: "Select at least one proposal with the checkboxes.",
+    generating: "Generating…",
+    generateCombined: (n: number) => `Generate combined issue (${n})`,
+    synthesising:
+      "Synthesising a combined, sanitised issue (this runs an LLM on the server and can take 15 to 40 seconds).",
+    selectAllVisible: "Select all visible",
+    selectProposal: (title: string) => `Select ${title}`,
+    colProposal: "Proposal",
+    colKindTarget: "Kind · target",
+    colRepo: "Repo",
+    colHarness: "Harness",
+    colRunCase: "Run · case",
+    colDateTemplate: "Date · template",
+    colStatus: "Status",
+    recurrentBadgeTooltip: (count: number) =>
+      `The same kind and target were proposed from ${count} distinct runs — repeated evidence, a good issue candidate.`,
+    recurrentBadge: (count: number) => `recurrent ×${count}`,
+    harnessBadgeTooltip: (harness: string) =>
+      `Harness: ${harness} — a generated issue would target its adapter, or .github/ if the selection mixes harnesses.`,
+    templateTooltip: (parts: (string | null)[]) =>
+      parts.filter(Boolean).join(" · ") || "No template metadata",
+    templateLabel: (template: string) => `template: ${template}`,
+    fingerprintLabel: (fingerprint: string) => `fingerprint: ${fingerprint}`,
+    status: { saved: "saved", issued: "issued" },
+    issueLink: "issue ↗",
+    remove: "Remove",
+    noMatch: "No proposal matches the current filters.",
+    combinedHeading: "Combined issue (ml-python-base)",
+    combinedCount: (proposals: number, runs: number) =>
+      `${proposals} proposal${proposals === 1 ? "" : "s"} · ${runs} run${runs === 1 ? "" : "s"}`
+  },
+  es: {
+    eyebrow: "Mejoras",
+    title: "Propuestas guardadas",
+    lede: (
+      <>
+        Propuestas guardadas desde corridas individuales (el botón &quot;Guardar&quot; del
+        panel de propuestas de mejora). Elegí una o varias — pueden venir de corridas
+        distintas — y generá un único issue combinado y saneado para ml-python-base.
+      </>
+    ),
+    emptyTitle: "Todavía no hay propuestas guardadas.",
+    emptyDescription:
+      'Corré un caso, generá sus propuestas de mejora, y usá el botón "Guardar" del panel para traerlas acá.',
+    worklist: "Lista de trabajo",
+    selectedCount: (selected: number, total: number) => `${selected} de ${total} seleccionadas`,
+    proposalCount: (n: number) => `${n} propuesta${n === 1 ? "" : "s"}`,
+    filterRepo: "Filtrar por repositorio",
+    repoAll: "repo: todos",
+    filterKind: "Filtrar por tipo",
+    kindAll: "tipo: todos",
+    filterCase: "Filtrar por caso",
+    caseAll: "caso: todos",
+    filterHarness: "Filtrar por arnés",
+    harnessAll: "arnés: todos",
+    harnessTooltip:
+      "La herramienta que condujo el arnés — decide si un issue toca CLAUDE.md, opencode, o la capa compartida .github/.",
+    recurrentTooltip: (min: number) =>
+      `Solo temas propuestos desde ${min} o más corridas distintas (mismo tipo y objetivo).`,
+    recurrentOnly: "solo recurrentes",
+    selectAtLeastOne: "Seleccioná al menos una propuesta con los checkboxes.",
+    generating: "Generando…",
+    generateCombined: (n: number) => `Generar issue combinado (${n})`,
+    synthesising:
+      "Sintetizando un issue combinado y saneado (esto corre un LLM en el servidor y puede tardar entre 15 y 40 segundos).",
+    selectAllVisible: "Seleccionar todas las visibles",
+    selectProposal: (title: string) => `Seleccionar ${title}`,
+    colProposal: "Propuesta",
+    colKindTarget: "Tipo · objetivo",
+    colRepo: "Repo",
+    colHarness: "Arnés",
+    colRunCase: "Corrida · caso",
+    colDateTemplate: "Fecha · plantilla",
+    colStatus: "Estado",
+    recurrentBadgeTooltip: (count: number) =>
+      `El mismo tipo y objetivo se propusieron desde ${count} corridas distintas — evidencia repetida, buen candidato a issue.`,
+    recurrentBadge: (count: number) => `recurrente ×${count}`,
+    harnessBadgeTooltip: (harness: string) =>
+      `Arnés: ${harness} — un issue generado apuntaría a su adaptador, o a .github/ si la selección mezcla arneses.`,
+    templateTooltip: (parts: (string | null)[]) =>
+      parts.filter(Boolean).join(" · ") || "Sin metadatos de plantilla",
+    templateLabel: (template: string) => `plantilla: ${template}`,
+    fingerprintLabel: (fingerprint: string) => `huella: ${fingerprint}`,
+    status: { saved: "guardada", issued: "emitida" },
+    issueLink: "issue ↗",
+    remove: "Quitar",
+    noMatch: "Ninguna propuesta coincide con los filtros actuales.",
+    combinedHeading: "Issue combinado (ml-python-base)",
+    combinedCount: (proposals: number, runs: number) =>
+      `${proposals} propuesta${proposals === 1 ? "" : "s"} · ${runs} corrida${runs === 1 ? "" : "s"}`
+  }
+});
 
 // A proposal theme is "recurrent" when the same kind+target was proposed from
 // at least this many distinct runs — repeated evidence, not one-off noise.
@@ -43,6 +167,7 @@ function shortFingerprint(fingerprint: string): string {
 // any subset (across runs/cases) and synthesize ONE combined sanitized issue
 // for ml-python-base — the group counterpart of the per-run card in RunDetail.
 export function Improvements() {
+  const m = useMessages(MESSAGES);
   const [proposals, setProposals] = useState<SavedProposalRecord[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -174,42 +299,32 @@ export function Improvements() {
     <section className="page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Improvements</p>
-          <h1>Saved proposals</h1>
-          <p className="lede">
-            Proposals saved from individual runs (the "Save" button in the Improvement
-            proposals panel). Select one or several — they may come from different runs —
-            and generate a single combined, sanitised issue for ml-python-base.
-          </p>
+          <p className="eyebrow">{m.eyebrow}</p>
+          <h1>{m.title}</h1>
+          <p className="lede">{m.lede}</p>
         </div>
       </header>
       {loadError ? <ErrorBanner message={loadError} onDismiss={() => setLoadError(null)} /> : null}
       {proposals !== null && proposals.length === 0 ? (
-        <EmptyState
-          title="No saved proposals yet."
-          description={
-            "Run a case, generate its improvement proposals, and use the " +
-            'panel\'s "Save" button to bring them here.'
-          }
-        />
+        <EmptyState title={m.emptyTitle} description={m.emptyDescription} />
       ) : null}
       {proposals !== null && proposals.length > 0 ? (
         <section className="panel">
           <div className="panel-head">
-            <h2>Worklist</h2>
+            <h2>{m.worklist}</h2>
             <span className="muted">
               {selected.size > 0
-                ? `${selected.size} of ${visible.length} selected`
-                : `${visible.length} proposal(s)`}
+                ? m.selectedCount(selected.size, visible.length)
+                : m.proposalCount(visible.length)}
             </span>
           </div>
           <div className="improvements-toolbar">
             <select
-              aria-label="Filter by repository"
+              aria-label={m.filterRepo}
               onChange={(e) => setRepoFilter(e.target.value)}
               value={repoFilter}
             >
-              <option value={ALL}>repo: all</option>
+              <option value={ALL}>{m.repoAll}</option>
               {distinct(proposals.map((p) => p.repo)).map((repo) => (
                 <option key={repo} value={repo}>
                   {repo.split("/").pop()}
@@ -217,11 +332,11 @@ export function Improvements() {
               ))}
             </select>
             <select
-              aria-label="Filter by kind"
+              aria-label={m.filterKind}
               onChange={(e) => setKindFilter(e.target.value)}
               value={kindFilter}
             >
-              <option value={ALL}>kind: all</option>
+              <option value={ALL}>{m.kindAll}</option>
               {distinct(proposals.map((p) => p.kind)).map((kind) => (
                 <option key={kind} value={kind}>
                   {kind}
@@ -229,11 +344,11 @@ export function Improvements() {
               ))}
             </select>
             <select
-              aria-label="Filter by case"
+              aria-label={m.filterCase}
               onChange={(e) => setCaseFilter(e.target.value)}
               value={caseFilter}
             >
-              <option value={ALL}>case: all</option>
+              <option value={ALL}>{m.caseAll}</option>
               {distinct(proposals.map((p) => p.case)).map((caseId) => (
                 <option key={caseId} value={caseId}>
                   {caseId}
@@ -241,77 +356,63 @@ export function Improvements() {
               ))}
             </select>
             <select
-              aria-label="Filter by harness"
+              aria-label={m.filterHarness}
               onChange={(e) => setHarnessFilter(e.target.value)}
-              title="The tool that drove the harness — it decides whether an issue touches CLAUDE.md, opencode, or the shared .github/ layer."
+              title={m.harnessTooltip}
               value={harnessFilter}
             >
-              <option value={ALL}>harness: all</option>
+              <option value={ALL}>{m.harnessAll}</option>
               {distinct(proposals.map((p) => p.harness)).map((harness) => (
                 <option key={harness} value={harness}>
                   {harness}
                 </option>
               ))}
             </select>
-            <label
-              className="switch"
-              title={`Only themes proposed from ${RECURRENCE_MIN_RUNS} or more distinct runs (same kind and target).`}
-            >
+            <label className="switch" title={m.recurrentTooltip(RECURRENCE_MIN_RUNS)}>
               <input
                 checked={onlyRecurrent}
                 onChange={(e) => setOnlyRecurrent(e.target.checked)}
                 type="checkbox"
               />
-              <span>recurrent only</span>
+              <span>{m.recurrentOnly}</span>
             </label>
             <span className="toolbar-spacer" />
             <button
               className="primary"
               disabled={generating || selected.size === 0}
               onClick={handleGenerate}
-              title={
-                selected.size === 0
-                  ? "Select at least one proposal with the checkboxes."
-                  : undefined
-              }
+              title={selected.size === 0 ? m.selectAtLeastOne : undefined}
               type="button"
             >
-              {generating
-                ? "Generating…"
-                : `Generate combined issue (${selected.size})`}
+              {generating ? m.generating : m.generateCombined(selected.size)}
             </button>
           </div>
-          {generating ? (
-            <p className="muted">
-              Synthesising a combined, sanitised issue (this runs an LLM on the
-              server and can take 15 to 40 seconds).
-            </p>
-          ) : null}
+          {generating ? <p className="muted">{m.synthesising}</p> : null}
           <div className="table-scroll">
             <div className="table table--improvements">
               <div className="table-row table-head">
                 <span>
                   <input
-                    aria-label="Select all visible"
+                    aria-label={m.selectAllVisible}
                     checked={allVisibleSelected}
                     onChange={toggleAllVisible}
                     type="checkbox"
                   />
                 </span>
-                <span>Proposal</span>
-                <span>Kind · target</span>
-                <span>Repo</span>
-                <span>Harness</span>
-                <span>Run · case</span>
-                <span>Date · template</span>
-                <span>Status</span>
+                <span>{m.colProposal}</span>
+                <span>{m.colKindTarget}</span>
+                <span>{m.colRepo}</span>
+                <span>{m.colHarness}</span>
+                <span>{m.colRunCase}</span>
+                <span>{m.colDateTemplate}</span>
+                <span>{m.colStatus}</span>
                 <span />
               </div>
               {visible.map((proposal) => (
                 <div className="table-row" key={proposal.id}>
                   <span>
                     <input
-                      aria-label={`Select ${proposal.title}`}
+                      aria-label={m.selectProposal(proposal.title)}
                       checked={selected.has(proposal.id)}
                       onChange={() => toggle(proposal.id)}
                       type="checkbox"
@@ -328,9 +429,9 @@ export function Improvements() {
                     {runCount(proposal) >= RECURRENCE_MIN_RUNS ? (
                       <span
                         className="badge ok"
-                        title={`The same kind and target were proposed from ${runCount(proposal)} distinct runs — repeated evidence, a good issue candidate.`}
+                        title={m.recurrentBadgeTooltip(runCount(proposal))}
                       >
-                        recurrent ×{runCount(proposal)}
+                        {m.recurrentBadge(runCount(proposal))}
                       </span>
                     ) : null}
                     {proposal.target ? (
@@ -348,7 +449,7 @@ export function Improvements() {
                     {proposal.harness ? (
                       <span
                         className="badge neutral"
-                        title={`Harness: ${proposal.harness} — a generated issue would target its adapter, or .github/ if the selection mixes harnesses.`}
+                        title={m.harnessBadgeTooltip(proposal.harness)}
                       >
                         {proposal.harness}
                       </span>
@@ -372,18 +473,14 @@ export function Improvements() {
                     <span className="cell-date">{formatRunDate(proposal.run_created_at)}</span>
                     <small
                       className="cell-fingerprint"
-                      title={
-                        [
-                          proposal.template_version
-                            ? `template: ${proposal.template_version}`
-                            : null,
-                          proposal.template_fingerprint
-                            ? `fingerprint: ${proposal.template_fingerprint}`
-                            : null
-                        ]
-                          .filter(Boolean)
-                          .join(" · ") || "No template metadata"
-                      }
+                      title={m.templateTooltip([
+                        proposal.template_version
+                          ? m.templateLabel(proposal.template_version)
+                          : null,
+                        proposal.template_fingerprint
+                          ? m.fingerprintLabel(proposal.template_fingerprint)
+                          : null
+                      ])}
                     >
                       {proposal.template_version ||
                         shortFingerprint(proposal.template_fingerprint)}
@@ -395,7 +492,7 @@ export function Improvements() {
                         proposal.status === "issued" ? "badge ok" : "badge neutral"
                       }
                     >
-                      {proposal.status}
+                      {m.status[proposal.status]}
                     </span>
                     {proposal.created_issue_url ? (
                       <small>
@@ -404,23 +501,21 @@ export function Improvements() {
                           rel="noreferrer"
                           target="_blank"
                         >
-                          issue ↗
+                          {m.issueLink}
                         </a>
                       </small>
                     ) : null}
                   </span>
                   <span className="row-actions">
                     <button onClick={() => handleDelete(proposal.id)} type="button">
-                      Remove
+                      {m.remove}
                     </button>
                   </span>
                 </div>
               ))}
             </div>
           </div>
-          {visible.length === 0 ? (
-            <p className="muted">No proposal matches the current filters.</p>
-          ) : null}
+          {visible.length === 0 ? <p className="muted">{m.noMatch}</p> : null}
         </section>
       ) : null}
       {generateError ? (
@@ -429,10 +524,9 @@ export function Improvements() {
       {groupIssue ? (
         <section className="panel">
           <div className="panel-head">
-            <h2>Combined issue (ml-python-base)</h2>
+            <h2>{m.combinedHeading}</h2>
             <span className="muted">
-              {groupIssue.proposal_ids.length} proposal(s) ·{" "}
-              {groupIssue.source_run_ids.length} run(s)
+              {m.combinedCount(groupIssue.proposal_ids.length, groupIssue.source_run_ids.length)}
             </span>
           </div>
           <IssueFormView

@@ -274,6 +274,50 @@ def resolve_prompt_file(
     return short_name, REPO_ROOT / prompts[short_name]
 
 
+# Provider error codes and phrases worth naming on their own line when a
+# harness dies: the raw error can be kilobytes long (LiteLLM echoes it with its
+# fallback table), and the worker keeps only the last 1000 characters.
+_CAUSE_MARKERS = (
+    "claude_code_version_too_old",
+    "Invalid model name",
+    "model_not_found",
+    "authentication_error",
+    "permission_error",
+    "rate_limit_error",
+    "overloaded_error",
+)
+_CAUSE_MAX = 300
+
+
+def harness_error_cause(step_log: Path) -> str | None:
+    """One short line naming why a harness CLI died, or ``None``.
+
+    Reads the first ``API Error`` line of the step log and keeps the provider's
+    own sentence and error code, so the run's stored failure reason carries the
+    cause even when the full error is too long to fit.
+    """
+    try:
+        text = step_log.read_text(errors="replace")
+    except OSError:
+        return None
+    line = next((ln for ln in text.splitlines() if "API Error" in ln), "")
+    if not line:
+        return None
+    code = next((marker for marker in _CAUSE_MARKERS if marker in line), "")
+    message = ""
+    start = line.find('"message":"')
+    if start != -1:
+        rest = line[start + len('"message":"') :]
+        message = rest[: rest.find('"')] if '"' in rest else rest
+    elif code:
+        at = line.find(code)
+        message = line[at : at + 160]
+    summary = " — ".join(part for part in (code, message.strip()) if part)
+    if not summary:
+        summary = line.strip()
+    return f"Cause: {summary}"[:_CAUSE_MAX]
+
+
 def extract_cell_id(run_id: str) -> str:
     parts = run_id.split("-")
     return parts[2] if len(parts) >= 4 else "?"
@@ -2955,6 +2999,7 @@ def main(argv: list[str] | None = None) -> int:
     # between two arms is only readable against how each of them terminated:
     # an arm that ran out of budget did not spend more, it was cut off.
     stop_reason: str | None = None
+    harness_cause: str | None = None
     # Which template wrote each step's prompt, in order. Recorded in usage.json
     # so a later audit can see from the artifacts alone which framing a run was
     # given — the SWE-bench leak showed up in no stored number and turned up
@@ -3092,6 +3137,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"  ⚠️  {args.harness} exited with code {rc} — see {step_log.relative_to(REPO_ROOT)}"
                 )
+                harness_cause = harness_error_cause(step_log)
                 stop_reason = "harness_error"
                 break
 
@@ -3226,6 +3272,9 @@ def main(argv: list[str] | None = None) -> int:
                 "(stop_reason=harness_error). This run measured the "
                 "connection, not the subject."
             )
+            # Last on purpose: the worker stores the tail of this output.
+            if harness_cause:
+                print(f"  {harness_cause}")
             return 2
         return 0
     else:  # interactive

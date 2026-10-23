@@ -2216,6 +2216,9 @@ def harness_facts(_state: Any) -> dict[str, Any]:
         "runner_image": settings.runner_image,
         "docker_ok": False,
         "runner_image_present": False,
+        # From the image's label, so no container is started to ask (ADR-0070
+        # erratum: an unpinned CLI install stayed on a cached old version).
+        "claude_cli_version": "",
         "docker_version": "",
         "docker_error": "",
     }
@@ -2228,8 +2231,10 @@ def harness_facts(_state: Any) -> dict[str, Any]:
         facts["docker_version"] = client.version().get("Version", "")
         facts["docker_ok"] = True
         with contextlib.suppress(Exception):
-            client.images.get(settings.runner_image)
+            image = client.images.get(settings.runner_image)
             facts["runner_image_present"] = True
+            labels = (image.labels or {}) if hasattr(image, "labels") else {}
+            facts["claude_cli_version"] = str(labels.get("claude-code.version", ""))
     except Exception as exc:  # the failure *is* the answer this command reports
         facts["docker_error"] = f"{type(exc).__name__}: {exc}"
     return facts

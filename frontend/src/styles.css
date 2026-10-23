@@ -1008,6 +1008,21 @@ button.ghost:disabled {
   border-bottom: 0;
 }
 
+/* `.settings-list div` turns every row into a grid; the segmented controls
+   inside a toggle row must stay one inline row of buttons. */
+.settings-list .theme-toggle-row > .theme-toggle,
+.settings-list .theme-toggle-row > .segmented {
+  display: inline-flex;
+  gap: 0;
+  padding-bottom: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-list .theme-toggle-row > .lang-toggle button {
+  padding: 6px 14px;
+  font-size: inherit;
+}
+
 /* Segmented control. `.theme-toggle` is the original, Settings-only name; the
    generic `.segmented` alias is what new callers (the model picker) use. */
 .theme-toggle,
@@ -4045,4 +4060,27 @@ button.danger:hover {
   color: var(--console-text);
   padding: 10px;
   border-radius: 6px;
+}
+
+/* Language switch (ADR-0070): EN | ES under the brand, one button when collapsed. */
+.brand-lang {
+  display: flex;
+}
+
+.app-shell--nav-collapsed .brand-lang {
+  justify-content: center;
+}
+
+.lang-toggle button {
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.lang-toggle-compact {
+  padding: 3px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }

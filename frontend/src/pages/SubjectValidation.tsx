@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { api, ApiError } from "../api";
@@ -17,6 +18,7 @@ import {
   IconSparkles,
   IconX
 } from "../components/icons";
+import { defineMessages, useMessages } from "../i18n";
 import { HARNESS_NATIVE_MODELS, HARNESS_OPTIONS, HOST_HARNESSES } from "../harnesses";
 import type {
   CaseRecord,
@@ -31,11 +33,11 @@ import type {
 
 
 const STEPS = [
-  { key: "subject", label: "Bring your tool" },
-  { key: "success", label: "Declare what success is" },
-  { key: "arms", label: "Choose the arms" },
-  { key: "watch", label: "Watch it, and go in" },
-  { key: "read", label: "Read the result" }
+  { key: "subject" },
+  { key: "success" },
+  { key: "arms" },
+  { key: "watch" },
+  { key: "read" }
 ] as const;
 
 type StepKey = (typeof STEPS)[number]["key"];
@@ -44,6 +46,548 @@ type Arm = { harness: string; executorModel: string };
 
 const MAX_STEP_OPTIONS = [5, 10, 20, 40];
 const REPETITION_OPTIONS = [1, 3, 5, 10];
+
+const MESSAGES = defineMessages({
+  en: {
+    stepLabel: {
+      subject: "Bring your tool",
+      success: "Declare what success is",
+      arms: "Choose the arms",
+      watch: "Watch it, and go in",
+      read: "Read the result"
+    } as Record<StepKey, string>,
+    title: "Validate your tool",
+    lede:
+      "You built something — an agent behind an API, an MCP server, a service " +
+      "wrapper — and a skill that drives it. This measures how reliably it does " +
+      "its job under each harness and model. It says nothing about the harness: " +
+      "nothing here is ablated.",
+    noticeCaseSelected: (caseId: string) => `Case '${caseId}' selected.`,
+    noticeUsingExistingCase: (caseId: string) => `Using existing case '${caseId}'.`,
+    noticeCaseUpdated: (caseId: string) => `Case '${caseId}' updated.`,
+    noticeCaseCreated: (caseId: string) => `Case '${caseId}' created.`,
+    noticeStaged: (name: string) => `Staged '${name}'. It will be added to every arm's run.`,
+    noticeImported: (name: string, sourceUrl: string) =>
+      `Imported '${name}' from ${sourceUrl}.`,
+    noticeDesignCreated: (experimentId: string) =>
+      `Design '${experimentId}' created. Nothing has run yet — read ` +
+      `the notes below, then launch.`,
+    noticeQueued: (count: number) => `Queued ${count} run(s).`,
+    errorLoadSkills: "Unable to load staged skills.",
+    errorSomethingFailed: "Something failed",
+    errorMultipleSkills: (choices: string) =>
+      `That source holds several skills. Pick one on the Skills page: ${choices}`,
+    errorNoFreeCaseId: "Unable to find a free case id for this subject.",
+    errorNoFreeExperimentId: "Unable to find a free experiment id.",
+    errorGenerateCaseDraft: "Unable to generate the case draft.",
+    aiErrorNoCommand: (retried: string) =>
+      `The draft has no runnable validation command${retried}. Write one below, ` +
+      "or describe the check you want and generate again.",
+    aiNoticeDraftGenerated: (kept: number, retried: string) =>
+      `Draft generated with ${kept} validation command(s)${retried}. ` +
+      "Review and edit the fields below before saving.",
+    retriedSuffix: " (after one corrective retry)",
+    runsQueuedCallout: (link: string) => (
+      <>
+        The runs are queued, so this is a record of what ran, not a form. To test
+        something different, <Link to="/evaluate/subject" reloadDocument>{link}</Link>.
+      </>
+    ),
+    startNewValidation: "start a new validation",
+    skillsPanel: {
+      heading: "Which skill drives your tool?",
+      skillsWorkbench: "Skills workbench",
+      intro:
+        "The skill is what the agent reads to reach your tool. Staged skills are " +
+        "added via extra skills, while harness skills are governed tools. Select " +
+        "one or multiple skills under test.",
+      tabAll: (count: number) => `All (${count})`,
+      tabStaged: (count: number) => `Staged (${count})`,
+      tabHarness: (count: number) => `Harness (${count})`,
+      filterAriaLabel: "Filter skills",
+      filterPlaceholder: "Filter skills by name or description…",
+      noSkillsTitle: "No skills found.",
+      noSkillsDescription: "No matching skills found. Adjust your search or filter tab.",
+      invokeSelected: (tooltip: ReactNode) => (
+        <>
+          Ask the agent to use the selected skill(s) at the start of every step.{" "}
+          {tooltip}
+        </>
+      ),
+      invokeSelectedTooltip:
+        "On by default: a skill that is merely available is invoked only when " +
+        "the case's instruction or the skill's own triggers call for it, so the " +
+        "run may never exercise it. Turn this off to measure whether the agent " +
+        "reaches for the skill unasked.",
+      isolateGoverned: (tooltip: ReactNode) => (
+        <>
+          Isolate the run: disable every harness skill that is not selected above.{" "}
+          {tooltip}
+        </>
+      ),
+      isolateGovernedTooltip:
+        "Every governed harness skill you did not select above is added to this " +
+        "run's disabled list, so only the skill(s) you picked can be reached. " +
+        "Leave this off to test your skill alongside the rest of the harness as " +
+        "usual; turn it on to isolate the measurement to just this skill.",
+      alreadyGoverned: (tooltip: ReactNode) => (
+        <>
+          My skill is already part of the governed harness — every run loads it
+          already.{" "}
+          {tooltip}
+        </>
+      ),
+      alreadyGovernedTooltip:
+        "Check this only if your skill ships as part of the governed harness " +
+        "itself, not as a staged extra skill, so every run loads it regardless " +
+        "of what you pick above. It only affects this form: it lets you continue " +
+        "past this step without selecting a skill from the list. It does not " +
+        "change what is sent to the run."
+    },
+    writeOne: {
+      heading: "Write one here",
+      skillName: "Skill name",
+      skillMd: "SKILL.md",
+      stageButton: "Stage this skill",
+      staging: "Staging…"
+    },
+    importOne: {
+      heading: "Or import one",
+      repoUrl: "Repository or archive URL",
+      note:
+        "Fetched, validated and staged — never promoted into the harness by this " +
+        "step.",
+      importButton: "Import",
+      importing: "Importing…"
+    },
+    notReadyYet: "Not ready yet:",
+    successPanel: {
+      heading: "What is being tested, and what counts as done?",
+      useExisting: (count: number) => `Use an existing case (${count})`,
+      createNew: "Create a new case",
+      pickExistingIntro:
+        "Pick a case the lab already holds — SWE-bench, a benchmark, or a saved " +
+        "case — to validate your tool or skill against a known standard.",
+      filterCasesAriaLabel: "Filter cases",
+      filterCasesPlaceholder: "Search by id, name or tag (e.g. swe-bench, python, bugfix)…",
+      noCasesTitle: "No cases found.",
+      noCasesDescription: "No existing case matches the search.",
+      noDescription: "No description",
+      selectedCase: (caseId: string) => (
+        <>
+          Selected case: <code>{caseId}</code>
+        </>
+      ),
+      selectedCaseMeta: (subject: string, maxSteps: number, variant: string) => (
+        <>
+          {subject} · Max steps: {maxSteps} · Variant: <code>{variant}</code>
+        </>
+      ),
+      useThisCase: "Use this case and continue"
+    },
+    aiAssist: {
+      title: "Draft it with AI (optional)",
+      contextWith: (skills: string) => `Context: ${skills}`,
+      contextWithout: "No skills selected in step 1",
+      describeLabel: "Describe what you want to test, in plain language",
+      describePlaceholder:
+        "e.g. Check that the agent uses notion-export to save page 123 to notes.txt, " +
+        "and that the file exists and is not empty.",
+      modelLabel: "Model",
+      defaultSuffix: " (default)",
+      generate: "Generate the case",
+      drafting: "Drafting…",
+      leftOutTitle: "Left out of the draft — the lab would not run these:"
+    },
+    caseForm: {
+      subject: "Subject",
+      subjectPlaceholder: "notion-export skill + local export API",
+      instruction: "The instruction the agent gets",
+      instructionPlaceholder:
+        "Read the linked page and save its contents to notes.txt in the workspace.",
+      validationCommands: "Validation commands — one per line",
+      validationPlaceholder: "test -s {workspace}/notes.txt\npython3 check_export.py {workspace}",
+      maxSteps: "Max steps",
+      explanation:
+        "The command is the whole measurement: it runs after the agent stops, and " +
+        "its exit code is the pass. A command that cannot fail — a smoke check that " +
+        "only proves the thing started — produces 100% and measures nothing.",
+      notExecutable: "Not executable, so these would be dropped in silence:",
+      saving: "Saving…",
+      updateCase: "Update the case",
+      createCase: "Create the case"
+    },
+    armsPanel: {
+      heading: "Where should it run?",
+      noBaseline: "One arm per harness/model — no baseline",
+      intro:
+        "Every arm is a peer. There is no control here, because nothing is being " +
+        "compared against a version of the harness with your tool removed — each arm " +
+        "gets its own pass rate and is read on its own.",
+      harness: "Harness",
+      runsNativeAuth: (harness: string) => `Runs the ${harness} CLI with its native auth. `,
+      claudeAuthNote:
+        "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or " +
+        "host mode (make app-host).",
+      hostModeNote: "Needs host mode — run make app-host.",
+      executorModel: "Executor model",
+      remove: "Remove",
+      addArm: "Add an arm",
+      repetitions: "Repetitions per arm",
+      armsSummary: (arms: number, repetitions: number, runs: number) =>
+        `${arms} arm(s) x ${repetitions} repetition(s) = ${runs} run(s). A single run ` +
+        'of an agent is an anecdote; the repetitions are what make "most of the ' +
+        'time" a rate.',
+      queueing: "Queueing…",
+      launch: (count: number) => `Launch ${count} run(s)`,
+      creating: "Creating…",
+      createDesign: "Create the design"
+    },
+    watchPanel: {
+      heading: "The runs",
+      openExperiment: "Open the experiment",
+      intro:
+        "The pass column is the validation command's verdict, computed for you. Open " +
+        "a run's sandbox to see what the agent actually did — that is the part no " +
+        "score can carry, and it is why a scored run is still worth looking at.",
+      waitingForRuns: "Waiting for the runs to appear",
+      run: "Run",
+      arm: "Arm",
+      state: "State",
+      passed: "Passed",
+      yourJudgement: "Your judgement",
+      pass: "pass",
+      fail: "fail",
+      openSandbox: "Open the sandbox",
+      scored: (score: number) => ` · scored ${score}/10`,
+      reading: "Reading…",
+      readResult: "Read the result"
+    },
+    readPanel: {
+      resultKicker: "Result",
+      evidence: (evidence: string) => `Evidence: ${evidence}`,
+      onePerArm: "One rate per arm",
+      arm: "Arm",
+      passed: "Passed",
+      scoredRuns: "Scored runs",
+      costMean: "Cost (mean)",
+      notAveraged:
+        "These are not averaged together. A combined number would describe a " +
+        "configuration nobody runs.",
+      perCase: "Per case",
+      passedOfScored: "Passed of scored, per arm",
+      case: "Case",
+      successesOfScored: (successes: number, scored: number) => `${successes} of ${scored}`,
+      openFullExperiment: "Open the full experiment",
+      backToRuns: "Back to the runs"
+    },
+    helpPanel: {
+      title: "What this mode can and cannot say",
+      body1:
+        "It reports how often your subject completed its cases under each harness and " +
+        "model. It cannot tell you whether the harness helped: no arm here has the " +
+        "harness removed, so there is nothing to attribute a difference to.",
+      body2: (link: string) => (
+        <>
+          To ask that question instead, run a <Link to="/evaluate/new">{link}</Link>,
+          which ablates a skill and compares the arm with it against the arm without.
+        </>
+      ),
+      harnessEvaluation: "harness evaluation"
+    },
+    blocking: {
+      chooseSkill:
+        "Choose at least one skill that drives your tool — or say it is already " +
+        "part of the harness.",
+      pickExistingCase: "Pick an existing case from the list, or create a new one.",
+      nameSubject: "Name the subject. The result sentence has to say what passed.",
+      writeInstruction: "Write the instruction the agent is given.",
+      addValidationCommand:
+        "Add at least one validation command that exits non-zero when the " +
+        "subject fails. Without one the runs execute and report nothing.",
+      declareArm: "Declare at least one arm.",
+      duplicateArms: "Two arms are identical — each arm must be its own configuration.",
+      pickModel:
+        "Pick a model for every arm. A headless run needs one, and the arm's " +
+        "label names it."
+    }
+  },
+  es: {
+    stepLabel: {
+      subject: "Traé tu herramienta",
+      success: "Declará qué es el éxito",
+      arms: "Elegí los brazos",
+      watch: "Miralo, y entrá",
+      read: "Leé el resultado"
+    } as Record<StepKey, string>,
+    title: "Validá tu herramienta",
+    lede:
+      "Construiste algo — un agente detrás de una API, un servidor MCP, un " +
+      "wrapper de servicio — y un skill que lo maneja. Esto mide con qué " +
+      "confiabilidad hace su trabajo bajo cada arnés y modelo. No dice nada " +
+      "sobre el arnés: nada acá está ablacionado.",
+    noticeCaseSelected: (caseId: string) => `Caso '${caseId}' seleccionado.`,
+    noticeUsingExistingCase: (caseId: string) => `Usando el caso existente '${caseId}'.`,
+    noticeCaseUpdated: (caseId: string) => `Caso '${caseId}' actualizado.`,
+    noticeCaseCreated: (caseId: string) => `Caso '${caseId}' creado.`,
+    noticeStaged: (name: string) =>
+      `'${name}' agregado a staging. Se incluirá en la corrida de cada brazo.`,
+    noticeImported: (name: string, sourceUrl: string) =>
+      `'${name}' importado desde ${sourceUrl}.`,
+    noticeDesignCreated: (experimentId: string) =>
+      `Diseño '${experimentId}' creado. Todavía no corrió nada — leé las notas ` +
+      "de abajo y después lanzá.",
+    noticeQueued: (count: number) => `${count} corrida(s) encoladas.`,
+    errorLoadSkills: "No se pudieron cargar los skills en staging.",
+    errorSomethingFailed: "Algo falló",
+    errorMultipleSkills: (choices: string) =>
+      `Esa fuente contiene varios skills. Elegí uno en la página de Skills: ${choices}`,
+    errorNoFreeCaseId: "No se pudo encontrar un id de caso libre para esta herramienta.",
+    errorNoFreeExperimentId: "No se pudo encontrar un id de experimento libre.",
+    errorGenerateCaseDraft: "No se pudo generar el borrador del caso.",
+    aiErrorNoCommand: (retried: string) =>
+      `El borrador no tiene ningún comando de validación ejecutable${retried}. Escribí ` +
+      "uno abajo, o describí la verificación que querés y generá de nuevo.",
+    aiNoticeDraftGenerated: (kept: number, retried: string) =>
+      `Borrador generado con ${kept} comando(s) de validación${retried}. ` +
+      "Revisá y editá los campos de abajo antes de guardar.",
+    retriedSuffix: " (después de un reintento correctivo)",
+    runsQueuedCallout: (link: string) => (
+      <>
+        Las corridas ya están encoladas, así que esto es un registro de lo que
+        corrió, no un formulario. Para probar algo distinto,{" "}
+        <Link to="/evaluate/subject" reloadDocument>{link}</Link>.
+      </>
+    ),
+    startNewValidation: "iniciá una nueva validación",
+    skillsPanel: {
+      heading: "¿Qué skill maneja tu herramienta?",
+      skillsWorkbench: "Banco de skills",
+      intro:
+        "El skill es lo que el agente lee para llegar a tu herramienta. Los " +
+        "skills en staging se agregan como skills extra, mientras que los " +
+        "skills del arnés son herramientas gobernadas. Seleccioná uno o varios " +
+        "skills a validar.",
+      tabAll: (count: number) => `Todos (${count})`,
+      tabStaged: (count: number) => `Staging (${count})`,
+      tabHarness: (count: number) => `Arnés (${count})`,
+      filterAriaLabel: "Filtrar skills",
+      filterPlaceholder: "Filtrar skills por nombre o descripción…",
+      noSkillsTitle: "No se encontraron skills.",
+      noSkillsDescription: "Ningún skill coincide. Ajustá la búsqueda o la pestaña.",
+      invokeSelected: (tooltip: ReactNode) => (
+        <>
+          Pedirle al agente que use el/los skill(s) seleccionados al empezar cada
+          paso.{" "}
+          {tooltip}
+        </>
+      ),
+      invokeSelectedTooltip:
+        "Activado por defecto: un skill que solo está disponible se invoca nada " +
+        "más cuando la instrucción del caso o los propios disparadores del skill " +
+        "lo piden, así que la corrida puede nunca ejercitarlo. Desactivá esto para " +
+        "medir si el agente recurre al skill sin que se lo pidan.",
+      isolateGoverned: (tooltip: ReactNode) => (
+        <>
+          Aislar la corrida: deshabilitar todo skill del arnés que no esté
+          seleccionado arriba.{" "}
+          {tooltip}
+        </>
+      ),
+      isolateGovernedTooltip:
+        "Todo skill gobernado del arnés que no seleccionaste arriba se agrega a " +
+        "la lista de deshabilitados de esta corrida, así que solo el/los skill(s) " +
+        "que elegiste puede(n) usarse. Dejalo apagado para probar tu skill junto " +
+        "con el resto del arnés como de costumbre; prendelo para aislar la " +
+        "medición a solo este skill.",
+      alreadyGoverned: (tooltip: ReactNode) => (
+        <>
+          Mi skill ya forma parte del arnés gobernado — cada corrida ya lo carga.{" "}
+          {tooltip}
+        </>
+      ),
+      alreadyGovernedTooltip:
+        "Marcá esto solo si tu skill viene incluido en el propio arnés gobernado, " +
+        "no como skill extra en staging, así que cada corrida lo carga sin " +
+        "importar lo que elijas arriba. Solo afecta este formulario: te deja " +
+        "seguir más allá de este paso sin elegir un skill de la lista. No cambia " +
+        "lo que se envía a la corrida."
+    },
+    writeOne: {
+      heading: "Escribí uno acá",
+      skillName: "Nombre del skill",
+      skillMd: "SKILL.md",
+      stageButton: "Poner este skill en staging",
+      staging: "Subiendo a staging…"
+    },
+    importOne: {
+      heading: "O importá uno",
+      repoUrl: "URL del repositorio o archivo",
+      note:
+        "Obtenido, validado y puesto en staging — esto nunca lo promueve al " +
+        "arnés.",
+      importButton: "Importar",
+      importing: "Importando…"
+    },
+    notReadyYet: "Todavía no está listo:",
+    successPanel: {
+      heading: "¿Qué se está probando, y qué cuenta como hecho?",
+      useExisting: (count: number) => `Usar un caso existente (${count})`,
+      createNew: "Crear un caso nuevo",
+      pickExistingIntro:
+        "Elegí un caso que el lab ya tiene — SWE-bench, un benchmark, o un caso " +
+        "guardado — para validar tu herramienta o skill contra un estándar " +
+        "conocido.",
+      filterCasesAriaLabel: "Filtrar casos",
+      filterCasesPlaceholder: "Buscá por id, nombre o etiqueta (por ej. swe-bench, python, bugfix)…",
+      noCasesTitle: "No se encontraron casos.",
+      noCasesDescription: "Ningún caso existente coincide con la búsqueda.",
+      noDescription: "Sin descripción",
+      selectedCase: (caseId: string) => (
+        <>
+          Caso seleccionado: <code>{caseId}</code>
+        </>
+      ),
+      selectedCaseMeta: (subject: string, maxSteps: number, variant: string) => (
+        <>
+          {subject} · Pasos máximos: {maxSteps} · Variante: <code>{variant}</code>
+        </>
+      ),
+      useThisCase: "Usar este caso y continuar"
+    },
+    aiAssist: {
+      title: "Redactalo con IA (opcional)",
+      contextWith: (skills: string) => `Contexto: ${skills}`,
+      contextWithout: "No hay skills seleccionados en el paso 1",
+      describeLabel: "Describí qué querés probar, en lenguaje simple",
+      describePlaceholder:
+        "por ej. Verificá que el agente use notion-export para guardar la página " +
+        "123 en notes.txt, y que el archivo exista y no esté vacío.",
+      modelLabel: "Modelo",
+      defaultSuffix: " (por defecto)",
+      generate: "Generar el caso",
+      drafting: "Redactando…",
+      leftOutTitle: "Dejado afuera del borrador — el lab no correría esto:"
+    },
+    caseForm: {
+      subject: "Herramienta",
+      subjectPlaceholder: "skill notion-export + API de exportación local",
+      instruction: "La instrucción que recibe el agente",
+      instructionPlaceholder:
+        "Leé la página enlazada y guardá su contenido en notes.txt dentro del workspace.",
+      validationCommands: "Comandos de validación — uno por línea",
+      validationPlaceholder: "test -s {workspace}/notes.txt\npython3 check_export.py {workspace}",
+      maxSteps: "Pasos máximos",
+      explanation:
+        "El comando es toda la medición: corre después de que el agente se " +
+        "detiene, y su código de salida es el pase. Un comando que no puede " +
+        "fallar — una verificación superficial que solo prueba que algo arrancó — " +
+        "da 100% y no mide nada.",
+      notExecutable: "No es ejecutable, así que esto se descartaría en silencio:",
+      saving: "Guardando…",
+      updateCase: "Actualizar el caso",
+      createCase: "Crear el caso"
+    },
+    armsPanel: {
+      heading: "¿Dónde debería correr?",
+      noBaseline: "Un brazo por arnés/modelo — sin línea de base",
+      intro:
+        "Cada brazo es un par. Acá no hay control, porque no se está comparando " +
+        "contra una versión del arnés con tu herramienta sacada — cada brazo " +
+        "tiene su propia tasa de éxito y se lee por separado.",
+      harness: "Arnés",
+      runsNativeAuth: (harness: string) => `Corre la CLI de ${harness} con su auth nativa. `,
+      claudeAuthNote:
+        "Funciona en Docker (CLAUDE_CODE_OAUTH_TOKEN o ANTHROPIC_API_KEY en .env) " +
+        "o en modo host (make app-host).",
+      hostModeNote: "Necesita modo host — corré make app-host.",
+      executorModel: "Modelo ejecutor",
+      remove: "Quitar",
+      addArm: "Agregar un brazo",
+      repetitions: "Repeticiones por brazo",
+      armsSummary: (arms: number, repetitions: number, runs: number) =>
+        `${arms} brazo(s) x ${repetitions} repetición(es) = ${runs} corrida(s). Una ` +
+        "sola corrida de un agente es una anécdota; las repeticiones son lo que " +
+        'convierte "la mayoría de las veces" en una tasa.',
+      queueing: "Encolando…",
+      launch: (count: number) => `Lanzar ${count} corrida(s)`,
+      creating: "Creando…",
+      createDesign: "Crear el diseño"
+    },
+    watchPanel: {
+      heading: "Las corridas",
+      openExperiment: "Abrir el experimento",
+      intro:
+        "La columna de pase es el veredicto del comando de validación, calculado " +
+        "por vos. Abrí el sandbox de una corrida para ver qué hizo realmente el " +
+        "agente — esa es la parte que ningún puntaje puede transmitir, y por eso " +
+        "vale la pena mirar una corrida igual aunque tenga puntaje.",
+      waitingForRuns: "Esperando que aparezcan las corridas",
+      run: "Corrida",
+      arm: "Brazo",
+      state: "Estado",
+      passed: "Pasó",
+      yourJudgement: "Tu evaluación",
+      pass: "pasó",
+      fail: "falló",
+      openSandbox: "Abrir el sandbox",
+      scored: (score: number) => ` · puntuado ${score}/10`,
+      reading: "Leyendo…",
+      readResult: "Leé el resultado"
+    },
+    readPanel: {
+      resultKicker: "Resultado",
+      evidence: (evidence: string) => `Evidencia: ${evidence}`,
+      onePerArm: "Una tasa por brazo",
+      arm: "Brazo",
+      passed: "Pasó",
+      scoredRuns: "Corridas puntuadas",
+      costMean: "Costo (media)",
+      notAveraged:
+        "Esto no se promedia junto. Un número combinado describiría una " +
+        "configuración que nadie corre.",
+      perCase: "Por caso",
+      passedOfScored: "Pasó de puntuadas, por brazo",
+      case: "Caso",
+      successesOfScored: (successes: number, scored: number) => `${successes} de ${scored}`,
+      openFullExperiment: "Abrir el experimento completo",
+      backToRuns: "Volver a las corridas"
+    },
+    helpPanel: {
+      title: "Qué puede y qué no puede decir este modo",
+      body1:
+        "Informa con qué frecuencia tu herramienta completó sus casos bajo cada " +
+        "arnés y modelo. No puede decirte si el arnés ayudó: ningún brazo acá " +
+        "tiene el arnés sacado, así que no hay nada a lo que atribuirle una " +
+        "diferencia.",
+      body2: (link: string) => (
+        <>
+          Para hacer esa pregunta en cambio, corré una{" "}
+          <Link to="/evaluate/new">{link}</Link>, que ablaciona un skill y compara
+          el brazo con él contra el brazo sin él.
+        </>
+      ),
+      harnessEvaluation: "evaluación de arnés"
+    },
+    blocking: {
+      chooseSkill:
+        "Elegí al menos un skill que maneje tu herramienta — o indicá que ya es " +
+        "parte del arnés.",
+      pickExistingCase: "Elegí un caso existente de la lista, o creá uno nuevo.",
+      nameSubject: "Nombrá la herramienta. La oración del resultado tiene que decir qué pasó.",
+      writeInstruction: "Escribí la instrucción que recibe el agente.",
+      addValidationCommand:
+        "Agregá al menos un comando de validación que salga con código distinto " +
+        "de cero cuando la herramienta falla. Sin uno, las corridas se ejecutan y " +
+        "no informan nada.",
+      declareArm: "Declará al menos un brazo.",
+      duplicateArms: "Dos brazos son idénticos — cada brazo debe tener su propia configuración.",
+      pickModel:
+        "Elegí un modelo para cada brazo. Una corrida sin interfaz necesita uno, " +
+        "y la etiqueta del brazo lo nombra."
+    }
+  }
+});
 
 /**
  * Client-side mirror of `validation._looks_executable`.
@@ -129,6 +673,7 @@ function armLabel(arm: Arm): string {
  * control arm this mode does not have.
  */
 export function SubjectValidation() {
+  const m = useMessages(MESSAGES);
   const navigate = useNavigate();
   const [step, setStep] = useState<StepKey>("subject");
   const [busy, setBusy] = useState("");
@@ -246,12 +791,12 @@ export function SubjectValidation() {
     if (c.max_steps) {
       setMaxSteps(c.max_steps);
     }
-    setNotice(`Case '${c.case_id}' selected.`);
+    setNotice(m.noticeCaseSelected(c.case_id));
   };
 
   const advanceWithExistingCase = () => {
     if (!caseId) return;
-    setNotice(`Using existing case '${caseId}'.`);
+    setNotice(m.noticeUsingExistingCase(caseId));
     setStep("arms");
   };
 
@@ -269,7 +814,7 @@ export function SubjectValidation() {
     api
       .listStagedSkills()
       .then(setStagedSkills)
-      .catch(() => setError("Unable to load staged skills."));
+      .catch(() => setError(m.errorLoadSkills));
     api
       .listHarnessSkills()
       .then(setGovernedSkills)
@@ -340,7 +885,7 @@ export function SubjectValidation() {
     try {
       await work();
     } catch (workError) {
-      setError(workError instanceof Error ? workError.message : "Something failed");
+      setError(workError instanceof Error ? workError.message : m.errorSomethingFailed);
     } finally {
       setBusy("");
     }
@@ -387,7 +932,7 @@ export function SubjectValidation() {
       setSkillsExtra((current) => [...current, created.name]);
       setNewSkillName("");
       setNewSkillBody("");
-      setNotice(`Staged '${created.name}'. It will be added to every arm's run.`);
+      setNotice(m.noticeStaged(created.name));
     });
 
   const importSkill = () =>
@@ -395,16 +940,14 @@ export function SubjectValidation() {
       const preview = await api.previewStagedSkillImport(importUrl, "", "");
       if (!preview.preview) {
         throw new Error(
-          `That source holds several skills. Pick one on the Skills page: ${preview.choices
-            .map((choice) => choice.name)
-            .join(", ")}`
+          m.errorMultipleSkills(preview.choices.map((choice) => choice.name).join(", "))
         );
       }
       const imported = await api.importStagedSkill(importUrl, "", preview.name, false);
       setStagedSkills((current) => [...current, imported]);
       setSkillsExtra((current) => [...current, imported.name]);
       setImportUrl("");
-      setNotice(`Imported '${imported.name}' from ${preview.source_url}.`);
+      setNotice(m.noticeImported(imported.name, preview.source_url));
     });
 
 
@@ -433,21 +976,14 @@ export function SubjectValidation() {
         }
         setAiDropped(draft.dropped_commands ?? []);
         const kept = draft.validation_commands?.length ?? 0;
-        const retried = draft.attempts > 1 ? " (after one corrective retry)" : "";
+        const retried = draft.attempts > 1 ? m.retriedSuffix : "";
         if (kept === 0) {
-          setAiError(
-            "The draft has no runnable validation command" +
-              retried +
-              ". Write one below, or describe the check you want and generate again."
-          );
+          setAiError(m.aiErrorNoCommand(retried));
         } else {
-          setAiNotice(
-            `Draft generated with ${kept} validation command(s)${retried}. ` +
-              "Review and edit the fields below before saving."
-          );
+          setAiNotice(m.aiNoticeDraftGenerated(kept, retried));
         }
       } catch (err) {
-        setAiError(err instanceof Error ? err.message : "Unable to generate the case draft.");
+        setAiError(err instanceof Error ? err.message : m.errorGenerateCaseDraft);
       }
     });
 
@@ -474,7 +1010,7 @@ export function SubjectValidation() {
       });
       if (caseId) {
         const updated = await api.updateCase(caseId, payload(caseId));
-        setNotice(`Case '${updated.case_id}' updated.`);
+        setNotice(m.noticeCaseUpdated(updated.case_id));
         setStep("arms");
         return;
       }
@@ -484,7 +1020,7 @@ export function SubjectValidation() {
         try {
           const created = await api.createCase(payload(candidate));
           setCaseId(created.case_id);
-          setNotice(`Case '${created.case_id}' created.`);
+          setNotice(m.noticeCaseCreated(created.case_id));
           setStep("arms");
           return;
         } catch (createError) {
@@ -493,7 +1029,7 @@ export function SubjectValidation() {
           }
         }
       }
-      throw new Error("Unable to find a free case id for this subject.");
+      throw new Error(m.errorNoFreeCaseId);
     });
 
   /**
@@ -527,10 +1063,7 @@ export function SubjectValidation() {
           });
           setExperimentId(created.experiment_id);
           setWarnings(created.warnings ?? []);
-          setNotice(
-            `Design '${created.experiment_id}' created. Nothing has run yet — read ` +
-              `the notes below, then launch.`
-          );
+          setNotice(m.noticeDesignCreated(created.experiment_id));
           return;
         } catch (createError) {
           if (!isDuplicateId(createError)) {
@@ -539,9 +1072,7 @@ export function SubjectValidation() {
           lastError = createError;
         }
       }
-      throw lastError instanceof Error
-        ? lastError
-        : new Error("Unable to find a free experiment id.");
+      throw lastError instanceof Error ? lastError : new Error(m.errorNoFreeExperimentId);
     });
 
 
@@ -574,7 +1105,7 @@ export function SubjectValidation() {
         // available too, and only staged ones need `skills_extra` to be.
         skills_invoke: invokeSelected ? [...skillsExtra] : []
       });
-      setNotice(`Queued ${result.count} run(s).`);
+      setNotice(m.noticeQueued(result.count));
       setLaunched(true);
       setStep("watch");
     });
@@ -594,43 +1125,44 @@ export function SubjectValidation() {
       read: []
     };
     if (skillsExtra.length === 0 && !alreadyGoverned) {
-      problems.subject.push(
-        "Choose at least one skill that drives your tool — or say it is already " +
-          "part of the harness."
-      );
+      problems.subject.push(m.blocking.chooseSkill);
     }
     if (caseMode === "existing") {
       if (!caseId) {
-        problems.success.push("Pick an existing case from the list, or create a new one.");
+        problems.success.push(m.blocking.pickExistingCase);
       }
     } else {
       if (!subject.trim()) {
-        problems.success.push("Name the subject. The result sentence has to say what passed.");
+        problems.success.push(m.blocking.nameSubject);
       }
       if (!prompt.trim()) {
-        problems.success.push("Write the instruction the agent is given.");
+        problems.success.push(m.blocking.writeInstruction);
       }
       if (executable.length === 0) {
-        problems.success.push(
-          "Add at least one validation command that exits non-zero when the " +
-            "subject fails. Without one the runs execute and report nothing."
-        );
+        problems.success.push(m.blocking.addValidationCommand);
       }
     }
     if (arms.length === 0) {
-      problems.arms.push("Declare at least one arm.");
+      problems.arms.push(m.blocking.declareArm);
     }
     if (new Set(arms.map(armLabel)).size !== arms.length) {
-      problems.arms.push("Two arms are identical — each arm must be its own configuration.");
+      problems.arms.push(m.blocking.duplicateArms);
     }
     if (arms.some((arm) => !arm.executorModel.trim())) {
-      problems.arms.push(
-        "Pick a model for every arm. A headless run needs one, and the arm's " +
-          "label names it."
-      );
+      problems.arms.push(m.blocking.pickModel);
     }
     return problems;
-  }, [alreadyGoverned, arms, caseId, caseMode, executable.length, prompt, skillsExtra.length, subject]);
+  }, [
+    alreadyGoverned,
+    arms,
+    caseId,
+    caseMode,
+    executable.length,
+    m,
+    prompt,
+    skillsExtra.length,
+    subject
+  ]);
 
 
   const stepIndex = STEPS.findIndex((item) => item.key === step);
@@ -659,13 +1191,8 @@ export function SubjectValidation() {
     <section className="page">
       <header className="page-header">
         <div>
-          <h1>Validate your tool</h1>
-          <p className="lede">
-            You built something — an agent behind an API, an MCP server, a service
-            wrapper — and a skill that drives it. This measures how reliably it does
-            its job under each harness and model. It says nothing about the harness:
-            nothing here is ablated.
-          </p>
+          <h1>{m.title}</h1>
+          <p className="lede">{m.lede}</p>
         </div>
       </header>
 
@@ -687,7 +1214,7 @@ export function SubjectValidation() {
               type="button"
             >
               <span className="stepper-index">{index + 1}</span>
-              <span>{item.label}</span>
+              <span>{m.stepLabel[item.key]}</span>
             </button>
           </li>
         ))}
@@ -696,26 +1223,19 @@ export function SubjectValidation() {
       {error ? <ErrorBanner message={error} /> : null}
       {notice ? <p className="callout callout--ok">{notice}</p> : null}
       {launched && step !== "watch" && step !== "read" ? (
-        <p className="callout">
-          The runs are queued, so this is a record of what ran, not a form. To test
-          something different, <Link to="/evaluate/subject" reloadDocument>start a new validation</Link>.
-        </p>
+        <p className="callout">{m.runsQueuedCallout(m.startNewValidation)}</p>
       ) : null}
 
       {step === "subject" ? (
         <>
           <div className="panel">
             <div className="panel-head">
-              <h2>Which skill drives your tool?</h2>
+              <h2>{m.skillsPanel.heading}</h2>
               <Link className="button-link" to="/evidence/skills">
-                Skills workbench
+                {m.skillsPanel.skillsWorkbench}
               </Link>
             </div>
-            <p className="muted">
-              The skill is what the agent reads to reach your tool. Staged skills are
-              added via extra skills, while harness skills are governed tools. Select
-              one or multiple skills under test.
-            </p>
+            <p className="muted">{m.skillsPanel.intro}</p>
 
             <div className="filter-stack">
               <div className="tab-bar">
@@ -724,28 +1244,28 @@ export function SubjectValidation() {
                   onClick={() => setFilterTab("all")}
                   type="button"
                 >
-                  All ({allSkills.length})
+                  {m.skillsPanel.tabAll(allSkills.length)}
                 </button>
                 <button
                   className={`tab ${filterTab === "staged" ? "tab--active" : ""}`}
                   onClick={() => setFilterTab("staged")}
                   type="button"
                 >
-                  Staged ({stagedSkills.length})
+                  {m.skillsPanel.tabStaged(stagedSkills.length)}
                 </button>
                 <button
                   className={`tab ${filterTab === "harness" ? "tab--active" : ""}`}
                   onClick={() => setFilterTab("harness")}
                   type="button"
                 >
-                  Harness ({governedSkills.length})
+                  {m.skillsPanel.tabHarness(governedSkills.length)}
                 </button>
               </div>
 
               <input
-                aria-label="Filter skills"
+                aria-label={m.skillsPanel.filterAriaLabel}
                 onChange={(event) => setSearchSkill(event.target.value)}
-                placeholder="Filter skills by name or description…"
+                placeholder={m.skillsPanel.filterPlaceholder}
                 type="search"
                 value={searchSkill}
               />
@@ -753,8 +1273,8 @@ export function SubjectValidation() {
 
             {visibleSkills.length === 0 ? (
               <EmptyState
-                description="No matching skills found. Adjust your search or filter tab."
-                title="No skills found."
+                description={m.skillsPanel.noSkillsDescription}
+                title={m.skillsPanel.noSkillsTitle}
               />
             ) : (
               <ul className="pick-list">
@@ -785,9 +1305,9 @@ export function SubjectValidation() {
                   type="checkbox"
                 />
                 <span>
-                  Ask the agent to use the selected skill(s) at the start of every
-                  step.{" "}
-                  <InfoTooltip text="On by default: a skill that is merely available is invoked only when the case's instruction or the skill's own triggers call for it, so the run may never exercise it. Turn this off to measure whether the agent reaches for the skill unasked." />
+                  {m.skillsPanel.invokeSelected(
+                    <InfoTooltip text={m.skillsPanel.invokeSelectedTooltip} />
+                  )}
                 </span>
               </label>
 
@@ -798,8 +1318,9 @@ export function SubjectValidation() {
                   type="checkbox"
                 />
                 <span>
-                  Isolate the run: disable every harness skill that is not selected above.{" "}
-                  <InfoTooltip text="Every governed harness skill you did not select above is added to this run's disabled list, so only the skill(s) you picked can be reached. Leave this off to test your skill alongside the rest of the harness as usual; turn it on to isolate the measurement to just this skill." />
+                  {m.skillsPanel.isolateGoverned(
+                    <InfoTooltip text={m.skillsPanel.isolateGovernedTooltip} />
+                  )}
                 </span>
               </label>
 
@@ -810,9 +1331,9 @@ export function SubjectValidation() {
                   type="checkbox"
                 />
                 <span>
-                  My skill is already part of the governed harness — every run loads it
-                  already.{" "}
-                  <InfoTooltip text="Check this only if your skill ships as part of the governed harness itself, not as a staged extra skill, so every run loads it regardless of what you pick above. It only affects this form: it lets you continue past this step without selecting a skill from the list. It does not change what is sent to the run." />
+                  {m.skillsPanel.alreadyGoverned(
+                    <InfoTooltip text={m.skillsPanel.alreadyGovernedTooltip} />
+                  )}
                 </span>
               </label>
             </div>
@@ -821,11 +1342,11 @@ export function SubjectValidation() {
 
           <div className="panel">
             <div className="panel-head">
-              <h2>Write one here</h2>
+              <h2>{m.writeOne.heading}</h2>
             </div>
             <div className="form-grid">
               <label>
-                <span>Skill name</span>
+                <span>{m.writeOne.skillName}</span>
                 <input
                   onChange={(event) => setNewSkillName(event.target.value)}
                   placeholder="notion-export"
@@ -833,7 +1354,7 @@ export function SubjectValidation() {
                 />
               </label>
               <label className="full">
-                <span>SKILL.md</span>
+                <span>{m.writeOne.skillMd}</span>
                 <textarea
                   onChange={(event) => setNewSkillBody(event.target.value)}
                   placeholder={"# notion-export\n\nCall POST http://localhost:8900/export with…"}
@@ -849,18 +1370,18 @@ export function SubjectValidation() {
                 onClick={() => void authorSkill()}
                 type="button"
               >
-                {busy === "author" ? "Staging…" : "Stage this skill"}
+                {busy === "author" ? m.writeOne.staging : m.writeOne.stageButton}
               </button>
             </div>
           </div>
 
           <div className="panel">
             <div className="panel-head">
-              <h2>Or import one</h2>
+              <h2>{m.importOne.heading}</h2>
             </div>
             <div className="form-grid">
               <label className="full">
-                <span>Repository or archive URL</span>
+                <span>{m.importOne.repoUrl}</span>
                 <input
                   onChange={(event) => setImportUrl(event.target.value)}
                   placeholder="https://github.com/owner/repo"
@@ -868,10 +1389,7 @@ export function SubjectValidation() {
                 />
               </label>
             </div>
-            <p className="muted">
-              Fetched, validated and staged — never promoted into the harness by this
-              step.
-            </p>
+            <p className="muted">{m.importOne.note}</p>
             <div className="panel-actions">
               <button
                 className="secondary"
@@ -879,7 +1397,7 @@ export function SubjectValidation() {
                 onClick={() => void importSkill()}
                 type="button"
               >
-                {busy === "import" ? "Importing…" : "Import"}
+                {busy === "import" ? m.importOne.importing : m.importOne.importButton}
               </button>
             </div>
           </div>
@@ -889,7 +1407,7 @@ export function SubjectValidation() {
       {step === "success" ? (
         <div className="panel">
           <div className="panel-head">
-            <h2>What is being tested, and what counts as done?</h2>
+            <h2>{m.successPanel.heading}</h2>
             {existingCases.length > 0 ? (
               <div className="tab-bar tab-bar--inline">
                 <button
@@ -897,14 +1415,14 @@ export function SubjectValidation() {
                   onClick={() => setCaseMode("existing")}
                   type="button"
                 >
-                  Use an existing case ({existingCases.length})
+                  {m.successPanel.useExisting(existingCases.length)}
                 </button>
                 <button
                   className={`tab ${caseMode === "new" ? "tab--active" : ""}`}
                   onClick={() => setCaseMode("new")}
                   type="button"
                 >
-                  Create a new case
+                  {m.successPanel.createNew}
                 </button>
               </div>
             ) : null}
@@ -912,23 +1430,20 @@ export function SubjectValidation() {
 
           {caseMode === "existing" ? (
             <div className="filter-stack">
-              <p className="muted">
-                Pick a case the lab already holds — SWE-bench, a benchmark, or a saved
-                case — to validate your tool or skill against a known standard.
-              </p>
+              <p className="muted">{m.successPanel.pickExistingIntro}</p>
 
               <input
-                aria-label="Filter cases"
+                aria-label={m.successPanel.filterCasesAriaLabel}
                 onChange={(event) => setCaseSearch(event.target.value)}
-                placeholder="Search by id, name or tag (e.g. swe-bench, python, bugfix)…"
+                placeholder={m.successPanel.filterCasesPlaceholder}
                 type="search"
                 value={caseSearch}
               />
 
               {filteredCases.length === 0 ? (
                 <EmptyState
-                  description="No existing case matches the search."
-                  title="No cases found."
+                  description={m.successPanel.noCasesDescription}
+                  title={m.successPanel.noCasesTitle}
                 />
               ) : (
                 <ul className="pick-list">
@@ -952,7 +1467,7 @@ export function SubjectValidation() {
                             ))}
                           </strong>
                           <span className="muted">
-                            <code>{c.case_id}</code> — {c.description || "No description"}
+                            <code>{c.case_id}</code> — {c.description || m.successPanel.noDescription}
                           </span>
                         </button>
                       </li>
@@ -964,11 +1479,9 @@ export function SubjectValidation() {
               {caseId ? (
                 <div className="panel subtle selection-summary">
                   <div>
-                    <strong>
-                      Selected case: <code>{caseId}</code>
-                    </strong>
+                    <strong>{m.successPanel.selectedCase(caseId)}</strong>
                     <span className="muted small">
-                      {subject} · Max steps: {maxSteps} · Variant: <code>{promptVariant}</code>
+                      {m.successPanel.selectedCaseMeta(subject, maxSteps, promptVariant)}
                     </span>
                   </div>
                   <button
@@ -977,7 +1490,7 @@ export function SubjectValidation() {
                     onClick={advanceWithExistingCase}
                     type="button"
                   >
-                    Use this case and continue <IconArrowRight size={14} />
+                    {m.successPanel.useThisCase} <IconArrowRight size={14} />
                   </button>
                 </div>
               ) : null}
@@ -986,7 +1499,7 @@ export function SubjectValidation() {
                 <div className="callout callout--warning">
                   <IconAlert size={16} />
                   <div>
-                    <strong>Not ready yet:</strong>
+                    <strong>{m.notReadyYet}</strong>
                     <ul className="blocking-list">
                       {blocking.success.map((problem) => (
                         <li key={problem}>{problem}</li>
@@ -1002,20 +1515,22 @@ export function SubjectValidation() {
               <div className="assist-card">
                 <div className="assist-card-head">
                   <strong className="assist-card-title">
-                    <IconSparkles size={16} /> Draft it with AI (optional)
+                    <IconSparkles size={16} /> {m.aiAssist.title}
                   </strong>
                   {skillsExtra.length > 0 ? (
-                    <span className="muted small">Context: {skillsExtra.join(", ")}</span>
+                    <span className="muted small">
+                      {m.aiAssist.contextWith(skillsExtra.join(", "))}
+                    </span>
                   ) : (
-                    <span className="muted small">No skills selected in step 1</span>
+                    <span className="muted small">{m.aiAssist.contextWithout}</span>
                   )}
                 </div>
 
                 <label>
-                  <span>Describe what you want to test, in plain language</span>
+                  <span>{m.aiAssist.describeLabel}</span>
                   <textarea
                     onChange={(event) => setAiDescription(event.target.value)}
-                    placeholder="e.g. Check that the agent uses notion-export to save page 123 to notes.txt, and that the file exists and is not empty."
+                    placeholder={m.aiAssist.describePlaceholder}
                     rows={2}
                     value={aiDescription}
                   />
@@ -1023,18 +1538,22 @@ export function SubjectValidation() {
 
                 <div className="assist-card-row">
                   <label>
-                    <span>Model</span>
+                    <span>{m.aiAssist.modelLabel}</span>
                     <select
                       onChange={(event) => setAiModel(event.target.value)}
                       value={aiModel || gatewayDefault}
                     >
                       {modelOptions.map((opt) => (
                         <option key={opt.id} value={opt.id}>
-                          {opt.label || opt.id} {opt.id === gatewayDefault ? "(default)" : ""}
+                          {opt.label || opt.id}{" "}
+                          {opt.id === gatewayDefault ? m.aiAssist.defaultSuffix : ""}
                         </option>
                       ))}
                       {!modelOptions.some((opt) => opt.id === gatewayDefault) && gatewayDefault ? (
-                        <option value={gatewayDefault}>{gatewayDefault} (default)</option>
+                        <option value={gatewayDefault}>
+                          {gatewayDefault}
+                          {m.aiAssist.defaultSuffix}
+                        </option>
                       ) : null}
                     </select>
                   </label>
@@ -1046,10 +1565,10 @@ export function SubjectValidation() {
                     type="button"
                   >
                     {busy === "case-draft" ? (
-                      <Spinner label="Drafting…" />
+                      <Spinner label={m.aiAssist.drafting} />
                     ) : (
                       <>
-                        <IconSparkles size={14} /> Generate the case
+                        <IconSparkles size={14} /> {m.aiAssist.generate}
                       </>
                     )}
                   </button>
@@ -1066,14 +1585,13 @@ export function SubjectValidation() {
                   <div className="callout callout--warning">
                     <IconAlert size={16} />
                     <div>
-                      <strong>
-                        Left out of the draft — the lab would not run these:
-                      </strong>
+                      <strong>{m.aiAssist.leftOutTitle}</strong>
                       <ul className="blocking-list dropped-list">
                         {aiDropped.map((item) => (
                           <li key={item.command}>
                             <code>{item.command.split("\n")[0]}</code>
                             {item.command.includes("\n") ? " …" : ""}
+                            {/* item.reason is backend-composed and stays in English. */}
                             <span className="muted small"> — {item.reason}</span>
                           </li>
                         ))}
@@ -1085,33 +1603,33 @@ export function SubjectValidation() {
 
               <div className="form-grid">
                 <label className="full">
-                  <span>Subject</span>
+                  <span>{m.caseForm.subject}</span>
                   <input
                     onChange={(event) => setSubject(event.target.value)}
-                    placeholder="notion-export skill + local export API"
+                    placeholder={m.caseForm.subjectPlaceholder}
                     value={subject}
                   />
                 </label>
                 <label className="full">
-                  <span>The instruction the agent gets</span>
+                  <span>{m.caseForm.instruction}</span>
                   <textarea
                     onChange={(event) => setPrompt(event.target.value)}
-                    placeholder="Read the linked page and save its contents to notes.txt in the workspace."
+                    placeholder={m.caseForm.instructionPlaceholder}
                     rows={4}
                     value={prompt}
                   />
                 </label>
                 <label className="full">
-                  <span>Validation commands — one per line</span>
+                  <span>{m.caseForm.validationCommands}</span>
                   <textarea
                     onChange={(event) => setCommandText(event.target.value)}
-                    placeholder={"test -s {workspace}/notes.txt\npython3 check_export.py {workspace}"}
+                    placeholder={m.caseForm.validationPlaceholder}
                     rows={5}
                     value={commandText}
                   />
                 </label>
                 <label>
-                  <span>Max steps</span>
+                  <span>{m.caseForm.maxSteps}</span>
                   <select
                     onChange={(event) => setMaxSteps(Number(event.target.value))}
                     value={maxSteps}
@@ -1124,16 +1642,12 @@ export function SubjectValidation() {
                   </select>
                 </label>
               </div>
-              <p className="muted">
-                The command is the whole measurement: it runs after the agent stops, and
-                its exit code is the pass. A command that cannot fail — a smoke check that
-                only proves the thing started — produces 100% and measures nothing.
-              </p>
+              <p className="muted">{m.caseForm.explanation}</p>
               {rejected.length > 0 ? (
                 <div className="callout callout--warning">
                   <IconAlert size={16} />
                   <div>
-                    <strong>Not executable, so these would be dropped in silence:</strong>
+                    <strong>{m.caseForm.notExecutable}</strong>
                     <ul className="blocking-list">
                       {rejected.map((command) => (
                         <li key={command}>{command}</li>
@@ -1146,7 +1660,7 @@ export function SubjectValidation() {
                 <div className="callout callout--warning">
                   <IconAlert size={16} />
                   <div>
-                    <strong>Not ready yet:</strong>
+                    <strong>{m.notReadyYet}</strong>
                     <ul className="blocking-list">
                       {blocking.success.map((problem) => (
                         <li key={problem}>{problem}</li>
@@ -1162,7 +1676,11 @@ export function SubjectValidation() {
                   onClick={() => void createCase()}
                   type="button"
                 >
-                  {busy === "case" ? "Saving…" : caseId ? "Update the case" : "Create the case"}{" "}
+                  {busy === "case"
+                    ? m.caseForm.saving
+                    : caseId
+                      ? m.caseForm.updateCase
+                      : m.caseForm.createCase}{" "}
                   <IconArrowRight size={14} />
                 </button>
               </div>
@@ -1175,20 +1693,16 @@ export function SubjectValidation() {
       {step === "arms" ? (
         <div className="panel">
           <div className="panel-head">
-            <h2>Where should it run?</h2>
-            <span className="muted">One arm per harness/model — no baseline</span>
+            <h2>{m.armsPanel.heading}</h2>
+            <span className="muted">{m.armsPanel.noBaseline}</span>
           </div>
-          <p className="muted">
-            Every arm is a peer. There is no control here, because nothing is being
-            compared against a version of the harness with your tool removed — each arm
-            gets its own pass rate and is read on its own.
-          </p>
+          <p className="muted">{m.armsPanel.intro}</p>
           <ul className="pick-list arm-list">
             {arms.map((arm, index) => (
               <li className="panel subtle" key={`${arm.harness}-${index}`}>
                 <div className="form-grid">
                   <label>
-                    <span>Harness</span>
+                    <span>{m.armsPanel.harness}</span>
                     <select
                       onChange={(event) => {
                         const harness = event.target.value;
@@ -1214,16 +1728,16 @@ export function SubjectValidation() {
                     </select>
                     {HOST_HARNESSES.has(arm.harness) ? (
                       <span className="muted small">
-                        Runs the {arm.harness} CLI with its native auth.{" "}
+                        {m.armsPanel.runsNativeAuth(arm.harness)}
                         {arm.harness === "claude"
-                          ? "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host)."
-                          : "Needs host mode — run make app-host."}
+                          ? m.armsPanel.claudeAuthNote
+                          : m.armsPanel.hostModeNote}
                       </span>
                     ) : null}
                   </label>
                   <div className="full">
                     <ModelPicker
-                      label="Executor model"
+                      label={m.armsPanel.executorModel}
                       nativeOptions={HARNESS_NATIVE_MODELS[arm.harness]}
                       onChange={(modelId) =>
                         editArms((current) =>
@@ -1250,7 +1764,7 @@ export function SubjectValidation() {
                       }
                       type="button"
                     >
-                      <IconX size={14} /> Remove
+                      <IconX size={14} /> {m.armsPanel.remove}
                     </button>
                   ) : null}
                 </div>
@@ -1269,12 +1783,12 @@ export function SubjectValidation() {
               }
               type="button"
             >
-              <IconPlus size={14} /> Add an arm
+              <IconPlus size={14} /> {m.armsPanel.addArm}
             </button>
           </div>
           <div className="form-grid">
             <label>
-              <span>Repetitions per arm</span>
+              <span>{m.armsPanel.repetitions}</span>
               <select
                 disabled={launched}
                 onChange={(event) => editRepetitions(Number(event.target.value))}
@@ -1289,9 +1803,7 @@ export function SubjectValidation() {
             </label>
           </div>
           <p className="muted">
-            {arms.length} arm(s) x {repetitions} repetition(s) = {arms.length * repetitions}{" "}
-            run(s). A single run of an agent is an anecdote; the repetitions are what
-            make "most of the time" a rate.
+            {m.armsPanel.armsSummary(arms.length, repetitions, arms.length * repetitions)}
           </p>
           {blocking.arms.length > 0 ? (
             <ul className="blocking-list">
@@ -1302,6 +1814,7 @@ export function SubjectValidation() {
           ) : null}
           {warnings.length > 0 ? (
             <ul className="blocking-list blocking-list--warning">
+              {/* warnings are backend-composed and stay in English. */}
               {warnings.map((warning) => (
                 <li key={warning}>{warning}</li>
               ))}
@@ -1316,8 +1829,8 @@ export function SubjectValidation() {
                 type="button"
               >
                 {busy === "launch"
-                  ? "Queueing…"
-                  : `Launch ${arms.length * repetitions} run(s)`}
+                  ? m.armsPanel.queueing
+                  : m.armsPanel.launch(arms.length * repetitions)}
               </button>
             ) : (
               <button
@@ -1326,7 +1839,7 @@ export function SubjectValidation() {
                 onClick={() => void createDesign()}
                 type="button"
               >
-                {busy === "design" ? "Creating…" : "Create the design"}
+                {busy === "design" ? m.armsPanel.creating : m.armsPanel.createDesign}
               </button>
             )}
           </div>
@@ -1336,27 +1849,23 @@ export function SubjectValidation() {
       {step === "watch" ? (
         <div className="panel">
           <div className="panel-head">
-            <h2>The runs</h2>
+            <h2>{m.watchPanel.heading}</h2>
             <Link className="button-link" to={`/evaluate/experiments?experiment=${experimentId}`}>
-              Open the experiment
+              {m.watchPanel.openExperiment}
             </Link>
           </div>
-          <p className="muted">
-            The pass column is the validation command's verdict, computed for you. Open
-            a run's sandbox to see what the agent actually did — that is the part no
-            score can carry, and it is why a scored run is still worth looking at.
-          </p>
+          <p className="muted">{m.watchPanel.intro}</p>
           {runs.length === 0 ? (
-            <Spinner label="Waiting for the runs to appear" />
+            <Spinner label={m.watchPanel.waitingForRuns} />
           ) : (
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Run</th>
-                  <th>Arm</th>
-                  <th>State</th>
-                  <th>Passed</th>
-                  <th>Your judgement</th>
+                  <th>{m.watchPanel.run}</th>
+                  <th>{m.watchPanel.arm}</th>
+                  <th>{m.watchPanel.state}</th>
+                  <th>{m.watchPanel.passed}</th>
+                  <th>{m.watchPanel.yourJudgement}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1373,16 +1882,16 @@ export function SubjectValidation() {
                       {item.objective_passed === null || item.objective_passed === undefined
                         ? "—"
                         : item.objective_passed
-                          ? "pass"
-                          : "fail"}
+                          ? m.watchPanel.pass
+                          : m.watchPanel.fail}
                     </td>
                     <td>
                       <Link to={`/advanced/runs/${item.run_id}?tab=terminal`}>
-                        Open the sandbox
+                        {m.watchPanel.openSandbox}
                       </Link>
                       {item.score === null || item.score === undefined
                         ? null
-                        : ` · scored ${item.score}/10`}
+                        : m.watchPanel.scored(item.score)}
                     </td>
                   </tr>
                 ))}
@@ -1396,7 +1905,7 @@ export function SubjectValidation() {
               onClick={() => void loadSummary()}
               type="button"
             >
-              {busy === "summary" ? "Reading…" : "Read the result"}
+              {busy === "summary" ? m.watchPanel.reading : m.watchPanel.readResult}
             </button>
           </div>
         </div>
@@ -1408,7 +1917,8 @@ export function SubjectValidation() {
             <div className="card verdict verdict--neutral">
               <div className="verdict-head">
                 <div>
-                  <p className="verdict-kicker">Result</p>
+                  {/* summary.verdict.* is backend-composed and stays in English. */}
+                  <p className="verdict-kicker">{m.readPanel.resultKicker}</p>
                   <h2>{summary.verdict.headline}</h2>
                   <p className="muted">{summary.verdict.claim}</p>
                 </div>
@@ -1416,7 +1926,9 @@ export function SubjectValidation() {
                   {summary.verdict.strength}
                 </span>
               </div>
-              <p className="verdict-evidence muted">Evidence: {summary.verdict.evidence}</p>
+              <p className="verdict-evidence muted">
+                {m.readPanel.evidence(summary.verdict.evidence)}
+              </p>
               {summary.verdict.caveats.length > 0 ? (
                 <ul className="warning-list">
                   {summary.verdict.caveats.map((caveat) => (
@@ -1429,15 +1941,15 @@ export function SubjectValidation() {
 
           <div className="panel">
             <div className="panel-head">
-              <h2>One rate per arm</h2>
+              <h2>{m.readPanel.onePerArm}</h2>
             </div>
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Arm</th>
-                  <th>Passed</th>
-                  <th>Scored runs</th>
-                  <th>Cost (mean)</th>
+                  <th>{m.readPanel.arm}</th>
+                  <th>{m.readPanel.passed}</th>
+                  <th>{m.readPanel.scoredRuns}</th>
+                  <th>{m.readPanel.costMean}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1458,22 +1970,19 @@ export function SubjectValidation() {
                 ))}
               </tbody>
             </table>
-            <p className="muted">
-              These are not averaged together. A combined number would describe a
-              configuration nobody runs.
-            </p>
+            <p className="muted">{m.readPanel.notAveraged}</p>
           </div>
 
           {summary.case_outcomes ? (
             <div className="panel">
               <div className="panel-head">
-                <h2>Per case</h2>
-                <span className="muted">Passed of scored, per arm</span>
+                <h2>{m.readPanel.perCase}</h2>
+                <span className="muted">{m.readPanel.passedOfScored}</span>
               </div>
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Case</th>
+                    <th>{m.readPanel.case}</th>
                     {Object.keys(summary.case_outcomes).map((label) => (
                       <th key={label}>{label}</th>
                     ))}
@@ -1495,7 +2004,7 @@ export function SubjectValidation() {
                           <td key={label}>
                             {!cell || cell.scored_runs === 0
                               ? "—"
-                              : `${cell.successes} of ${cell.scored_runs}`}
+                              : m.readPanel.successesOfScored(cell.successes, cell.scored_runs)}
                           </td>
                         );
                       })}
@@ -1512,26 +2021,18 @@ export function SubjectValidation() {
               onClick={() => navigate(`/evaluate/experiments?experiment=${experimentId}`)}
               type="button"
             >
-              Open the full experiment
+              {m.readPanel.openFullExperiment}
             </button>
             <button className="ghost" onClick={() => setStep("watch")} type="button">
-              Back to the runs
+              {m.readPanel.backToRuns}
             </button>
           </div>
         </>
       ) : null}
 
-      <HelpPanel docHref="docs/guide-skill-validation.md" title="What this mode can and cannot say">
-        <p>
-          It reports how often your subject completed its cases under each harness and
-          model. It cannot tell you whether the harness helped: no arm here has the
-          harness removed, so there is nothing to attribute a difference to.
-        </p>
-        <p>
-          To ask that question instead, run a{" "}
-          <Link to="/evaluate/new">harness evaluation</Link>, which ablates a skill and
-          compares the arm with it against the arm without.
-        </p>
+      <HelpPanel docHref="docs/guide-skill-validation.md" title={m.helpPanel.title}>
+        <p>{m.helpPanel.body1}</p>
+        <p>{m.helpPanel.body2(m.helpPanel.harnessEvaluation)}</p>
       </HelpPanel>
     </section>
   );

@@ -39,6 +39,18 @@ container):
    (or just `make app-up`, which builds it).
 3. Create a claude run as usual — no host worker needed.
 
+**The CLI version is pinned** (`ARG CLAUDE_CODE_VERSION` in `Dockerfile.runner`) and
+recorded as the image label `claude-code.version`. Newer models need a newer CLI —
+the 5.5 family and Fable 5.1 need 2.1.280 or later (`MIN_CLAUDE_CLI_VERSION` in
+`native_models.py`) — and an unpinned install stays on whatever Docker cached. Bump
+the ARG and rebuild when a model needs it. **Health** shows the image's version and
+warns when it is too old for a current model, and preflight refuses such a run
+instead of letting it die on the API's `claude_code_version_too_old`.
+
+In Docker every claude run reaches Anthropic through the gateway
+(`ANTHROPIC_BASE_URL` in `.claude/settings.local.json`), so the gateway must have a
+card for the model too; preflight checks that as well.
+
 ### Claude observability + A/B hygiene (stream-json)
 
 `claude` runs execute with `--output-format stream-json --verbose`: the raw

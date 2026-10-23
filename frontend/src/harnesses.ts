@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "./api";
+import { defineMessages, useLang } from "./i18n";
 import type { ModelOption } from "./types";
 
 /**
@@ -36,6 +37,37 @@ export const HARNESS_NATIVE_MODELS: Record<string, ModelOption[]> = {
   codex: [{ id: "codex-mini-latest", label: "Codex Mini (latest)" }]
 };
 
+const MESSAGES = defineMessages({
+  en: { previous: " (previous)", notOnGateway: " — not on your gateway" },
+  es: { previous: " (anterior)", notOnGateway: " — no está en tu gateway" }
+});
+
+/**
+ * The live reading of every native model by id, across harnesses: its label
+ * with the generation and gateway suffixes, and whether the gateway serves it.
+ * Forms that still list `HARNESS_NATIVE_MODELS` read it so a model the gateway
+ * cannot serve is marked everywhere, not only in the harness x model form.
+ */
+export function useNativeModelIndex(): Record<string, NativeModel> {
+  const catalog = useNativeModels();
+  return Object.fromEntries(
+    Object.values(catalog)
+      .flat()
+      .map((model) => [model.id, model])
+  );
+}
+
+/** The first native model the gateway does not rule out, for a harness default. */
+export function defaultNativeModel(
+  harness: string,
+  index: Record<string, NativeModel>
+): string | undefined {
+  const models = HARNESS_NATIVE_MODELS[harness];
+  if (!models) return undefined;
+  const served = models.find((model) => index[model.id]?.on_gateway !== false);
+  return (served ?? models[0]).id;
+}
+
 /** One native model as `GET /api/models/native` serves it (ADR-0069). */
 export type NativeModel = ModelOption & {
   generation: "current" | "previous";
@@ -62,6 +94,7 @@ export function useNativeModels(): Record<string, NativeModel[]> {
     ])
   ) as Record<string, NativeModel[]>;
   const [models, setModels] = useState<Record<string, NativeModel[]>>(fallback);
+  const m = MESSAGES[useLang().lang];
   useEffect(() => {
     let active = true;
     api
@@ -76,8 +109,8 @@ export function useNativeModels(): Record<string, NativeModel[]> {
                 ...row,
                 label:
                   row.label +
-                  (row.generation === "previous" ? " (previous)" : "") +
-                  (row.on_gateway === false ? " — not on your gateway" : "")
+                  (row.generation === "previous" ? m.previous : "") +
+                  (row.on_gateway === false ? m.notOnGateway : "")
               }))
             ])
           )
@@ -87,6 +120,6 @@ export function useNativeModels(): Record<string, NativeModel[]> {
     return () => {
       active = false;
     };
-  }, []);
+  }, [m]);
   return models;
 }

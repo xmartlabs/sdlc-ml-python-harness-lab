@@ -19,9 +19,111 @@
  *   when that folder is a repository.
  */
 
+import { defineMessages, useMessages } from "../i18n";
 import type { LocalSourceListing } from "../types";
 import { EmptyState } from "./EmptyState";
 import { IconChevronRight, IconFolder, IconGitBranch, IconLevelUp } from "./icons";
+
+const MESSAGES = defineMessages({
+  en: {
+    how: (useLabel: string) => (
+      <>
+        <strong>Click a folder to open it.</strong> The ones marked{" "}
+        <span className="folder-picker__inline-tag">
+          <IconGitBranch size={12} /> git
+        </span>{" "}
+        are repositories you can audit — press <strong>{useLabel}</strong> on one, or
+        open it first if you want to look inside.
+      </>
+    ),
+    topOfShared: "Top of the shared folder",
+    upOneLevel: "Up one level",
+    crumbsLabel: "Folder you are browsing",
+    insideRepo: (branch: string) => (branch ? ` on ${branch}` : ""),
+    youAreInside: (branchSuffix: string, hint: string) => (
+      <>You are inside this repository{branchSuffix}. {hint}</>
+    ),
+    plainFolder: (name: string) => (
+      <>
+        <strong>{name}</strong> is a plain folder, not a git repository. Open one of
+        the folders below to find the repository you want.
+      </>
+    ),
+    nothingToOpenTitle: "Nothing to open here.",
+    nothingToOpenRoot:
+      "This folder holds no subdirectories. Point HARNESS_LAB_LOCAL_SOURCES_DIR at " +
+      "the directory where your repositories live and restart the lab.",
+    nothingToOpenDeeper: "This folder holds no subdirectories. Go back up and try another one.",
+    gitRepoLookInside: "Git repository — open to look inside",
+    plainFolderOpenIt: "Folder — open it",
+    browsing: (path: string) => (
+      <>
+        Browsing <code>{path}</code>
+      </>
+    ),
+    repoCount: (count: number) =>
+      ` — ${count} git ${count === 1 ? "repository" : "repositories"} here.`,
+    noRepoCount: ".",
+    rootHelp: (
+      <>
+        {" "}
+        Your repositories somewhere else? Set{" "}
+        <code>HARNESS_LAB_LOCAL_SOURCES_DIR</code> in <code>.env</code> to the
+        directory that holds them and restart the lab — one directory of
+        repositories, never your home folder.
+      </>
+    )
+  },
+  es: {
+    how: (useLabel: string) => (
+      <>
+        <strong>Hacé clic en una carpeta para abrirla.</strong> Las marcadas{" "}
+        <span className="folder-picker__inline-tag">
+          <IconGitBranch size={12} /> git
+        </span>{" "}
+        son repositorios que podés auditar — presioná <strong>{useLabel}</strong> en
+        uno, o abrilo primero si querés mirar adentro.
+      </>
+    ),
+    topOfShared: "Tope de la carpeta compartida",
+    upOneLevel: "Subir un nivel",
+    crumbsLabel: "Carpeta que estás explorando",
+    insideRepo: (branch: string) => (branch ? ` en ${branch}` : ""),
+    youAreInside: (branchSuffix: string, hint: string) => (
+      <>Estás dentro de este repositorio{branchSuffix}. {hint}</>
+    ),
+    plainFolder: (name: string) => (
+      <>
+        <strong>{name}</strong> es una carpeta común, no un repositorio git. Abrí
+        una de las carpetas de abajo para encontrar el repositorio que buscás.
+      </>
+    ),
+    nothingToOpenTitle: "Nada para abrir acá.",
+    nothingToOpenRoot:
+      "Esta carpeta no tiene subdirectorios. Apuntá HARNESS_LAB_LOCAL_SOURCES_DIR al " +
+      "directorio donde viven tus repositorios y reiniciá el lab.",
+    nothingToOpenDeeper: "Esta carpeta no tiene subdirectorios. Volvé arriba y probá con otra.",
+    gitRepoLookInside: "Repositorio git — abrí para mirar adentro",
+    plainFolderOpenIt: "Carpeta — abrila",
+    browsing: (path: string) => (
+      <>
+        Explorando <code>{path}</code>
+      </>
+    ),
+    repoCount: (count: number) =>
+      ` — ${count} ${count === 1 ? "repositorio git" : "repositorios git"} acá.`,
+    noRepoCount: ".",
+    rootHelp: (
+      <>
+        {" "}
+        ¿Tus repositorios están en otro lado? Configurá{" "}
+        <code>HARNESS_LAB_LOCAL_SOURCES_DIR</code> en <code>.env</code> con el
+        directorio que los contiene y reiniciá el lab — un directorio de
+        repositorios, nunca tu carpeta personal.
+      </>
+    )
+  }
+});
 
 type FolderPickerProps = {
   listing: LocalSourceListing;
@@ -67,6 +169,7 @@ export function FolderPicker({
   workingLabel,
   useHint
 }: FolderPickerProps) {
+  const m = useMessages(MESSAGES);
   const crumbs = trail(listing);
   const here = crumbs[crumbs.length - 1];
   const parent = listing.parent;
@@ -74,18 +177,11 @@ export function FolderPicker({
 
   return (
     <section aria-busy={browsing} className="folder-picker">
-      <p className="folder-picker__how">
-        <strong>Click a folder to open it.</strong> The ones marked{" "}
-        <span className="folder-picker__inline-tag">
-          <IconGitBranch size={12} /> git
-        </span>{" "}
-        are repositories you can audit — press <strong>{useLabel}</strong> on one, or
-        open it first if you want to look inside.
-      </p>
+      <p className="folder-picker__how">{m.how(useLabel)}</p>
 
       <div className="folder-picker__bar">
         {parent == null ? (
-          <span className="folder-picker__top">Top of the shared folder</span>
+          <span className="folder-picker__top">{m.topOfShared}</span>
         ) : (
           <button
             className="ghost folder-picker__up"
@@ -94,10 +190,10 @@ export function FolderPicker({
             type="button"
           >
             <IconLevelUp size={15} />
-            Up one level
+            {m.upOneLevel}
           </button>
         )}
-        <nav aria-label="Folder you are browsing" className="folder-picker__crumbs">
+        <nav aria-label={m.crumbsLabel} className="folder-picker__crumbs">
           {crumbs.map((crumb, index) =>
             index === crumbs.length - 1 ? (
               <span aria-current="location" className="crumb crumb--here" key={crumb.path}>
@@ -129,8 +225,7 @@ export function FolderPicker({
               <span className="badge pick-tag">git</span>
             </strong>
             <span className="muted small">
-              You are inside this repository
-              {listing.branch ? ` on ${listing.branch}` : ""}. {useHint}
+              {m.youAreInside(m.insideRepo(listing.branch ?? ""), useHint)}
             </span>
           </div>
           <button
@@ -145,21 +240,14 @@ export function FolderPicker({
       ) : (
         <p className="folder-picker__here-note muted small">
           <IconFolder size={14} />
-          <span>
-            <strong>{here.label}</strong> is a plain folder, not a git repository. Open
-            one of the folders below to find the repository you want.
-          </span>
+          <span>{m.plainFolder(here.label)}</span>
         </p>
       )}
 
       {listing.entries.length === 0 ? (
         <EmptyState
-          description={
-            parent == null
-              ? "This folder holds no subdirectories. Point HARNESS_LAB_LOCAL_SOURCES_DIR at the directory where your repositories live and restart the lab."
-              : "This folder holds no subdirectories. Go back up and try another one."
-          }
-          title="Nothing to open here."
+          description={parent == null ? m.nothingToOpenRoot : m.nothingToOpenDeeper}
+          title={m.nothingToOpenTitle}
         />
       ) : (
         <ul className="folder-picker__list">
@@ -183,7 +271,7 @@ export function FolderPicker({
                     {entry.is_repo ? <span className="badge pick-tag">git</span> : null}
                   </strong>
                   <span className="muted">
-                    {entry.is_repo ? "Git repository — open to look inside" : "Folder — open it"}
+                    {entry.is_repo ? m.gitRepoLookInside : m.plainFolderOpenIt}
                   </span>
                 </span>
                 <IconChevronRight className="folder-row__go" size={16} />
@@ -204,14 +292,9 @@ export function FolderPicker({
       )}
 
       <p className="folder-picker__root muted small">
-        Browsing <code>{listing.root}</code>
-        {repositories > 0
-          ? ` — ${repositories} git ${repositories === 1 ? "repository" : "repositories"} here.`
-          : "."}{" "}
-        Your repositories somewhere else? Set{" "}
-        <code>HARNESS_LAB_LOCAL_SOURCES_DIR</code> in <code>.env</code> to the directory
-        that holds them and restart the lab — one directory of repositories, never your
-        home folder.
+        {m.browsing(listing.root ?? "")}
+        {repositories > 0 ? m.repoCount(repositories) : m.noRepoCount}
+        {m.rootHelp}
       </p>
     </section>
   );

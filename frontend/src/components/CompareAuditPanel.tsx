@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../api";
+import { defineMessages, useMessages } from "../i18n";
 import type { CompareAuditRecord } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
 import { Markdown } from "./Markdown";
@@ -12,6 +13,49 @@ type CompareAuditPanelProps = {
   /** False while any selected run is still executing; the backend refuses then too. */
   allFinished: boolean;
 };
+
+const MESSAGES = defineMessages({
+  en: {
+    title: "Reading",
+    reading: "Reading…",
+    explainAgain: "Explain again",
+    explain: "Explain this comparison",
+    readyTitle:
+      "An LLM reads the table above and writes what was compared, what the numbers say, what differed between these runs, and why this is not a causal claim.",
+    notReadyTitle:
+      "Available once at least two runs are selected and every one of them has stopped.",
+    noneYetReadable:
+      "No reading yet. Ask for one to get, in plain language, whether anything improved, which numbers were never measured, and what the differences between these runs can and cannot explain.",
+    noneYetNotReadable:
+      "The reading becomes available once at least two runs are selected and every one of them has stopped.",
+    readingWith: (model: string) => `Reading with ${model}…`,
+    theDefaultModel: "the default model",
+    readingFailed: "The reading failed",
+    unableToRead: "Unable to read this comparison",
+    hideEvidence: "hide the evidence it was given",
+    showEvidence: "show the evidence it was given"
+  },
+  es: {
+    title: "Lectura",
+    reading: "Leyendo…",
+    explainAgain: "Explicar de nuevo",
+    explain: "Explicar esta comparación",
+    readyTitle:
+      "Un LLM lee la tabla de arriba y escribe qué se comparó, qué dicen los números, qué difirió entre estas corridas y por qué esto no es una afirmación causal.",
+    notReadyTitle:
+      "Disponible cuando haya al menos dos corridas seleccionadas y todas hayan terminado.",
+    noneYetReadable:
+      "Todavía no hay lectura. Pedí una para saber, en lenguaje claro, si algo mejoró, qué números nunca se midieron y qué pueden y no pueden explicar las diferencias entre estas corridas.",
+    noneYetNotReadable:
+      "La lectura estará disponible cuando haya al menos dos corridas seleccionadas y todas hayan terminado.",
+    readingWith: (model: string) => `Leyendo con ${model}…`,
+    theDefaultModel: "el modelo por defecto",
+    readingFailed: "La lectura falló",
+    unableToRead: "No se pudo leer esta comparación",
+    hideEvidence: "ocultar la evidencia que recibió",
+    showEvidence: "mostrar la evidencia que recibió"
+  }
+});
 
 /**
  * An LLM reading of the comparison table, generated only when asked for.
@@ -26,6 +70,7 @@ type CompareAuditPanelProps = {
  * button generates or replaces the reading for exactly this set of runs.
  */
 export function CompareAuditPanel({ runIds, allFinished }: CompareAuditPanelProps) {
+  const m = useMessages(MESSAGES);
   const [audit, setAudit] = useState<CompareAuditRecord | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,38 +130,30 @@ export function CompareAuditPanel({ runIds, allFinished }: CompareAuditPanelProp
       .then(() => api.getCompareAudit(runIds))
       .then(setAudit)
       .catch((runError: unknown) =>
-        setError(
-          runError instanceof Error
-            ? runError.message
-            : "Unable to read this comparison"
-        )
+        setError(runError instanceof Error ? runError.message : m.unableToRead)
       )
       .finally(() => setPending(false));
   };
 
   const label =
     audit?.status === "running"
-      ? "Reading…"
+      ? m.reading
       : audit?.status === "done"
-        ? "Explain again"
-        : "Explain this comparison";
+        ? m.explainAgain
+        : m.explain;
 
   return (
     <div className="card">
       <div className="row space-between">
         <h3>
-          Reading <ProvenanceBadge provenance="judgement" />
+          {m.title} <ProvenanceBadge provenance="judgement" />
         </h3>
         <div className="button-row">
           {audit ? <span className="badge">{audit.status}</span> : null}
           <button
             disabled={!readable || pending || audit?.status === "running"}
             onClick={handleRun}
-            title={
-              readable
-                ? "An LLM reads the table above and writes what was compared, what the numbers say, what differed between these runs, and why this is not a causal claim."
-                : "Available once at least two runs are selected and every one of them has stopped."
-            }
+            title={readable ? m.readyTitle : m.notReadyTitle}
             type="button"
           >
             {label}
@@ -127,15 +164,11 @@ export function CompareAuditPanel({ runIds, allFinished }: CompareAuditPanelProp
         <ErrorBanner message={error} onDismiss={() => setError(null)} />
       )}
       {audit === null ? (
-        <p className="muted">
-          {readable
-            ? "No reading yet. Ask for one to get, in plain language, whether anything improved, which numbers were never measured, and what the differences between these runs can and cannot explain."
-            : "The reading becomes available once at least two runs are selected and every one of them has stopped."}
-        </p>
+        <p className="muted">{readable ? m.noneYetReadable : m.noneYetNotReadable}</p>
       ) : audit.status === "running" ? (
-        <Spinner label={`Reading with ${audit.auditor_model || "the default model"}…`} />
+        <Spinner label={m.readingWith(audit.auditor_model || m.theDefaultModel)} />
       ) : audit.status === "failed" ? (
-        <ErrorBanner message={audit.error ?? "The reading failed"} />
+        <ErrorBanner message={audit.error ?? m.readingFailed} />
       ) : (
         <>
           <Markdown>{audit.markdown}</Markdown>
@@ -147,9 +180,7 @@ export function CompareAuditPanel({ runIds, allFinished }: CompareAuditPanelProp
               onClick={() => setShowEvidence((value) => !value)}
               type="button"
             >
-              {showEvidence
-                ? "hide the evidence it was given"
-                : "show the evidence it was given"}
+              {showEvidence ? m.hideEvidence : m.showEvidence}
             </button>
           </p>
           {showEvidence && audit.evidence_json ? (
