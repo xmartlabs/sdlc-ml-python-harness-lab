@@ -575,6 +575,17 @@ harness-check:
 	@[ -n "$(REPO)" ] || { echo "❌ REPO is required. Example: REPO=../my-project"; exit 1; }
 	@uv run python scripts/harness_check.py --repo '$(REPO)' $(if $(REF),--ref '$(REF)',)
 
+# Carry the lab's harness — or just some skills — into your own repository
+# (ADR-0072). Previews by default; APPLY=1 writes. Refuses uncommitted work.
+# Usage: make harness-export REPO=../my-project [TOOL=claude] [SKILLS=a,b] [GOVERNANCE=0] [APPLY=1]
+#        make harness-export LIST=1   # the skill names you can export
+harness-export:
+	@if [ -n "$(LIST)" ]; then uv run python scripts/harness_export.py --list; exit 0; fi; \
+	[ -n "$(REPO)" ] || { echo "❌ REPO is required. Example: REPO=../my-project (or LIST=1 for the skill names)"; exit 1; }
+	@uv run python scripts/harness_export.py --repo '$(REPO)' --tool '$(or $(TOOL),claude)' \
+		$(if $(SKILLS),--skills '$(SKILLS)',) $(if $(filter 0,$(GOVERNANCE)),--no-governance,) \
+		$(if $(APPLY),--apply,)
+
 # Import a hand-authored benchmark case from its task.yaml (idempotent).
 # Usage: make case-import TASK=benchmarks/cli-textstats/task.yaml
 case-import:
@@ -986,4 +997,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill
+.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill

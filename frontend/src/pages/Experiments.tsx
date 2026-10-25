@@ -1813,7 +1813,7 @@ export function Experiments() {
         </div>
       </header>
 
-      <HelpPanel title={m.helpTitle}>
+      <HelpPanel doc="read-results" title={m.helpTitle}>
         <p>{m.helpParagraph1}</p>
         <p className="muted">{m.helpParagraph2}</p>
       </HelpPanel>

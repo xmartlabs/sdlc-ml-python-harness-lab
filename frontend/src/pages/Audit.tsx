@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { HelpPanel } from "../components/HelpPanel";
 import { FolderPicker } from "../components/FolderPicker";
 import { Markdown } from "../components/Markdown";
 import { ModelPicker } from "../components/ModelPicker";
@@ -193,6 +194,24 @@ const MESSAGES = defineMessages({
     gateErrorSuffix: (message: string) =>
       `${message} Adopt the inferred gate above first — with no validation ` +
       "command there is nothing for the check to run.",
+    help: {
+      title: "What this audit tells you, and the thirty-second version",
+      body: (
+        <>
+          <p>
+            The audit runs eight checks that code can decide — rules file, a
+            verification target that can fail, skill frontmatter, context size, pinned
+            hooks and MCP servers, a declared harness version — then has a model map
+            the harness and propose cases that would test it. The checks decide where
+            the wizard goes next, not the model.
+          </p>
+          <p>
+            No stack needed for the checks alone: <code>make harness-check REPO=../your-project</code>.
+            To copy what works into your repository: <code>make harness-export</code>.
+          </p>
+        </>
+      )
+    },
     header: {
       title: "Set up a repository for audit",
       lede:
@@ -629,6 +648,24 @@ const MESSAGES = defineMessages({
     gateErrorSuffix: (message: string) =>
       `${message} Adoptá primero el gate inferido de arriba — sin un comando de ` +
       "validación no hay nada que el chequeo pueda correr.",
+    help: {
+      title: "Qué te dice esta auditoría, y la versión de treinta segundos",
+      body: (
+        <>
+          <p>
+            La auditoría corre ocho chequeos que decide el código — archivo de reglas,
+            un target de verificación que pueda fallar, frontmatter de las skills,
+            tamaño del contexto, hooks y servidores MCP fijados, una versión de arnés
+            declarada — y después un modelo mapea el arnés y propone casos que lo
+            prueben. Los chequeos deciden a dónde sigue el asistente, no el modelo.
+          </p>
+          <p>
+            Sin stack, solo los chequeos: <code>make harness-check REPO=../tu-proyecto</code>.
+            Para copiar lo que funciona a tu repositorio: <code>make harness-export</code>.
+          </p>
+        </>
+      )
+    },
     header: {
       title: "Configurar un repositorio para auditar",
       lede:
@@ -1981,6 +2018,10 @@ export function Audit() {
           <p className="lede">{m.header.lede}</p>
         </div>
       </header>
+
+      <HelpPanel doc="bring-your-own" title={m.help.title}>
+        {m.help.body}
+      </HelpPanel>
 
       <ol className="stepper">
         {STEPS.map((item, index) => (

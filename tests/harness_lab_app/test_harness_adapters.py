@@ -226,6 +226,10 @@ def _docker_claude(monkeypatch, routing):
         lambda name, *_a, **_k: "tok" if name == "CLAUDE_CODE_OAUTH_TOKEN" else "",
     )
     monkeypatch.setattr(RunService, "_gateway_routing", lambda _self: routing)
+    # These tests describe an install whose claude CLI goes through the gateway.
+    monkeypatch.setattr(
+        RunService, "_claude_routes_through_gateway", lambda _self: True
+    )
     return RunService.__new__(RunService)
 
 
@@ -373,3 +377,44 @@ def test_the_runner_pins_a_claude_cli_new_enough_for_every_current_model():
         required = min_claude_cli_version(model["id"])
         if required:
             assert as_tuple(pinned.group(1)) >= as_tuple(required), model["id"]
+
+
+def test_a_claude_cli_talking_to_anthropic_directly_is_not_held_to_the_gateway(
+    monkeypatch,
+):
+    """A developer's claude reaches Anthropic directly unless their own
+    .claude/settings.local.json sets ANTHROPIC_BASE_URL. A gateway configured for
+    opencode must not then refuse a model Anthropic serves."""
+    from harness_lab_app.run_service import RunService
+    from harness_lab_app.schemas import RunConfigCreate
+
+    service = _docker_claude(monkeypatch, {"claude-opus-5-5": {}})
+    monkeypatch.setattr(
+        RunService, "_claude_routes_through_gateway", lambda _self: False
+    )
+    service.preflight(
+        RunConfigCreate(
+            case_id="todo-web-v1",
+            prompt_variant="default",
+            harness="claude",
+            executor_model="claude-haiku-5-5",
+        )
+    )
+
+
+def test_claude_routes_through_the_gateway_only_when_its_settings_say_so(
+    tmp_path, monkeypatch
+):
+    import json
+
+    import harness_lab_app.run_service as rs
+    from harness_lab_app.run_service import RunService
+
+    monkeypatch.setattr(rs.get_settings(), "repo_root", tmp_path, raising=False)
+    service = RunService.__new__(RunService)
+    assert service._claude_routes_through_gateway() is False
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.local.json").write_text(
+        json.dumps({"env": {"ANTHROPIC_BASE_URL": "https://gateway.example"}})
+    )
+    assert service._claude_routes_through_gateway() is True

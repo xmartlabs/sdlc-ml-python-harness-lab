@@ -78,6 +78,11 @@ def test_the_endpoint_marks_models_the_gateway_does_not_serve(monkeypatch):
         "fetch_gateway_routing_cached",
         lambda *_a, **_k: {"claude-opus-5-5-oauth": {}},
     )
+    # This install's claude CLI goes through the gateway; not every one does.
+    monkeypatch.setattr(
+        "harness_lab_app.executors.claude_settings_env",
+        lambda _root: {"ANTHROPIC_BASE_URL": "http://gw"},
+    )
     claude = {m["id"]: m for m in _endpoint("/api/models/native")()["claude"]}
     assert claude["claude-opus-5-5"]["on_gateway"] is True
     assert claude["claude-sonnet-5-5"]["on_gateway"] is False
@@ -89,3 +94,15 @@ def test_the_endpoint_reports_unknown_without_a_gateway(monkeypatch):
     monkeypatch.setattr(api_module, "_gateway_endpoint", lambda: ("", ""))
     claude = _endpoint("/api/models/native")()["claude"]
     assert {m["on_gateway"] for m in claude} == {None}
+
+
+def test_claude_coverage_is_unknown_when_claude_does_not_use_the_gateway():
+    """A gateway for opencode says nothing about a claude CLI that talks to
+    Anthropic directly: its models must not be marked 'not on your gateway'."""
+    routing = {"claude-opus-5-5": {}}
+    catalog = native_catalog(routing, claude_via_gateway=False)
+    assert {m["on_gateway"] for m in catalog["claude"]} == {None}
+    assert (
+        native_catalog(routing, claude_via_gateway=True)["claude"][0]["on_gateway"]
+        is False
+    )

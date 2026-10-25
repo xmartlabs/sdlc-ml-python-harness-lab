@@ -1607,6 +1607,8 @@ export type DocEntry = {
   title: string;
   description: string;
   group: string;
+  /** The file under docs/, so a link between two catalogued docs opens in place. */
+  file: string;
 };
 
 export type DocContent = {

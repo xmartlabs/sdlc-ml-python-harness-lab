@@ -15,7 +15,6 @@ import type {
   ConditionRecord,
   ExperimentRecord,
   GateCheckRecord,
-  HarnessSkill,
   ReadinessReport,
   StagedSkillRecord,
   TargetRecord
@@ -189,7 +188,6 @@ const MESSAGES = defineMessages({
       skillsSelected: (count: number) => `Skills — ${count} selected`,
       loadingSkills: "Loading skills",
       staged: "staged",
-      governed: "governed",
       enforceSkillUse: "Enforce skill use",
       enforceHint:
         "Without it the treatment arm measures whether the skill was available, " +
@@ -221,10 +219,8 @@ const MESSAGES = defineMessages({
         "arms run against a moving ref are not the same experiment twice.",
       blockingNoCases: "Select at least one case. An experiment with no cases measures nothing.",
       blockingNoSkills: "Select at least one skill — that is the only thing the two arms differ on.",
-      blockingIdenticalArms:
-        "Every selected skill is already governed and the arm is not asked to use " +
-        "them, so both arms would be identical. Tick 'Enforce skill use', or add a " +
-        "staged skill.",
+      noStagedSkills:
+        "No staged skill yet. The lab's own skills are not in this repository's governance, so this preset measures skills you stage: import or create one on Evidence → Skills, then come back.",
       onThisRepoTitle: "Experiments on this repository",
       readingExperiments: "Reading experiments",
       noneRunTitle: "Nothing has been run against this repository yet",
@@ -374,7 +370,6 @@ const MESSAGES = defineMessages({
       skillsSelected: (count: number) => `Skills — ${count} seleccionada(s)`,
       loadingSkills: "Cargando skills",
       staged: "en borrador",
-      governed: "gobernada",
       enforceSkillUse: "Exigir el uso de la skill",
       enforceHint:
         "Sin esto, el brazo de tratamiento mide si la skill estaba disponible, no " +
@@ -407,10 +402,8 @@ const MESSAGES = defineMessages({
         "experimento dos veces.",
       blockingNoCases: "Seleccioná al menos un caso. Un experimento sin casos no mide nada.",
       blockingNoSkills: "Seleccioná al menos una skill — es lo único en que difieren los dos brazos.",
-      blockingIdenticalArms:
-        "Todas las skills seleccionadas ya están gobernadas y no se le pide al " +
-        "brazo que las use, así que ambos brazos serían idénticos. Tildá 'Exigir " +
-        "el uso de la skill', o agregá una skill en borrador.",
+      noStagedSkills:
+        "Todavía no hay skills en borrador. Las skills propias del lab no están en la gobernanza de este repositorio, así que este preset mide skills en borrador: importá o creá una en Evidencia → Skills y volvé.",
       onThisRepoTitle: "Experimentos en este repositorio",
       readingExperiments: "Leyendo experimentos",
       noneRunTitle: "Todavía no se corrió nada contra este repositorio",
@@ -468,7 +461,6 @@ export function RepositoryDetail() {
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [enforceInvoke, setEnforceInvoke] = useState(true);
   const [stagedSkills, setStagedSkills] = useState<StagedSkillRecord[]>([]);
-  const [governedSkills, setGovernedSkills] = useState<HarnessSkill[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
 
   const run = async (key: string, action: () => Promise<void>) => {
@@ -576,12 +568,7 @@ export function RepositoryDetail() {
 
   const loadSkills = () =>
     run("skills", async () => {
-      const [staged, governed] = await Promise.all([
-        api.listStagedSkills(),
-        api.listHarnessSkills()
-      ]);
-      setStagedSkills(staged);
-      setGovernedSkills(governed);
+      setStagedSkills(await api.listStagedSkills());
     });
 
   const rePin = () =>
@@ -661,7 +648,7 @@ export function RepositoryDetail() {
     setWarnings([]);
     setNotice("");
     setError(null);
-    if (next === "skills" && stagedSkills.length === 0 && governedSkills.length === 0) {
+    if (next === "skills" && stagedSkills.length === 0) {
       void loadSkills();
     }
   };
@@ -677,9 +664,6 @@ export function RepositoryDetail() {
     if (preset === "skills") {
       if (selectedSkills.length === 0) {
         return m.experimentsTab.blockingNoSkills;
-      }
-      if (stagedSelected.length === 0 && !enforceInvoke) {
-        return m.experimentsTab.blockingIdenticalArms;
       }
     }
     return "";
@@ -739,11 +723,10 @@ export function RepositoryDetail() {
                 : m.experimentsTab.conditionSkillsNoEnforce(skillList),
               overrides: {
                 ...shared,
-                // Governed skills are already present; only staged ones have to
-                // be added, so listing a governed name here would be a request
-                // for a staged skill that does not exist.
-                ...(stagedSelected.length > 0 ? { skills_extra: stagedSelected } : {}),
-                ...(enforceInvoke ? { skills_invoke: [...selectedSkills] } : {})
+                // Only staged skills reach a `native` arm (through skills_extra);
+                // the lab's governed skills are not in the target's governance.
+                skills_extra: stagedSelected,
+                ...(enforceInvoke ? { skills_invoke: [...stagedSelected] } : {})
               }
             }
           ]
@@ -1242,6 +1225,14 @@ export function RepositoryDetail() {
                     {busy === "skills" ? (
                       <Spinner label={m.experimentsTab.loadingSkills} />
                     ) : null}
+                    {/* Staged skills only: a `native` arm sees the repository's own
+                        governance, so a lab skill would be invoked without being
+                        there. Staged skills are the ones added with skills_extra. */}
+                    {busy !== "skills" && stagedSkills.length === 0 ? (
+                      <p className="callout callout--warning small">
+                        {m.experimentsTab.noStagedSkills}
+                      </p>
+                    ) : null}
                     <div className="checkbox-grid">
                       {stagedSkills.map((skill) => (
                         <label className="checkbox" key={`staged-${skill.name}`}>
@@ -1256,23 +1247,6 @@ export function RepositoryDetail() {
                             {skill.name}
                             <span className="badge pick-tag pick-tag--soft">
                               {m.experimentsTab.staged}
-                            </span>
-                          </span>
-                        </label>
-                      ))}
-                      {governedSkills.map((skill) => (
-                        <label className="checkbox" key={`governed-${skill.name}`}>
-                          <input
-                            checked={selectedSkills.includes(skill.name)}
-                            onChange={() =>
-                              setSelectedSkills((current) => toggle(current, skill.name))
-                            }
-                            type="checkbox"
-                          />
-                          <span>
-                            {skill.name}
-                            <span className="badge pick-tag pick-tag--soft">
-                              {m.experimentsTab.governed}
                             </span>
                           </span>
                         </label>

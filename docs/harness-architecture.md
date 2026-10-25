@@ -1,5 +1,9 @@
 # Harness Architecture
 
+> **Reference for maintainers.** How the template projects one governed harness into
+> each tool's native layout. You do not need it to use the lab — see [docs/README.md](README.md).
+
+
 This repository is a polyvalent template: one governed source of truth in `.github/`
 is projected into the native layout of every AI tool (Claude Code, OpenCode,
 Antigravity, Codex, Copilot). This document explains the projection engine and how

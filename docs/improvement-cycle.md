@@ -154,7 +154,7 @@ worklist is an additive path for multi-run grouping.
   ([ADR-0043](adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)).
   Runs on the host — pair it with the host or docker mode you're already using.
 - **Model:** the synthesis uses the auditor model by default (`gpt-5.4-mini` on
-  the gateway, `claude-sonnet-5` on the Claude CLI); override with
+  the gateway, `claude-sonnet-5-5` on the Claude CLI); override with
   `IMPROVE_MODEL=<model name the active transport understands>` (e.g. `gpt-5.5`
   for a stronger gateway pass).
 - **Any harness:** works for opencode, codex, and claude runs — whatever produced

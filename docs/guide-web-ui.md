@@ -7,12 +7,18 @@ walks the end-to-end flow and what each screen does.
 
 Start it with `make app-up` (brings up api + worker + redis + frontend).
 
+> **This is the screen-by-screen reference.** To get something done — make a case,
+> run a comparison, read a result, audit a repository, take a skill home — start at
+> [docs/README.md](README.md): six one-page journeys that send you here when you need
+> the detail.
+
 ## The core loop
 
 ```
 pick a Case → choose model + harness + prompt → Create run
    → watch it execute (logs stream live)
-   → it finishes: SWE-bench auto-scores; a case with a rubric is LLM-judged
+   → it finishes: a case with validation commands scores itself;
+     one with only a rubric is LLM-judged
    → Compare runs across models / conditions
 ```
 
@@ -944,7 +950,7 @@ second borrows the authority of the first.
 | Metric | What it is |
 |---|---|
 | `task_validation_pass` | every one of the case's validation commands exited 0. The success metric of every experiment |
-| `test_pass_rate` | passed ÷ *conclusive* checks. Its resolution is the number of validation commands the case declares: one command makes it binary, ten make it a gradient. A check that timed out, was killed, could not find its command or had no network is excluded, never counted as a failure ([ADR-0048](adr/0048-a-check-that-did-not-measure-is-not-a-failure.md), [ADR-0061](adr/0062-a-check-the-environment-failed-is-not-a-verdict.md)) |
+| `test_pass_rate` | passed ÷ *conclusive* checks. Its resolution is the number of validation commands the case declares: one command makes it binary, ten make it a gradient. A check that timed out, was killed, could not find its command or had no network is excluded, never counted as a failure ([ADR-0048](adr/0048-a-check-that-did-not-measure-is-not-a-failure.md), [ADR-0062](adr/0062-a-check-the-environment-failed-is-not-a-verdict.md)) |
 | `cost_usd` | what the provider charged, from the CLI's own accounting |
 | `billed_tokens` | **every token billed**: input + output + prompt cache written + prompt cache re-read. This is what a harness actually costs — a 25-skill catalog in the system prompt is re-read on every turn |
 | `total_tokens` | uncached input + output only. Kept for continuity with older runs; it can move *down* while cost moves up, so read `billed_tokens` |
@@ -1046,7 +1052,9 @@ disabled with `0` (`HARNESS_LAB_RUN_STALL_SECONDS`,
 `run_model_wait_seconds` for a slow model.
 
 ### Cases
-The catalog of tasks. Four ways to get realistic cases:
+The catalog of tasks. How to choose between the ways in — AI draft, SWE-bench and
+SWE-bench Pro import, a repository, a `task.yaml` — is
+[create a case](journey-create-a-case.md); this section is the screen itself.
 
 - **Draft it with AI** — describe the case in one sentence and the assistant
   shapes the whole thing: case type, a free id, name, description, the
@@ -1132,7 +1140,7 @@ thing it names?* Seven things put a card there:
 - **Nothing resolved on either side** — the mirror of "no headroom": no arm passed
   anything, so the dimension ranks nobody. When every run failed the *same* check it
   is the environment that decided, and the card says so
-  ([ADR-0061](adr/0062-a-check-the-environment-failed-is-not-a-verdict.md)).
+  ([ADR-0062](adr/0062-a-check-the-environment-failed-is-not-a-verdict.md)).
 - **The arm mixes treated and untreated runs** — it invoked its skills in some and not
   others.
 - **The design was objected to when it was created** — a warning the wizard showed you
@@ -1300,7 +1308,7 @@ the network at validation is what stops audited code from calling out while it i
 being measured. A command that installs will therefore die in its own installer every
 time, so the readiness report carries an **Offline validation** line that names any
 such command — including a `make test` whose recipe calls `make install` — before a
-run proves it ([ADR-0061](adr/0062-a-check-the-environment-failed-is-not-a-verdict.md)).
+run proves it ([ADR-0062](adr/0062-a-check-the-environment-failed-is-not-a-verdict.md)).
 Full walkthrough: [Target repositories](guide-target-repositories.md).
 
 Once two active repositories are registered the page header offers **Test the

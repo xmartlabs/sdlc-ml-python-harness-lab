@@ -917,7 +917,7 @@ export function Runs({
         </div>
       </header>
 
-      <HelpPanel title={m.help.title} docHref="docs/guide-web-ui.md">
+      <HelpPanel doc="run" title={m.help.title}>
         <ol className="skills-howto">
           <li>{m.help.step1(<strong>{m.fields.case}</strong>, <strong>{m.fields.promptVariant}</strong>, <strong>{m.fields.harness}</strong>)}</li>
           <li>{m.help.step2(<strong>{m.fields.executorModel} / {m.fields.plannerModel}</strong>)}</li>

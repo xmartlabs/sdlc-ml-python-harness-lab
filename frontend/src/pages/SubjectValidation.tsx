@@ -65,6 +65,8 @@ const MESSAGES = defineMessages({
     noticeCaseSelected: (caseId: string) => `Case '${caseId}' selected.`,
     noticeUsingExistingCase: (caseId: string) => `Using existing case '${caseId}'.`,
     noticeCaseUpdated: (caseId: string) => `Case '${caseId}' updated.`,
+    defaultRubric: (subject: string) =>
+      `Score 10 when every validation command passes and the work does what the instruction asks for (${subject}). Score partial credit when the commands pass but part of the requested behaviour is missing. Score 0 when any validation command fails or the requested work is absent.`,
     noticeCaseCreated: (caseId: string) => `Case '${caseId}' created.`,
     noticeStaged: (name: string) => `Staged '${name}'. It will be added to every arm's run.`,
     noticeImported: (name: string, sourceUrl: string) =>
@@ -329,6 +331,8 @@ const MESSAGES = defineMessages({
     noticeCaseSelected: (caseId: string) => `Caso '${caseId}' seleccionado.`,
     noticeUsingExistingCase: (caseId: string) => `Usando el caso existente '${caseId}'.`,
     noticeCaseUpdated: (caseId: string) => `Caso '${caseId}' actualizado.`,
+    defaultRubric: (subject: string) =>
+      `Puntaje 10 cuando todos los comandos de validación pasan y el trabajo hace lo que pide la instrucción (${subject}). Puntaje parcial cuando los comandos pasan pero falta parte del comportamiento pedido. Puntaje 0 cuando algún comando de validación falla o el trabajo pedido no está.`,
     noticeCaseCreated: (caseId: string) => `Caso '${caseId}' creado.`,
     noticeStaged: (name: string) =>
       `'${name}' agregado a staging. Se incluirá en la corrida de cada brazo.`,
@@ -707,6 +711,9 @@ export function SubjectValidation() {
   const [prompt, setPrompt] = useState("");
   const [commandText, setCommandText] = useState("");
   const [maxSteps, setMaxSteps] = useState(10);
+  // The drafted rubric, kept so the case saves: a case with commands and no
+  // rubric is refused (case_validation.REASON_NO_RUBRIC).
+  const [rubric, setRubric] = useState("");
   const [caseId, setCaseId] = useState("");
 
   // Step 2 — AI Case Assistant.
@@ -974,6 +981,7 @@ export function SubjectValidation() {
         if (draft.max_steps) {
           setMaxSteps(draft.max_steps);
         }
+        setRubric(draft.scoring_rubric ?? "");
         setAiDropped(draft.dropped_commands ?? []);
         const kept = draft.validation_commands?.length ?? 0;
         const retried = draft.attempts > 1 ? m.retriedSuffix : "";
@@ -1003,7 +1011,9 @@ export function SubjectValidation() {
         prompt_variants: { default: prompt },
         step_prompts: [],
         success_criteria: {},
-        scoring_rubric: "",
+        // The drafted rubric, else a plain one: the backend refuses a case
+        // with commands and no rubric, which made this step impossible to save.
+        scoring_rubric: rubric.trim() || m.defaultRubric(subject),
         constraints: [],
         validation_commands: executable,
         max_steps: maxSteps
@@ -2030,7 +2040,7 @@ export function SubjectValidation() {
         </>
       ) : null}
 
-      <HelpPanel docHref="docs/guide-skill-validation.md" title={m.helpPanel.title}>
+      <HelpPanel doc="bring-your-own" title={m.helpPanel.title}>
         <p>{m.helpPanel.body1}</p>
         <p>{m.helpPanel.body2(m.helpPanel.harnessEvaluation)}</p>
       </HelpPanel>

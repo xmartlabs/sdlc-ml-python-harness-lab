@@ -1,5 +1,10 @@
 # Agentic scoring: how this harness maps to assessments of AI-assisted coding
 
+> **Template material, not lab scoring.** This maps the template's working loop to
+> external assessments of AI-assisted coding. How the lab scores a run is in
+> [journey-read-results.md](journey-read-results.md).
+
+
 This document explains how the working loop in `docs/agentic-workflow.md` relates to
 the kind of assessment that gauges *how well you use AI for coding*, and — honestly —
 what a template repository can and cannot influence. It refers to such assessments

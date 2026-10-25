@@ -106,12 +106,14 @@ const MESSAGES = defineMessages({
       "Repetitions decide how far a result goes: one is exploratory, two to four a judgement, five or more a validation — and every rate carries its interval so you can see how wide it still is.",
       "A result holds for the cases, model and harness version it ran on. Every run records all three."
     ],
-    onboardingTitle: "New to the lab?",
+    onboardingTitle: "New to the lab? Six journeys, one page each",
     onboarding: [
-      "Validate a tool you built — it needs nothing set up, and it leaves behind a staged skill and a case with real validation.",
-      "Add a repository once you want to evaluate the harness against real code.",
-      "Create cases by hand, or derive them from the repository's own history.",
-      "Run the experiment and read the case matrix, not just the average."
+      { doc: "create-case", text: "Create a case — from an idea with AI, a SWE-bench issue, or your repository." },
+      { doc: "run", text: "Run and compare — models, harnesses and skills, repeated; continue a run that stopped short." },
+      { doc: "read-results", text: "Read the results — the validity banner first, then the verdict and its interval." },
+      { doc: "bring-your-own", text: "Bring your repo or skill — audit its harness, measure the skill." },
+      { doc: "take-it-home", text: "Take it home — copy the harness, or one skill, into your project." },
+      { doc: "improve-template", text: "Improve the template — turn evidence into a better ml-python-base." }
     ],
     attentionTitle: "What needs attention?",
     readingCorpus: "Reading the corpus",
@@ -185,12 +187,14 @@ const MESSAGES = defineMessages({
       "Las repeticiones deciden hasta dónde llega un resultado: una es exploratoria, de dos a cuatro un juicio, cinco o más una validación — y cada tasa lleva su intervalo para que veas cuán ancho sigue siendo.",
       "Un resultado vale para los casos, el modelo y la versión de arnés con la que corrió. Cada corrida registra los tres."
     ],
-    onboardingTitle: "¿Sos nuevo en el lab?",
+    onboardingTitle: "¿Sos nuevo en el lab? Seis recorridos, una página cada uno",
     onboarding: [
-      "Validá una herramienta que construiste — no necesita nada configurado, y deja una skill preparada y un caso con validación real.",
-      "Agregá un repositorio cuando quieras evaluar el arnés contra código real.",
-      "Creá casos a mano, o derivalos de la propia historia del repositorio.",
-      "Corré el experimento y leé la matriz de casos, no solo el promedio."
+      { doc: "create-case", text: "Creá un caso — desde una idea con IA, un issue de SWE-bench o tu repositorio." },
+      { doc: "run", text: "Corré y compará — modelos, arneses y skills, con repeticiones; continuá una corrida que se quedó corta." },
+      { doc: "read-results", text: "Leé los resultados — primero el aviso de validez, después el veredicto y su intervalo." },
+      { doc: "bring-your-own", text: "Traé tu repo o tu skill — auditá su arnés, medí la skill." },
+      { doc: "take-it-home", text: "Llevátelo — copiá el arnés, o una sola skill, a tu proyecto." },
+      { doc: "improve-template", text: "Mejorá el template — convertí evidencia en un ml-python-base mejor." }
     ],
     attentionTitle: "¿Qué necesita atención?",
     readingCorpus: "Leyendo el corpus",
@@ -279,10 +283,10 @@ export function Home() {
     };
   }, []);
 
-  // An empty lab gets the four steps; a lab in use does not need them taking up
-  // the space where its own evidence should be.
-  const isNewLab =
-    summary !== null && summary.repositories === 0 && summary.cases === 0;
+  // A lab nobody has run anything on yet gets the journeys. Cases cannot be the
+  // signal: the benchmark cases are seeded on startup, so a fresh install always
+  // has some and the panel never showed.
+  const isNewLab = summary !== null && summary.success.n === 0;
 
   return (
     <section className="page home">
@@ -361,7 +365,9 @@ export function Home() {
           <h2>{m.onboardingTitle}</h2>
           <ol className="onboarding-steps">
             {m.onboarding.map((step) => (
-              <li key={step}>{step}</li>
+              <li key={step.doc}>
+                <Link to={`/system/guide?doc=${step.doc}`}>{step.text}</Link>
+              </li>
             ))}
           </ol>
         </section>

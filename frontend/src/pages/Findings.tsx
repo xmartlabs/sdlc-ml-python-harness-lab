@@ -509,7 +509,7 @@ export function Findings() {
         </div>
       </header>
 
-      <HelpPanel title={m.page.helpTitle}>
+      <HelpPanel doc="improve-template" title={m.page.helpTitle}>
         <p>{m.page.helpBody1}</p>
         <p className="mono small">{m.page.helpPipeline}</p>
         <p className="muted">{m.page.helpBody2}</p>

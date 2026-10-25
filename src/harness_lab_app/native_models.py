@@ -147,11 +147,18 @@ def served_claude_models(routing: Mapping[str, Any]) -> list[str]:
 
 def native_catalog(
     routing: Mapping[str, Any] | None,
+    *,
+    claude_via_gateway: bool = True,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Every harness's native models, each with its gateway coverage."""
+    """Every harness's native models, each with its gateway coverage.
+
+    ``claude_via_gateway`` is False when the claude CLI talks to Anthropic
+    directly; its models then get ``None`` — the gateway is not on its path.
+    """
     catalog: dict[str, list[dict[str, Any]]] = {}
     for harness, models in NATIVE_MODELS.items():
-        coverage = gateway_coverage(harness, routing)
+        uses_gateway = claude_via_gateway or harness != "claude"
+        coverage = gateway_coverage(harness, routing if uses_gateway else None)
         catalog[harness] = [
             {**model, "on_gateway": coverage[model["id"]]} for model in models
         ]

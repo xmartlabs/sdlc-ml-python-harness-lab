@@ -514,7 +514,7 @@ export function Compare({ runs }: CompareProps) {
         <p>{m.adhocWarning(<Link to="/evaluate/new">{m.experimentLink}</Link>)}</p>
       </div>
 
-      <HelpPanel title={m.helpTitle} docHref="docs/guide-web-ui.md">
+      <HelpPanel doc="read-results" title={m.helpTitle}>
         <ol className="skills-howto">
           <li>{m.help1(<strong>{m.sameCase}</strong>)}</li>
           <li>{m.help2}</li>

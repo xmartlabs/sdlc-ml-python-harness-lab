@@ -527,7 +527,7 @@ export function Repositories() {
         </div>
       </header>
 
-      <HelpPanel title={m.helpPanel.title}>
+      <HelpPanel doc="bring-your-own" title={m.helpPanel.title}>
         <p>{m.helpPanel.body}</p>
         <p className="muted">{m.helpPanel.bodyNote}</p>
       </HelpPanel>

@@ -2601,7 +2601,7 @@ export function NewEvaluation() {
         ) : null}
       </div>
 
-      <HelpPanel title={m.whyFormShaped}>
+      <HelpPanel doc="run" title={m.whyFormShaped}>
         <p>{m.whyFormShapedBody1}</p>
         <p>{m.whyFormShapedBody2}</p>
       </HelpPanel>

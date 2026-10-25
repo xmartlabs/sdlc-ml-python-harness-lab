@@ -6,25 +6,13 @@ import { Markdown } from "../components/Markdown";
 import { defineMessages, useMessages } from "../i18n";
 import type { DocContent, DocEntry } from "../types";
 
-// The core loop shown at the top so the web is self-explanatory at a glance.
+// The loop at a glance; each step is a journey in the index below.
 const CORE_LOOP_EN = `
-1. **Start from a question** on Home — validate a tool you built, evaluate a harness change, or audit a repository you have never seen.
-2. **Declare the design** — cases, arms, repetitions. The lab refuses a design its mode cannot answer.
-3. **Runs execute in containers.** A case with a validation command scores itself; a case with a rubric is LLM-judged; anything else you score from the run page.
-4. **Read the experiment** — one rate per arm, the case matrix, and the verdict's caveats. Then record a finding.
-5. **Feed it back** — a run's audit becomes a sanitised issue for the governance template (\`make improve RUN=<id>\`).
-
-Audits, judges and summaries use your AI gateway, or the Claude Code CLI when only a Claude credential is configured (Health → LLM transport).
+**Case → run → read → keep what works.** Make a case whose check the agent did not write, run it under configurations that differ in one thing (model, harness, skill, prompt), read the verdict with its interval and validity banner, then copy what helped into your project (\`make harness-export\`) or into the template. Start with the first document below; the six journeys after it are one page each.
 `;
 
 const CORE_LOOP_ES = `
-1. **Arrancá de una pregunta** en Inicio — validá una herramienta que construiste, evaluá un cambio de arnés, o auditá un repositorio que nunca viste.
-2. **Declará el diseño** — casos, brazos, repeticiones. El lab rechaza un diseño que su modo no puede responder.
-3. **Las corridas se ejecutan en contenedores.** Un caso con un comando de validación se puntúa solo; un caso con una rúbrica lo juzga un LLM; cualquier otro lo puntuás vos desde la página de la corrida.
-4. **Leé el experimento** — una tasa por brazo, la matriz de casos y las salvedades del veredicto. Después registrá un hallazgo.
-5. **Devolvé lo aprendido** — la auditoría de una corrida se convierte en un issue saneado para el template de gobernanza (\`make improve RUN=<id>\`).
-
-Las auditorías, jueces y resúmenes usan tu gateway de IA, o la CLI de Claude Code cuando solo hay configurada una credencial de Claude (Estado → transporte LLM).
+**Caso → corrida → lectura → quedate con lo que funciona.** Armá un caso cuyo chequeo no haya escrito el agente, corrélo con configuraciones que difieran en una sola cosa (modelo, arnés, skill, prompt), leé el veredicto con su intervalo y su aviso de validez, y después copiá lo que ayudó a tu proyecto (\`make harness-export\`) o al template. Empezá por el primer documento de la lista; los seis recorridos que siguen ocupan una página cada uno. Los documentos están en inglés.
 `;
 
 const MESSAGES = defineMessages({
@@ -32,7 +20,7 @@ const MESSAGES = defineMessages({
     eyebrow: "Guide",
     title: "How to use the lab",
     lede: "Everything you need to run experiments, compare harnesses, and feed improvements back to your repos — the real docs, rendered here.",
-    coreLoopTitle: "The core loop",
+    coreLoopTitle: "The loop in one line",
     coreLoop: CORE_LOOP_EN,
     docsUnavailable: "Docs API unavailable — start the app backend.",
     selectGuide: "Select a guide to read it here."
@@ -41,7 +29,7 @@ const MESSAGES = defineMessages({
     eyebrow: "Guía",
     title: "Cómo usar el lab",
     lede: "Todo lo que necesitás para correr experimentos, comparar arneses y devolver mejoras a tus repositorios — los documentos reales, mostrados acá.",
-    coreLoopTitle: "El ciclo central",
+    coreLoopTitle: "El ciclo en una línea",
     coreLoop: CORE_LOOP_ES,
     docsUnavailable: "La API de documentos no está disponible — iniciá el backend de la app.",
     selectGuide: "Elegí una guía para leerla acá."
@@ -91,6 +79,21 @@ export function Guide() {
       active = false;
     };
   }, [selected]);
+
+  // A link from one doc to another (`journey-run-and-compare.md`,
+  // `x.md#section`) opens that doc here when it is catalogued; anything else
+  // keeps its normal behaviour.
+  const openDocLink = (href: string): boolean => {
+    // Only links inside docs/: `../README.md` is the repository's README, not
+    // docs/README.md, and shares its file name.
+    if (href.startsWith("../") || href.startsWith("/")) return false;
+    const file = href.split("#")[0].split("/").pop() ?? "";
+    const match = docs.find((doc) => doc.file === file);
+    if (!match) return false;
+    setSelected(match.slug);
+    window.scrollTo({ top: 0 });
+    return true;
+  };
 
   const groups = useMemo(() => {
     const order: string[] = [];
@@ -148,7 +151,7 @@ export function Guide() {
 
         <div className="panel guide-content">
           {content ? (
-            <Markdown>{content.content}</Markdown>
+            <Markdown onDocLink={openDocLink}>{content.content}</Markdown>
           ) : (
             <p className="muted">{m.selectGuide}</p>
           )}

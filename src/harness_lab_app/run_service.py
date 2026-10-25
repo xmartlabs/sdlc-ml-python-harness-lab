@@ -735,17 +735,31 @@ class RunService:
             base = rewrite_localhost(base, get_settings().docker_host_alias)
         return fetch_gateway_routing_cached(base, token) or None
 
+    def _claude_routes_through_gateway(self) -> bool:
+        """Whether the claude CLI in a run reaches Anthropic through a gateway.
+
+        It does only when the lab's Claude settings set ``ANTHROPIC_BASE_URL``
+        (``.claude/settings.local.json`` is per developer and untracked). A
+        gateway configured for opencode says nothing about claude: without the
+        variable the CLI talks to Anthropic, which serves every Claude model.
+        """
+        from harness_lab_app.executors import claude_settings_env
+
+        return bool(
+            claude_settings_env(get_settings().repo_root).get("ANTHROPIC_BASE_URL")
+        )
+
     def _check_claude_model_served(self, executor_model: str | None) -> None:
         """Refuse a Claude model the gateway has no card for.
 
-        In Docker the claude CLI reaches Anthropic through the lab's gateway
-        (``ANTHROPIC_BASE_URL``, see ``executors.claude_settings_env``), so a
-        model without a card dies on its first request with "Invalid model
-        name" — eight runs of claude-haiku-5-5 did exactly that on 2026-10-23.
-        An empty model is the CLI's own default and is left alone.
+        Applies when the claude CLI reaches Anthropic through the gateway
+        (``ANTHROPIC_BASE_URL``, see ``executors.claude_settings_env``): a model
+        without a card then dies on its first request with "Invalid model name"
+        — eight runs of claude-haiku-5-5 did exactly that on 2026-10-23. An
+        empty model is the CLI's own default and is left alone.
         """
         model = (executor_model or "").strip()
-        if not model:
+        if not model or not self._claude_routes_through_gateway():
             return
         routing = self._gateway_routing()
         if routing is None:

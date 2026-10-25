@@ -86,6 +86,7 @@ const MESSAGES = defineMessages({
       validatedBy: (commands: ReactNode) => <>Validated by: {commands}</>,
       noValidationGate: "No validation gate — this run can only ever be scored by hand."
     },
+    howToRead: "How do I read this run?",
     header: {
       eyebrow: "Run detail",
       continues: (parent: ReactNode) => <>Continues {parent}</>,
@@ -356,6 +357,7 @@ const MESSAGES = defineMessages({
       validatedBy: (commands: ReactNode) => <>Validado por: {commands}</>,
       noValidationGate: "Sin puerta de validación — esta corrida solo puede puntuarse a mano."
     },
+    howToRead: "¿Cómo leo esta corrida?",
     header: {
       eyebrow: "Detalle de la corrida",
       continues: (parent: ReactNode) => <>Continúa {parent}</>,
@@ -1282,6 +1284,9 @@ export function RunDetail({
           </p>
         ) : null}
         {actionError !== null ? <ErrorBanner message={actionError} onDismiss={() => setActionError(null)} /> : null}
+        <p className="small">
+          <Link to="/system/guide?doc=read-results">{m.howToRead}</Link>
+        </p>
       </div>
       <div className="run-tabs">
         {(["detail", "terminal", "desktop"] as const).map((name) => (

@@ -22,7 +22,7 @@ Whether the runner *can* execute a case at all is a different question, answered
 
 The rules themselves are pure and live in one module: `case_validation.py`.
 
-## The six refusals
+## The nine refusals
 
 Each one is a shape that produced a wrong number in a real experiment.
 
@@ -65,7 +65,26 @@ a script body is split and each line is run on its own — the first often exits
 **5. A command that does not look runnable.** Prose in the commands field is not a
 check. `build_validation_spec` used to drop it without saying so.
 
-**6. Commands with no scale to grade against.** A case carrying validation commands
+**6. A file handed to the shell as if it were a command.** A path to a markdown or
+config file exits 126 and says nothing about the agent. Say what the check is:
+
+```sh
+# refused
+{workspace}/docs/DESIGN.md
+# accepted — it exists and is not empty / it says the thing
+test -s {workspace}/docs/DESIGN.md
+grep -q 'retry policy' {workspace}/docs/DESIGN.md
+```
+
+**7. A glob handed to an interpreter.** `bash {workspace}/tests/*.sh` runs only the
+first file that sorts and passes the rest to it as arguments, so a suite of 55
+scripts is measured by one. Loop over the glob instead (with `|| exit 1`, see 1).
+
+**8. A file the interpreter cannot run.** A `.ts` file handed to `python`, a `.py`
+to `node`: the check fails with a syntax or collection error on every run, whatever
+the agent did.
+
+**9. Commands with no scale to grade against.** A case carrying validation commands
 needs a `scoring_rubric` or `success_criteria`. Without one `_llm_judge_rubric` returns
 at its first guard and every run of the case parks in `awaiting_manual_score` with no
 score and no record of why — which reads as a scoring backlog rather than as the case

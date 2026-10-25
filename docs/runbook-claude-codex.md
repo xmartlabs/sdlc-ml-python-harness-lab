@@ -39,11 +39,12 @@ run one mode at a time — pick by the harness you're testing. Open
 **Evaluate → New evaluation** for a control/treatment comparison, or **Advanced →
 Runs → New run** for a single run:
 
-1. **Case** — e.g. `tetris-v1` (game build, rubric-judged + objective smoke) or
-   `cli-textstats-v1` (pure-stdlib CLI, fully objective — a good clean probe).
+1. **Case** — e.g. `clinic-slots-t1` (pure Python, graded by the lab's own tests —
+   a good clean probe) or `todo-web-v1` (a page graded in a real browser).
 2. **Harness** — `claude` or `codex`.
 3. **Executor model** — the dropdown shows that CLI's **native models**:
-   - claude → Claude Sonnet 5 / Opus 4.8 / Haiku 4.5
+   - claude → Claude Opus 5.5 / Sonnet 5.5 / Haiku 5.5 / Fable 5.1, then the
+     previous generation; a model your gateway does not serve is marked
    - codex → `codex-mini-latest` (add your ids in `HARNESS_NATIVE_MODELS`,
      `frontend/src/harnesses.ts`)
 
@@ -80,8 +81,9 @@ with `cwd` at the repo root; the prompt tells the agent to build in
 
 **Compare** page → pick the runs (same case, different harness/model) to see
 objective result, score, tokens, steps side by side; **Benchmarks** has the
-leaderboard. Typical loop: run `tetris-v1` with `claude`+Opus, `claude`+Sonnet,
-and `codex`, then compare.
+leaderboard. For a comparison you can trust, build it as an experiment instead —
+**Evaluate → Harness x model** or **New evaluation** with the **Swap the harness**
+factor ([run and compare](journey-run-and-compare.md)).
 
 ## Gotchas / limits
 
@@ -105,7 +107,7 @@ and `codex`, then compare.
 
 | I want to test… | Mode | Harness | Model source |
 |---|---|---|---|
-| Claude Code (your account) | `make app-up` (token in `.env`) or `make app-host` | `claude` | native menu (Sonnet 5 / Opus 4.8 / Haiku 4.5) |
+| Claude Code (your account) | `make app-up` (token in `.env`) or `make app-host` | `claude` | native menu (the Claude 5.5 family and Fable 5.1) |
 | Codex (your account) | `make app-host` | `codex` | native menu (edit ids in `harnesses.ts`) |
 | opencode + gateway model | `make app-up` | `opencode` | live LiteLLM list |
 | SWE-bench objective | `make app-up` | `opencode` | live LiteLLM list |

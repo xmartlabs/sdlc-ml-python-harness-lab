@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { api } from "../api";
 import { SWE_CASE_TYPES, caseTestCounts, shortInstanceLabel } from "../caseLabels";
 import { EmptyState } from "../components/EmptyState";
+import { HelpPanel } from "../components/HelpPanel";
 import { Spinner } from "../components/Spinner";
 import { IconAlert, IconSparkles } from "../components/icons";
 import { defineMessages, pickMessages, useMessages } from "../i18n";
@@ -136,7 +137,23 @@ const MESSAGES = defineMessages({
     otherFilter: (count: number) => `Other (${count})`,
     noSweBenchCases:
       "No SWE-bench cases yet. Import one above (they live in the DB only, so a DB reset removes them).",
-    noCasesSeedOrCreate: "Seed Tetris or create a new case to begin.",
+    noCasesSeedOrCreate: "Seed the benchmark cases or create a new one to begin.",
+    helpTitle: "Four ways to make a case",
+    helpBody: (newCase: ReactNode) => (
+      <>
+        <p>
+          A case is a task plus the checks that say whether the agent did it. Draft one
+          from an idea with {newCase}, import a SWE-bench issue below, draft one from a
+          repository on <em>Evaluate → Audit a repository</em>, or write a{" "}
+          <code>task.yaml</code> under <code>benchmarks/</code>.
+        </p>
+        <p>
+          A case is only as good as its check: a command that cannot fail, or fails for
+          reasons that are not the agent's, makes every result built on it noise. Run a
+          new case once with a strong model before trusting it.
+        </p>
+      </>
+    ),
     noCasesTitle: "No cases here.",
     caseHeader: "Case",
     type: "Type",
@@ -244,7 +261,24 @@ const MESSAGES = defineMessages({
     otherFilter: (count: number) => `Otros (${count})`,
     noSweBenchCases:
       "Todavía no hay casos de SWE-bench. Importá uno arriba (viven solo en la base de datos, así que un reset de la DB los elimina).",
-    noCasesSeedOrCreate: "Sembrá Tetris o creá un caso nuevo para empezar.",
+    noCasesSeedOrCreate: "Sembrá los casos de benchmark o creá uno nuevo para empezar.",
+    helpTitle: "Cuatro formas de crear un caso",
+    helpBody: (newCase: ReactNode) => (
+      <>
+        <p>
+          Un caso es una tarea más los chequeos que dicen si el agente la hizo. Generá
+          uno desde una idea con {newCase}, importá un issue de SWE-bench abajo, generá
+          uno desde un repositorio en <em>Evaluar → Auditar un repositorio</em>, o
+          escribí un <code>task.yaml</code> en <code>benchmarks/</code>.
+        </p>
+        <p>
+          Un caso vale lo que vale su chequeo: un comando que no puede fallar, o que
+          falla por motivos ajenos al agente, convierte en ruido todo resultado que se
+          apoye en él. Corré un caso nuevo una vez con un modelo fuerte antes de
+          confiar en él.
+        </p>
+      </>
+    ),
     noCasesTitle: "No hay casos acá.",
     caseHeader: "Caso",
     type: "Tipo",
@@ -538,6 +572,10 @@ export function Cases({
           </button>
         </div>
       </header>
+
+      <HelpPanel doc="create-case" title={m.helpTitle}>
+        {m.helpBody(<strong>{m.newCase}</strong>)}
+      </HelpPanel>
 
       <section className="panel">
         <div className="panel-head">
