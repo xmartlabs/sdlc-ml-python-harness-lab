@@ -99,6 +99,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0068 — A case can start from its own files](0068-a-case-can-start-from-its-own-files.md)
 - [0069 — A model is judged by the tier it does reliably](0069-a-model-is-judged-by-the-tier-it-does-reliably.md)
 - [0070 — The interface speaks English and Spanish](0070-the-interface-speaks-english-and-spanish.md)
+- [0071 — A grader brings its own dependencies, and never the agent's tests](0071-a-grader-brings-its-own-dependencies-and-never-the-agents-tests.md)
 
 ## Why ADRs exist
 

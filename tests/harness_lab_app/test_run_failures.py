@@ -202,3 +202,30 @@ def test_a_cli_too_old_for_the_model_is_named_as_such():
     )
     assert classify_failure(tail) == "lab"
     assert failure_label(tail) == "CLI too old"
+
+
+def test_a_gateway_outage_mid_run_is_named_as_the_endpoint():
+    """eda-ml-iris-categ-numerico-K-005 (2026-10-23): the gateway's origin went
+    down behind Cloudflare (521) after thirteen turns."""
+    tail = (
+        "  ⚠️  Exiting non-zero: claude failed (stop_reason=harness_error). This run "
+        "measured the connection, not the subject.\n"
+        '  Cause: API Error: 521 {"type":"https://developers.cloudflare.com/support/'
+        'troubleshooting/http-status-codes/cloudflare-5xx-errors/error-521/",'
+        '"title":"Error 521: Web server is down","status":521'
+    )
+    assert classify_failure(tail) == "lab"
+    assert failure_label(tail) == "endpoint down"
+
+
+@pytest.mark.parametrize(
+    "status", ["500", "502", "503", "504", "520", "522", "524", "529"]
+)
+def test_server_side_api_errors_are_the_endpoint(status):
+    assert (
+        failure_label(f"Cause: API Error: {status} upstream failure") == "endpoint down"
+    )
+
+
+def test_a_client_error_is_not_called_an_outage():
+    assert failure_label("Cause: API Error: 400 bad request\n") != "endpoint down"

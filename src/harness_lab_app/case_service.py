@@ -318,6 +318,12 @@ class CaseService:
                 meta["starter_dir"] = str(raw["starter"])
             else:
                 meta.pop("starter_dir", None)
+            if raw.get("validation_requirements"):
+                meta["validation_requirements"] = [
+                    str(item) for item in raw["validation_requirements"]
+                ]
+            else:
+                meta.pop("validation_requirements", None)
             existing.metadata_json = meta
             existing.updated_at = utc_now()
             self.session.add(existing)
@@ -361,6 +367,17 @@ class CaseService:
                 # Files the workspace starts from (ADR-0068); the runner copies
                 # them in and refuses any path outside benchmarks/.
                 **({"starter_dir": str(raw["starter"])} if raw.get("starter") else {}),
+                # Packages the graded tests import, installed before the offline
+                # checks (ADR-0071).
+                **(
+                    {
+                        "validation_requirements": [
+                            str(item) for item in raw["validation_requirements"]
+                        ]
+                    }
+                    if raw.get("validation_requirements")
+                    else {}
+                ),
             },
         )
         self.session.add(case)

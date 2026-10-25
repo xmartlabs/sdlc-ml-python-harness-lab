@@ -1306,6 +1306,37 @@ def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
     return diff_lines
 
 
+# Directories an agent creates by installing or running things, not by writing
+# code. They stay in the archive; they are kept out of diff.patch, which the
+# judge and the auditor read as "the agent's code".
+DIFF_EXCLUDED_DIRS = frozenset(
+    {
+        "venv",
+        ".venv",
+        "env",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".tox",
+        "site-packages",
+    }
+)
+
+
+def _diffable_copy(dest: Path, into: Path) -> Path:
+    """A copy of ``dest`` without :data:`DIFF_EXCLUDED_DIRS`, for diffing."""
+    shutil.copytree(
+        dest,
+        into,
+        symlinks=True,
+        ignore_dangling_symlinks=True,
+        ignore=lambda _dir, names: [n for n in names if n in DIFF_EXCLUDED_DIRS],
+    )
+    return into
+
+
 def write_diff_patch(out_dir: Path, dest: Path) -> int:
     """Write ``diff.patch`` for an archived workspace and return its line count.
 
@@ -1354,10 +1385,16 @@ def write_diff_patch(out_dir: Path, dest: Path) -> int:
         # therefore shipped an empty diff.patch — and `bench_audit` gates its
         # "Código producido" section on that file being non-empty, so the audit
         # LLM judged runs it had never seen the code of.
-        with tempfile.TemporaryDirectory() as empty:
+        with (
+            tempfile.TemporaryDirectory() as empty,
+            tempfile.TemporaryDirectory() as scratch,
+        ):
+            code = _diffable_copy(dest, Path(scratch) / dest.name)
             result = _run_git(
-                ["git", "diff", "--no-index", empty, str(dest)], cwd=REPO_ROOT
+                ["git", "diff", "--no-index", empty, str(code)], cwd=REPO_ROOT
             )
+        # The copy's path appears in the patch headers; name the archive instead.
+        result.stdout = result.stdout.replace(str(code), str(dest))
     diff_path.write_text(result.stdout)
     diff_lines = result.stdout.count("\n")
     print(f"  diff.patch: {diff_lines} lines")

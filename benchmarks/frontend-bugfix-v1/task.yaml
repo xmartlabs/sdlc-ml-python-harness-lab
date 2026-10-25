@@ -31,16 +31,16 @@ validation_note: >
 validation_commands:
   - "git -C /app diff --quiet HEAD -- benchmarks/frontend-bugfix-v1/tests && test -z \"$(git -C /app status --porcelain -- benchmarks/frontend-bugfix-v1/tests)\""
   - "test -f {workspace}/index.html && test -f {workspace}/app.js"
-  - "cd {workspace} && SCHEDULE_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_regression_all_appointments_render_in_time_order"
-  - "cd {workspace} && SCHEDULE_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_regression_each_row_names_its_doctor"
-  - "cd {workspace} && SCHEDULE_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_filtering_by_a_doctor_shows_only_their_appointments"
-  - "cd {workspace} && SCHEDULE_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_switching_doctors_and_back_to_all_restores_the_list"
-  - "cd {workspace} && SCHEDULE_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_the_counter_matches_what_is_shown"
-  - "cd {workspace} && SCHEDULE_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_the_counter_follows_a_cancellation"
-  - "cd {workspace} && SCHEDULE_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_cancel_is_a_button_with_an_accessible_name"
-  - "cd {workspace} && SCHEDULE_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_cancel_works_from_the_keyboard"
-  - "cd {workspace} && SCHEDULE_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_a_cancellation_is_announced"
-  - "cd {workspace} && SCHEDULE_WORKSPACE={workspace} timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_patient_names_are_rendered_as_text"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_regression_all_appointments_render_in_time_order"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_regression_each_row_names_its_doctor"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_filtering_by_a_doctor_shows_only_their_appointments"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_switching_doctors_and_back_to_all_restores_the_list"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_the_counter_matches_what_is_shown"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_the_counter_follows_a_cancellation"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_cancel_is_a_button_with_an_accessible_name"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_cancel_works_from_the_keyboard"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_a_cancellation_is_announced"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_patient_names_are_rendered_as_text"
 files_forbidden:
   - benchmarks/frontend-bugfix-v1/tests/test_schedule.py
 

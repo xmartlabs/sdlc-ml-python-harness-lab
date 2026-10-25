@@ -51,7 +51,7 @@ the page in headless Chromium through the contract above. Read them before you
 start — they are the acceptance criteria. Run them yourself with:
 
 ```bash
-cd {workspace} && TODO_WORKSPACE={workspace} python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py
+cd {workspace} && TODO_WORKSPACE="$PWD" python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/todo-web-v1/tests/test_todo.py
 ```
 
 Do not edit the tests.

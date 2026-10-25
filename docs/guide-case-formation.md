@@ -123,6 +123,35 @@ a model to recover the command from it.
 every case paired with an external repository a prompt about resolving a GitHub issue.
 `prompt_kinds` is what makes that class of defect readable from the artifacts.
 
+## The grade is the lab's, and so are its dependencies
+
+[ADR-0071](adr/0071-a-grader-brings-its-own-dependencies-and-never-the-agents-tests.md)
+sets two rules for any case graded by a test suite:
+
+- **Ship the tests; never grade the agent's.** Put the suite under
+  `benchmarks/<case>/tests/`, guard it against edits, and run one command per test. Asking
+  the agent to write tests is fine — they are part of the work — but a case that runs the
+  file the agent wrote lets six easy tests outscore twenty-five demanding ones.
+  `eda-ml-iris-categ-numerico` did exactly that; `eda-iris-pipeline-v2` is its fix.
+- **Declare what the tests import.** Validation runs offline in a clean container. List
+  the third-party packages the graded tests need, pinned, under `validation_requirements`
+  in `task.yaml`:
+
+  ```yaml
+  validation_requirements:
+    - pandas==3.1.0
+    - scikit-learn==1.9.1
+  ```
+
+  A setup step installs them with network into the run's folder before the checks run.
+  If it cannot, the checks are recorded inconclusive rather than failed; the same goes for
+  a check that dies on `No module named` for a module the agent was not asked to write.
+  Pin the versions you calibrated on.
+
+Every graded command `cd`s into the workspace first, so pass the tests an absolute path —
+`CLINIC_WORKSPACE="$PWD"`, never `CLINIC_WORKSPACE={workspace}`, which is relative to the
+lab root and stops resolving after the `cd`. A test holds every `task.yaml` to this.
+
 ## Frontend cases — graded in a real browser
 
 A frontend case is graded the way a user meets the page: in headless Chromium,

@@ -94,7 +94,17 @@ def update_runs_yaml(
 
 
 def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    # errors="replace": a diff can carry bytes that are not UTF-8 (a binary an
+    # agent left in its workspace). Strict decoding raised UnicodeDecodeError and
+    # killed eda-ml-iris-categ-numerico-K-008 after the agent had finished.
+    return subprocess.run(
+        args,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

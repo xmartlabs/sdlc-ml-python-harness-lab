@@ -521,3 +521,91 @@ def test_the_judge_reads_why_a_check_did_not_measure():
     text = describe_objective_for_judge(objective)
     assert "[INCONCLUSIVE: command not found]" in text
     assert "settled nothing (command not found)" in text
+
+
+# --- validation dependencies (ADR-0071) -----------------------------------------
+
+
+def test_a_case_that_declares_validation_requirements_gets_a_setup_step(
+    tmp_path, monkeypatch
+):
+    """eda-ml-iris (2026-10-23): ten runs failed `pytest` at collection because
+    the clean, offline validation container had no pandas. The case names its
+    graders' dependencies; the lab installs them, with network, before the
+    offline checks run."""
+    monkeypatch.setattr(
+        "harness_lab_app.validation.get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path),
+    )
+    case = _case(
+        validation_commands=["pytest {workspace}/test_x.py -q"],
+        metadata_json={
+            "validation_requirements": ["pandas==2.2.3", "scikit-learn==1.5.2"]
+        },
+    )
+    spec = build_validation_spec(case, "iris-K-001")
+    setup = spec["setup"]
+    assert len(setup) == 1
+    script = setup[0][-1]
+    assert "uv pip install" in script and "--target" in script
+    assert "python -m pip install" in script  # fallback where there is no uv
+    assert "pandas==2.2.3 scikit-learn==1.5.2;" in script
+    deps = "data/runs/iris-K-001/validation-deps"
+    assert deps in script
+    # Every offline check sees the installed packages.
+    assert all(
+        f'PYTHONPATH="$PWD/{deps}' in command[-1] for command in spec["commands"]
+    )
+
+
+def test_a_case_without_validation_requirements_has_no_setup_step(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "harness_lab_app.validation.get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path),
+    )
+    spec = build_validation_spec(
+        _case(validation_commands=["pytest {workspace}/t.py -q"]), "r-K-001"
+    )
+    assert spec["setup"] == []
+    assert "PYTHONPATH" not in spec["commands"][0][-1]
+
+
+def test_an_unsafe_requirement_is_refused_not_shell_injected(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "harness_lab_app.validation.get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path),
+    )
+    case = _case(
+        validation_commands=["pytest {workspace}/t.py -q"],
+        metadata_json={"validation_requirements": ["pandas; rm -rf /", "numpy==2.1.3"]},
+    )
+    script = build_validation_spec(case, "r-K-001")["setup"][0][-1]
+    assert "rm -rf /" not in script and "pandas" not in script
+    assert " numpy==2.1.3;" in script
+
+
+def test_a_missing_third_party_module_is_inconclusive():
+    """No module named 'joblib' in the grader's environment says nothing about
+    the agent's code."""
+    output = (
+        "ImportError while importing test module 'test_pipeline_iris_eda.py'.\n"
+        "E   ModuleNotFoundError: No module named 'joblib'\n"
+        "!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!"
+    )
+    assert validation.classify_inconclusive(2, output) == "missing_dependency"
+
+
+def test_a_missing_module_the_agent_should_have_written_is_still_its_failure():
+    """clinic.py not written is the agent's failure — the whole point of the check."""
+    output = "E   ModuleNotFoundError: No module named 'clinic'\n"
+    assert validation.classify_inconclusive(1, output, own_modules={"clinic"}) is None
+
+
+def test_a_module_from_the_workspace_is_never_called_a_missing_dependency(tmp_path):
+    (tmp_path / "ml_pipeline.py").write_text("x = 1\n")
+    output = "E   ModuleNotFoundError: No module named 'ml_pipeline'\n"
+    own = validation.workspace_modules(tmp_path)
+    assert "ml_pipeline" in own
+    assert validation.classify_inconclusive(1, output, own_modules=own) is None

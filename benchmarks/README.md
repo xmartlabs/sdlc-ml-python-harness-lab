@@ -24,6 +24,12 @@ registry, and a `results/` folder.
   appointment scheduling in three difficulty tiers (`tier:1`-`tier:3`), pure Python. The
   experiment page shows, per arm, the highest tier done reliably (ADR-0069). See
   `clinic-slots-t1/README.md`.
+- **`eda-iris-pipeline-v2/`** — an end-to-end tabular ML task (dataset with a derived
+  categorical feature, EDA summary, scikit-learn pipeline, demo writing `eda_report.json`
+  and `model.joblib`), graded by the lab's own twelve tests. Declares
+  `validation_requirements` (pinned pandas, numpy, scikit-learn, joblib), installed before
+  the offline checks (ADR-0071). Replaces `eda-ml-iris-categ-numerico`, which graded each
+  run on the tests the run itself wrote.
 - **`harness-regression-v1/`** — not a case: the suite definition (`suite.yaml`) that
   pairs the cases above for a baseline-vs-candidate harness comparison (ADR-0037).
 - **`nemotron-planner-qwen-executor/`** — planner/executor split benchmark focused on

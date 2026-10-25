@@ -100,6 +100,11 @@ GRADED_CONTRACT = {
     "todo-web-v1": ("test_todo.py", "TODO_WORKSPACE", "index.html"),
     "frontend-bugfix-v1": ("test_schedule.py", "SCHEDULE_WORKSPACE", "index.html"),
     "clinic-slots-t1": ("test_slots.py", "CLINIC_WORKSPACE", "clinic.py"),
+    "eda-iris-pipeline-v2": (
+        "test_iris_pipeline.py",
+        "IRIS_WORKSPACE",
+        "ml_pipeline.py",
+    ),
     "clinic-booking-t2": ("test_booking.py", "CLINIC_WORKSPACE", "clinic.py"),
     "clinic-rules-t3": ("test_rules.py", "CLINIC_WORKSPACE", "clinic.py"),
 }

@@ -39,7 +39,7 @@ and drive the page in headless Chromium. Two of them are regressions — behavio
 already works and must keep working. Read them before you start. Run them with:
 
 ```bash
-cd {workspace} && SCHEDULE_WORKSPACE={workspace} python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py
+cd {workspace} && SCHEDULE_WORKSPACE="$PWD" python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py
 ```
 
 Do not edit the tests.

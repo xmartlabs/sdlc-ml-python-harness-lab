@@ -1,0 +1,69 @@
+task_id: eda-iris-pipeline-v2
+version: "1"
+status: active
+category: agentic-build
+tags: [python, ml, pandas, scikit-learn, data-science, graded, ships-tests]
+
+description: >
+  An end-to-end tabular ML task: build an Iris-style dataset with numeric and a
+  derived categorical feature, a short EDA summary, a scikit-learn pipeline and a
+  demo that writes eda_report.json and model.joblib — graded by the lab's own
+  tests. It replaces eda-ml-iris-categ-numerico, which graded each run on the
+  tests the run itself wrote (ADR-0071).
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+target_level: 20
+complexity: medium
+
+validation: objective
+validation_note: >
+  The tests in benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py are the
+  grade, one command per test, after a tamper guard and entry-point checks. They
+  import pandas and scikit-learn, which the validation setup installs (pinned) before
+  the offline checks run.
+
+# Installed by the validation setup step, with network, before the offline checks
+# (ADR-0071). Pinned to the versions the tests were calibrated on.
+validation_requirements:
+  - pandas==3.1.0
+  - numpy==2.4.6
+  - scikit-learn==1.9.1
+  - joblib==1.6.0
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/eda-iris-pipeline-v2/tests && test -z \"$(git -C /app status --porcelain -- benchmarks/eda-iris-pipeline-v2/tests)\""
+  - "test -f {workspace}/ml_pipeline.py"
+  - "test -f {workspace}/main.py"
+  - "cd {workspace} && IRIS_WORKSPACE=\"$PWD\" timeout 180 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py::test_the_dataset_has_four_numeric_and_a_categorical_feature"
+  - "cd {workspace} && IRIS_WORKSPACE=\"$PWD\" timeout 180 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py::test_the_dataset_has_three_classes_and_one_label_per_row"
+  - "cd {workspace} && IRIS_WORKSPACE=\"$PWD\" timeout 180 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py::test_the_dataset_is_reproducible"
+  - "cd {workspace} && IRIS_WORKSPACE=\"$PWD\" timeout 180 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py::test_the_categorical_feature_is_derived_not_constant"
+  - "cd {workspace} && IRIS_WORKSPACE=\"$PWD\" timeout 180 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py::test_the_eda_summary_has_every_required_section"
+  - "cd {workspace} && IRIS_WORKSPACE=\"$PWD\" timeout 180 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py::test_the_class_distribution_counts_every_row"
+  - "cd {workspace} && IRIS_WORKSPACE=\"$PWD\" timeout 180 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py::test_missing_values_are_counted_per_column"
+  - "cd {workspace} && IRIS_WORKSPACE=\"$PWD\" timeout 180 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py::test_the_eda_summary_is_json_serializable"
+  - "cd {workspace} && IRIS_WORKSPACE=\"$PWD\" timeout 180 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py::test_training_returns_accuracy_and_macro_f1_in_range"
+  - "cd {workspace} && IRIS_WORKSPACE=\"$PWD\" timeout 180 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py::test_the_classifier_actually_learns"
+  - "cd {workspace} && IRIS_WORKSPACE=\"$PWD\" timeout 180 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py::test_main_writes_the_report_and_a_loadable_model"
+  - "cd {workspace} && IRIS_WORKSPACE=\"$PWD\" timeout 180 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py::test_the_saved_model_predicts_a_category_it_never_saw"
+files_forbidden:
+  - benchmarks/eda-iris-pipeline-v2/tests/test_iris_pipeline.py
+
+constraints:
+  - ml_pipeline.py and main.py in the workspace, with the exact public names
+  - No downloads at run time; build the dataset in code
+  - Do not edit the shipped tests
+
+success_criteria:
+  level_0: ml_pipeline.py missing or does not import
+  level_5: about half of the graded tests pass
+  level_10: every graded test passes
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+prompts:
+  default: benchmarks/eda-iris-pipeline-v2/prompt_default.md
+  harness: benchmarks/eda-iris-pipeline-v2/prompt_harness.md
+
+scoring_rubric: benchmarks/eda-iris-pipeline-v2/scoring.md

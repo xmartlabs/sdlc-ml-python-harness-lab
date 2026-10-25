@@ -2132,4 +2132,18 @@ in under a second on `Invalid model name` and were listed as "agent error".
 And a failure the model never got to cause must be labelled as the lab's, or the
 run list and the leaderboard read infrastructure as capability.
 
+## 2026-10-24 — Run the grader where it will run, before reading any result
+
+Twelve runs of `eda-ml-iris-categ-numerico` scored 0–3 and looked like weak models. The
+grader's container had no pandas (ten collection errors), the grade was the agent's own
+test file, and the fix itself carried two bugs the unit tests could not see: the runner's
+venv has no pip (uv only), and every graded command passed a lab-relative `{workspace}`
+that stopped resolving after its own `cd` — the clinic cases had worked only because
+`python -m pytest` puts the cwd on `sys.path`.
+
+**How to apply:** before trusting a case or a validation change, run it through
+`DockerRunExecutor` with `hardened=True` on an archived workspace — setup with network,
+checks without — and calibrate the tests on a reference, an empty and a partial
+workspace. When a whole grid fails the same way, suspect the grader first.
+
 <!-- Add new learnings above this line -->

@@ -225,3 +225,62 @@ def test_a_stored_check_names_the_command_under_the_key_that_says_so():
     check = objective["checks"][0]
     assert check["command"] == "sh -c 'pytest -q'"
     assert check["name"] == check["command"]
+
+
+class PhaseRecordingExecutor:
+    """Records each command's phase; the setup step can be made to fail."""
+
+    def __init__(self, setup_exit: int = 0, check_exit: int = 0, check_lines=None):
+        self.setup_exit = setup_exit
+        self.check_exit = check_exit
+        self.check_lines = check_lines or []
+        self.calls: list[tuple[str, str]] = []
+
+    def start(self, run_id: str, command: list[str], **kwargs) -> FakeHandle:
+        phase = kwargs.get("phase", "")
+        self.calls.append((phase, command[-1]))
+        if phase == "setup":
+            return FakeHandle(["pip output"], self.setup_exit)
+        return FakeHandle(self.check_lines, self.check_exit)
+
+
+def _seed_case_with_requirements(session: Session, run_id: str, run_dir: Path):
+    seed_case_and_run(session, run_id, run_dir)
+    case = (
+        session.get(Case, 1)
+        or session.exec(__import__("sqlmodel").select(Case)).first()
+    )
+    case.metadata_json = {"validation_requirements": ["pandas==2.2.3"]}
+    session.add(case)
+    session.commit()
+
+
+def test_the_setup_step_runs_first_and_with_network(patched_settings):
+    engine = make_engine()
+    with Session(engine) as session:
+        _seed_case_with_requirements(session, "run-deps", patched_settings / "run-deps")
+        executor = PhaseRecordingExecutor()
+        ValidationService(session, executor=executor).validate_run("run-deps")
+    phases = [phase for phase, _ in executor.calls]
+    assert phases[0] == "setup"
+    assert set(phases[1:]) == {"validate"}
+
+
+def test_a_failed_setup_makes_the_checks_inconclusive_not_failed(patched_settings):
+    """A grader that could not install its own dependencies measured nothing."""
+    engine = make_engine()
+    with Session(engine) as session:
+        _seed_case_with_requirements(
+            session, "run-nodeps", patched_settings / "run-nodeps"
+        )
+        executor = PhaseRecordingExecutor(setup_exit=1, check_exit=1)
+        validation = ValidationService(session, executor=executor).validate_run(
+            "run-nodeps"
+        )
+    objective = validation.objective
+    assert objective["passed"] is None
+    assert all(
+        check["inconclusive_reason"] == "missing_dependency"
+        for check in objective["checks"]
+    )
+    assert [phase for phase, _ in executor.calls] == ["setup"]

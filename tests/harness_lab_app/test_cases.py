@@ -261,3 +261,71 @@ def test_the_clinic_ladder_declares_three_tiers(session):
         "clinic-booking-t2": "tier:2",
         "clinic-rules-t3": "tier:3",
     }
+
+
+def test_a_task_yaml_declares_its_graders_dependencies(tmp_path):
+    """ADR-0071: the packages the graded tests import are case data, stored like
+    the starter, refreshed on re-seed and dropped when the yaml drops them."""
+    import yaml
+
+    from harness_lab_app.case_service import CaseService
+
+    task = tmp_path / "task.yaml"
+    body = {
+        "task_id": "deps-case",
+        "description": "d",
+        "prompts": {"default": "p"},
+        "validation_commands": ["pytest {workspace}/t.py -q"],
+        "validation_requirements": ["pandas==2.2.3", "joblib==1.4.2"],
+    }
+    task.write_text(yaml.safe_dump(body))
+    from sqlmodel import Session, SQLModel, create_engine
+    from sqlmodel.pool import StaticPool
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        case = CaseService(session).import_task_yaml(task)
+        assert case.metadata_json["validation_requirements"] == [
+            "pandas==2.2.3",
+            "joblib==1.4.2",
+        ]
+
+
+def test_a_graded_case_hands_its_tests_an_absolute_workspace():
+    """Every graded command `cd`s into the workspace first, so a `{workspace}` path
+    relative to the lab root no longer resolves after it. The clinic tests only
+    worked because `python -m pytest` happens to put the cwd on sys.path; the iris
+    tests, which run `main.py` by path, did not (2026-10-24)."""
+    import re
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[2] / "benchmarks"
+    offenders = []
+    for task in sorted(root.glob("*/task.yaml")):
+        for command in (
+            yaml.safe_load(task.read_text()).get("validation_commands") or []
+        ):
+            if re.search(r"\b[A-Z_]+_WORKSPACE=\{workspace\}", str(command)):
+                offenders.append(task.parent.name)
+                break
+    assert offenders == [], offenders
+
+
+def test_a_case_with_validation_requirements_reads_back_through_the_api_schema():
+    """The list lives in metadata_json; a `dict[str, str]` schema would refuse to
+    serialize every case that declares it."""
+    from harness_lab_app.schemas import CaseRead
+
+    record = CaseRead(
+        case_id="c",
+        name="c",
+        type="build_from_scratch",
+        status="active",
+        sync_state="imported_from_yaml",
+        metadata_json={"validation_requirements": ["pandas==3.1.0"]},
+    )
+    assert record.metadata_json["validation_requirements"] == ["pandas==3.1.0"]

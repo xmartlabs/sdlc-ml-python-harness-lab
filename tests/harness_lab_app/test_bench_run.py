@@ -924,3 +924,32 @@ def test_no_api_error_means_no_cause_line(tmp_path):
     log = tmp_path / "step-1.log"
     log.write_text("# claude session init\nTraceback: SyntaxError\n")
     assert bench_run.harness_error_cause(log) is None
+
+
+def test_a_workspace_with_a_virtualenv_still_archives(tmp_path):
+    """eda-ml-iris-categ-numerico-K-008 (2026-10-23): the agent created `venv/`
+    in its workspace, `git diff` returned 2.6 MB of binary, and decoding it as
+    UTF-8 killed the run after the agent had finished its work."""
+    dest = tmp_path / "workspace"
+    (dest / "venv" / "lib").mkdir(parents=True)
+    (dest / "venv" / "lib" / "blob.so").write_bytes(bytes(range(256)) * 64)
+    (dest / "__pycache__").mkdir()
+    (dest / "__pycache__" / "m.cpython-311.pyc").write_bytes(b"\xa4\x00\xff")
+    (dest / "main.py").write_text("print('hi')\n")
+    lines = bench_run.write_diff_patch(tmp_path, dest)
+    patch = (tmp_path / "diff.patch").read_text()
+    assert lines > 0
+    assert "main.py" in patch
+    # The agent's code is the diff; installed packages and caches are not.
+    assert "venv/" not in patch and "__pycache__" not in patch
+    # The archive itself keeps everything.
+    assert (dest / "venv" / "lib" / "blob.so").exists()
+
+
+def test_git_output_that_is_not_utf8_never_raises(tmp_path):
+    (tmp_path / "f.bin").write_bytes(b"\xa4\xff\x00 binary")
+    result = bench_run._run_git(
+        ["git", "diff", "--no-index", "--text", "/dev/null", str(tmp_path / "f.bin")],
+        cwd=tmp_path,
+    )
+    assert isinstance(result.stdout, str)

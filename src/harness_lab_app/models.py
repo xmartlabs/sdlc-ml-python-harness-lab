@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import Column, UniqueConstraint
 from sqlalchemy.types import JSON
@@ -182,7 +183,8 @@ class Case(SQLModel, table=True):
     # benchmark exists to catch.
     files_expected: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     files_forbidden: list[str] = Field(default_factory=list, sa_column=Column(JSON))
-    metadata_json: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
+    # JSON, not only strings: `validation_requirements` is a list (ADR-0071).
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

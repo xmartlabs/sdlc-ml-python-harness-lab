@@ -19,6 +19,8 @@ failed, and did anything get measured — so they are kept together.
 
 from __future__ import annotations
 
+import re
+
 # kind -> (prefix, human label). Order matters only for readability; the
 # prefixes are mutually exclusive.
 _KINDS: tuple[tuple[str, str, str], ...] = (
@@ -59,11 +61,23 @@ _LAB_MARKERS: tuple[tuple[str, str], ...] = (
 UNMEASURED_KINDS = frozenset({"lab"})
 
 
+# A server-side status from the provider or a proxy in front of it (Cloudflare
+# 52x, Anthropic 529 overloaded). The run reached a gateway that could not
+# answer, which says nothing about the model.
+_SERVER_ERROR_RE = re.compile(r"API Error: 5\d\d\b")
+
+
 def _lab_marker(text: str) -> str | None:
     lowered = text.lower()
     for marker, label in _LAB_MARKERS:
         if marker in lowered:
+            # A server-side outage outranks the generic harness_error verdict
+            # that always accompanies it.
+            if label == "harness error" and _SERVER_ERROR_RE.search(text):
+                return "endpoint down"
             return label
+    if _SERVER_ERROR_RE.search(text):
+        return "endpoint down"
     return None
 
 

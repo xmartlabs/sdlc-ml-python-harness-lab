@@ -37,7 +37,7 @@ from the workspace. Read them before you start — they are the acceptance crite
 them with:
 
 ```bash
-cd {workspace} && CLINIC_WORKSPACE={workspace} python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py
+cd {workspace} && CLINIC_WORKSPACE="$PWD" python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-booking-t2/tests/test_booking.py
 ```
 
 Do not edit the tests.
