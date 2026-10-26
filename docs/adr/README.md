@@ -92,6 +92,15 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0061 — A claude run started inside a clone must be told where the skills are](0061-a-claude-run-started-inside-a-clone-must-be-told-where-the-skills-are.md)
 - [0062 — A check the environment failed is not a verdict](0062-a-check-the-environment-failed-is-not-a-verdict.md)
 - [0063 — The context limit opencode is told is read off the serving host](0063-the-context-limit-opencode-is-told-is-read-off-the-serving-host.md)
+- [0064 — An experiment shows its uncertainty](0064-an-experiment-shows-its-uncertainty.md)
+- [0065 — The audit decides what code can decide](0065-the-audit-decides-what-code-can-decide.md)
+- [0066 — Harness and model vary together only in a full grid](0066-harness-and-model-vary-together-only-in-a-full-grid.md)
+- [0067 — A frontend case is graded in a real browser](0067-a-frontend-case-is-graded-in-a-real-browser.md)
+- [0068 — A case can start from its own files](0068-a-case-can-start-from-its-own-files.md)
+- [0069 — A model is judged by the tier it does reliably](0069-a-model-is-judged-by-the-tier-it-does-reliably.md)
+- [0070 — The interface speaks English and Spanish](0070-the-interface-speaks-english-and-spanish.md)
+- [0071 — A grader brings its own dependencies, and never the agent's tests](0071-a-grader-brings-its-own-dependencies-and-never-the-agents-tests.md)
+- [0072 — A developer takes the harness home, and the docs follow the journey](0072-a-developer-takes-the-harness-home-and-the-docs-follow-the-journey.md)
 
 ## Why ADRs exist
 

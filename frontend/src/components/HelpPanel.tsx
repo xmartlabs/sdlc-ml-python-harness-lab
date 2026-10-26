@@ -2,20 +2,27 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 
+import { defineMessages, useMessages } from "../i18n";
 import { IconChevronRight } from "./icons";
+
+const MESSAGES = defineMessages({
+  en: { openGuide: "Open the guide" },
+  es: { openGuide: "Abrir la guía" }
+});
 
 type HelpPanelProps = {
   title: string;
-  /** Docs path the panel expands on; kept as the link's title so callers need no change. */
-  docHref?: string;
+  /** The Guide doc the panel expands on (its slug); "Open the guide" opens it. */
+  doc?: string;
   defaultOpen?: boolean;
   children: ReactNode;
 };
 
 // Collapsible in-app onboarding block. Mirrors the Skills "how-to" pattern and
 // links to the in-app guide so the UI stays self-explanatory.
-export function HelpPanel({ title, docHref, defaultOpen = false, children }: HelpPanelProps) {
+export function HelpPanel({ title, doc, defaultOpen = false, children }: HelpPanelProps) {
   const [open, setOpen] = useState(defaultOpen);
+  const m = useMessages(MESSAGES);
   return (
     <section className="panel help-panel">
       <div className="help-head">
@@ -32,9 +39,9 @@ export function HelpPanel({ title, docHref, defaultOpen = false, children }: Hel
             {title}
           </span>
         </button>
-        {docHref ? (
-          <Link className="help-doc-link" title={docHref} to="/system/guide">
-            Open the guide
+        {doc ? (
+          <Link className="help-doc-link" to={`/system/guide?doc=${doc}`}>
+            {m.openGuide}
           </Link>
         ) : null}
       </div>

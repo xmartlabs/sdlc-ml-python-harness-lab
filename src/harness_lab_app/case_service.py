@@ -312,6 +312,19 @@ class CaseService:
                 existing.validation_commands = [
                     str(cmd) for cmd in raw["validation_commands"]
                 ]
+            # The starter is authored like the commands: the file is its source.
+            meta = dict(existing.metadata_json or {})
+            if raw.get("starter"):
+                meta["starter_dir"] = str(raw["starter"])
+            else:
+                meta.pop("starter_dir", None)
+            if raw.get("validation_requirements"):
+                meta["validation_requirements"] = [
+                    str(item) for item in raw["validation_requirements"]
+                ]
+            else:
+                meta.pop("validation_requirements", None)
+            existing.metadata_json = meta
             existing.updated_at = utc_now()
             self.session.add(existing)
             self.session.commit()
@@ -349,7 +362,23 @@ class CaseService:
                 )
             ),
             max_steps=int(raw.get("target_level", 1)),
-            metadata_json={"source_path": str(task_path)},
+            metadata_json={
+                "source_path": str(task_path),
+                # Files the workspace starts from (ADR-0068); the runner copies
+                # them in and refuses any path outside benchmarks/.
+                **({"starter_dir": str(raw["starter"])} if raw.get("starter") else {}),
+                # Packages the graded tests import, installed before the offline
+                # checks (ADR-0071).
+                **(
+                    {
+                        "validation_requirements": [
+                            str(item) for item in raw["validation_requirements"]
+                        ]
+                    }
+                    if raw.get("validation_requirements")
+                    else {}
+                ),
+            },
         )
         self.session.add(case)
         self.session.commit()

@@ -4,7 +4,7 @@ Step-by-step setup for a developer cloning the lab on a **new machine**. At the 
 you will have the web app running, one benchmark run executed, and the improvement
 loop within reach.
 
-Already set up? Jump to [Operating the lab](#8-what-next--operating-the-lab).
+Already set up? Start at [docs/README.md](README.md) — six one-page journeys.
 
 ---
 
@@ -14,7 +14,7 @@ Already set up? Jump to [Operating the lab](#8-what-next--operating-the-lab).
 |---|---|---|
 | **Docker Desktop** | The web app and every agent run in containers | `docker info` |
 | **make** + **git** | All workflows are Makefile-driven | `make --version` |
-| [uv](https://github.com/astral-sh/uv) *(optional)* | Only to develop the lab itself (tests, lint) | `uv --version` |
+| [uv](https://github.com/astral-sh/uv) | The shell tools — `make harness-check`, `make harness-export`, `make demo-check` — and developing the lab | `uv --version` |
 | **Node 20+** *(optional)* | Only for host-mode frontend development | `node --version` |
 
 ```bash
@@ -89,7 +89,7 @@ LITELLM_MASTER_KEY=sk-...
 Optional model overrides (LiteLLM model names, no `gateway/` prefix). The
 defaults are transport-specific: over the gateway the lab uses `gpt-5.4-mini`
 for audits/judges and `gpt-5.4-nano` for summaries; over the Claude CLI (Path B)
-it uses `claude-sonnet-5` and `claude-haiku-4-5`. An override must be a name the
+it uses `claude-sonnet-5-5` and `claude-haiku-5-5`. An override must be a name the
 active transport understands.
 
 ```bash
@@ -160,9 +160,11 @@ ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 No restart is needed after editing `.env`: it is bind-mounted and read when each
-run starts, and the token flows into the runner container from there. No gateway
-involvement for the runs themselves. Design details:
-[harness-adapters.md](harness-adapters.md).
+run starts, and the token flows into the runner container from there. The CLI talks
+to Anthropic directly — unless your own `.claude/settings.local.json` (untracked,
+per developer) sets `ANTHROPIC_BASE_URL` to your gateway, in which case every claude
+run goes through it and the gateway needs a card for each model you pick (the run
+form marks the ones it lacks). Design details: [harness-adapters.md](harness-adapters.md).
 
 **The same credential also powers the lab's judges.** When no gateway is
 configured, the audit, the improvement synthesis, the SWE-bench Pro judge, the
@@ -171,7 +173,7 @@ running `claude -p` headless with every tool disabled — a plain text completio
 not an agent. You do not configure anything for this: it is what the transport
 does when there is no gateway, and each helper picks a Claude model by default
 (override with `AUDITOR_MODEL`, `DEEPEVAL_MODEL`, `CASE_SUMMARY_MODEL`, using
-names the CLI understands such as `claude-sonnet-5`). Rationale and trade-offs:
+names the CLI understands such as `claude-sonnet-5-5`). Rationale and trade-offs:
 [ADR-0043](adr/0043-one-llm-transport-gateway-first-claude-cli-second.md).
 
 **Prefer HTTP over a subprocess?** Anthropic serves an OpenAI-compatible
@@ -341,21 +343,21 @@ Runs, scoring and comparison are unaffected.
 
 ## 5. Smoke test — your first run
 
-1. Open **http://localhost:5173** → **Evaluate → New evaluation** (or
-   **Advanced → Runs → New run** for a single run).
-2. Pick a simple case (e.g. `tetris-v1`), a **harness** you configured
-   (`claude` for Path B, `opencode` for Path A), a governance-loaded **prompt
-   variant** (`sdlc_full` / `swe_harness`), and an **executor model**
-   (gateway models come live from LiteLLM; if one is marked *not routable*,
-   enable it in **Settings → Model catalog** first).
-3. Create the run and watch the logs stream. When it finishes, it is scored
-   ([ADR-0038](adr/0038-every-run-leaves-with-a-score.md)): a case with executable
-   validation commands (SWE-bench, SWE-bench Pro, a target repository with a gate,
-   a custom case with `validation_commands`) scores itself; a case with a
-   `scoring_rubric` is LLM-judged; only rubric-less, non-objective cases stop in
-   `awaiting_manual_score` — submit the score in the run detail.
-4. In the run detail, click **Run audit** (works under either path) — the LLM
-   reads the run's artifacts and reports skill usage, loops, and SDLC adherence.
+```bash
+make demo-check     # docker, credential (names only), API, cases — writes nothing
+```
+
+1. Open **http://localhost:5173** → **Advanced → Runs → New run**.
+2. Pick the case `clinic-slots-t1` (small, pure Python, graded by the lab's own
+   tests), the **harness** you configured (`claude` for Path B, `opencode` for
+   Path A), the prompt variant `default`, and an **executor model** (`claude-opus-5-5`
+   for Path B; for Path A any gateway model — one marked *not routable* has to be
+   enabled in **Settings → Model catalog** first).
+3. Create the run and watch the log stream. When it finishes it scores itself: the
+   case's validation commands are its tests
+   ([ADR-0038](adr/0038-every-run-leaves-with-a-score.md)).
+4. On the run page, press **Run audit** — a model reads the run's artifacts and
+   reports how the agent worked.
 
 If all of that worked, your machine is fully onboarded.
 
@@ -391,7 +393,7 @@ What "in place" means:
 - **A judge**, for the two `GEval` rubrics. Zero-config under either credential
   path: the judge goes over the same LLM transport as the audit
   ([ADR-0043](adr/0043-one-llm-transport-gateway-first-claude-cli-second.md)) —
-  `gpt-5.4-mini` through the gateway, `claude-sonnet-5` through the Claude CLI.
+  `gpt-5.4-mini` through the gateway, `claude-sonnet-5-5` through the Claude CLI.
   Override with `DEEPEVAL_MODEL` (or `AUDITOR_MODEL`) in `.env`.
 - `tool_correctness` is deterministic and needs no judge — but it only scores
   cases that declare `files_expected` or `validation_commands`, because an
@@ -413,20 +415,13 @@ cd frontend && npm install && npx tsc --noEmit   # frontend typecheck
 A Dev Container config is included (VS Code → "Reopen in Container") for a
 zero-setup Linux environment.
 
-## 8. What next — operating the lab
+## 8. What next
 
-Once set up, your day-to-day is the **improvement cycle**: run → audit → propose →
-file an issue → improve the template → re-measure.
-
-| I want to… | Read |
-|---|---|
-| Understand every screen of the web UI | [guide-web-ui.md](guide-web-ui.md) |
-| Push a stopped run further with a new prompt | [guide-run-continuation.md](guide-run-continuation.md) |
-| Run the audit → proposals → GitHub-issue loop | [improvement-cycle.md](improvement-cycle.md) |
-| Inspect a run turn by turn in Langfuse | [guide-langfuse-observability.md](guide-langfuse-observability.md) |
-| The methodology behind the loop (when to trust a proposal) | [harness-lifecycle/improvement-methodology.md](harness-lifecycle/improvement-methodology.md) |
-| Consolidate proposals from several runs into ONE issue | Improvements menu in the UI (saved-proposals worklist) — see [guide-web-ui.md](guide-web-ui.md) |
-| Adopt a new template release and validate it | [harness-lifecycle/lab-sync-workflow.md](harness-lifecycle/lab-sync-workflow.md) |
-| Benchmark with SWE-bench / SWE-bench Pro | [design-swe-bench-cases.md](design-swe-bench-cases.md), [design-swe-bench-pro-lane.md](design-swe-bench-pro-lane.md) |
-| Compare harnesses (claude vs codex vs opencode) | [harness-adapters.md](harness-adapters.md), [runbook-claude-codex.md](runbook-claude-codex.md) |
-| Tune self-hosted/local models so they converge | [local-model-runtime-config.md](local-model-runtime-config.md), [task-sizing.md](task-sizing.md) |
+You are set up. Everything else is one of six journeys — see
+**[docs/README.md](README.md)**:
+[create a case](journey-create-a-case.md) ·
+[run and compare](journey-run-and-compare.md) ·
+[read the results](journey-read-results.md) ·
+[bring your repo or skill](journey-bring-your-repo-or-skill.md) ·
+[take it home](journey-take-it-home.md) ·
+[improve the template](journey-improve-the-template.md).

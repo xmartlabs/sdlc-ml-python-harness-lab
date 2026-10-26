@@ -153,8 +153,9 @@ _DEFAULT_MODELS: dict[str, dict[str, str]] = {
     # gpt-5.4-mini: mini tier, ~6.7x cheaper than gpt-5.5 with enough judgment
     # for log audits. gpt-5.4-nano: summaries are extraction, not reasoning.
     "gateway": {"audit": "gpt-5.4-mini", "summary": "gpt-5.4-nano"},
-    # Sonnet judges, Haiku summarizes — the same split, one tier per job.
-    "claude_cli": {"audit": "claude-sonnet-5", "summary": "claude-haiku-4-5"},
+    # Sonnet judges, Haiku summarizes — the same split, one tier per job, on
+    # the current generation (Sonnet 5.5 costs what Sonnet 5 did).
+    "claude_cli": {"audit": "claude-sonnet-5-5", "summary": "claude-haiku-5-5"},
 }
 
 

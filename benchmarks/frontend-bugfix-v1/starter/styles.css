@@ -1,0 +1,7 @@
+body { font-family: system-ui, sans-serif; margin: 2rem; color: #1f2933; }
+main { max-width: 40rem; }
+.appointment { display: flex; gap: 1rem; align-items: center; padding: .5rem 0; border-bottom: 1px solid #e4e7eb; }
+.time { font-variant-numeric: tabular-nums; width: 4rem; }
+.patient { flex: 1; }
+.doctor { color: #616e7c; }
+.cancel { color: #b42318; cursor: pointer; }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { ApiError, api } from "../api";
@@ -7,13 +8,13 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { ReadinessReportView } from "../components/ReadinessReportView";
 import { Spinner } from "../components/Spinner";
 import { formatRunDate } from "../dates";
+import { defineMessages, useMessages } from "../i18n";
 import type {
   CaseRecord,
   CheckoutState,
   ConditionRecord,
   ExperimentRecord,
   GateCheckRecord,
-  HarnessSkill,
   ReadinessReport,
   StagedSkillRecord,
   TargetRecord
@@ -21,13 +22,7 @@ import type {
 
 type TabKey = "checkout" | "readiness" | "cases" | "experiments" | "report";
 
-const TABS: { key: TabKey; label: string }[] = [
-  { key: "checkout", label: "Checkout" },
-  { key: "readiness", label: "Readiness" },
-  { key: "cases", label: "Cases" },
-  { key: "experiments", label: "Experiments" },
-  { key: "report", label: "Report" }
-];
+const TAB_KEYS: TabKey[] = ["checkout", "readiness", "cases", "experiments", "report"];
 
 /** An experiment read whole, because only the detail endpoint carries arms. */
 type ExperimentDetail = ExperimentRecord & { conditions: ConditionRecord[] };
@@ -68,8 +63,379 @@ function readTargetRepoId(overrides: Record<string, unknown>): string {
   return typeof value === "string" ? value : "";
 }
 
+const MESSAGES = defineMessages({
+  en: {
+    tabs: {
+      checkout: "Checkout",
+      readiness: "Readiness",
+      cases: "Cases",
+      experiments: "Experiments",
+      report: "Report"
+    },
+    errors: {
+      somethingWrong: "Something went wrong",
+      loadRepository: "Unable to load this repository",
+      findFreeId: "Unable to find a free experiment id."
+    },
+    loadingRepository: "Reading this repository",
+    notFound: {
+      title: "Repository not found",
+      description: (targetId: string) => `No repository is registered under '${targetId}'.`,
+      back: "Back to repositories"
+    },
+    header: {
+      pinnedAt: (commit: ReactNode) => (
+        <>Pinned at {commit} — every case, run and report below reads that commit.</>
+      ),
+      unpinned: "unpinned",
+      unpinnedNote: "Nothing here is comparable until this repository is pinned to a commit.",
+      allRepositories: "All repositories"
+    },
+    checkout: {
+      title: "Local checkout",
+      cloned: "Cloned",
+      notCloned: "Not cloned",
+      intro:
+        "You clone this repository in your own terminal so your credentials apply, " +
+        "or hand the lab a clone you already have; either way the lab only ever " +
+        "reads it.",
+      reading: "Reading the checkout",
+      path: "Path",
+      attachedNote: "an existing clone, attached to this repository",
+      head: "HEAD",
+      branch: "Branch",
+      pinnedCommit: "Pinned commit",
+      notPinned: "not pinned",
+      pinnedAtLabel: "Pinned at",
+      dirtyTitle: "The working tree has uncommitted changes",
+      dirtyBody: (files: number, head: string) => (
+        <>
+          {files} file(s) differ from {head}. A run reads the pinned commit, not
+          your edits, so what you see locally is not what was measured.
+        </>
+      ),
+      staleTitle: "HEAD has moved since the pin",
+      staleBody:
+        "Re-pinning changes what every future case, run and report reads. Results " +
+        "already recorded keep the commit they used.",
+      pinning: "Pinning…",
+      rePin: "Re-pin to HEAD",
+      cloneYourself: "Clone it yourself",
+      copy: "Copy",
+      copiedNotice: "Clone command copied to the clipboard.",
+      pinnedNotice: (commit: string) =>
+        `Pinned to ${commit}. Everything measured from now on reads that commit.`
+    },
+    readinessTab: {
+      title: "What this repository already has",
+      ready: "Ready to run",
+      notReady: "Not runnable yet",
+      reading: "Reading the repository",
+      adoptedNotice: "Adopted. Runs against this repository now validate with its own commands.",
+      gateTitle: "Gate check",
+      running: "Running…",
+      runGateCheck: "Run gate check",
+      gateIntro:
+        "It runs the repository's own setup and validation commands at the pinned " +
+        "commit with no agent, so a red run afterwards is a fact about the agent " +
+        "rather than about the runner image.",
+      noGateTitle: "No gate check yet",
+      noGateDescription:
+        "Run one to find out whether this repository builds and passes on its own.",
+      verdict: "Verdict",
+      verdictRunning: "Running",
+      verdictPassed: "Passed",
+      verdictFailed: (phase: string) => `Failed at ${phase}`,
+      unnamedPhase: "an unnamed phase",
+      verdictNone: "No verdict",
+      commit: "Commit",
+      lastUpdated: "Last updated",
+      waitingForGate: "Waiting for the gate to finish",
+      exit: (code: string) => `exit ${code}`,
+      passed: "passed",
+      failed: "failed"
+    },
+    casesTab: {
+      title: "Case library",
+      count: (count: number) => `${count} case(s)`,
+      intro: "Cases derived from this repository's own history. They are what every experiment below runs.",
+      loading: "Loading cases",
+      noneTitle: "No cases from this repository yet",
+      noneDescription: "Derive the first ones from the repository's commits in the audit.",
+      deriveFromHistory: "Derive cases from history",
+      meta: (type: string, steps: string) => `· ${type} · ${steps} step(s)`,
+      noValidation: "No validation command, so a run of this case has no objective verdict — it can only be scored by hand."
+    },
+    experimentsTab: {
+      launchTitle: "Launch an experiment",
+      launchIntro:
+        "Both presets hold the repository, the cases and the model fixed and vary " +
+        "one thing about the harness. Everything runs at the pinned commit.",
+      presetSkills: "Native vs native + skills",
+      presetHarness: "Native vs the lab harness",
+      presetSkillsDescription:
+        "Both arms use the repository's own governance. Only the treatment arm " +
+        "gets the selected skills.",
+      presetHarnessDescription:
+        "Both arms use the same cases and model. The control keeps the repository's " +
+        "own governance; the treatment gets the lab harness injected into the " +
+        "workspace.",
+      casesSelected: (count: number) => `Cases — ${count} selected`,
+      noCasesTitle: "No cases to run",
+      noCasesDescription: "An experiment needs at least one case from this repository.",
+      addFirstCase: "Add the first case",
+      validationCommands: (count: number) => `${count} validation command(s)`,
+      skillsSelected: (count: number) => `Skills — ${count} selected`,
+      loadingSkills: "Loading skills",
+      staged: "staged",
+      enforceSkillUse: "Enforce skill use",
+      enforceHint:
+        "Without it the treatment arm measures whether the skill was available, " +
+        "not whether it was used.",
+      repetitionsPerArm: "Repetitions per arm",
+      executorModelLabel:
+        "Executor model — required for opencode; claude/codex fall back to their CLI default",
+      cancel: "Cancel",
+      launching: "Launching…",
+      createAndLaunch: "Create and launch",
+      conditionNative: "The repository's own setup, with no extra skills.",
+      conditionSkillsWithEnforce: (skills: string) =>
+        `The same setup with ${skills} available and asked for.`,
+      conditionSkillsNoEnforce: (skills: string) =>
+        `The same setup with ${skills} available.`,
+      conditionNativeGovernance: "The repository's own governance, with nothing injected.",
+      conditionInjected: "The lab harness injected into the same workspace.",
+      questionSkills: (skills: string, name: string) =>
+        `Does adding ${skills} change outcomes on ${name}?`,
+      questionHarness: (name: string) => `Does the lab harness improve on ${name}'s own setup?`,
+      experimentNameSkills: (name: string) => `Skills on ${name}`,
+      experimentNameHarness: (name: string) => `Harness source on ${name}`,
+      runNotes: (targetId: string, commit: string) =>
+        `Both arms run against ${targetId} at ${commit}.`,
+      queuedNotice: (count: number, experimentId: string) =>
+        `Queued ${count} run(s) under '${experimentId}'.`,
+      blockingNoPin:
+        "This repository has no pinned commit. Pin it under Checkout first — two " +
+        "arms run against a moving ref are not the same experiment twice.",
+      blockingNoCases: "Select at least one case. An experiment with no cases measures nothing.",
+      blockingNoSkills: "Select at least one skill — that is the only thing the two arms differ on.",
+      noStagedSkills:
+        "No staged skill yet. The lab's own skills are not in this repository's governance, so this preset measures skills you stage: import or create one on Evidence → Skills, then come back.",
+      onThisRepoTitle: "Experiments on this repository",
+      readingExperiments: "Reading experiments",
+      noneRunTitle: "Nothing has been run against this repository yet",
+      noneRunDescription: "Launch one with a preset above.",
+      experimentMeta: (status: string, arms: number, cases: number, reps: number) =>
+        `${status} · ${arms} arm(s) · ${cases} case(s) · ${reps} rep(s)`
+    },
+    reportTab: {
+      title: "Client report",
+      assembling: "Assembling…",
+      regenerate: "Regenerate",
+      generate: "Generate report",
+      download: "Download .md",
+      intro:
+        "Assembled live from the evidence this repository has produced — readiness, " +
+        "cases, experiments and signed findings. It never claims what was not measured.",
+      noneTitle: "No report yet",
+      noneDescription: "Generate one to read what the lab can currently say about this repository.",
+      findingsNote: (
+        <>
+          Findings are recorded separately — see <Link to="/evidence/findings">Findings</Link>.
+        </>
+      )
+    }
+  },
+  es: {
+    tabs: {
+      checkout: "Checkout",
+      readiness: "Estado",
+      cases: "Casos",
+      experiments: "Experimentos",
+      report: "Reporte"
+    },
+    errors: {
+      somethingWrong: "Algo salió mal",
+      loadRepository: "No se pudo cargar este repositorio",
+      findFreeId: "No se pudo encontrar un id de experimento libre."
+    },
+    loadingRepository: "Leyendo este repositorio",
+    notFound: {
+      title: "Repositorio no encontrado",
+      description: (targetId: string) => `No hay ningún repositorio registrado bajo '${targetId}'.`,
+      back: "Volver a repositorios"
+    },
+    header: {
+      pinnedAt: (commit: ReactNode) => (
+        <>Fijado en {commit} — cada caso, corrida y reporte de abajo lee ese commit.</>
+      ),
+      unpinned: "sin fijar",
+      unpinnedNote: "Nada acá es comparable hasta que este repositorio esté fijado a un commit.",
+      allRepositories: "Todos los repositorios"
+    },
+    checkout: {
+      title: "Checkout local",
+      cloned: "Clonado",
+      notCloned: "No clonado",
+      intro:
+        "Cloná este repositorio en tu propia terminal para que apliquen tus " +
+        "credenciales, o dale al lab un clon que ya tengas; de cualquier forma el " +
+        "lab solo lo lee.",
+      reading: "Leyendo el checkout",
+      path: "Ruta",
+      attachedNote: "un clon existente, adjuntado a este repositorio",
+      head: "HEAD",
+      branch: "Rama",
+      pinnedCommit: "Commit fijado",
+      notPinned: "no fijado",
+      pinnedAtLabel: "Fijado el",
+      dirtyTitle: "El árbol de trabajo tiene cambios sin confirmar",
+      dirtyBody: (files: number, head: string) => (
+        <>
+          {files} archivo(s) difieren de {head}. Una corrida lee el commit fijado,
+          no tus ediciones, así que lo que ves localmente no es lo que se midió.
+        </>
+      ),
+      staleTitle: "HEAD se movió desde que se fijó",
+      staleBody:
+        "Volver a fijar cambia lo que lee cada caso, corrida y reporte futuro. Los " +
+        "resultados ya registrados mantienen el commit que usaron.",
+      pinning: "Fijando…",
+      rePin: "Volver a fijar a HEAD",
+      cloneYourself: "Clonalo vos mismo",
+      copy: "Copiar",
+      copiedNotice: "Comando de clonado copiado al portapapeles.",
+      pinnedNotice: (commit: string) =>
+        `Fijado en ${commit}. Todo lo medido de ahora en más lee ese commit.`
+    },
+    readinessTab: {
+      title: "Lo que este repositorio ya tiene",
+      ready: "Listo para correr",
+      notReady: "Todavía no se puede correr",
+      reading: "Leyendo el repositorio",
+      adoptedNotice: "Adoptado. Las corridas contra este repositorio ahora validan con sus propios comandos.",
+      gateTitle: "Chequeo del gate",
+      running: "Corriendo…",
+      runGateCheck: "Correr chequeo del gate",
+      gateIntro:
+        "Corre los propios comandos de setup y validación del repositorio en el " +
+        "commit fijado sin ningún agente, así que una corrida roja después es un " +
+        "hecho sobre el agente y no sobre la imagen del runner.",
+      noGateTitle: "Todavía no hay chequeo del gate",
+      noGateDescription:
+        "Corré uno para saber si este repositorio compila y pasa por su cuenta.",
+      verdict: "Veredicto",
+      verdictRunning: "Corriendo",
+      verdictPassed: "Pasó",
+      verdictFailed: (phase: string) => `Falló en ${phase}`,
+      unnamedPhase: "una fase sin nombre",
+      verdictNone: "Sin veredicto",
+      commit: "Commit",
+      lastUpdated: "Última actualización",
+      waitingForGate: "Esperando a que termine el gate",
+      exit: (code: string) => `salida ${code}`,
+      passed: "pasó",
+      failed: "falló"
+    },
+    casesTab: {
+      title: "Biblioteca de casos",
+      count: (count: number) => `${count} caso(s)`,
+      intro: "Casos derivados del propio historial de este repositorio. Son lo que corre cada experimento de abajo.",
+      loading: "Cargando casos",
+      noneTitle: "Todavía no hay casos de este repositorio",
+      noneDescription: "Derivá los primeros desde los commits del repositorio en la auditoría.",
+      deriveFromHistory: "Derivar casos del historial",
+      meta: (type: string, steps: string) => `· ${type} · ${steps} paso(s)`,
+      noValidation: "No hay comando de validación, así que una corrida de este caso no tiene veredicto objetivo — solo se puede puntuar a mano."
+    },
+    experimentsTab: {
+      launchTitle: "Lanzar un experimento",
+      launchIntro:
+        "Ambas plantillas mantienen fijos el repositorio, los casos y el modelo, y " +
+        "varían una sola cosa del arnés. Todo corre en el commit fijado.",
+      presetSkills: "Nativo vs nativo + skills",
+      presetHarness: "Nativo vs el arnés del lab",
+      presetSkillsDescription:
+        "Ambos brazos usan la propia gobernanza del repositorio. Solo el brazo de " +
+        "tratamiento recibe las skills seleccionadas.",
+      presetHarnessDescription:
+        "Ambos brazos usan los mismos casos y modelo. El control mantiene la propia " +
+        "gobernanza del repositorio; el tratamiento recibe el arnés del lab " +
+        "inyectado en el workspace.",
+      casesSelected: (count: number) => `Casos — ${count} seleccionado(s)`,
+      noCasesTitle: "No hay casos para correr",
+      noCasesDescription: "Un experimento necesita al menos un caso de este repositorio.",
+      addFirstCase: "Agregar el primer caso",
+      validationCommands: (count: number) => `${count} comando(s) de validación`,
+      skillsSelected: (count: number) => `Skills — ${count} seleccionada(s)`,
+      loadingSkills: "Cargando skills",
+      staged: "en borrador",
+      enforceSkillUse: "Exigir el uso de la skill",
+      enforceHint:
+        "Sin esto, el brazo de tratamiento mide si la skill estaba disponible, no " +
+        "si se usó.",
+      repetitionsPerArm: "Repeticiones por brazo",
+      executorModelLabel:
+        "Modelo ejecutor — requerido para opencode; claude/codex recurren a su CLI por defecto",
+      cancel: "Cancelar",
+      launching: "Lanzando…",
+      createAndLaunch: "Crear y lanzar",
+      conditionNative: "El propio setup del repositorio, sin skills extra.",
+      conditionSkillsWithEnforce: (skills: string) =>
+        `El mismo setup con ${skills} disponibles y exigidas.`,
+      conditionSkillsNoEnforce: (skills: string) =>
+        `El mismo setup con ${skills} disponibles.`,
+      conditionNativeGovernance: "La propia gobernanza del repositorio, sin nada inyectado.",
+      conditionInjected: "El arnés del lab inyectado en el mismo workspace.",
+      questionSkills: (skills: string, name: string) =>
+        `¿Agregar ${skills} cambia los resultados en ${name}?`,
+      questionHarness: (name: string) => `¿El arnés del lab mejora el propio setup de ${name}?`,
+      experimentNameSkills: (name: string) => `Skills en ${name}`,
+      experimentNameHarness: (name: string) => `Origen del arnés en ${name}`,
+      runNotes: (targetId: string, commit: string) =>
+        `Ambos brazos corren contra ${targetId} en ${commit}.`,
+      queuedNotice: (count: number, experimentId: string) =>
+        `Se encolaron ${count} corrida(s) bajo '${experimentId}'.`,
+      blockingNoPin:
+        "Este repositorio no tiene un commit fijado. Fijalo en Checkout primero — " +
+        "dos brazos corriendo contra una ref que se mueve no son el mismo " +
+        "experimento dos veces.",
+      blockingNoCases: "Seleccioná al menos un caso. Un experimento sin casos no mide nada.",
+      blockingNoSkills: "Seleccioná al menos una skill — es lo único en que difieren los dos brazos.",
+      noStagedSkills:
+        "Todavía no hay skills en borrador. Las skills propias del lab no están en la gobernanza de este repositorio, así que este preset mide skills en borrador: importá o creá una en Evidencia → Skills y volvé.",
+      onThisRepoTitle: "Experimentos en este repositorio",
+      readingExperiments: "Leyendo experimentos",
+      noneRunTitle: "Todavía no se corrió nada contra este repositorio",
+      noneRunDescription: "Lanzá uno con una plantilla de arriba.",
+      experimentMeta: (status: string, arms: number, cases: number, reps: number) =>
+        `${status} · ${arms} brazo(s) · ${cases} caso(s) · ${reps} repetición(es)`
+    },
+    reportTab: {
+      title: "Reporte para el cliente",
+      assembling: "Armando…",
+      regenerate: "Regenerar",
+      generate: "Generar reporte",
+      download: "Descargar .md",
+      intro:
+        "Armado al vuelo a partir de la evidencia que produjo este repositorio — " +
+        "estado, casos, experimentos y hallazgos firmados. Nunca afirma lo que no " +
+        "se midió.",
+      noneTitle: "Todavía no hay reporte",
+      noneDescription: "Generá uno para leer lo que el lab puede decir hoy sobre este repositorio.",
+      findingsNote: (
+        <>
+          Los hallazgos se registran por separado — mirá{" "}
+          <Link to="/evidence/findings">Hallazgos</Link>.
+        </>
+      )
+    }
+  }
+});
+
 export function RepositoryDetail() {
   const { targetId = "" } = useParams();
+  const m = useMessages(MESSAGES);
 
   const [tab, setTab] = useState<TabKey>("checkout");
   const [target, setTarget] = useState<TargetRecord | null>(null);
@@ -95,7 +461,6 @@ export function RepositoryDetail() {
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [enforceInvoke, setEnforceInvoke] = useState(true);
   const [stagedSkills, setStagedSkills] = useState<StagedSkillRecord[]>([]);
-  const [governedSkills, setGovernedSkills] = useState<HarnessSkill[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
 
   const run = async (key: string, action: () => Promise<void>) => {
@@ -104,9 +469,7 @@ export function RepositoryDetail() {
     try {
       await action();
     } catch (actionError) {
-      setError(
-        actionError instanceof Error ? actionError.message : "Something went wrong"
-      );
+      setError(actionError instanceof Error ? actionError.message : m.errors.somethingWrong);
     } finally {
       setBusy("");
     }
@@ -127,11 +490,7 @@ export function RepositoryDetail() {
       })
       .catch((loadError: unknown) => {
         if (active) {
-          setError(
-            loadError instanceof Error
-              ? loadError.message
-              : "Unable to load this repository"
-          );
+          setError(loadError instanceof Error ? loadError.message : m.errors.loadRepository);
         }
       })
       .finally(() => {
@@ -209,12 +568,7 @@ export function RepositoryDetail() {
 
   const loadSkills = () =>
     run("skills", async () => {
-      const [staged, governed] = await Promise.all([
-        api.listStagedSkills(),
-        api.listHarnessSkills()
-      ]);
-      setStagedSkills(staged);
-      setGovernedSkills(governed);
+      setStagedSkills(await api.listStagedSkills());
     });
 
   const rePin = () =>
@@ -229,10 +583,7 @@ export function RepositoryDetail() {
             pinned_at: state.pinned_at
           }
       );
-      setNotice(
-        `Pinned to ${state.pinned_commit.slice(0, 10)}. Everything measured from ` +
-          `now on reads that commit.`
-      );
+      setNotice(m.checkout.pinnedNotice(state.pinned_commit.slice(0, 10)));
     });
 
   const runGateCheck = () =>
@@ -297,7 +648,7 @@ export function RepositoryDetail() {
     setWarnings([]);
     setNotice("");
     setError(null);
-    if (next === "skills" && stagedSkills.length === 0 && governedSkills.length === 0) {
+    if (next === "skills" && stagedSkills.length === 0) {
       void loadSkills();
     }
   };
@@ -305,29 +656,20 @@ export function RepositoryDetail() {
   /** Why a preset cannot be launched yet, or an empty string when it can. */
   const blocking = useMemo(() => {
     if (pinnedCommit === "") {
-      return (
-        "This repository has no pinned commit. Pin it under Checkout first — two " +
-        "arms run against a moving ref are not the same experiment twice."
-      );
+      return m.experimentsTab.blockingNoPin;
     }
     if (selectedCaseIds.length === 0) {
-      return "Select at least one case. An experiment with no cases measures nothing.";
+      return m.experimentsTab.blockingNoCases;
     }
     if (preset === "skills") {
       if (selectedSkills.length === 0) {
-        return "Select at least one skill — that is the only thing the two arms differ on.";
-      }
-      if (stagedSelected.length === 0 && !enforceInvoke) {
-        return (
-          "Every selected skill is already governed and the arm is not asked to use " +
-          "them, so both arms would be identical. Tick 'Enforce skill use', or add a " +
-          "staged skill."
-        );
+        return m.experimentsTab.blockingNoSkills;
       }
     }
     return "";
   }, [
     enforceInvoke,
+    m,
     pinnedCommit,
     preset,
     selectedCaseIds,
@@ -352,9 +694,7 @@ export function RepositoryDetail() {
         lastError = createError;
       }
     }
-    throw lastError instanceof Error
-      ? lastError
-      : new Error("Unable to find a free experiment id.");
+    throw lastError instanceof Error ? lastError : new Error(m.errors.findFreeId);
   };
 
   const launchPreset = () =>
@@ -372,22 +712,21 @@ export function RepositoryDetail() {
             {
               label: "native",
               role: "control" as const,
-              description: "The repository's own setup, with no extra skills.",
+              description: m.experimentsTab.conditionNative,
               overrides: { ...shared }
             },
             {
               label: "native + skills",
               role: "treatment" as const,
               description: enforceInvoke
-                ? `The same setup with ${skillList} available and asked for.`
-                : `The same setup with ${skillList} available.`,
+                ? m.experimentsTab.conditionSkillsWithEnforce(skillList)
+                : m.experimentsTab.conditionSkillsNoEnforce(skillList),
               overrides: {
                 ...shared,
-                // Governed skills are already present; only staged ones have to
-                // be added, so listing a governed name here would be a request
-                // for a staged skill that does not exist.
-                ...(stagedSelected.length > 0 ? { skills_extra: stagedSelected } : {}),
-                ...(enforceInvoke ? { skills_invoke: [...selectedSkills] } : {})
+                // Only staged skills reach a `native` arm (through skills_extra);
+                // the lab's governed skills are not in the target's governance.
+                skills_extra: stagedSelected,
+                ...(enforceInvoke ? { skills_invoke: [...stagedSelected] } : {})
               }
             }
           ]
@@ -395,33 +734,35 @@ export function RepositoryDetail() {
             {
               label: "native",
               role: "control" as const,
-              description: "The repository's own governance, with nothing injected.",
+              description: m.experimentsTab.conditionNativeGovernance,
               overrides: { ...shared }
             },
             {
               label: "injected",
               role: "treatment" as const,
-              description: "The lab harness injected into the same workspace.",
+              description: m.experimentsTab.conditionInjected,
               overrides: { ...shared, harness_source: "injected" as const }
             }
           ];
 
       const question = isSkills
-        ? `Does adding ${skillList} change outcomes on ${name}?`
-        : `Does the lab harness improve on ${name}'s own setup?`;
+        ? m.experimentsTab.questionSkills(skillList, name)
+        : m.experimentsTab.questionHarness(name);
       const base = slugify(
         isSkills ? `skills-${targetId}` : `harness-source-${targetId}`
       );
 
       const created = await createUnderFreeId(base, (experimentId) => ({
         experiment_id: experimentId,
-        name: isSkills ? `Skills on ${name}` : `Harness source on ${name}`,
+        name: isSkills
+          ? m.experimentsTab.experimentNameSkills(name)
+          : m.experimentsTab.experimentNameHarness(name),
         question,
         mode: "harness_evaluation",
         case_ids: [...selectedCaseIds],
         repetitions,
         conditions,
-        notes: `Both arms run against ${targetId} at ${pinnedCommit.slice(0, 10)}.`
+        notes: m.experimentsTab.runNotes(targetId, pinnedCommit.slice(0, 10))
       }));
       setWarnings(created.warnings ?? []);
 
@@ -436,9 +777,7 @@ export function RepositoryDetail() {
         resume: false,
         dry_run: false
       });
-      setNotice(
-        `Queued ${result.count} run(s) under '${created.experiment_id}'.`
-      );
+      setNotice(m.experimentsTab.queuedNotice(result.count, created.experiment_id));
       setPreset("");
       setExperiments(await loadExperiments());
     });
@@ -446,7 +785,7 @@ export function RepositoryDetail() {
   if (isLoading) {
     return (
       <section className="page">
-        <Spinner label="Reading this repository" />
+        <Spinner label={m.loadingRepository} />
       </section>
     );
   }
@@ -457,11 +796,11 @@ export function RepositoryDetail() {
         <EmptyState
           action={
             <Link className="button-link" to="/evidence/repositories">
-              Back to repositories
+              {m.notFound.back}
             </Link>
           }
-          description={`No repository is registered under '${targetId}'.`}
-          title="Repository not found"
+          description={m.notFound.description(targetId)}
+          title={m.notFound.title}
         />
       </section>
     );
@@ -477,40 +816,38 @@ export function RepositoryDetail() {
           </p>
           <p className="muted small">
             {pinnedCommit ? (
-              <>
-                Pinned at{" "}
+              m.header.pinnedAt(
                 <span className="badge neutral" title={pinnedCommit}>
                   {pinnedCommit.slice(0, 10)}
-                </span>{" "}
-                — every case, run and report below reads that commit.
-              </>
+                </span>
+              )
             ) : (
               <>
-                <span className="badge warn">unpinned</span> Nothing here is
-                comparable until this repository is pinned to a commit.
+                <span className="badge warn">{m.header.unpinned}</span>{" "}
+                {m.header.unpinnedNote}
               </>
             )}
           </p>
         </div>
         <div className="page-header-action">
           <Link className="button-link" to="/evidence/repositories">
-            All repositories
+            {m.header.allRepositories}
           </Link>
         </div>
       </header>
 
       <div className="tab-bar tab-bar--inline">
-        {TABS.map((item) => (
+        {TAB_KEYS.map((key) => (
           <button
-            className={`tab ${tab === item.key ? "tab--active" : ""}`}
-            key={item.key}
+            className={`tab ${tab === key ? "tab--active" : ""}`}
+            key={key}
             onClick={() => {
-              setTab(item.key);
+              setTab(key);
               setNotice("");
             }}
             type="button"
           >
-            {item.label}
+            {m.tabs[key]}
           </button>
         ))}
       </div>
@@ -523,53 +860,47 @@ export function RepositoryDetail() {
       {tab === "checkout" ? (
         <div className="panel">
           <div className="panel-head">
-            <h2>Local checkout</h2>
+            <h2>{m.checkout.title}</h2>
             <span className={`badge ${checkout?.exists ? "ok" : "warn"}`}>
-              {checkout?.exists ? "Cloned" : "Not cloned"}
+              {checkout?.exists ? m.checkout.cloned : m.checkout.notCloned}
             </span>
           </div>
-          <p className="muted">
-            You clone this repository in your own terminal so your credentials
-            apply, or hand the lab a clone you already have; either way the lab
-            only ever reads it.
-          </p>
+          <p className="muted">{m.checkout.intro}</p>
 
           {checkout === null ? (
-            <Spinner label="Reading the checkout" />
+            <Spinner label={m.checkout.reading} />
           ) : (
             <>
               <div className="detail-grid">
                 <div>
-                  <span>Path</span>
+                  <span>{m.checkout.path}</span>
                   <code className="mono small">{checkout.host_path || "—"}</code>
                   {checkout.attached ? (
                     // The directory is named after the clone, not after this
                     // repository. Unsaid, the path on screen reads as a typo.
-                    <span className="muted small">
-                      an existing clone, attached to this repository
-                    </span>
+                    <span className="muted small">{m.checkout.attachedNote}</span>
                   ) : null}
                 </div>
                 <div>
-                  <span>HEAD</span>
+                  <span>{m.checkout.head}</span>
                   <strong className="mono">
                     {checkout.head ? checkout.head.slice(0, 10) : "—"}
                   </strong>
                 </div>
                 <div>
-                  <span>Branch</span>
+                  <span>{m.checkout.branch}</span>
                   <strong>{checkout.branch || "—"}</strong>
                 </div>
                 <div>
-                  <span>Pinned commit</span>
+                  <span>{m.checkout.pinnedCommit}</span>
                   <strong className="mono">
                     {checkout.pinned_commit
                       ? checkout.pinned_commit.slice(0, 10)
-                      : "not pinned"}
+                      : m.checkout.notPinned}
                   </strong>
                 </div>
                 <div>
-                  <span>Pinned at</span>
+                  <span>{m.checkout.pinnedAtLabel}</span>
                   <strong>
                     {checkout.pinned_at ? formatRunDate(checkout.pinned_at) : "—"}
                   </strong>
@@ -583,12 +914,12 @@ export function RepositoryDetail() {
               {checkout.dirty ? (
                 <div className="callout callout--warning">
                   <div>
-                    <strong>The working tree has uncommitted changes</strong>
+                    <strong>{m.checkout.dirtyTitle}</strong>
                     <p>
-                      {checkout.dirty_files} file(s) differ from{" "}
-                      {checkout.head ? checkout.head.slice(0, 10) : "HEAD"}. A run
-                      reads the pinned commit, not your edits, so what you see
-                      locally is not what was measured.
+                      {m.checkout.dirtyBody(
+                        checkout.dirty_files,
+                        checkout.head ? checkout.head.slice(0, 10) : "HEAD"
+                      )}
                     </p>
                   </div>
                 </div>
@@ -597,11 +928,8 @@ export function RepositoryDetail() {
               {checkout.pin_is_stale ? (
                 <div className="callout">
                   <div>
-                    <strong>HEAD has moved since the pin</strong>
-                    <p>
-                      Re-pinning changes what every future case, run and report
-                      reads. Results already recorded keep the commit they used.
-                    </p>
+                    <strong>{m.checkout.staleTitle}</strong>
+                    <p>{m.checkout.staleBody}</p>
                     <div className="button-row">
                       <button
                         className="primary"
@@ -609,7 +937,7 @@ export function RepositoryDetail() {
                         onClick={() => void rePin()}
                         type="button"
                       >
-                        {busy === "pin" ? "Pinning…" : "Re-pin to HEAD"}
+                        {busy === "pin" ? m.checkout.pinning : m.checkout.rePin}
                       </button>
                     </div>
                   </div>
@@ -619,16 +947,16 @@ export function RepositoryDetail() {
               {!checkout.exists || !checkout.is_repo ? (
                 <div className="card">
                   <div className="panel-head">
-                    <h3>Clone it yourself</h3>
+                    <h3>{m.checkout.cloneYourself}</h3>
                     <button
                       className="secondary"
                       onClick={() => {
                         void navigator.clipboard.writeText(checkout.command);
-                        setNotice("Clone command copied to the clipboard.");
+                        setNotice(m.checkout.copiedNotice);
                       }}
                       type="button"
                     >
-                      Copy
+                      {m.checkout.copy}
                     </button>
                   </div>
                   <pre className="command-preview">{checkout.command}</pre>
@@ -643,14 +971,14 @@ export function RepositoryDetail() {
         <>
           <div className="panel">
             <div className="panel-head">
-              <h2>What this repository already has</h2>
+              <h2>{m.readinessTab.title}</h2>
               {readiness !== null ? (
                 <span className={`badge ${readiness.ready ? "ok" : "warn"}`}>
-                  {readiness.ready ? "Ready to run" : "Not runnable yet"}
+                  {readiness.ready ? m.readinessTab.ready : m.readinessTab.notReady}
                 </span>
               ) : null}
             </div>
-            {busy === "readiness" ? <Spinner label="Reading the repository" /> : null}
+            {busy === "readiness" ? <Spinner label={m.readinessTab.reading} /> : null}
             {readiness !== null ? (
               <ReadinessReportView
                 adopting={busy === "adopt"}
@@ -658,10 +986,7 @@ export function RepositoryDetail() {
                   void run("adopt", async () => {
                     await api.updateTarget(targetId, payload);
                     setReadiness(await api.getTargetReadiness(targetId));
-                    setNotice(
-                      "Adopted. Runs against this repository now validate with its " +
-                        "own commands."
-                    );
+                    setNotice(m.readinessTab.adoptedNotice);
                   });
                 }}
                 report={readiness}
@@ -671,50 +996,48 @@ export function RepositoryDetail() {
 
           <div className="panel">
             <div className="panel-head">
-              <h2>Gate check</h2>
+              <h2>{m.readinessTab.gateTitle}</h2>
               <button
                 className="primary"
                 disabled={busy !== "" || gate?.status === "running"}
                 onClick={() => void runGateCheck()}
                 type="button"
               >
-                {gate?.status === "running" ? "Running…" : "Run gate check"}
+                {gate?.status === "running" ? m.readinessTab.running : m.readinessTab.runGateCheck}
               </button>
             </div>
-            <p className="muted">
-              It runs the repository's own setup and validation commands at the
-              pinned commit with no agent, so a red run afterwards is a fact about
-              the agent rather than about the runner image.
-            </p>
+            <p className="muted">{m.readinessTab.gateIntro}</p>
 
             {gate === null ? (
               <EmptyState
-                description="Run one to find out whether this repository builds and passes on its own."
-                title="No gate check yet"
+                description={m.readinessTab.noGateDescription}
+                title={m.readinessTab.noGateTitle}
               />
             ) : (
               <>
                 <div className="detail-grid">
                   <div>
-                    <span>Verdict</span>
+                    <span>{m.readinessTab.verdict}</span>
                     <strong>
                       {gate.status === "running"
-                        ? "Running"
+                        ? m.readinessTab.verdictRunning
                         : gate.passed === true
-                          ? "Passed"
+                          ? m.readinessTab.verdictPassed
                           : gate.passed === false
-                            ? `Failed at ${gate.failed_phase || "an unnamed phase"}`
-                            : "No verdict"}
+                            ? m.readinessTab.verdictFailed(
+                                gate.failed_phase || m.readinessTab.unnamedPhase
+                              )
+                            : m.readinessTab.verdictNone}
                     </strong>
                   </div>
                   <div>
-                    <span>Commit</span>
+                    <span>{m.readinessTab.commit}</span>
                     <strong className="mono">
                       {gate.commit ? gate.commit.slice(0, 10) : "—"}
                     </strong>
                   </div>
                   <div>
-                    <span>Last updated</span>
+                    <span>{m.readinessTab.lastUpdated}</span>
                     <strong>{formatRunDate(gate.updated_at)}</strong>
                   </div>
                 </div>
@@ -722,7 +1045,7 @@ export function RepositoryDetail() {
                   <p className="callout callout--danger">{gate.error}</p>
                 ) : null}
                 {gate.status === "running" ? (
-                  <Spinner label="Waiting for the gate to finish" />
+                  <Spinner label={m.readinessTab.waitingForGate} />
                 ) : null}
                 <ul className="check-list">
                   {gate.checks_json.map((step) => (
@@ -734,8 +1057,8 @@ export function RepositoryDetail() {
                         <strong>{step.phase}</strong>{" "}
                         <code className="mono small">{step.command}</code>
                         <p className="muted">
-                          exit {step.exit_code ?? "—"} ·{" "}
-                          {step.passed ? "passed" : "failed"}
+                          {m.readinessTab.exit(String(step.exit_code ?? "—"))} ·{" "}
+                          {step.passed ? m.readinessTab.passed : m.readinessTab.failed}
                         </p>
                         {!step.passed && step.detail ? (
                           <pre className="command-preview">{step.detail}</pre>
@@ -753,25 +1076,22 @@ export function RepositoryDetail() {
       {tab === "cases" ? (
         <div className="panel">
           <div className="panel-head">
-            <h2>Case library</h2>
+            <h2>{m.casesTab.title}</h2>
             {cases !== null ? (
-              <span className="badge neutral">{cases.length} case(s)</span>
+              <span className="badge neutral">{m.casesTab.count(cases.length)}</span>
             ) : null}
           </div>
-          <p className="muted">
-            Cases derived from this repository's own history. They are what every
-            experiment below runs.
-          </p>
-          {busy === "cases" ? <Spinner label="Loading cases" /> : null}
+          <p className="muted">{m.casesTab.intro}</p>
+          {busy === "cases" ? <Spinner label={m.casesTab.loading} /> : null}
           {cases !== null && cases.length === 0 ? (
             <EmptyState
               action={
                 <Link className="button-link" to="/evaluate/audit">
-                  Derive cases from history
+                  {m.casesTab.deriveFromHistory}
                 </Link>
               }
-              description="Derive the first ones from the repository's commits in the audit."
-              title="No cases from this repository yet"
+              description={m.casesTab.noneDescription}
+              title={m.casesTab.noneTitle}
             />
           ) : null}
           {cases !== null && cases.length > 0 ? (
@@ -789,17 +1109,14 @@ export function RepositoryDetail() {
                     {item.name || item.case_id}
                     <span className="muted small">
                       {" "}
-                      <code>{item.case_id}</code> · {item.type} ·{" "}
-                      {item.max_steps ?? "—"} step(s)
+                      <code>{item.case_id}</code>{" "}
+                      {m.casesTab.meta(item.type, String(item.max_steps ?? "—"))}
                     </span>
                   </button>
                   {expandedCase === item.case_id ? (
                     <div className="stack">
                       {(item.validation_commands ?? []).length === 0 ? (
-                        <p className="muted small">
-                          No validation command, so a run of this case has no
-                          objective verdict — it can only be scored by hand.
-                        </p>
+                        <p className="muted small">{m.casesTab.noValidation}</p>
                       ) : (
                         <ul className="check-items">
                           {(item.validation_commands ?? []).map((command) => (
@@ -822,27 +1139,23 @@ export function RepositoryDetail() {
         <>
           <div className="panel">
             <div className="panel-head">
-              <h2>Launch an experiment</h2>
+              <h2>{m.experimentsTab.launchTitle}</h2>
             </div>
-            <p className="muted">
-              Both presets hold the repository, the cases and the model fixed and
-              vary one thing about the harness. Everything runs at the pinned
-              commit.
-            </p>
+            <p className="muted">{m.experimentsTab.launchIntro}</p>
             <div className="toolbar">
               <button
                 className={preset === "skills" ? "primary" : "secondary"}
                 onClick={() => openPreset(preset === "skills" ? "" : "skills")}
                 type="button"
               >
-                Native vs native + skills
+                {m.experimentsTab.presetSkills}
               </button>
               <button
                 className={preset === "harness" ? "primary" : "secondary"}
                 onClick={() => openPreset(preset === "harness" ? "" : "harness")}
                 type="button"
               >
-                Native vs the lab harness
+                {m.experimentsTab.presetHarness}
               </button>
             </div>
 
@@ -850,27 +1163,27 @@ export function RepositoryDetail() {
               <div className="card">
                 <h3>
                   {preset === "skills"
-                    ? "Native vs native + skills"
-                    : "Native vs the lab harness"}
+                    ? m.experimentsTab.presetSkills
+                    : m.experimentsTab.presetHarness}
                 </h3>
                 <p className="muted small">
                   {preset === "skills"
-                    ? "Both arms use the repository's own governance. Only the treatment arm gets the selected skills."
-                    : "Both arms use the same cases and model. The control keeps the repository's own governance; the treatment gets the lab harness injected into the workspace."}
+                    ? m.experimentsTab.presetSkillsDescription
+                    : m.experimentsTab.presetHarnessDescription}
                 </p>
 
                 <label className="field">
-                  <span>Cases — {selectedCaseIds.length} selected</span>
+                  <span>{m.experimentsTab.casesSelected(selectedCaseIds.length)}</span>
                 </label>
                 {cases === null || cases.length === 0 ? (
                   <EmptyState
                     action={
                       <Link className="button-link" to="/evaluate/audit">
-                        Add the first case
+                        {m.experimentsTab.addFirstCase}
                       </Link>
                     }
-                    description="An experiment needs at least one case from this repository."
-                    title="No cases to run"
+                    description={m.experimentsTab.noCasesDescription}
+                    title={m.experimentsTab.noCasesTitle}
                   />
                 ) : (
                   <ul className="pick-list">
@@ -893,8 +1206,9 @@ export function RepositoryDetail() {
                             </strong>
                             <span className="muted">
                               <code>{item.case_id}</code> —{" "}
-                              {(item.validation_commands ?? []).length} validation
-                              command(s)
+                              {m.experimentsTab.validationCommands(
+                                (item.validation_commands ?? []).length
+                              )}
                             </span>
                           </button>
                         </li>
@@ -906,9 +1220,19 @@ export function RepositoryDetail() {
                 {preset === "skills" ? (
                   <>
                     <label className="field">
-                      <span>Skills — {selectedSkills.length} selected</span>
+                      <span>{m.experimentsTab.skillsSelected(selectedSkills.length)}</span>
                     </label>
-                    {busy === "skills" ? <Spinner label="Loading skills" /> : null}
+                    {busy === "skills" ? (
+                      <Spinner label={m.experimentsTab.loadingSkills} />
+                    ) : null}
+                    {/* Staged skills only: a `native` arm sees the repository's own
+                        governance, so a lab skill would be invoked without being
+                        there. Staged skills are the ones added with skills_extra. */}
+                    {busy !== "skills" && stagedSkills.length === 0 ? (
+                      <p className="callout callout--warning small">
+                        {m.experimentsTab.noStagedSkills}
+                      </p>
+                    ) : null}
                     <div className="checkbox-grid">
                       {stagedSkills.map((skill) => (
                         <label className="checkbox" key={`staged-${skill.name}`}>
@@ -921,23 +1245,8 @@ export function RepositoryDetail() {
                           />
                           <span>
                             {skill.name}
-                            <span className="badge pick-tag pick-tag--soft">staged</span>
-                          </span>
-                        </label>
-                      ))}
-                      {governedSkills.map((skill) => (
-                        <label className="checkbox" key={`governed-${skill.name}`}>
-                          <input
-                            checked={selectedSkills.includes(skill.name)}
-                            onChange={() =>
-                              setSelectedSkills((current) => toggle(current, skill.name))
-                            }
-                            type="checkbox"
-                          />
-                          <span>
-                            {skill.name}
                             <span className="badge pick-tag pick-tag--soft">
-                              governed
+                              {m.experimentsTab.staged}
                             </span>
                           </span>
                         </label>
@@ -949,18 +1258,15 @@ export function RepositoryDetail() {
                         onChange={(event) => setEnforceInvoke(event.target.checked)}
                         type="checkbox"
                       />
-                      <span>Enforce skill use</span>
+                      <span>{m.experimentsTab.enforceSkillUse}</span>
                     </label>
-                    <p className="muted small">
-                      Without it the treatment arm measures whether the skill was
-                      available, not whether it was used.
-                    </p>
+                    <p className="muted small">{m.experimentsTab.enforceHint}</p>
                   </>
                 ) : null}
 
                 <div className="field-row">
                   <label className="field">
-                    <span>Repetitions per arm</span>
+                    <span>{m.experimentsTab.repetitionsPerArm}</span>
                     <input
                       min={1}
                       onChange={(event) =>
@@ -971,10 +1277,7 @@ export function RepositoryDetail() {
                     />
                   </label>
                   <label className="field">
-                    <span>
-                      Executor model — required for opencode; claude/codex fall back to
-                      their CLI default
-                    </span>
+                    <span>{m.experimentsTab.executorModelLabel}</span>
                     <input
                       onChange={(event) => setExecutorModel(event.target.value)}
                       placeholder="gateway/<alias> · lmstudio/<id> · claude-sonnet-5"
@@ -987,7 +1290,7 @@ export function RepositoryDetail() {
 
                 <div className="toolbar">
                   <button onClick={() => setPreset("")} type="button">
-                    Cancel
+                    {m.experimentsTab.cancel}
                   </button>
                   <button
                     className="primary"
@@ -995,7 +1298,9 @@ export function RepositoryDetail() {
                     onClick={() => void launchPreset()}
                     type="button"
                   >
-                    {busy === "launch" ? "Launching…" : "Create and launch"}
+                    {busy === "launch"
+                      ? m.experimentsTab.launching
+                      : m.experimentsTab.createAndLaunch}
                   </button>
                 </div>
               </div>
@@ -1012,16 +1317,18 @@ export function RepositoryDetail() {
 
           <div className="panel">
             <div className="panel-head">
-              <h2>Experiments on this repository</h2>
+              <h2>{m.experimentsTab.onThisRepoTitle}</h2>
               {experiments !== null ? (
                 <span className="badge neutral">{experiments.length}</span>
               ) : null}
             </div>
-            {busy === "experiments" ? <Spinner label="Reading experiments" /> : null}
+            {busy === "experiments" ? (
+              <Spinner label={m.experimentsTab.readingExperiments} />
+            ) : null}
             {experiments !== null && experiments.length === 0 ? (
               <EmptyState
-                description="Launch one with a preset above."
-                title="Nothing has been run against this repository yet"
+                description={m.experimentsTab.noneRunDescription}
+                title={m.experimentsTab.noneRunTitle}
               />
             ) : null}
             {experiments !== null && experiments.length > 0 ? (
@@ -1035,8 +1342,12 @@ export function RepositoryDetail() {
                       <strong>{item.name || item.experiment_id}</strong>
                       <span className="muted small">
                         {" "}
-                        {item.status} · {item.conditions.length} arm(s) ·{" "}
-                        {item.case_ids.length} case(s) · {item.repetitions} rep(s)
+                        {m.experimentsTab.experimentMeta(
+                          item.status,
+                          item.conditions.length,
+                          item.case_ids.length,
+                          item.repetitions
+                        )}
                       </span>
                     </Link>
                   </li>
@@ -1050,7 +1361,7 @@ export function RepositoryDetail() {
       {tab === "report" ? (
         <div className="panel">
           <div className="panel-head">
-            <h2>Client report</h2>
+            <h2>{m.reportTab.title}</h2>
             <div className="toolbar">
               <button
                 className="primary"
@@ -1059,35 +1370,28 @@ export function RepositoryDetail() {
                 type="button"
               >
                 {busy === "report"
-                  ? "Assembling…"
+                  ? m.reportTab.assembling
                   : report
-                    ? "Regenerate"
-                    : "Generate report"}
+                    ? m.reportTab.regenerate
+                    : m.reportTab.generate}
               </button>
               {report ? (
                 <button onClick={downloadReport} type="button">
-                  Download .md
+                  {m.reportTab.download}
                 </button>
               ) : null}
             </div>
           </div>
-          <p className="muted">
-            Assembled live from the evidence this repository has produced —
-            readiness, cases, experiments and signed findings. It never claims what
-            was not measured.
-          </p>
+          <p className="muted">{m.reportTab.intro}</p>
           {report ? (
             <pre className="candidate-prompt pre--scroll">{report}</pre>
           ) : (
             <EmptyState
-              description="Generate one to read what the lab can currently say about this repository."
-              title="No report yet"
+              description={m.reportTab.noneDescription}
+              title={m.reportTab.noneTitle}
             />
           )}
-          <p className="muted small">
-            Findings are recorded separately — see{" "}
-            <Link to="/evidence/findings">Findings</Link>.
-          </p>
+          <p className="muted small">{m.reportTab.findingsNote}</p>
         </div>
       ) : null}
     </section>

@@ -1,25 +1,51 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import { Markdown } from "../components/Markdown";
+import { defineMessages, useMessages } from "../i18n";
 import type { DocContent, DocEntry } from "../types";
 
-// The core loop shown at the top so the web is self-explanatory at a glance.
-const CORE_LOOP = `
-1. **Start from a question** on Home — validate a tool you built, evaluate a harness change, or audit a repository you have never seen.
-2. **Declare the design** — cases, arms, repetitions. The lab refuses a design its mode cannot answer.
-3. **Runs execute in containers.** A case with a validation command scores itself; a case with a rubric is LLM-judged; anything else you score from the run page.
-4. **Read the experiment** — one rate per arm, the case matrix, and the verdict's caveats. Then record a finding.
-5. **Feed it back** — a run's audit becomes a sanitised issue for the governance template (\`make improve RUN=<id>\`).
-
-Audits, judges and summaries use your AI gateway, or the Claude Code CLI when only a Claude credential is configured (Health → LLM transport).
+// The loop at a glance; each step is a journey in the index below.
+const CORE_LOOP_EN = `
+**Case → run → read → keep what works.** Make a case whose check the agent did not write, run it under configurations that differ in one thing (model, harness, skill, prompt), read the verdict with its interval and validity banner, then copy what helped into your project (\`make harness-export\`) or into the template. Start with the first document below; the six journeys after it are one page each.
 `;
 
+const CORE_LOOP_ES = `
+**Caso → corrida → lectura → quedate con lo que funciona.** Armá un caso cuyo chequeo no haya escrito el agente, corrélo con configuraciones que difieran en una sola cosa (modelo, arnés, skill, prompt), leé el veredicto con su intervalo y su aviso de validez, y después copiá lo que ayudó a tu proyecto (\`make harness-export\`) o al template. Empezá por el primer documento de la lista; los seis recorridos que siguen ocupan una página cada uno. Los documentos están en inglés.
+`;
+
+const MESSAGES = defineMessages({
+  en: {
+    eyebrow: "Guide",
+    title: "How to use the lab",
+    lede: "Everything you need to run experiments, compare harnesses, and feed improvements back to your repos — the real docs, rendered here.",
+    coreLoopTitle: "The loop in one line",
+    coreLoop: CORE_LOOP_EN,
+    docsUnavailable: "Docs API unavailable — start the app backend.",
+    selectGuide: "Select a guide to read it here."
+  },
+  es: {
+    eyebrow: "Guía",
+    title: "Cómo usar el lab",
+    lede: "Todo lo que necesitás para correr experimentos, comparar arneses y devolver mejoras a tus repositorios — los documentos reales, mostrados acá.",
+    coreLoopTitle: "El ciclo en una línea",
+    coreLoop: CORE_LOOP_ES,
+    docsUnavailable: "La API de documentos no está disponible — iniciá el backend de la app.",
+    selectGuide: "Elegí una guía para leerla acá."
+  }
+});
+
 export function Guide() {
+  // `?doc=<slug>` opens one doc directly, so Home can link to the demo guide.
+  const [searchParams] = useSearchParams();
   const [docs, setDocs] = useState<DocEntry[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(searchParams.get("doc"));
   const [content, setContent] = useState<DocContent | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // A flag, not translated text: resolved at render time so a language switch
+  // after the failed load still shows the right string.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const m = useMessages(MESSAGES);
 
   useEffect(() => {
     let active = true;
@@ -28,9 +54,14 @@ export function Guide() {
       .then((entries) => {
         if (!active) return;
         setDocs(entries);
-        setSelected((current) => current ?? entries[0]?.slug ?? null);
+        // An unknown `?doc=` falls back to the first doc rather than a blank page.
+        setSelected((current) =>
+          current && entries.some((entry) => entry.slug === current)
+            ? current
+            : (entries[0]?.slug ?? null)
+        );
       })
-      .catch(() => active && setLoadError("Docs API unavailable — start the app backend."));
+      .catch(() => active && setLoadFailed(true));
     return () => {
       active = false;
     };
@@ -49,6 +80,21 @@ export function Guide() {
     };
   }, [selected]);
 
+  // A link from one doc to another (`journey-run-and-compare.md`,
+  // `x.md#section`) opens that doc here when it is catalogued; anything else
+  // keeps its normal behaviour.
+  const openDocLink = (href: string): boolean => {
+    // Only links inside docs/: `../README.md` is the repository's README, not
+    // docs/README.md, and shares its file name.
+    if (href.startsWith("../") || href.startsWith("/")) return false;
+    const file = href.split("#")[0].split("/").pop() ?? "";
+    const match = docs.find((doc) => doc.file === file);
+    if (!match) return false;
+    setSelected(match.slug);
+    window.scrollTo({ top: 0 });
+    return true;
+  };
+
   const groups = useMemo(() => {
     const order: string[] = [];
     const byGroup: Record<string, DocEntry[]> = {};
@@ -66,23 +112,20 @@ export function Guide() {
     <section className="page">
       <header className="page-header">
         <div>
-          <p className="eyebrow">Guide</p>
-          <h1>How to use the lab</h1>
-          <p className="lede">
-            Everything you need to run experiments, compare harnesses, and feed
-            improvements back to your repos — the real docs, rendered here.
-          </p>
+          <p className="eyebrow">{m.eyebrow}</p>
+          <h1>{m.title}</h1>
+          <p className="lede">{m.lede}</p>
         </div>
       </header>
 
       <section className="panel">
         <div className="panel-head">
-          <h2>The core loop</h2>
+          <h2>{m.coreLoopTitle}</h2>
         </div>
-        <Markdown>{CORE_LOOP}</Markdown>
+        <Markdown>{m.coreLoop}</Markdown>
       </section>
 
-      {loadError ? <p className="muted">{loadError}</p> : null}
+      {loadFailed ? <p className="muted">{m.docsUnavailable}</p> : null}
 
       <div className="guide-layout">
         <nav className="guide-index">
@@ -108,9 +151,9 @@ export function Guide() {
 
         <div className="panel guide-content">
           {content ? (
-            <Markdown>{content.content}</Markdown>
+            <Markdown onDocLink={openDocLink}>{content.content}</Markdown>
           ) : (
-            <p className="muted">Select a guide to read it here.</p>
+            <p className="muted">{m.selectGuide}</p>
           )}
         </div>
       </div>

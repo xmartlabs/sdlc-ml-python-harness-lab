@@ -1,3 +1,5 @@
+import { defineMessages, pickMessages } from "./i18n";
+
 // Timestamp helpers shared by the run list and the improvements table.
 //
 // The API stores datetimes as naive UTC (SQLite drops tzinfo on persist), so it
@@ -23,6 +25,17 @@ export function formatRunDate(iso: string | null | undefined): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+const RELATIVE = defineMessages({
+  en: {
+    justNow: "just now",
+    ago: (amount: string) => `${amount} ago`
+  },
+  es: {
+    justNow: "recién",
+    ago: (amount: string) => `hace ${amount}`
+  }
+});
+
 // Compact age for dense cells: "just now", "12m", "5h", "3d", "6w". The exact
 // timestamp always stays available in the cell's tooltip.
 export function formatRelative(iso: string | null | undefined, now: number = Date.now()): string {
@@ -30,24 +43,25 @@ export function formatRelative(iso: string | null | undefined, now: number = Dat
   if (!date) {
     return "—";
   }
+  const m = pickMessages(RELATIVE);
   const seconds = Math.max(0, Math.round((now - date.getTime()) / 1000));
   if (seconds < 60) {
-    return "just now";
+    return m.justNow;
   }
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) {
-    return `${minutes}m ago`;
+    return m.ago(`${minutes}m`);
   }
   const hours = Math.round(minutes / 60);
   if (hours < 24) {
-    return `${hours}h ago`;
+    return m.ago(`${hours}h`);
   }
   const days = Math.round(hours / 24);
   if (days < 7) {
-    return `${days}d ago`;
+    return m.ago(`${days}d`);
   }
   const weeks = Math.round(days / 7);
-  return weeks < 5 ? `${weeks}w ago` : formatRunDate(iso);
+  return weeks < 5 ? m.ago(`${weeks}w`) : formatRunDate(iso);
 }
 
 // Elapsed wall-clock between two API timestamps ("12m 47s"), or "" when either

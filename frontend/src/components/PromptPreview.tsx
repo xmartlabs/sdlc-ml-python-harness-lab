@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api, ApiError } from "../api";
+import { defineMessages, useMessages } from "../i18n";
 import { IconChevronRight, IconSearch } from "./icons";
 
 export type PromptPreviewEntry = {
@@ -18,6 +19,25 @@ type LoadState =
   | { status: "error"; message: string }
   | { status: "loaded"; items: { label: string; content: string }[] };
 
+const MESSAGES = defineMessages({
+  en: {
+    hidePromptTitle: "Hide the prompt text",
+    viewPromptTitle: (variant: string) => `View the "${variant}" prompt text`,
+    hidePrompt: "Hide prompt",
+    viewPrompt: "View prompt",
+    loading: "Loading…",
+    loadError: "Could not load this prompt."
+  },
+  es: {
+    hidePromptTitle: "Ocultar el texto del prompt",
+    viewPromptTitle: (variant: string) => `Ver el texto del prompt "${variant}"`,
+    hidePrompt: "Ocultar prompt",
+    viewPrompt: "Ver prompt",
+    loading: "Cargando…",
+    loadError: "No se pudo cargar este prompt."
+  }
+});
+
 /**
  * Toggle button that fetches and reveals the full text behind a selected
  * prompt variant — `prompt_variants` on a case is either the literal prompt
@@ -25,6 +45,7 @@ type LoadState =
  * select shows) doesn't tell a person what the agent will actually read.
  */
 export function PromptPreview({ entries, variant }: PromptPreviewProps) {
+  const m = useMessages(MESSAGES);
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<LoadState>({ status: "idle" });
 
@@ -57,8 +78,7 @@ export function PromptPreview({ entries, variant }: PromptPreviewProps) {
     )
       .then((items) => setState({ status: "loaded", items }))
       .catch((error: unknown) => {
-        const message =
-          error instanceof ApiError ? error.message : "Could not load this prompt.";
+        const message = error instanceof ApiError ? error.message : m.loadError;
         setState({ status: "error", message });
       });
   };
@@ -69,18 +89,18 @@ export function PromptPreview({ entries, variant }: PromptPreviewProps) {
         aria-expanded={open}
         className="ghost prompt-preview-toggle"
         onClick={toggle}
-        title={open ? "Hide the prompt text" : `View the "${variant}" prompt text`}
+        title={open ? m.hidePromptTitle : m.viewPromptTitle(variant)}
         type="button"
       >
         <IconSearch size={13} />
-        {open ? "Hide prompt" : "View prompt"}
+        {open ? m.hidePrompt : m.viewPrompt}
         <span className="prompt-preview-chevron">
           <IconChevronRight size={13} />
         </span>
       </button>
       {open ? (
         <div className="prompt-preview-body">
-          {state.status === "loading" ? <p className="muted small">Loading…</p> : null}
+          {state.status === "loading" ? <p className="muted small">{m.loading}</p> : null}
           {state.status === "error" ? (
             <p className="muted small error">{state.message}</p>
           ) : null}

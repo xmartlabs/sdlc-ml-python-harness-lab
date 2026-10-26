@@ -23,6 +23,7 @@ import type {
   EnvUpdateResult,
   EvidenceSummary,
   GatewayModelRecord,
+  NativeModelRecord,
   GatewayTestResult,
   HarnessSkill,
   HealResult,
@@ -171,6 +172,9 @@ export const api = {
   listOllamaModels: (refresh = false) =>
     request<OllamaCatalog>(`/api/ollama/models${refresh ? "?refresh=true" : ""}`),
   listModelCatalog: () => request<GatewayModelRecord[]>("/api/models/catalog"),
+  /** Native CLI model menus with gateway coverage (ADR-0069). */
+  listNativeModels: () =>
+    request<Record<string, NativeModelRecord[]>>("/api/models/native"),
   refreshModelCatalog: () =>
     request<ModelRefreshResult>("/api/models/refresh", { method: "POST" }),
   checkModelContext: (modelId: string, requiredTokens?: number) =>

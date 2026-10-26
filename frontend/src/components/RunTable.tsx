@@ -9,6 +9,7 @@ import {
   shortInstanceLabel
 } from "../caseLabels";
 import { formatDuration, formatRelative, formatRunDate, parseApiDate } from "../dates";
+import { defineMessages, pickMessages, useMessages } from "../i18n";
 import { EmptyState } from "./EmptyState";
 import { ErrorBanner } from "./ErrorBanner";
 import { StateBadge } from "./StateBadge";
@@ -46,18 +47,185 @@ type RunRow = {
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 25;
 
-const SORT_COLUMNS: { key: SortKey; label: string }[] = [
-  { key: "run", label: "Run" },
-  { key: "harness", label: "Harness" },
-  { key: "model", label: "Model" },
-  { key: "state", label: "State" },
-  { key: "score", label: "Score" },
-  { key: "created", label: "Created" },
-  { key: "improvements", label: "Improvements" }
+const SORT_KEYS: SortKey[] = [
+  "run",
+  "harness",
+  "model",
+  "state",
+  "score",
+  "created",
+  "improvements"
 ];
 
 // Ordering for the improvement-cycle column: work still to do sorts first.
 const IMPROVEMENTS_RANK: Record<string, number> = { yes: 0, pending: 1, no: 2 };
+
+const MESSAGES = defineMessages({
+  en: {
+    columns: {
+      run: "Run",
+      harness: "Harness",
+      model: "Model",
+      state: "State",
+      score: "Score",
+      created: "Created",
+      improvements: "Improvements"
+    },
+    actions: "Actions",
+    improvementsBadge: {
+      yes: { label: "yes", title: "Improvement proposals were generated." },
+      no: {
+        label: "no",
+        title: "Synthesis ran and proposed no changes (clean run / gate closed)."
+      },
+      pending: {
+        label: "pending",
+        title: "No synthesis yet — open the run to generate its proposals."
+      }
+    },
+    tooltip: {
+      created: (date: string) => `Created: ${date}`,
+      lastRun: (start: string, end: string) => `Last run: ${start} → ${end}`,
+      stillRunning: "still running",
+      lastRunNotStarted: "Last run: not started yet",
+      queuedFor: (duration: string) => `Queued for: ${duration}`,
+      execution: (duration: string) => `Execution: ${duration}`,
+      run: (runId: string) => `Run: ${runId}`,
+      case: (caseId: string) => `Case: ${caseId}`,
+      tests: (f2p: number, p2p: number) => `Tests: F2P ${f2p} / P2P ${p2p}`,
+      command: (command: string) => `Command: ${command}`
+    },
+    runList: "Run list",
+    runsOfTotal: (shown: number, total: number) => `${shown} of ${total} runs`,
+    runsTotal: (total: number) => `${total} total`,
+    showingOnly: "Showing only",
+    unscoredFilterLabel: "finished runs with no score",
+    failedFilterLabel: "failed runs",
+    showAllRuns: "Show all runs",
+    search: "Search",
+    searchPlaceholder: "Case title, run id, model…",
+    harness: "Harness",
+    state: "State",
+    all: "All",
+    perPage: "Per page",
+    clearFilters: "Clear filters",
+    emptyNoRuns: {
+      title: "No runs yet.",
+      description: "Create a run from the web app once the API is online."
+    },
+    emptyNoMatch: {
+      title: "Nothing to show.",
+      description: "No run matches the current search and filters."
+    },
+    sortBy: (label: string) => `Sort by ${label.toLowerCase()}`,
+    batchBadge: "batch",
+    armTitle: (label: string, experimentId: string) => `Arm "${label}" of experiment ${experimentId}.`,
+    unlabelled: "unlabelled",
+    noResult: "no result",
+    noResultTitle:
+      "Nothing about the model or the harness can be read from this run — retry it.",
+    checksFailed: "checks failed",
+    checksFailedTitle:
+      "The automated checks ran and failed — the produced code does not build or does not run. Open the run to see which check failed.",
+    checksPassed: "checks passed",
+    checksPassedTitle: "Automated checks passed.",
+    cancel: "Cancel",
+    runAgain: "Run again",
+    runAgainTitleExperiment: (experimentId: string) =>
+      `Repeats this configuration and stays in ${experimentId}, as another repetition of the same arm.`,
+    runAgainTitlePlain: "Repeats this configuration as a new run.",
+    deleteLabel: "Delete",
+    deleteConfirm: (runId: string) => `Delete run "${runId}"? This cannot be undone.`,
+    paginationOf: (from: number, to: number, total: number) => `${from}–${to} of ${total}`,
+    first: "« First",
+    prev: "‹ Prev",
+    pageOf: (current: number, total: number) => `Page ${current} / ${total}`,
+    next: "Next ›",
+    last: "Last »"
+  },
+  es: {
+    columns: {
+      run: "Corrida",
+      harness: "Arnés",
+      model: "Modelo",
+      state: "Estado",
+      score: "Puntaje",
+      created: "Creada",
+      improvements: "Mejoras"
+    },
+    actions: "Acciones",
+    improvementsBadge: {
+      yes: { label: "sí", title: "Se generaron propuestas de mejora." },
+      no: {
+        label: "no",
+        title: "La síntesis corrió y no propuso cambios (corrida limpia / gate cerrado)."
+      },
+      pending: {
+        label: "pendiente",
+        title: "Todavía no hay síntesis — abrí la corrida para generar sus propuestas."
+      }
+    },
+    tooltip: {
+      created: (date: string) => `Creada: ${date}`,
+      lastRun: (start: string, end: string) => `Última corrida: ${start} → ${end}`,
+      stillRunning: "todavía corriendo",
+      lastRunNotStarted: "Última corrida: todavía no empezó",
+      queuedFor: (duration: string) => `En cola: ${duration}`,
+      execution: (duration: string) => `Ejecución: ${duration}`,
+      run: (runId: string) => `Corrida: ${runId}`,
+      case: (caseId: string) => `Caso: ${caseId}`,
+      tests: (f2p: number, p2p: number) => `Tests: F2P ${f2p} / P2P ${p2p}`,
+      command: (command: string) => `Comando: ${command}`
+    },
+    runList: "Lista de corridas",
+    runsOfTotal: (shown: number, total: number) => `${shown} de ${total} corridas`,
+    runsTotal: (total: number) => `${total} en total`,
+    showingOnly: "Mostrando solo",
+    unscoredFilterLabel: "corridas terminadas sin puntaje",
+    failedFilterLabel: "corridas falladas",
+    showAllRuns: "Mostrar todas las corridas",
+    search: "Buscar",
+    searchPlaceholder: "Título del caso, id de corrida, modelo…",
+    harness: "Arnés",
+    state: "Estado",
+    all: "Todas",
+    perPage: "Por página",
+    clearFilters: "Limpiar filtros",
+    emptyNoRuns: {
+      title: "Todavía no hay corridas.",
+      description: "Creá una corrida desde la app web una vez que la API esté en línea."
+    },
+    emptyNoMatch: {
+      title: "Nada para mostrar.",
+      description: "Ninguna corrida coincide con la búsqueda y los filtros actuales."
+    },
+    sortBy: (label: string) => `Ordenar por ${label.toLowerCase()}`,
+    batchBadge: "lote",
+    armTitle: (label: string, experimentId: string) => `Brazo "${label}" del experimento ${experimentId}.`,
+    unlabelled: "sin etiqueta",
+    noResult: "sin resultado",
+    noResultTitle:
+      "De esta corrida no se puede leer nada sobre el modelo o el arnés — reintentala.",
+    checksFailed: "chequeos fallaron",
+    checksFailedTitle:
+      "Los chequeos automáticos corrieron y fallaron — el código producido no compila o no corre. Abrí la corrida para ver qué chequeo falló.",
+    checksPassed: "chequeos pasaron",
+    checksPassedTitle: "Los chequeos automáticos pasaron.",
+    cancel: "Cancelar",
+    runAgain: "Correr de nuevo",
+    runAgainTitleExperiment: (experimentId: string) =>
+      `Repite esta configuración y se queda en ${experimentId}, como otra repetición del mismo brazo.`,
+    runAgainTitlePlain: "Repite esta configuración como una nueva corrida.",
+    deleteLabel: "Eliminar",
+    deleteConfirm: (runId: string) => `¿Eliminar la corrida "${runId}"? Esto no se puede deshacer.`,
+    paginationOf: (from: number, to: number, total: number) => `${from}–${to} de ${total}`,
+    first: "« Primera",
+    prev: "‹ Anterior",
+    pageOf: (current: number, total: number) => `Página ${current} / ${total}`,
+    next: "Siguiente ›",
+    last: "Última »"
+  }
+});
 
 // Pull a flag's value out of the stored CLI command — the run list shows
 // harness/model as columns so conditions can be scanned without reading the
@@ -70,21 +238,14 @@ function commandFlag(command: string[], flag: string): string {
 // At-a-glance improvement-synthesis status per run (from improvements.json):
 // "yes" = proposed changes, "no" = ran but clean, "pending" = still to generate.
 function improvementsBadge(status: RunRecord["improvements"]) {
+  const m = pickMessages(MESSAGES);
   if (status === "yes") {
-    return { className: "badge ok", label: "yes", title: "Improvement proposals were generated." };
+    return { className: "badge ok", ...m.improvementsBadge.yes };
   }
   if (status === "no") {
-    return {
-      className: "badge neutral",
-      label: "no",
-      title: "Synthesis ran and proposed no changes (clean run / gate closed)."
-    };
+    return { className: "badge neutral", ...m.improvementsBadge.no };
   }
-  return {
-    className: "badge warn",
-    label: "pending",
-    title: "No synthesis yet — open the run to generate its proposals."
-  };
+  return { className: "badge warn", ...m.improvementsBadge.pending };
 }
 
 /**
@@ -120,23 +281,24 @@ function summarizeFailure(run: RunRecord): FailureSummary | null {
 // timestamp plus the last execution window (start → end and how long it took),
 // which is what you actually compare runs by.
 function createdTooltip(run: RunRecord): string {
-  const lines = [`Created: ${formatRunDate(run.created_at)}`];
+  const m = pickMessages(MESSAGES);
+  const lines = [m.tooltip.created(formatRunDate(run.created_at))];
   if (run.started_at) {
     const queued = formatDuration(run.created_at, run.started_at);
     const executed = formatDuration(run.started_at, run.ended_at);
-    const ended = run.ended_at ? formatRunDate(run.ended_at) : "still running";
-    lines.push(`Last run: ${formatRunDate(run.started_at)} → ${ended}`);
+    const ended = run.ended_at ? formatRunDate(run.ended_at) : m.tooltip.stillRunning;
+    lines.push(m.tooltip.lastRun(formatRunDate(run.started_at), ended));
     // Queue time is not the harness being slow — with a single worker a batch
     // queues behind itself — so it is reported apart from execution time
     // instead of being folded into one "duration".
     if (queued) {
-      lines.push(`Queued for: ${queued}`);
+      lines.push(m.tooltip.queuedFor(queued));
     }
     if (executed) {
-      lines.push(`Execution: ${executed}`);
+      lines.push(m.tooltip.execution(executed));
     }
   } else {
-    lines.push("Last run: not started yet");
+    lines.push(m.tooltip.lastRunNotStarted);
   }
   return lines.join("\n");
 }
@@ -145,16 +307,17 @@ function createdTooltip(run: RunRecord): string {
 // and the short instance id follow, and the tooltip keeps the exact run id,
 // test counts, and the full command a hover away.
 function buildRow(run: RunRecord, caseById: Map<string, CaseRecord>): RunRow {
+  const m = pickMessages(MESSAGES);
   const caseId = commandFlag(run.command, "--case");
   const caseRecord = caseById.get(caseId);
   const title = caseDisplayName(caseRecord, caseId) || run.run_id;
   const tests = caseTestCounts(caseRecord);
   const tooltip = [
     title,
-    `Run: ${run.run_id}`,
-    caseId ? `Case: ${caseId}` : null,
-    tests ? `Tests: F2P ${tests.f2p} / P2P ${tests.p2p}` : null,
-    `Command: ${run.command.join(" ")}`
+    m.tooltip.run(run.run_id),
+    caseId ? m.tooltip.case(caseId) : null,
+    tests ? m.tooltip.tests(tests.f2p, tests.p2p) : null,
+    m.tooltip.command(run.command.join(" "))
   ]
     .filter(Boolean)
     .join("\n");
@@ -198,6 +361,7 @@ function compareRows(a: RunRow, b: RunRow, key: SortKey): number {
 }
 
 export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: RunTableProps) {
+  const m = useMessages(MESSAGES);
   const { runId: activeRunId } = useParams();
   // The home page's attention items promise a filtered list — "4 experiment
   // runs failed" leading to every run ever would be the kind of CTA that
@@ -321,7 +485,7 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
 
   const handleDeleteRow = (event: MouseEvent, targetRunId: string) => {
     event.preventDefault();
-    if (!window.confirm(`Delete run "${targetRunId}"? This cannot be undone.`)) {
+    if (!window.confirm(m.deleteConfirm(targetRunId))) {
       return;
     }
     setRowActionError(null);
@@ -345,9 +509,9 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
   return (
     <section className="panel">
       <div className="panel-head">
-        <h2>Run list</h2>
+        <h2>{m.runList}</h2>
         <span className="muted">
-          {isFiltered ? `${sorted.length} of ${runs.length} runs` : `${runs.length} total`}
+          {isFiltered ? m.runsOfTotal(sorted.length, runs.length) : m.runsTotal(runs.length)}
         </span>
       </div>
 
@@ -355,11 +519,9 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
           hiding rows is worse than one that shows too many. */}
       {attentionFilter ? (
         <p className="callout">
-          Showing only{" "}
+          {m.showingOnly}{" "}
           <strong>
-            {attentionFilter === "unscored"
-              ? "finished runs with no score"
-              : "failed runs"}
+            {attentionFilter === "unscored" ? m.unscoredFilterLabel : m.failedFilterLabel}
           </strong>
           .{" "}
           <button
@@ -367,7 +529,7 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
             onClick={() => setSearchParams({})}
             type="button"
           >
-            Show all runs
+            {m.showAllRuns}
           </button>
         </p>
       ) : null}
@@ -375,18 +537,18 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
       {runs.length > 0 ? (
         <div className="table-toolbar">
           <label className="toolbar-field toolbar-search">
-            <span className="sidebar-label">Search</span>
+            <span className="sidebar-label">{m.search}</span>
             <input
               onChange={(event) => {
                 setQuery(event.target.value);
                 setPage(1);
               }}
-              placeholder="Case title, run id, model…"
+              placeholder={m.searchPlaceholder}
               value={query}
             />
           </label>
           <label className="toolbar-field">
-            <span className="sidebar-label">Harness</span>
+            <span className="sidebar-label">{m.harness}</span>
             <select
               onChange={(event) => {
                 setHarnessFilter(event.target.value);
@@ -394,7 +556,7 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
               }}
               value={harnessFilter}
             >
-              <option value="all">All</option>
+              <option value="all">{m.all}</option>
               {harnessOptions.map((item) => (
                 <option key={item} value={item}>
                   {item}
@@ -403,7 +565,7 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
             </select>
           </label>
           <label className="toolbar-field">
-            <span className="sidebar-label">State</span>
+            <span className="sidebar-label">{m.state}</span>
             <select
               onChange={(event) => {
                 setStateFilter(event.target.value);
@@ -411,7 +573,7 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
               }}
               value={stateFilter}
             >
-              <option value="all">All</option>
+              <option value="all">{m.all}</option>
               {stateOptions.map((item) => (
                 <option key={item} value={item}>
                   {item}
@@ -420,7 +582,7 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
             </select>
           </label>
           <label className="toolbar-field">
-            <span className="sidebar-label">Per page</span>
+            <span className="sidebar-label">{m.perPage}</span>
             <select
               onChange={(event) => {
                 setPageSize(Number(event.target.value));
@@ -437,7 +599,7 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
           </label>
           {isFiltered ? (
             <button onClick={resetFilters} type="button">
-              Clear filters
+              {m.clearFilters}
             </button>
           ) : null}
         </div>
@@ -448,35 +610,29 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
       ) : null}
 
       {runs.length === 0 ? (
-        <EmptyState
-          description="Create a run from the web app once the API is online."
-          title="No runs yet."
-        />
+        <EmptyState description={m.emptyNoRuns.description} title={m.emptyNoRuns.title} />
       ) : sorted.length === 0 ? (
-        <EmptyState
-          description="No run matches the current search and filters."
-          title="Nothing to show."
-        />
+        <EmptyState description={m.emptyNoMatch.description} title={m.emptyNoMatch.title} />
       ) : (
         <>
           <div className="table table--runs">
             <div className="table-row table-head">
-              {SORT_COLUMNS.map((column) => (
-                <span key={column.key}>
+              {SORT_KEYS.map((key) => (
+                <span key={key}>
                   <button
-                    className={sortKey === column.key ? "sort-header active" : "sort-header"}
-                    onClick={() => handleSort(column.key)}
-                    title={`Sort by ${column.label.toLowerCase()}`}
+                    className={sortKey === key ? "sort-header active" : "sort-header"}
+                    onClick={() => handleSort(key)}
+                    title={m.sortBy(m.columns[key])}
                     type="button"
                   >
-                    {column.label}
+                    {m.columns[key]}
                     <span className="sort-arrow">
-                      {sortKey === column.key ? (sortDirection === "asc" ? "▲" : "▼") : "↕"}
+                      {sortKey === key ? (sortDirection === "asc" ? "▲" : "▼") : "↕"}
                     </span>
                   </button>
                 </span>
               ))}
-              <span>Actions</span>
+              <span>{m.actions}</span>
             </div>
             {visible.map((row) => {
               const run = row.run;
@@ -496,13 +652,13 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
                         {row.attempt ? <span className="badge neutral">{row.attempt}</span> : null}
                         {row.run.batch_id ? (
                           <span className="badge neutral" title={row.run.batch_id}>
-                            batch
+                            {m.batchBadge}
                           </span>
                         ) : null}
                         {run.experiment_id ? (
                           <span
                             className="badge neutral"
-                            title={`Arm "${run.condition_label || "unlabelled"}" of experiment ${run.experiment_id}.`}
+                            title={m.armTitle(run.condition_label || m.unlabelled, run.experiment_id)}
                           >
                             {run.condition_label || run.experiment_id}
                           </span>
@@ -542,24 +698,18 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
                         </span>
                       ) : null}
                       {failure?.lab ? (
-                        <small
-                          className="muted"
-                          title="Nothing about the model or the harness can be read from this run — retry it."
-                        >
-                          no result
+                        <small className="muted" title={m.noResultTitle}>
+                          {m.noResult}
                         </small>
                       ) : null}
                       {run.objective_passed === false ? (
-                        <span
-                          className="badge error"
-                          title="The automated checks ran and failed — the produced code does not build or does not run. Open the run to see which check failed."
-                        >
-                          checks failed
+                        <span className="badge error" title={m.checksFailedTitle}>
+                          {m.checksFailed}
                         </span>
                       ) : null}
                       {run.objective_passed === true ? (
-                        <span className="badge ok" title="Automated checks passed.">
-                          checks passed
+                        <span className="badge ok" title={m.checksPassedTitle}>
+                          {m.checksPassed}
                         </span>
                       ) : null}
                     </span>
@@ -581,26 +731,26 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
                       onClick={(event) => handleCancelRow(event, run.run_id)}
                       type="button"
                     >
-                      Cancel
+                      {m.cancel}
                     </button>
                     <button
                       disabled={isPending}
                       onClick={(event) => handleCloneRow(event, run.run_id)}
                       title={
                         run.experiment_id
-                          ? `Repeats this configuration and stays in ${run.experiment_id}, as another repetition of the same arm.`
-                          : "Repeats this configuration as a new run."
+                          ? m.runAgainTitleExperiment(run.experiment_id)
+                          : m.runAgainTitlePlain
                       }
                       type="button"
                     >
-                      Run again
+                      {m.runAgain}
                     </button>
                     <button
                       disabled={isPending}
                       onClick={(event) => handleDeleteRow(event, run.run_id)}
                       type="button"
                     >
-                      Delete
+                      {m.deleteLabel}
                     </button>
                   </div>
                 </div>
@@ -610,35 +760,33 @@ export function RunTable({ cases, onCancelRun, onCloneRun, onDeleteRun, runs }: 
 
           <div className="table-pagination">
             <span className="muted">
-              {pageStart + 1}–{Math.min(pageStart + pageSize, sorted.length)} of {sorted.length}
+              {m.paginationOf(pageStart + 1, Math.min(pageStart + pageSize, sorted.length), sorted.length)}
             </span>
             <div className="pagination-controls">
               <button disabled={currentPage === 1} onClick={() => setPage(1)} type="button">
-                « First
+                {m.first}
               </button>
               <button
                 disabled={currentPage === 1}
                 onClick={() => setPage((current) => Math.max(1, current - 1))}
                 type="button"
               >
-                ‹ Prev
+                {m.prev}
               </button>
-              <span className="muted">
-                Page {currentPage} / {pageCount}
-              </span>
+              <span className="muted">{m.pageOf(currentPage, pageCount)}</span>
               <button
                 disabled={currentPage === pageCount}
                 onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
                 type="button"
               >
-                Next ›
+                {m.next}
               </button>
               <button
                 disabled={currentPage === pageCount}
                 onClick={() => setPage(pageCount)}
                 type="button"
               >
-                Last »
+                {m.last}
               </button>
             </div>
           </div>

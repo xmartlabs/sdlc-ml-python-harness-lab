@@ -3,7 +3,9 @@ import type { ComponentType } from "react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 
+import { defineMessages, useMessages } from "../i18n";
 import type { IconProps } from "./icons";
+import { LanguageToggle } from "./LanguageToggle";
 import { XmartlabsLogo } from "./XmartlabsLogo";
 import {
   IconBook,
@@ -13,6 +15,7 @@ import {
   IconFiles,
   IconFlask,
   IconHome,
+  IconLayers,
   IconLightbulb,
   IconList,
   IconPlus,
@@ -33,14 +36,75 @@ type ShellProps = {
 
 const COLLAPSED_STORAGE_KEY = "ahl.sidebar.collapsed";
 
+const MESSAGES = defineMessages({
+  en: {
+    groups: { evaluate: "Evaluate", evidence: "Evidence", advanced: "Advanced", system: "System" },
+    nav: {
+      home: "Home",
+      newEvaluation: "New evaluation",
+      subject: "Validate your tool",
+      audit: "Audit a repository",
+      harnessByModel: "Harness x model",
+      experiments: "Experiments",
+      findings: "Findings",
+      cases: "Cases",
+      repositories: "Repositories",
+      skills: "Skills",
+      runs: "Runs",
+      compare: "Compare",
+      benchmarks: "Benchmarks",
+      improvements: "Improvements",
+      health: "Health",
+      guide: "Guide",
+      settings: "Settings"
+    },
+    expandSidebar: "Expand sidebar",
+    collapseSidebar: "Collapse sidebar",
+    signOut: "Sign out",
+    authOff: "Authentication is off — anyone who can reach this address can drive the lab. Run",
+    authOffTail: "on the server to protect it."
+  },
+  es: {
+    groups: { evaluate: "Evaluar", evidence: "Evidencia", advanced: "Avanzado", system: "Sistema" },
+    nav: {
+      home: "Inicio",
+      newEvaluation: "Nueva evaluación",
+      subject: "Validá tu herramienta",
+      audit: "Auditar un repositorio",
+      harnessByModel: "Arnés x modelo",
+      experiments: "Experimentos",
+      findings: "Hallazgos",
+      cases: "Casos",
+      repositories: "Repositorios",
+      skills: "Skills",
+      runs: "Corridas",
+      compare: "Comparar",
+      benchmarks: "Benchmarks",
+      improvements: "Mejoras",
+      health: "Estado",
+      guide: "Guía",
+      settings: "Configuración"
+    },
+    expandSidebar: "Expandir la barra lateral",
+    collapseSidebar: "Contraer la barra lateral",
+    signOut: "Cerrar sesión",
+    authOff:
+      "La autenticación está desactivada: cualquiera que llegue a esta dirección puede usar el lab. Corré",
+    authOffTail: "en el servidor para protegerlo."
+  }
+});
+
+type NavKey = keyof (typeof MESSAGES)["en"]["nav"];
+type GroupKey = keyof (typeof MESSAGES)["en"]["groups"];
+
 type NavItem = {
   to: string;
-  label: string;
+  label: NavKey;
   icon: ComponentType<IconProps>;
   end?: boolean;
 };
 
-type NavGroup = { title: string; items: NavItem[] };
+type NavGroup = { title: GroupKey | null; items: NavItem[] };
 
 /**
  * Navigation grouped by what a person came to do, not by which table backs it.
@@ -52,42 +116,43 @@ type NavGroup = { title: string; items: NavItem[] };
  */
 const NAV_GROUPS: NavGroup[] = [
   {
-    title: "",
-    items: [{ to: "/", label: "Home", icon: IconHome, end: true }]
+    title: null,
+    items: [{ to: "/", label: "home", icon: IconHome, end: true }]
   },
   {
-    title: "Evaluate",
+    title: "evaluate",
     items: [
-      { to: "/evaluate/new", label: "New evaluation", icon: IconPlus },
-      { to: "/evaluate/subject", label: "Validate your tool", icon: IconPuzzle },
-      { to: "/evaluate/audit", label: "Audit a repository", icon: IconSearch },
-      { to: "/evaluate/experiments", label: "Experiments", icon: IconFlask }
+      { to: "/evaluate/new", label: "newEvaluation", icon: IconPlus },
+      { to: "/evaluate/subject", label: "subject", icon: IconPuzzle },
+      { to: "/evaluate/audit", label: "audit", icon: IconSearch },
+      { to: "/evaluate/harness-by-model", label: "harnessByModel", icon: IconLayers },
+      { to: "/evaluate/experiments", label: "experiments", icon: IconFlask }
     ]
   },
   {
-    title: "Evidence",
+    title: "evidence",
     items: [
-      { to: "/evidence/findings", label: "Findings", icon: IconSearch },
-      { to: "/evidence/cases", label: "Cases", icon: IconFiles },
-      { to: "/evidence/repositories", label: "Repositories", icon: IconRepo },
-      { to: "/evidence/skills", label: "Skills", icon: IconPuzzle }
+      { to: "/evidence/findings", label: "findings", icon: IconSearch },
+      { to: "/evidence/cases", label: "cases", icon: IconFiles },
+      { to: "/evidence/repositories", label: "repositories", icon: IconRepo },
+      { to: "/evidence/skills", label: "skills", icon: IconPuzzle }
     ]
   },
   {
-    title: "Advanced",
+    title: "advanced",
     items: [
-      { to: "/advanced/runs", label: "Runs", icon: IconList },
-      { to: "/advanced/compare", label: "Compare", icon: IconCompare },
-      { to: "/advanced/benchmarks", label: "Benchmarks", icon: IconTrophy },
-      { to: "/advanced/improvements", label: "Improvements", icon: IconLightbulb }
+      { to: "/advanced/runs", label: "runs", icon: IconList },
+      { to: "/advanced/compare", label: "compare", icon: IconCompare },
+      { to: "/advanced/benchmarks", label: "benchmarks", icon: IconTrophy },
+      { to: "/advanced/improvements", label: "improvements", icon: IconLightbulb }
     ]
   },
   {
-    title: "System",
+    title: "system",
     items: [
-      { to: "/system/health", label: "Health", icon: IconPulse },
-      { to: "/system/guide", label: "Guide", icon: IconBook },
-      { to: "/system/settings", label: "Settings", icon: IconSettings }
+      { to: "/system/health", label: "health", icon: IconPulse },
+      { to: "/system/guide", label: "guide", icon: IconBook },
+      { to: "/system/settings", label: "settings", icon: IconSettings }
     ]
   }
 ];
@@ -101,6 +166,7 @@ function getStoredCollapsed(): boolean {
 
 export function Shell({ children, authEnabled, onLogout }: ShellProps) {
   const [collapsed, setCollapsed] = useState(getStoredCollapsed);
+  const m = useMessages(MESSAGES);
 
   useEffect(() => {
     window.localStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed ? "true" : "false");
@@ -128,7 +194,7 @@ export function Shell({ children, authEnabled, onLogout }: ShellProps) {
             )}
             <button
               aria-expanded={!collapsed}
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-label={collapsed ? m.expandSidebar : m.collapseSidebar}
               className="sidebar-toggle"
               onClick={() => setCollapsed((current) => !current)}
               type="button"
@@ -145,12 +211,16 @@ export function Shell({ children, authEnabled, onLogout }: ShellProps) {
               )}
             </button>
           </div>
+          {/* The language switch sits with the brand, where it is seen first. */}
+          <div className="brand-lang">
+            <LanguageToggle compact={collapsed} />
+          </div>
         </div>
         <nav className="nav">
           {NAV_GROUPS.map((group) => (
-            <div className="nav-group" key={group.title || "root"}>
+            <div className="nav-group" key={group.title ?? "root"}>
               {group.title && !collapsed ? (
-                <p className="nav-group-title">{group.title}</p>
+                <p className="nav-group-title">{m.groups[group.title]}</p>
               ) : null}
               {group.items.map((item) => {
                 const Icon = item.icon;
@@ -161,14 +231,14 @@ export function Shell({ children, authEnabled, onLogout }: ShellProps) {
                     }
                     end={item.end}
                     key={item.to}
-                    title={item.label}
+                    title={m.nav[item.label]}
                     to={item.to}
                   >
                     <span className="nav-item-icon">
                       <Icon size={16} />
                     </span>
                     {collapsed ? null : (
-                      <span className="nav-item-label">{item.label}</span>
+                      <span className="nav-item-label">{m.nav[item.label]}</span>
                     )}
                   </NavLink>
                 );
@@ -184,7 +254,7 @@ export function Shell({ children, authEnabled, onLogout }: ShellProps) {
             </div>
             {authEnabled ? (
               <button className="button-link" onClick={onLogout} type="button">
-                Sign out
+                {m.signOut}
               </button>
             ) : null}
           </div>
@@ -193,8 +263,7 @@ export function Shell({ children, authEnabled, onLogout }: ShellProps) {
       <main className="workbench">
         {authEnabled ? null : (
           <div className="auth-banner" role="status">
-            Authentication is off — anyone who can reach this address can drive the
-            lab. Run <code>make set-password</code> on the server to protect it.
+            {m.authOff} <code>make set-password</code> {m.authOffTail}
           </div>
         )}
         {children}

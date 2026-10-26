@@ -105,6 +105,9 @@ SOURCE_GATEWAY = "gateway"
 # ``n_keep: 13777 >= n_ctx: 8192``, burning 2.5 hours and a 12 MB log.
 # 32k is the smallest ceiling that still leaves headroom for a multi-step run.
 MIN_CONTEXT_TOKENS = 32768
+# Above the hard floor: what an agentic coding run needs to work without running
+# out mid-task. Ollama's own guidance for coding agents is 64k or more.
+AGENTIC_CONTEXT_TOKENS = 65536
 
 
 def normalize_model_name(model: str) -> str:
@@ -410,11 +413,31 @@ class ContextProbeResult:
     def ok(self) -> bool:
         return self.status == "ok"
 
+    @property
+    def advisory(self) -> str:
+        """A non-blocking warning when the window passes but leaves little room.
+
+        The floor keeps the system prompt from failing every step; an agentic
+        coding run also needs room for files, tool output and history, and runs
+        out mid-task below ~64k — a failure that reads as the model's when it is
+        the serving configuration's (ADR-0069).
+        """
+        if self.status != "ok" or not self.context_tokens:
+            return ""
+        if self.context_tokens >= AGENTIC_CONTEXT_TOKENS:
+            return ""
+        return (
+            f"Serving {self.context_tokens} tokens: enough to start, tight for agentic "
+            f"coding. Reload with 64k or more (Ollama: num_ctx; LM Studio: context "
+            f"length) so a long run does not fail on context."
+        )
+
     def as_dict(self) -> dict:
         return {
             "model": self.model,
             "status": self.status,
             "ok": self.ok,
+            "advisory": self.advisory,
             "required_tokens": self.required_tokens,
             "context_tokens": self.context_tokens,
             "prompt_tokens": self.prompt_tokens,

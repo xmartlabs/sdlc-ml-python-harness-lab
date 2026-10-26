@@ -1,6 +1,12 @@
 import { useState } from "react";
 
+import { defineMessages, useMessages } from "../i18n";
 import { IconInfo } from "./icons";
+
+const MESSAGES = defineMessages({
+  en: { trigger: "What does this option do?" },
+  es: { trigger: "¿Qué hace esta opción?" }
+});
 
 type InfoTooltipProps = {
   text: string;
@@ -14,11 +20,12 @@ type InfoTooltipProps = {
  */
 export function InfoTooltip({ text }: InfoTooltipProps) {
   const [open, setOpen] = useState(false);
+  const m = useMessages(MESSAGES);
 
   return (
     <span className="tooltip-anchor">
       <button
-        aria-label="What does this option do?"
+        aria-label={m.trigger}
         className="tooltip-trigger"
         onBlur={() => setOpen(false)}
         onClick={(event) => {

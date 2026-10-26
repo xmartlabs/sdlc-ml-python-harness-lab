@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { defineMessages, useMessages } from "../i18n";
 import type { ArtifactRecord } from "../types";
 import { Markdown } from "./Markdown";
 
@@ -9,6 +10,28 @@ type ArtifactsPanelProps = {
 
 const VIEWABLE_MEDIA_PREFIXES = ["text/", "application/json"];
 const MAX_LISTED = 200;
+
+const MESSAGES = defineMessages({
+  en: {
+    indexing: "Indexing...",
+    indexArtifacts: "Index artifacts",
+    refresh: "Refresh",
+    notIndexedHint: "Workspace files are not indexed — use the Terminal tab to browse them",
+    noArtifactsYet:
+      "No artifacts indexed yet. Expected files: metadata.json, prompt.md, report.md, " +
+      "audit.md, diff.patch."
+  },
+  es: {
+    indexing: "Indexando...",
+    indexArtifacts: "Indexar artefactos",
+    refresh: "Actualizar",
+    notIndexedHint:
+      "Los archivos del workspace no están indexados — usá la pestaña Terminal para navegarlos",
+    noArtifactsYet:
+      "Todavía no hay artefactos indexados. Archivos esperados: metadata.json, prompt.md, " +
+      "report.md, audit.md, diff.patch."
+  }
+});
 
 function isViewable(artifact: ArtifactRecord): boolean {
   return (
@@ -24,6 +47,7 @@ function formatSize(bytes: number): string {
 }
 
 export function ArtifactsPanel({ runId }: ArtifactsPanelProps) {
+  const m = useMessages(MESSAGES);
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState<string | null>(null);
@@ -87,16 +111,13 @@ export function ArtifactsPanel({ runId }: ArtifactsPanelProps) {
     <div>
       <div className="panel-actions">
         <button disabled={loading} onClick={handleRefresh} type="button">
-          {loading ? "Indexing..." : artifacts.length === 0 ? "Index artifacts" : "Refresh"}
+          {loading ? m.indexing : artifacts.length === 0 ? m.indexArtifacts : m.refresh}
         </button>
-        <span className="muted">Workspace files are not indexed — use the Terminal tab to browse them</span>
+        <span className="muted">{m.notIndexedHint}</span>
       </div>
       {error ? <p className="muted">{error}</p> : null}
       {listed.length === 0 ? (
-        <p className="muted">
-          No artifacts indexed yet. Expected files: metadata.json, prompt.md, report.md,
-          audit.md, diff.patch.
-        </p>
+        <p className="muted">{m.noArtifactsYet}</p>
       ) : (
         <div className="table">
           {listed.map((artifact) => (

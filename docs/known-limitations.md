@@ -116,6 +116,27 @@ failure reason, but the advice above it — check reachability, model id and
 context window — sends the reader to the wrong place. A quota marker set
 alongside `_COMPLETION_CAP_MARKERS` would let both layers name billing directly.
 
+### A Claude model the gateway does not serve is caught only by id
+
+In Docker the `claude` harness reaches Anthropic through the gateway
+(`ANTHROPIC_BASE_URL`), so a model without a gateway card dies on its first
+request with `Invalid model name`. Experiment `con-o-sin-harness` (2026-10-23)
+lost eight runs of `claude-haiku-5-5` that way, each listed as an "agent error".
+Preflight now asks the gateway and refuses such a model before anything is queued,
+the forms mark it "not on your gateway" with a warning under the picker, and the
+run list labels the old failures `model not served` / `harness error` and keeps
+them out of the counts. Two gaps remain: only the ids in `native_models.py` are
+checked (an id typed by hand is not), and a gateway that does not answer is
+treated as unknown, so the run is allowed.
+
+The same day, two `claude-opus-5-5` runs (K-006/007) — a model the gateway does
+serve — died on `claude_code_version_too_old`: the runner image's unpinned
+`npm install` had stayed on a cached Claude Code 2.1.197. The CLI is now pinned and
+labelled, Health and preflight read the label, and a harness error prints a short
+`Cause:` line last so the stored failure reason names it. Images built before the
+label existed report no version and are not blocked; `MIN_CLAUDE_CLI_VERSION` holds
+only floors the API has stated.
+
 ### The batch endpoint has no HTTP-level test
 
 `tests/harness_lab_app/test_run_batch.py` covers `RunService.create_batch`

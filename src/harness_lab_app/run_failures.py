@@ -19,6 +19,8 @@ failed, and did anything get measured — so they are kept together.
 
 from __future__ import annotations
 
+import re
+
 # kind -> (prefix, human label). Order matters only for readability; the
 # prefixes are mutually exclusive.
 _KINDS: tuple[tuple[str, str, str], ...] = (
@@ -39,9 +41,44 @@ _KINDS: tuple[tuple[str, str, str], ...] = (
     ("timeout", "Run timed out", "timed out"),
 )
 
+# Phrases anywhere in an agent-output tail that mean the run never reached the
+# model. Prefixes cannot catch these: the reason is the tail of the CLI's own
+# output. con-o-sin-harness (2026-10-23) recorded eight "agent error"s for a
+# model the gateway had no card for. Checked in order; the first match wins.
+_LAB_MARKERS: tuple[tuple[str, str], ...] = (
+    # LiteLLM / Anthropic-shaped refusals of an unknown model id.
+    ("invalid model name", "model not served"),
+    ("model_not_found", "model not served"),
+    ("does not exist or you do not have access", "model not served"),
+    # The API refusing the harness CLI itself, not the request it sent.
+    ("claude_code_version_too_old", "CLI too old"),
+    # bench_run's own verdict when the harness died before the model answered.
+    ("stop_reason=harness_error", "harness error"),
+)
+
 # Kinds where nothing can be concluded about the model or the harness, so the
 # run is not an attempt and must not be counted as one.
 UNMEASURED_KINDS = frozenset({"lab"})
+
+
+# A server-side status from the provider or a proxy in front of it (Cloudflare
+# 52x, Anthropic 529 overloaded). The run reached a gateway that could not
+# answer, which says nothing about the model.
+_SERVER_ERROR_RE = re.compile(r"API Error: 5\d\d\b")
+
+
+def _lab_marker(text: str) -> str | None:
+    lowered = text.lower()
+    for marker, label in _LAB_MARKERS:
+        if marker in lowered:
+            # A server-side outage outranks the generic harness_error verdict
+            # that always accompanies it.
+            if label == "harness error" and _SERVER_ERROR_RE.search(text):
+                return "endpoint down"
+            return label
+    if _SERVER_ERROR_RE.search(text):
+        return "endpoint down"
+    return None
 
 
 def classify_failure(reason: str | None) -> str | None:
@@ -49,7 +86,8 @@ def classify_failure(reason: str | None) -> str | None:
 
     ``None`` means the run did not fail (or recorded no reason). ``"agent"`` is
     the fallback: the reason is the tail of the agent's own output, which is a
-    real result — a bad one, but a result.
+    real result — a bad one, but a result — unless that tail says the model was
+    never reached.
     """
     text = (reason or "").strip()
     if not text:
@@ -57,6 +95,8 @@ def classify_failure(reason: str | None) -> str | None:
     for kind, prefix, _label in _KINDS:
         if text.startswith(prefix):
             return kind
+    if _lab_marker(text):
+        return "lab"
     return "agent"
 
 
@@ -68,7 +108,7 @@ def failure_label(reason: str | None) -> str | None:
     for _kind, prefix, label in _KINDS:
         if text.startswith(prefix):
             return label
-    return "agent error"
+    return _lab_marker(text) or "agent error"
 
 
 def is_unmeasured(reason: str | None) -> bool:

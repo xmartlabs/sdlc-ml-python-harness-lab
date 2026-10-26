@@ -1008,6 +1008,21 @@ button.ghost:disabled {
   border-bottom: 0;
 }
 
+/* `.settings-list div` turns every row into a grid; the segmented controls
+   inside a toggle row must stay one inline row of buttons. */
+.settings-list .theme-toggle-row > .theme-toggle,
+.settings-list .theme-toggle-row > .segmented {
+  display: inline-flex;
+  gap: 0;
+  padding-bottom: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-list .theme-toggle-row > .lang-toggle button {
+  padding: 6px 14px;
+  font-size: inherit;
+}
+
 /* Segmented control. `.theme-toggle` is the original, Settings-only name; the
    generic `.segmented` alias is what new callers (the model picker) use. */
 .theme-toggle,
@@ -2760,6 +2775,58 @@ button.ghost {
   border-style: dashed;
 }
 
+/* --- Home: the 30-second start (ADR-0065) -------------------------------- */
+.quick-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.quick-start-body {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+
+.quick-start-body h2 {
+  margin: 0 0 var(--space-1);
+  font-size: 1.05rem;
+}
+
+.quick-start-body p {
+  margin: 0 0 var(--space-2);
+}
+
+.quick-start-command {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  overflow-x: auto;
+}
+
+.quick-start-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.quick-start-actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.honesty h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
 .onboarding-steps {
   margin: var(--space-2) 0 0;
   padding-left: var(--space-5);
@@ -3993,4 +4060,27 @@ button.danger:hover {
   color: var(--console-text);
   padding: 10px;
   border-radius: 6px;
+}
+
+/* Language switch (ADR-0070): EN | ES under the brand, one button when collapsed. */
+.brand-lang {
+  display: flex;
+}
+
+.app-shell--nav-collapsed .brand-lang {
+  justify-content: center;
+}
+
+.lang-toggle button {
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.lang-toggle-compact {
+  padding: 3px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }

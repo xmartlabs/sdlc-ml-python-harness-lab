@@ -21,6 +21,7 @@ import json
 import re
 import shlex
 import shutil
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from harness_lab_app.config import get_settings
@@ -99,7 +100,24 @@ INCONCLUSIVE_LABELS = {
     "not_launched": "never launched",
     "not_found": "command not found",
     "no_network": "no network",
+    "missing_dependency": "grader dependency missing",
 }
+
+# `No module named 'x'` from Python's import system. Read only for modules the
+# agent was not supposed to write: a missing `clinic` is the agent's failure,
+# a missing `pandas` is the grader's environment (ADR-0071).
+_MISSING_MODULE_RE = re.compile(r"No module named '([A-Za-z0-9_]+)(?:\.[^']*)?'")
+
+# A requirement the setup step will pass to pip: a distribution name, optional
+# extras, and an optional version clause. Anything else is dropped rather than
+# quoted into a shell — the list is case data, not a free-form command.
+_REQUIREMENT_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?"
+    r"((==|>=|<=|~=|!=|>|<)[A-Za-z0-9.*+!_-]+(,(==|>=|<=|~=|!=|>|<)[A-Za-z0-9.*+!_-]+)*)?$"
+)
+
+#: Where a run's grader dependencies are installed, relative to the lab root.
+VALIDATION_DEPS_DIR = "validation-deps"
 
 _EXIT_CODE_REASONS = {
     -1: "not_launched",
@@ -133,7 +151,34 @@ _NO_NETWORK_RE = re.compile(
 )
 
 
-def classify_inconclusive(exit_code: Any, output: str = "") -> str | None:
+def workspace_modules(workspace: Path) -> set[str]:
+    """Top-level module and package names the agent's workspace provides."""
+    names: set[str] = set()
+    try:
+        for entry in workspace.iterdir():
+            if entry.suffix == ".py":
+                names.add(entry.stem)
+            elif entry.is_dir() and (entry / "__init__.py").exists():
+                names.add(entry.name)
+    except OSError:
+        pass
+    return names
+
+
+def validation_requirements(case: Any) -> list[str]:
+    """The pip requirements a case's graders need, validated, in order."""
+    meta = getattr(case, "metadata_json", None) or {}
+    raw = meta.get("validation_requirements") if isinstance(meta, dict) else None
+    if not isinstance(raw, list):
+        return []
+    return [
+        str(item).strip() for item in raw if _REQUIREMENT_RE.match(str(item).strip())
+    ]
+
+
+def classify_inconclusive(
+    exit_code: Any, output: str = "", own_modules: set[str] | None = None
+) -> str | None:
     """Why this check settled nothing, or ``None`` when it produced a verdict.
 
     Two families. The exit codes in :data:`INCONCLUSIVE_EXIT_CODES` say it on
@@ -157,6 +202,9 @@ def classify_inconclusive(exit_code: Any, output: str = "") -> str | None:
         return "not_found"
     if _NO_NETWORK_RE.search(text):
         return "no_network"
+    missing = _MISSING_MODULE_RE.search(text)
+    if missing and missing.group(1) not in (own_modules or set()):
+        return "missing_dependency"
     return None
 
 
@@ -316,8 +364,36 @@ def build_validation_spec(
     # no socket, so those commands must execute where the socket lives (the
     # worker process / host) — flagged here, honored by ValidationService.
     local = case.type == CaseType.swe_pro_instance
+    # The graders' own dependencies (ADR-0071). The checks run offline in a
+    # clean container, so a case whose tests import pandas must have it
+    # installed first, by a step that has network, into the run's own folder.
+    # Never the workspace's requirements.txt: the agent wrote it.
+    setup: list[list[str]] = []
+    requirements = validation_requirements(case)
+    if requirements and commands:
+        deps = f"data/runs/{run_id}/{VALIDATION_DEPS_DIR}"
+        # uv first: the runner's /opt/venv is built by uv and ships no pip.
+        # pip remains the fallback for a host or image that has it.
+        packages = " ".join(shlex.quote(item) for item in requirements)
+        target = shlex.quote(deps)
+        install = (
+            f"rm -rf {target} && if command -v uv >/dev/null 2>&1; then "
+            f"uv pip install --quiet --python python --target {target} {packages}; "
+            f"else python -m pip install --quiet --disable-pip-version-check "
+            f"--no-input --target {target} {packages}; fi"
+        )
+        setup.append(["sh", "-c", install])
+        # Absolute, resolved before any `cd` the check makes into the workspace.
+        commands = [
+            [
+                *argv[:-1],
+                f'export PYTHONPATH="$PWD/{deps}${{PYTHONPATH:+:$PYTHONPATH}}"; {argv[-1]}',
+            ]
+            for argv in commands
+        ]
     return {
         "strategy": strategy,
+        "setup": setup,
         "commands": commands,
         "workspace": workspace,
         # Where the gate ran. Informational — the `cd` is already in the argv —
@@ -347,7 +423,9 @@ def parse_objective(results: list[dict[str, Any]], strategy: str) -> dict[str, A
         output = result.get("output", "")
         swebench_line = _swebench_summary(output) or swebench_line
         command = str(result.get("command", "") or "")
-        reason = classify_inconclusive(exit_code, output)
+        reason = result.get("inconclusive_reason") or classify_inconclusive(
+            exit_code, output, result.get("own_modules")
+        )
         checks.append(
             {
                 # `name` is what the UI and the audit have always read; the

@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import Column, UniqueConstraint
 from sqlalchemy.types import JSON
@@ -74,6 +75,10 @@ class ExperimentMode(StrEnum):
     cross_repo = "cross_repo"
     discovery = "discovery"
     subject_validation = "subject_validation"
+    # A full grid of harness levels x models (ADR-0066): the one design that can
+    # ask whether a stronger model needs less harness, because it measures the
+    # interaction instead of refusing it as a confound.
+    harness_by_model = "harness_by_model"
 
 
 class ExperimentStatus(StrEnum):
@@ -178,7 +183,8 @@ class Case(SQLModel, table=True):
     # benchmark exists to catch.
     files_expected: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     files_forbidden: list[str] = Field(default_factory=list, sa_column=Column(JSON))
-    metadata_json: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
+    # JSON, not only strings: `validation_requirements` is a list (ADR-0071).
+    metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

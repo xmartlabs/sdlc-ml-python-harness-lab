@@ -814,3 +814,142 @@ def test_finalize_workspace_includes_files_the_agent_created(tmp_path):
     assert "+echo new" in patch
     assert "tests/test_new.sh" in patch and "+exit 0" in patch
     assert "build/out.bin" not in patch
+
+
+# --- seeding a workspace from a case's starter files (ADR-0068) ---------------
+
+
+def _starter(root):
+    starter = root / "benchmarks" / "fixit" / "starter"
+    (starter / "src").mkdir(parents=True)
+    (starter / "index.html").write_text("<h1>broken</h1>\n")
+    (starter / "src" / "app.js").write_text("console.log(1)\n")
+    return starter
+
+
+def test_a_starter_dir_seeds_an_empty_workspace(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_run, "REPO_ROOT", tmp_path)
+    _starter(tmp_path)
+    ws = tmp_path / "workspace" / "run-1"
+    ws.mkdir(parents=True)
+
+    copied = bench_run.seed_workspace(ws, {"starter_dir": "benchmarks/fixit/starter"})
+
+    assert copied == 2
+    assert (ws / "index.html").read_text() == "<h1>broken</h1>\n"
+    assert (ws / "src" / "app.js").exists()
+
+
+def test_seeding_never_overwrites_a_workspace_that_has_files(tmp_path, monkeypatch):
+    """A resumed or continued run already holds the agent's work."""
+    monkeypatch.setattr(bench_run, "REPO_ROOT", tmp_path)
+    _starter(tmp_path)
+    ws = tmp_path / "workspace" / "run-1"
+    ws.mkdir(parents=True)
+    (ws / "index.html").write_text("<h1>agent's fix</h1>\n")
+
+    assert (
+        bench_run.seed_workspace(ws, {"starter_dir": "benchmarks/fixit/starter"}) == 0
+    )
+    assert (ws / "index.html").read_text() == "<h1>agent's fix</h1>\n"
+
+
+@pytest.mark.parametrize(
+    "starter", ["../outside", "/etc", "benchmarks/../../etc", "src/harness_lab_app"]
+)
+def test_a_starter_outside_benchmarks_is_refused(tmp_path, monkeypatch, starter):
+    monkeypatch.setattr(bench_run, "REPO_ROOT", tmp_path)
+    (tmp_path / "src" / "harness_lab_app").mkdir(parents=True)
+    ws = tmp_path / "workspace" / "run-1"
+    ws.mkdir(parents=True)
+    with pytest.raises(SystemExit):
+        bench_run.seed_workspace(ws, {"starter_dir": starter})
+
+
+def test_a_symlink_in_a_starter_is_not_followed_out_of_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_run, "REPO_ROOT", tmp_path)
+    starter = _starter(tmp_path)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("token")
+    (starter / "leak.txt").symlink_to(secret)
+    ws = tmp_path / "workspace" / "run-1"
+    ws.mkdir(parents=True)
+
+    bench_run.seed_workspace(ws, {"starter_dir": "benchmarks/fixit/starter"})
+
+    # Links are skipped: a starter can never carry a host file into a run.
+    assert not (ws / "leak.txt").exists()
+    assert not (ws / "leak.txt").is_symlink()
+
+
+def test_no_starter_dir_seeds_nothing(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    assert bench_run.seed_workspace(ws, {}) == 0
+    assert bench_run.seed_workspace(ws, None) == 0
+
+
+def test_a_harness_error_names_its_cause_in_one_short_line(tmp_path):
+    """K-006 stored 1000 chars of tail and the cause was not in them: LiteLLM
+    repeats the provider error twice with its fallback table. The verdict line
+    must carry the provider's error code on its own, short enough to survive."""
+    log = tmp_path / "step-1.log"
+    log.write_text(
+        "# claude session init (model claude-opus-5-5)\n"
+        'API Error: 400 litellm.BadRequestError: AnthropicException - {"type":"error",'
+        '"error":{"type":"invalid_request_error","message":"Claude Code 2.1.197 does not '
+        'support this model; version 2.1.280 or newer is required.","details":'
+        '{"error_code":"claude_code_version_too_old"}}}'
+        + " Fallbacks=[...]" * 80
+        + "\n"
+    )
+    line = bench_run.harness_error_cause(log)
+    assert line is not None
+    assert "claude_code_version_too_old" in line
+    assert "2.1.280" in line
+    assert len(line) <= 300
+
+
+def test_a_rejected_model_is_named_too(tmp_path):
+    log = tmp_path / "step-1.log"
+    log.write_text(
+        "API Error: 400 anthropic_messages: Invalid model name passed in "
+        "model=claude-haiku-5-5. Call `/v1/models` to view available models.\n"
+    )
+    line = bench_run.harness_error_cause(log)
+    assert line is not None and "Invalid model name" in line
+
+
+def test_no_api_error_means_no_cause_line(tmp_path):
+    log = tmp_path / "step-1.log"
+    log.write_text("# claude session init\nTraceback: SyntaxError\n")
+    assert bench_run.harness_error_cause(log) is None
+
+
+def test_a_workspace_with_a_virtualenv_still_archives(tmp_path):
+    """eda-ml-iris-categ-numerico-K-008 (2026-10-23): the agent created `venv/`
+    in its workspace, `git diff` returned 2.6 MB of binary, and decoding it as
+    UTF-8 killed the run after the agent had finished its work."""
+    dest = tmp_path / "workspace"
+    (dest / "venv" / "lib").mkdir(parents=True)
+    (dest / "venv" / "lib" / "blob.so").write_bytes(bytes(range(256)) * 64)
+    (dest / "__pycache__").mkdir()
+    (dest / "__pycache__" / "m.cpython-311.pyc").write_bytes(b"\xa4\x00\xff")
+    (dest / "main.py").write_text("print('hi')\n")
+    lines = bench_run.write_diff_patch(tmp_path, dest)
+    patch = (tmp_path / "diff.patch").read_text()
+    assert lines > 0
+    assert "main.py" in patch
+    # The agent's code is the diff; installed packages and caches are not.
+    assert "venv/" not in patch and "__pycache__" not in patch
+    # The archive itself keeps everything.
+    assert (dest / "venv" / "lib" / "blob.so").exists()
+
+
+def test_git_output_that_is_not_utf8_never_raises(tmp_path):
+    (tmp_path / "f.bin").write_bytes(b"\xa4\xff\x00 binary")
+    result = bench_run._run_git(
+        ["git", "diff", "--no-index", "--text", "/dev/null", str(tmp_path / "f.bin")],
+        cwd=tmp_path,
+    )
+    assert isinstance(result.stdout, str)

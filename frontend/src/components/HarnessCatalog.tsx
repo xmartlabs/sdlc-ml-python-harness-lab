@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { defineMessages, useMessages } from "../i18n";
 import type { AttributionRecord, AuditFinding, AuditRecord, RunMetadata } from "../types";
 
 type HarnessCatalogProps = {
@@ -17,19 +18,67 @@ type CatalogRow = {
 };
 
 const KIND_ORDER: CatalogRow["kind"][] = ["skill", "subagent", "doc", "hook"];
-const KIND_LABEL: Record<CatalogRow["kind"], string> = {
-  skill: "Skills",
-  subagent: "Subagents",
-  doc: "Governance docs",
-  hook: "Hooks"
-};
 
-const VERDICT_LABEL: Record<AuditFinding["verdict"], string> = {
-  useful: "useful",
-  redundant: "redundant",
-  improve: "needs work",
-  unknown: "no evidence"
-};
+const MESSAGES = defineMessages({
+  en: {
+    kindLabel: {
+      skill: "Skills",
+      subagent: "Subagents",
+      doc: "Governance docs",
+      hook: "Hooks"
+    } as Record<CatalogRow["kind"], string>,
+    verdictLabel: {
+      useful: "useful",
+      redundant: "redundant",
+      improve: "needs work",
+      unknown: "no evidence"
+    } as Record<AuditFinding["verdict"], string>,
+    noMetadata:
+      "No metadata.json for this run yet (it is written when the run starts executing).",
+    disabledThisRun: " (disabled this run)",
+    experimental: " (experimental)",
+    off: "off",
+    consulted: "consulted",
+    notObserved: "not observed",
+    noVerdict: "no verdict",
+    evidenceLabel: "evidence:",
+    footnote:
+      '"Consulted" is a lower bound from the step logs (skills are context-injected, so ' +
+      "only explicit SKILL.md reads are observable). Verdicts come from the LLM audit's " +
+      "structured pass — run the audit to populate them.",
+    findingsNote: (parseError: string) => ` Findings note: ${parseError}`
+  },
+  es: {
+    kindLabel: {
+      skill: "Skills",
+      subagent: "Subagentes",
+      doc: "Documentos de gobernanza",
+      hook: "Hooks"
+    } as Record<CatalogRow["kind"], string>,
+    verdictLabel: {
+      useful: "útil",
+      redundant: "redundante",
+      improve: "necesita trabajo",
+      unknown: "sin evidencia"
+    } as Record<AuditFinding["verdict"], string>,
+    noMetadata:
+      "Todavía no hay metadata.json para esta corrida (se escribe cuando la corrida " +
+      "empieza a ejecutarse).",
+    disabledThisRun: " (deshabilitado en esta corrida)",
+    experimental: " (experimental)",
+    off: "apagado",
+    consulted: "consultado",
+    notObserved: "no observado",
+    noVerdict: "sin veredicto",
+    evidenceLabel: "evidencia:",
+    footnote:
+      '"Consultado" es una cota inferior a partir de los logs de pasos (los skills se ' +
+      "inyectan por contexto, así que solo las lecturas explícitas de SKILL.md son " +
+      "observables). Los veredictos vienen del paso estructurado de la auditoría LLM — " +
+      "corré la auditoría para completarlos.",
+    findingsNote: (parseError: string) => ` Nota de hallazgos: ${parseError}`
+  }
+});
 
 function verdictBadgeClass(verdict: AuditFinding["verdict"]): string {
   if (verdict === "useful") return "badge ok";
@@ -45,6 +94,7 @@ function docWasRead(name: string, readDocs: string[]): boolean {
 }
 
 export function HarnessCatalog({ metadata, attribution, audit }: HarnessCatalogProps) {
+  const m = useMessages(MESSAGES);
   const rows = useMemo<CatalogRow[]>(() => {
     if (!metadata) {
       return [];
@@ -113,11 +163,7 @@ export function HarnessCatalog({ metadata, attribution, audit }: HarnessCatalogP
   }, [metadata, attribution, audit]);
 
   if (!metadata) {
-    return (
-      <p className="muted">
-        No metadata.json for this run yet (it is written when the run starts executing).
-      </p>
-    );
+    return <p className="muted">{m.noMetadata}</p>;
   }
 
   const parseError = audit?.findings_json?.parse_error;
@@ -131,7 +177,7 @@ export function HarnessCatalog({ metadata, attribution, audit }: HarnessCatalogP
         }
         return (
           <div className="harness-catalog-group" key={kind}>
-            <p className="sidebar-label">{KIND_LABEL[kind]}</p>
+            <p className="sidebar-label">{m.kindLabel[kind]}</p>
             <div className="table">
               {group.map((row) => (
                 <div
@@ -141,16 +187,16 @@ export function HarnessCatalog({ metadata, attribution, audit }: HarnessCatalogP
                   <div className="harness-row-head">
                     <span className="harness-name">
                       <strong>{row.name}</strong>
-                      {row.disabled ? <small> (disabled this run)</small> : null}
-                      {row.experimental ? <small> (experimental)</small> : null}
+                      {row.disabled ? <small>{m.disabledThisRun}</small> : null}
+                      {row.experimental ? <small>{m.experimental}</small> : null}
                     </span>
                     <span>
                       {row.disabled ? (
-                        <span className="badge">off</span>
+                        <span className="badge">{m.off}</span>
                       ) : row.observed === "consulted" ? (
-                        <span className="badge ok">consulted</span>
+                        <span className="badge ok">{m.consulted}</span>
                       ) : row.observed === "not-observed" ? (
-                        <span className="badge">not observed</span>
+                        <span className="badge">{m.notObserved}</span>
                       ) : (
                         <span className="badge">—</span>
                       )}
@@ -158,10 +204,10 @@ export function HarnessCatalog({ metadata, attribution, audit }: HarnessCatalogP
                     <span className="harness-verdict">
                       {row.finding ? (
                         <span className={verdictBadgeClass(row.finding.verdict)}>
-                          {VERDICT_LABEL[row.finding.verdict]}
+                          {m.verdictLabel[row.finding.verdict]}
                         </span>
                       ) : (
-                        <span className="muted">no verdict</span>
+                        <span className="muted">{m.noVerdict}</span>
                       )}
                     </span>
                   </div>
@@ -170,7 +216,7 @@ export function HarnessCatalog({ metadata, attribution, audit }: HarnessCatalogP
                   ) : null}
                   {row.finding?.used_evidence ? (
                     <p className="harness-evidence">
-                      <span className="harness-evidence-label">evidence:</span>{" "}
+                      <span className="harness-evidence-label">{m.evidenceLabel}</span>{" "}
                       {row.finding.used_evidence}
                     </p>
                   ) : null}
@@ -181,10 +227,9 @@ export function HarnessCatalog({ metadata, attribution, audit }: HarnessCatalogP
         );
       })}
       <p className="muted">
-        "Consulted" is a lower bound from the step logs (skills are context-injected, so only
-        explicit SKILL.md reads are observable). Verdicts come from the LLM audit's structured
-        pass — run the audit to populate them.
-        {parseError ? ` Findings note: ${parseError}` : ""}
+        {m.footnote}
+        {/* parseError is backend-composed and stays in English. */}
+        {parseError ? m.findingsNote(parseError) : ""}
       </p>
     </div>
   );

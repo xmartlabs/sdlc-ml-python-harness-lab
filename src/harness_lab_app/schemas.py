@@ -55,7 +55,8 @@ class CaseCreate(BaseModel):
     provenance: CaseProvenance = CaseProvenance.synthetic
     files_expected: list[str] = Field(default_factory=list)
     files_forbidden: list[str] = Field(default_factory=list)
-    metadata_json: dict[str, str] = Field(default_factory=dict)
+    # JSON values: `validation_requirements` is a list (ADR-0071).
+    metadata_json: dict[str, Any] = Field(default_factory=dict)
     max_steps: int = 1
     # The repository this case was written for, when it was written for one.
     # What turns a pile of cases into a repository's own library (ADR-0042).

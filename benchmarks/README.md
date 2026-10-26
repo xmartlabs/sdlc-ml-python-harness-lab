@@ -11,6 +11,25 @@ registry, and a `results/` folder.
   experiments; it replaced the manually-scored `tetris-v1` pilot.
 - **`cli-textstats/`** — `cli-textstats-v1`. A small stdlib CLI with three exact-stdout
   checks; the regression suite's simple-feature canary.
+- **`todo-web-v1/`** — the first frontend case: an accessible, offline todo app graded in
+  headless Chromium by twelve Playwright tests through its accessible contract (keyboard
+  flow, `aria-pressed`, persistence, HTML escaping). Measures frontend quality and
+  capability expansion outside a Python stack (ADR-0067). Needs the browser layer in
+  `Dockerfile.runner`.
+- **`frontend-bugfix-v1/`** — a clinic-schedule page that "mostly works", seeded into the
+  workspace from `starter/` (ADR-0068): four bugs (interaction, state, accessibility,
+  injection), ten browser tests, two of them regressions so neither leaving the page alone
+  nor deleting it scores.
+- **`clinic-slots-t1/`, `clinic-booking-t2/`, `clinic-rules-t3/`** — the clinic ladder:
+  appointment scheduling in three difficulty tiers (`tier:1`-`tier:3`), pure Python. The
+  experiment page shows, per arm, the highest tier done reliably (ADR-0069). See
+  `clinic-slots-t1/README.md`.
+- **`eda-iris-pipeline-v2/`** — an end-to-end tabular ML task (dataset with a derived
+  categorical feature, EDA summary, scikit-learn pipeline, demo writing `eda_report.json`
+  and `model.joblib`), graded by the lab's own twelve tests. Declares
+  `validation_requirements` (pinned pandas, numpy, scikit-learn, joblib), installed before
+  the offline checks (ADR-0071). Replaces `eda-ml-iris-categ-numerico`, which graded each
+  run on the tests the run itself wrote.
 - **`harness-regression-v1/`** — not a case: the suite definition (`suite.yaml`) that
   pairs the cases above for a baseline-vs-candidate harness comparison (ADR-0037).
 - **`nemotron-planner-qwen-executor/`** — planner/executor split benchmark focused on
@@ -26,6 +45,7 @@ registry, and a `results/` folder.
   Deterministic pass/fail; strong signal on real work. Metrics: pass/fail, diff size, turns, tokens.
 - **`fastapi-endpoint/`** — add `GET /health/details` with a test. Measures architecture + tests + execution.
 - **`snake/`** — second small game, to check whether Tetris findings generalize.
+
 
 Future ideas: refactor a file (behavior-preserving, tests green) · RAG mini-pipeline
 (loader + chunker + mock retriever + test) · external-API tool wrapper with retry/errors + tests.

@@ -39,6 +39,18 @@ container):
    (or just `make app-up`, which builds it).
 3. Create a claude run as usual — no host worker needed.
 
+**The CLI version is pinned** (`ARG CLAUDE_CODE_VERSION` in `Dockerfile.runner`) and
+recorded as the image label `claude-code.version`. Newer models need a newer CLI —
+the 5.5 family and Fable 5.1 need 2.1.280 or later (`MIN_CLAUDE_CLI_VERSION` in
+`native_models.py`) — and an unpinned install stays on whatever Docker cached. Bump
+the ARG and rebuild when a model needs it. **Health** shows the image's version and
+warns when it is too old for a current model, and preflight refuses such a run
+instead of letting it die on the API's `claude_code_version_too_old`.
+
+In Docker every claude run reaches Anthropic through the gateway
+(`ANTHROPIC_BASE_URL` in `.claude/settings.local.json`), so the gateway must have a
+card for the model too; preflight checks that as well.
+
 ### Claude observability + A/B hygiene (stream-json)
 
 `claude` runs execute with `--output-format stream-json --verbose`: the raw
@@ -118,8 +130,9 @@ inside a container.
 
 The New-run executor menu is **harness-aware**: for `opencode` it's the live
 gateway list; for `codex`/`claude` it swaps to that CLI's **native models**
-(`HARNESS_NATIVE_MODELS` in `frontend/src/harnesses.ts`) — e.g. Claude Sonnet 5
-/ Opus 4.8 / Haiku 4.5. The selected id is a bare (non-`gateway/`) name, which
+(served by `GET /api/models/native`, from `native_models.py`) — the Claude 5.5
+family and Fable 5.1 first, the previous generation after. The selected id is a bare
+(non-`gateway/`) name, which
 `bench_run.py` passes straight to the CLI's `--model` / `-m` (`_native_model`
 ignores any `gateway/`-prefixed value and lets the CLI default apply).
 
@@ -140,10 +153,10 @@ Or run the pieces in separate terminals for debugging: `make app-worker-host`,
 `make app-api-host`, then `cd frontend && VITE_API_TARGET=http://localhost:8009
 npm run dev`.
 
-Then open `http://localhost:5173/advanced/runs`, pick **Case** `tetris-v1`, set
-**Harness** to `codex` or `claude`, and Create run. The run streams into the
-detail page like any other; `tetris-v1` carries a rubric, so it is LLM-judged
-(overwritable by hand), and the smoke floor validates it objectively.
+Then open `http://localhost:5173/advanced/runs`, pick **Case** `clinic-slots-t1`,
+set **Harness** to `codex` or `claude`, and Create run. The run streams into the
+detail page like any other and scores itself: the case's validation commands are its
+graded tests.
 
 `opencode`, SWE-bench and Docker `claude` runs use the containerized `make app-up`
 (they need the runner image). The two modes don't run at once — choose per what

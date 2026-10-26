@@ -168,6 +168,26 @@ may have failed, or the repository may simply not build in the runner image, and
 look identical in the output while meaning opposite things. The gate check answers that
 once, cheaply, and names the phase that failed (provision / setup / validate).
 
+### Deterministic harness checks — in the audit and from the terminal
+
+Every repository audit runs eight checks that code can decide without a model
+([ADR-0065](adr/0065-the-audit-decides-what-code-can-decide.md)): whether the
+verification target can fail, whether it rewrites the tree, whether any hook can block,
+how long the always-loaded rules file is, whether skills have a name and description,
+whether MCP servers are pinned, whether CI runs the same gate, and whether the harness
+version is declared. They appear as **Checks** in the audit's fact row and as a
+**Chequeos determinísticos** section of the report, failures first, each with its fix.
+
+The same checks run on any local repository, with no stack:
+
+```bash
+make harness-check REPO=../my-project          # committed tree at HEAD
+make harness-check REPO=../my-project REF=main # or any ref
+```
+
+It exits 1 when a check fails, so it can also gate a CI job. A check with nothing to
+look at reports **N/A**, not a pass.
+
 ## 2. Point a case at it
 
 In **Evaluate → New evaluation**, pick the repository under **Repository**; the run

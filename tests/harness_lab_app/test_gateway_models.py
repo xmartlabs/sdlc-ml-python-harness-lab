@@ -587,3 +587,25 @@ def test_only_a_conclusive_verdict_is_cached(monkeypatch):
     gateway_models.probe_model_context_cached("m", base_url="https://gw/v1", token="t")
     # "unknown" must be retried, not replayed for ten minutes.
     assert len(calls) == 4  # two probes, each with its corrective retry
+
+
+def test_a_context_that_passes_but_is_below_the_agentic_floor_is_advised():
+    """32k fits the system prompt; an agentic coding run needs room to work, and
+    Ollama and agent docs recommend 64k or more. Passing is not blocking, but it
+    is said — a run that runs out of context mid-task fails as transport, not
+    capability (ADR-0069)."""
+    from harness_lab_app.gateway_models import ContextProbeResult
+
+    tight = ContextProbeResult("m", "ok", 32768, 40960, 33000, "")
+    roomy = ContextProbeResult("m", "ok", 32768, 131072, 33000, "")
+    assert "64k" in tight.as_dict()["advisory"]
+    assert roomy.as_dict()["advisory"] == ""
+
+
+def test_an_unknown_window_gets_no_advisory():
+    from harness_lab_app.gateway_models import ContextProbeResult
+
+    assert (
+        ContextProbeResult("m", "unknown", 32768, None, None, "").as_dict()["advisory"]
+        == ""
+    )

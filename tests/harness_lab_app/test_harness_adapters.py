@@ -212,3 +212,209 @@ def test_a_run_with_no_effective_skills_stages_nothing(tmp_path):
     out_dir.mkdir()
     assert bench_run.stage_skill_catalog(out_dir, [], "claude") is None
     assert not (out_dir / "harness_skills").exists()
+
+
+def _docker_claude(monkeypatch, routing):
+    import harness_lab_app.run_service as rs
+    from harness_lab_app.run_service import RunService
+
+    monkeypatch.setattr(rs.get_settings(), "execution_backend", "docker", raising=False)
+    monkeypatch.setattr(RunService, "_check_runner_image", lambda _self: None)
+    monkeypatch.setattr(
+        rs,
+        "read_env_file_value",
+        lambda name, *_a, **_k: "tok" if name == "CLAUDE_CODE_OAUTH_TOKEN" else "",
+    )
+    monkeypatch.setattr(RunService, "_gateway_routing", lambda _self: routing)
+    # These tests describe an install whose claude CLI goes through the gateway.
+    monkeypatch.setattr(
+        RunService, "_claude_routes_through_gateway", lambda _self: True
+    )
+    return RunService.__new__(RunService)
+
+
+def test_preflight_refuses_a_claude_model_the_gateway_does_not_serve(monkeypatch):
+    """con-o-sin-harness (2026-10-23): eight runs of claude-haiku-5-5 died in
+    under a second on 'Invalid model name' because the gateway had no card for
+    it. The gateway answers that question before anything is queued."""
+    from harness_lab_app.run_service import RunPreflightError
+    from harness_lab_app.schemas import RunConfigCreate
+
+    service = _docker_claude(
+        monkeypatch, {"claude-opus-5-5": {}, "claude-haiku-4-5-20251001": {}}
+    )
+    cfg = RunConfigCreate(
+        case_id="todo-web-v1",
+        prompt_variant="default",
+        harness="claude",
+        executor_model="claude-haiku-5-5",
+    )
+    with pytest.raises(RunPreflightError) as refused:
+        service.preflight(cfg)
+    message = str(refused.value)
+    assert "claude-haiku-5-5" in message
+    assert "claude-opus-5-5" in message  # names what it does serve
+
+
+def test_preflight_accepts_a_claude_model_the_gateway_serves(monkeypatch):
+    from harness_lab_app.schemas import RunConfigCreate
+
+    service = _docker_claude(monkeypatch, {"claude-opus-5-5-oauth": {}})
+    cfg = RunConfigCreate(
+        case_id="todo-web-v1",
+        prompt_variant="default",
+        harness="claude",
+        executor_model="claude-opus-5-5",
+    )
+    service.preflight(cfg)
+
+
+def test_preflight_does_not_block_claude_when_the_gateway_cannot_be_asked(monkeypatch):
+    """No gateway, or one that did not answer: unknown is not 'missing'."""
+    from harness_lab_app.schemas import RunConfigCreate
+
+    service = _docker_claude(monkeypatch, None)
+    cfg = RunConfigCreate(
+        case_id="todo-web-v1",
+        prompt_variant="default",
+        harness="claude",
+        executor_model="claude-haiku-5-5",
+    )
+    service.preflight(cfg)
+
+
+def _docker_claude_cli(monkeypatch, cli_version):
+    import harness_lab_app.run_service as rs
+    from harness_lab_app.run_service import RunService
+
+    service = _docker_claude(monkeypatch, None)
+    monkeypatch.setattr(
+        "harness_lab_app.health_service.worker_facts",
+        lambda **_k: {
+            "backend": "docker",
+            "docker_ok": True,
+            "runner_image_present": True,
+            "runner_image": "harness-lab-runner:latest",
+            "claude_cli_version": cli_version,
+        },
+    )
+    monkeypatch.setattr(
+        RunService, "_check_runner_image", rs.RunService._check_runner_image
+    )
+    return service
+
+
+def test_preflight_refuses_a_claude_model_the_runner_cli_is_too_old_for(monkeypatch):
+    """walletsystem-concurrent-deposits-K-006/007 (2026-10-23): claude-opus-5-5
+    is served by the gateway, but the runner's Claude Code 2.1.197 was refused by
+    the API — 'version 2.1.280 or newer is required'."""
+    from harness_lab_app.run_service import RunPreflightError
+    from harness_lab_app.schemas import RunConfigCreate
+
+    service = _docker_claude_cli(monkeypatch, "2.1.197")
+    cfg = RunConfigCreate(
+        case_id="walletsystem-concurrent-deposits",
+        prompt_variant="default",
+        harness="claude",
+        executor_model="claude-opus-5-5",
+    )
+    with pytest.raises(RunPreflightError) as refused:
+        service.preflight(cfg)
+    message = str(refused.value)
+    assert "2.1.197" in message and "2.1.280" in message
+    assert "runner image" in message.lower()
+
+
+def test_preflight_accepts_a_runner_cli_new_enough_for_the_model(monkeypatch):
+    from harness_lab_app.schemas import RunConfigCreate
+
+    for model, version in (
+        ("claude-opus-5-5", "2.1.309"),
+        ("claude-haiku-4-5-20251001", "2.1.197"),
+    ):
+        service = _docker_claude_cli(monkeypatch, version)
+        service.preflight(
+            RunConfigCreate(
+                case_id="walletsystem-concurrent-deposits",
+                prompt_variant="default",
+                harness="claude",
+                executor_model=model,
+            )
+        )
+
+
+def test_an_image_without_a_cli_version_label_is_not_blocked(monkeypatch):
+    """Images built before the label existed say nothing: unknown, not too old."""
+    from harness_lab_app.schemas import RunConfigCreate
+
+    service = _docker_claude_cli(monkeypatch, "")
+    service.preflight(
+        RunConfigCreate(
+            case_id="walletsystem-concurrent-deposits",
+            prompt_variant="default",
+            harness="claude",
+            executor_model="claude-opus-5-5",
+        )
+    )
+
+
+def test_the_runner_pins_a_claude_cli_new_enough_for_every_current_model():
+    """The image's pinned CLI must accept every current-generation model the forms
+    offer; an unpinned `npm install` stayed on a cached 2.1.197 for months."""
+    import re
+
+    from harness_lab_app.native_models import NATIVE_MODELS, min_claude_cli_version
+
+    dockerfile = (bench_run.REPO_ROOT / "Dockerfile.runner").read_text()
+    pinned = re.search(r"^ARG CLAUDE_CODE_VERSION=(\S+)$", dockerfile, re.MULTILINE)
+    assert pinned, "Dockerfile.runner must pin CLAUDE_CODE_VERSION"
+    assert '"@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"' in dockerfile
+
+    def as_tuple(version):
+        return tuple(int(part) for part in version.split("."))
+
+    for model in NATIVE_MODELS["claude"]:
+        required = min_claude_cli_version(model["id"])
+        if required:
+            assert as_tuple(pinned.group(1)) >= as_tuple(required), model["id"]
+
+
+def test_a_claude_cli_talking_to_anthropic_directly_is_not_held_to_the_gateway(
+    monkeypatch,
+):
+    """A developer's claude reaches Anthropic directly unless their own
+    .claude/settings.local.json sets ANTHROPIC_BASE_URL. A gateway configured for
+    opencode must not then refuse a model Anthropic serves."""
+    from harness_lab_app.run_service import RunService
+    from harness_lab_app.schemas import RunConfigCreate
+
+    service = _docker_claude(monkeypatch, {"claude-opus-5-5": {}})
+    monkeypatch.setattr(
+        RunService, "_claude_routes_through_gateway", lambda _self: False
+    )
+    service.preflight(
+        RunConfigCreate(
+            case_id="todo-web-v1",
+            prompt_variant="default",
+            harness="claude",
+            executor_model="claude-haiku-5-5",
+        )
+    )
+
+
+def test_claude_routes_through_the_gateway_only_when_its_settings_say_so(
+    tmp_path, monkeypatch
+):
+    import json
+
+    import harness_lab_app.run_service as rs
+    from harness_lab_app.run_service import RunService
+
+    monkeypatch.setattr(rs.get_settings(), "repo_root", tmp_path, raising=False)
+    service = RunService.__new__(RunService)
+    assert service._claude_routes_through_gateway() is False
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.local.json").write_text(
+        json.dumps({"env": {"ANTHROPIC_BASE_URL": "https://gateway.example"}})
+    )
+    assert service._claude_routes_through_gateway() is True

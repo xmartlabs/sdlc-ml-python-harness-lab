@@ -21,6 +21,7 @@ from harness_lab_app.validation import (
     command_deadline_seconds,
     compute_composite,
     parse_objective,
+    workspace_modules,
 )
 
 if TYPE_CHECKING:
@@ -77,6 +78,45 @@ class ValidationService:
         # repository's own command and takes the hardened lane.
         hardened = not spec.get("local")
         results: list[dict[str, Any]] = []
+        # The graders' dependencies, installed with network before the offline
+        # checks (ADR-0071). A grader that could not be equipped measured
+        # nothing: its checks are recorded inconclusive without running.
+        for command in spec.get("setup") or []:
+            try:
+                handle = executor.start(
+                    f"{run_id}-setup", command, hardened=hardened, phase="setup"
+                )
+                output, exit_code = self._drain(handle, "validation setup")
+            except Exception as exc:
+                output, exit_code = f"executor error: {exc!r}", -1
+            if exit_code != 0:
+                self.session.add(
+                    RunEvent(
+                        run_id=run_id,
+                        level="warning",
+                        message="Validation setup could not install the graders' "
+                        f"dependencies (exit {exit_code}): {output[-400:]}",
+                    )
+                )
+                return parse_objective(
+                    [
+                        {
+                            "command": argv[-1] if argv else "",
+                            "exit_code": 1,
+                            "output": "validation setup failed; check not run",
+                            "inconclusive_reason": "missing_dependency",
+                        }
+                        for argv in spec["commands"]
+                    ],
+                    spec["strategy"],
+                )
+        # What the agent wrote: a missing one of these is its failure, never a
+        # missing grader dependency. The archived copy when there is one, the
+        # live workspace otherwise — the same choice the spec made.
+        archived = self._run_dir(run_id) / "workspace"
+        # data/runs/<id> → the lab root is three levels up.
+        live = self._run_dir(run_id).parents[2] / "workspace" / run_id
+        own_modules = workspace_modules(archived if archived.exists() else live)
         for command in spec["commands"]:
             label = command[-1] if command else ""
             try:
@@ -96,7 +136,14 @@ class ValidationService:
                     }
                 )
                 continue
-            results.append({"command": label, "exit_code": exit_code, "output": output})
+            results.append(
+                {
+                    "command": label,
+                    "exit_code": exit_code,
+                    "output": output,
+                    "own_modules": own_modules,
+                }
+            )
         return parse_objective(results, spec["strategy"])
 
     def _drain(self, handle: Any, label: str) -> tuple[str, int]:

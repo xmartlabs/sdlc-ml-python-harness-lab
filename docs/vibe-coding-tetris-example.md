@@ -1,5 +1,9 @@
 # Vibe-Coding a Tetris Game: How Each AI Tool Executes the Same Task
 
+> **History, not a guide.** An early template-era walkthrough; the model ids and flow
+> are dated. To run a case today, start at [docs/README.md](README.md).
+
+
 > Template-era illustrative walkthrough: it describes how each tool reads the
 > governed harness, not the lab's run pipeline. Some details have since moved
 > (e.g. Codex now has a generated `.codex/skills/` and `.codex/agents/`).

@@ -1,0 +1,53 @@
+task_id: clinic-slots-t1
+version: "1"
+status: active
+category: agentic-build
+tags: [python, stdlib, healthcare, scheduling, graded, ships-tests, "tier:1"]
+
+description: >
+  Tier 1 of the clinic ladder: list a doctor's free appointment slots for a day — working hours, a lunch block, half-open intervals and a deterministic, sorted result. Part of a three-tier ladder (clinic-slots-t1, clinic-booking-t2,
+  clinic-rules-t3) that measures the highest tier a model-harness pair does
+  reliably (ADR-0069).
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+target_level: 5
+complexity: small
+
+validation: objective
+validation_note: >
+  The tests in benchmarks/clinic-slots-t1/tests/test_slots.py are the grade, one command per
+  test, after a tamper guard and an entry-point check. Pure Python, no network.
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/clinic-slots-t1/tests && test -z \"$(git -C /app status --porcelain -- benchmarks/clinic-slots-t1/tests)\""
+  - "test -f {workspace}/clinic.py"
+  - "cd {workspace} && CLINIC_WORKSPACE=\"$PWD\" timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-slots-t1/tests/test_slots.py::test_an_empty_day_offers_every_slot_in_working_hours"
+  - "cd {workspace} && CLINIC_WORKSPACE=\"$PWD\" timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-slots-t1/tests/test_slots.py::test_slots_follow_the_requested_duration"
+  - "cd {workspace} && CLINIC_WORKSPACE=\"$PWD\" timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-slots-t1/tests/test_slots.py::test_a_booking_removes_the_slots_it_overlaps"
+  - "cd {workspace} && CLINIC_WORKSPACE=\"$PWD\" timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-slots-t1/tests/test_slots.py::test_back_to_back_is_allowed_because_intervals_are_half_open"
+  - "cd {workspace} && CLINIC_WORKSPACE=\"$PWD\" timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-slots-t1/tests/test_slots.py::test_a_one_minute_overlap_blocks_the_slot"
+  - "cd {workspace} && CLINIC_WORKSPACE=\"$PWD\" timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-slots-t1/tests/test_slots.py::test_the_lunch_block_is_never_offered"
+  - "cd {workspace} && CLINIC_WORKSPACE=\"$PWD\" timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-slots-t1/tests/test_slots.py::test_a_slot_may_not_straddle_lunch"
+  - "cd {workspace} && CLINIC_WORKSPACE=\"$PWD\" timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-slots-t1/tests/test_slots.py::test_the_result_is_sorted_and_has_no_duplicates"
+  - "cd {workspace} && CLINIC_WORKSPACE=\"$PWD\" timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-slots-t1/tests/test_slots.py::test_a_duration_longer_than_the_free_time_gives_no_slots"
+  - "cd {workspace} && CLINIC_WORKSPACE=\"$PWD\" timeout 60 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/clinic-slots-t1/tests/test_slots.py::test_a_non_positive_duration_is_refused"
+files_forbidden:
+  - benchmarks/clinic-slots-t1/tests/test_slots.py
+
+constraints:
+  - All code in clinic.py; standard library only
+  - Do not edit the shipped tests
+
+success_criteria:
+  level_0: clinic.py missing or does not import
+  level_5: about half of the graded tests pass
+  level_10: every graded test passes
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+prompts:
+  default: benchmarks/clinic-slots-t1/prompt_default.md
+  harness: benchmarks/clinic-slots-t1/prompt_harness.md
+
+scoring_rubric: benchmarks/clinic-slots-t1/scoring.md

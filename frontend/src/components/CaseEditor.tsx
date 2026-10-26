@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 
 import { api } from "../api";
 import { SWE_CASE_TYPES } from "../caseLabels";
+import { defineMessages, useMessages } from "../i18n";
 import type { CaseCreatePayload, CaseRecord } from "../types";
 
 type CaseEditorProps = {
@@ -18,6 +20,124 @@ const CASE_TYPES = [
   "bugfix",
   "repo_task"
 ] as const;
+
+const MESSAGES = defineMessages({
+  en: {
+    editCase: "Edit case",
+    readOnlyNotice:
+      "This case was imported from the SWE-bench dataset, so its definition is " +
+      "read-only — editing the prompts or test lists would invalidate the " +
+      "benchmark. Clone it to build a variant you can change.",
+    caseId: "Case ID",
+    caseIdHint: "Fixed: it is the key every run in the history joins on.",
+    name: "Name",
+    type: "Type",
+    maxSteps: "Max steps",
+    description: "Description",
+    promptVariants: "Prompt variants",
+    addVariant: "Add variant",
+    promptVariantsHint:
+      "One prompt per strategy you want to compare. The run form picks a variant by name.",
+    noVariants: "No prompt variants yet.",
+    variantName: "Variant name",
+    remove: "Remove",
+    prompt: "Prompt",
+    stepPrompts: "Step prompts",
+    addStep: "Add step",
+    stepPromptsHint:
+      "Optional, for multi-step cases: step 1 uses the prompt variant, and each " +
+      "entry here drives the step with the same number.",
+    step: (index: number) => `Step ${index}`,
+    removeStep: "Remove step",
+    successCriteria: "Success criteria",
+    addCriterion: "Add criterion",
+    criterion: "Criterion",
+    expected: "Expected",
+    constraintsLabel: "Constraints (one per line)",
+    validationCommandsLabel: "Validation commands (one per line)",
+    validationCommandsHint: (runId: ReactNode) => (
+      <>
+        Run inside the sandbox after the agent finishes; a non-zero exit fails the
+        objective score. {runId} is substituted.
+      </>
+    ),
+    scoringRubric: "Scoring rubric",
+    saving: "Saving…",
+    save: "Save",
+    exporting: "Exporting…",
+    syncToYaml: "Sync to YAML",
+    cloning: "Cloning…",
+    clone: "Clone",
+    deleting: "Deleting…",
+    deleteAction: "Delete",
+    saved: "Saved.",
+    exportedTo: (path: string) => `Exported to ${path}`,
+    newCaseIdPrompt: "New case id",
+    cloneCancelled: "Clone cancelled.",
+    clonedAs: (caseId: string) => `Cloned as ${caseId}.`,
+    deleteConfirm: (caseId: string) => `Delete case ${caseId}? Its runs are kept.`,
+    deleteCancelled: "Delete cancelled.",
+    deletedCase: (caseId: string) => `Deleted ${caseId}.`
+  },
+  es: {
+    editCase: "Editar caso",
+    readOnlyNotice:
+      "Este caso se importó del dataset de SWE-bench, así que su definición es " +
+      "de solo lectura — editar los prompts o las listas de tests invalidaría el " +
+      "benchmark. Cloná el caso para construir una variante que puedas cambiar.",
+    caseId: "ID del caso",
+    caseIdHint: "Fijo: es la clave con la que se relaciona cada corrida del historial.",
+    name: "Nombre",
+    type: "Tipo",
+    maxSteps: "Pasos máximos",
+    description: "Descripción",
+    promptVariants: "Variantes de prompt",
+    addVariant: "Agregar variante",
+    promptVariantsHint:
+      "Un prompt por cada estrategia que quieras comparar. El formulario de " +
+      "corrida elige una variante por nombre.",
+    noVariants: "Todavía no hay variantes de prompt.",
+    variantName: "Nombre de la variante",
+    remove: "Eliminar",
+    prompt: "Prompt",
+    stepPrompts: "Prompts de paso",
+    addStep: "Agregar paso",
+    stepPromptsHint:
+      "Opcional, para casos multi-paso: el paso 1 usa la variante de prompt, y " +
+      "cada entrada acá maneja el paso con el mismo número.",
+    step: (index: number) => `Paso ${index}`,
+    removeStep: "Eliminar paso",
+    successCriteria: "Criterios de éxito",
+    addCriterion: "Agregar criterio",
+    criterion: "Criterio",
+    expected: "Esperado",
+    constraintsLabel: "Restricciones (una por línea)",
+    validationCommandsLabel: "Comandos de validación (uno por línea)",
+    validationCommandsHint: (runId: ReactNode) => (
+      <>
+        Corre dentro del sandbox cuando el agente termina; una salida distinta de
+        cero hace fallar el puntaje objetivo. Se sustituye {runId}.
+      </>
+    ),
+    scoringRubric: "Rúbrica de puntuación",
+    saving: "Guardando…",
+    save: "Guardar",
+    exporting: "Exportando…",
+    syncToYaml: "Sincronizar a YAML",
+    cloning: "Clonando…",
+    clone: "Clonar",
+    deleting: "Eliminando…",
+    deleteAction: "Eliminar",
+    saved: "Guardado.",
+    exportedTo: (path: string) => `Exportado a ${path}`,
+    newCaseIdPrompt: "Nuevo id del caso",
+    cloneCancelled: "Clonación cancelada.",
+    clonedAs: (caseId: string) => `Clonado como ${caseId}.`,
+    deleteConfirm: (caseId: string) => `¿Eliminar el caso ${caseId}? Sus corridas se conservan.`,
+    deleteCancelled: "Eliminación cancelada.",
+    deletedCase: (caseId: string) => `Se eliminó ${caseId}.`
+  }
+});
 
 type PromptVariant = { name: string; body: string };
 type CriterionRow = { key: string; value: string };
@@ -101,6 +221,7 @@ export function CaseEditor({
   onCloned,
   onDeleted
 }: CaseEditorProps) {
+  const m = useMessages(MESSAGES);
   const caseId = caseRecord.case_id;
   const [draft, setDraft] = useState<Draft>(() => toDraft(caseRecord));
   const [busy, setBusy] = useState<string | null>(null);
@@ -154,7 +275,7 @@ export function CaseEditor({
     withBusy("save", async () => {
       const updated = await api.updateCase(caseId, toPayload(caseId, draft));
       onSaved(updated);
-      return "Saved.";
+      return m.saved;
     });
 
   const handleSync = () =>
@@ -162,14 +283,14 @@ export function CaseEditor({
       const result = await api.syncCase(caseId);
       const fresh = await api.getCase(caseId);
       onSaved(fresh);
-      return `Exported to ${result.task_path}`;
+      return m.exportedTo(result.task_path);
     });
 
   const handleClone = () =>
     withBusy("clone", async () => {
-      const newCaseId = window.prompt("New case id", `${caseId}-copy`);
+      const newCaseId = window.prompt(m.newCaseIdPrompt, `${caseId}-copy`);
       if (!newCaseId) {
-        return "Clone cancelled.";
+        return m.cloneCancelled;
       }
       const created = await api.cloneCase(
         caseId,
@@ -177,17 +298,17 @@ export function CaseEditor({
         `${draft.name || caseId} (copy)`
       );
       onCloned(created);
-      return `Cloned as ${created.case_id}.`;
+      return m.clonedAs(created.case_id);
     });
 
   const handleDelete = () =>
     withBusy("delete", async () => {
-      if (!window.confirm(`Delete case ${caseId}? Its runs are kept.`)) {
-        return "Delete cancelled.";
+      if (!window.confirm(m.deleteConfirm(caseId))) {
+        return m.deleteCancelled;
       }
       await api.deleteCase(caseId);
       onDeleted(caseId);
-      return `Deleted ${caseId}.`;
+      return m.deletedCase(caseId);
     });
 
   const patch = (changes: Partial<Draft>) =>
@@ -196,27 +317,19 @@ export function CaseEditor({
   return (
     <section className="panel">
       <div className="panel-head">
-        <h2>Edit case</h2>
+        <h2>{m.editCase}</h2>
         <span className="badge neutral">{caseRecord.sync_state}</span>
       </div>
-      {readOnly ? (
-        <p className="muted">
-          This case was imported from the SWE-bench dataset, so its definition is
-          read-only — editing the prompts or test lists would invalidate the
-          benchmark. Clone it to build a variant you can change.
-        </p>
-      ) : null}
+      {readOnly ? <p className="muted">{m.readOnlyNotice}</p> : null}
 
       <div className="form-grid">
         <label>
-          <span>Case ID</span>
+          <span>{m.caseId}</span>
           <input readOnly value={caseId} />
-          <small className="muted">
-            Fixed: it is the key every run in the history joins on.
-          </small>
+          <small className="muted">{m.caseIdHint}</small>
         </label>
         <label>
-          <span>Name</span>
+          <span>{m.name}</span>
           <input
             disabled={readOnly}
             onChange={(event) => patch({ name: event.target.value })}
@@ -224,7 +337,7 @@ export function CaseEditor({
           />
         </label>
         <label>
-          <span>Type</span>
+          <span>{m.type}</span>
           <select
             disabled={readOnly}
             onChange={(event) => patch({ type: event.target.value })}
@@ -241,7 +354,7 @@ export function CaseEditor({
           </select>
         </label>
         <label>
-          <span>Max steps</span>
+          <span>{m.maxSteps}</span>
           <input
             disabled={readOnly}
             min={1}
@@ -255,7 +368,7 @@ export function CaseEditor({
       </div>
 
       <label>
-        <span>Description</span>
+        <span>{m.description}</span>
         <textarea
           disabled={readOnly}
           onChange={(event) => patch({ description: event.target.value })}
@@ -265,7 +378,7 @@ export function CaseEditor({
       </label>
 
       <div className="panel-head">
-        <h3>Prompt variants</h3>
+        <h3>{m.promptVariants}</h3>
         {readOnly ? null : (
           <button
             className="badge"
@@ -274,22 +387,19 @@ export function CaseEditor({
             }
             type="button"
           >
-            Add variant
+            {m.addVariant}
           </button>
         )}
       </div>
-      <p className="muted">
-        One prompt per strategy you want to compare. The run form picks a variant
-        by name.
-      </p>
+      <p className="muted">{m.promptVariantsHint}</p>
       {draft.variants.length === 0 ? (
-        <p className="muted">No prompt variants yet.</p>
+        <p className="muted">{m.noVariants}</p>
       ) : null}
       {draft.variants.map((variant, index) => (
         <div className="case-variant" key={index}>
           <div className="form-grid">
             <label>
-              <span>Variant name</span>
+              <span>{m.variantName}</span>
               <input
                 disabled={readOnly}
                 onChange={(event) =>
@@ -317,12 +427,12 @@ export function CaseEditor({
                 }
                 type="button"
               >
-                Remove
+                {m.remove}
               </button>
             )}
           </div>
           <label>
-            <span>Prompt</span>
+            <span>{m.prompt}</span>
             <textarea
               disabled={readOnly}
               onChange={(event) =>
@@ -342,24 +452,21 @@ export function CaseEditor({
       ))}
 
       <div className="panel-head">
-        <h3>Step prompts</h3>
+        <h3>{m.stepPrompts}</h3>
         {readOnly ? null : (
           <button
             className="badge"
             onClick={() => patch({ stepPrompts: [...draft.stepPrompts, ""] })}
             type="button"
           >
-            Add step
+            {m.addStep}
           </button>
         )}
       </div>
-      <p className="muted">
-        Optional, for multi-step cases: step 1 uses the prompt variant, and each
-        entry here drives the step with the same number.
-      </p>
+      <p className="muted">{m.stepPromptsHint}</p>
       {draft.stepPrompts.map((step, index) => (
         <label key={index}>
-          <span>Step {index + 1}</span>
+          <span>{m.step(index + 1)}</span>
           <textarea
             disabled={readOnly}
             onChange={(event) =>
@@ -384,14 +491,14 @@ export function CaseEditor({
               }
               type="button"
             >
-              Remove step
+              {m.removeStep}
             </button>
           )}
         </label>
       ))}
 
       <div className="panel-head">
-        <h3>Success criteria</h3>
+        <h3>{m.successCriteria}</h3>
         {readOnly ? null : (
           <button
             className="badge"
@@ -400,14 +507,14 @@ export function CaseEditor({
             }
             type="button"
           >
-            Add criterion
+            {m.addCriterion}
           </button>
         )}
       </div>
       {draft.criteria.map((row, index) => (
         <div className="form-grid" key={index}>
           <label>
-            <span>Criterion</span>
+            <span>{m.criterion}</span>
             <input
               disabled={readOnly}
               onChange={(event) =>
@@ -421,7 +528,7 @@ export function CaseEditor({
             />
           </label>
           <label>
-            <span>Expected</span>
+            <span>{m.expected}</span>
             <input
               disabled={readOnly}
               onChange={(event) =>
@@ -446,14 +553,14 @@ export function CaseEditor({
               }
               type="button"
             >
-              Remove
+              {m.remove}
             </button>
           )}
         </div>
       ))}
 
       <label>
-        <span>Constraints (one per line)</span>
+        <span>{m.constraintsLabel}</span>
         <textarea
           disabled={readOnly}
           onChange={(event) => patch({ constraints: event.target.value })}
@@ -463,7 +570,7 @@ export function CaseEditor({
       </label>
 
       <label>
-        <span>Validation commands (one per line)</span>
+        <span>{m.validationCommandsLabel}</span>
         <textarea
           disabled={readOnly}
           onChange={(event) => patch({ validationCommands: event.target.value })}
@@ -471,13 +578,12 @@ export function CaseEditor({
           value={draft.validationCommands}
         />
         <small className="muted">
-          Run inside the sandbox after the agent finishes; a non-zero exit fails
-          the objective score. <code>{"{run_id}"}</code> is substituted.
+          {m.validationCommandsHint(<code>{"{run_id}"}</code>)}
         </small>
       </label>
 
       <label>
-        <span>Scoring rubric</span>
+        <span>{m.scoringRubric}</span>
         <textarea
           disabled={readOnly}
           onChange={(event) => patch({ scoringRubric: event.target.value })}
@@ -494,17 +600,17 @@ export function CaseEditor({
             onClick={handleSave}
             type="button"
           >
-            {busy === "save" ? "Saving…" : "Save"}
+            {busy === "save" ? m.saving : m.save}
           </button>
         )}
         <button disabled={busy !== null} onClick={handleSync} type="button">
-          {busy === "sync" ? "Exporting…" : "Sync to YAML"}
+          {busy === "sync" ? m.exporting : m.syncToYaml}
         </button>
         <button disabled={busy !== null} onClick={handleClone} type="button">
-          {busy === "clone" ? "Cloning…" : "Clone"}
+          {busy === "clone" ? m.cloning : m.clone}
         </button>
         <button disabled={busy !== null} onClick={handleDelete} type="button">
-          {busy === "delete" ? "Deleting…" : "Delete"}
+          {busy === "delete" ? m.deleting : m.deleteAction}
         </button>
       </div>
       {message ? <p className="muted">{message}</p> : null}

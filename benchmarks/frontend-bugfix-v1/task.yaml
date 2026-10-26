@@ -1,0 +1,64 @@
+task_id: frontend-bugfix-v1
+version: "1"
+status: active
+category: web-frontend
+tags: [frontend, browser, accessibility, bugfix, healthcare, graded, ships-tests]
+
+description: >
+  Fix a clinic-schedule page that "mostly works": a doctor filter that compares a
+  number with a string, a counter computed before filtering, a cancel control that
+  is a clickable div, and a patient name rendered as HTML. The workspace starts
+  from the broken page (ADR-0068); a shipped Playwright suite grades the fix in
+  headless Chromium, with two regression tests so a rewrite or a deletion cannot
+  pass.
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+# The workspace is seeded from these files before the agent runs (ADR-0068).
+starter: benchmarks/frontend-bugfix-v1/starter
+
+target_level: 6
+complexity: small
+
+validation: objective
+validation_note: >
+  The tests in benchmarks/frontend-bugfix-v1/tests/test_schedule.py are the grade, one
+  command per test. The first command is the tamper guard; the second confirms the
+  entry point survived. The runner image must ship Playwright and Chromium. The
+  page is opened from file://, so validation needs no network.
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/frontend-bugfix-v1/tests && test -z \"$(git -C /app status --porcelain -- benchmarks/frontend-bugfix-v1/tests)\""
+  - "test -f {workspace}/index.html && test -f {workspace}/app.js"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_regression_all_appointments_render_in_time_order"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_regression_each_row_names_its_doctor"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_filtering_by_a_doctor_shows_only_their_appointments"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_switching_doctors_and_back_to_all_restores_the_list"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_the_counter_matches_what_is_shown"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_the_counter_follows_a_cancellation"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_cancel_is_a_button_with_an_accessible_name"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_cancel_works_from_the_keyboard"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_a_cancellation_is_announced"
+  - "cd {workspace} && SCHEDULE_WORKSPACE=\"$PWD\" timeout 90 python -m pytest -c /dev/null -p no:cacheprovider -q /app/benchmarks/frontend-bugfix-v1/tests/test_schedule.py::test_patient_names_are_rendered_as_text"
+files_forbidden:
+  - benchmarks/frontend-bugfix-v1/tests/test_schedule.py
+
+constraints:
+  - Fix the existing files; do not rewrite the page or change data.js
+  - Plain HTML, CSS and JavaScript; no dependencies, no network
+  - Do not edit the shipped tests
+
+success_criteria:
+  level_0: the page no longer renders (regressions fail)
+  level_2: the page still renders in order with doctor names (the two regressions)
+  level_5: the doctor filter and the counter are fixed (tests 3-6)
+  level_8: cancel is a keyboard-reachable button and cancellations are announced (tests 7-9)
+  level_10: patient names are rendered as text, never HTML (test 10)
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+prompts:
+  default: benchmarks/frontend-bugfix-v1/prompt_default.md
+  harness: benchmarks/frontend-bugfix-v1/prompt_harness.md
+
+scoring_rubric: benchmarks/frontend-bugfix-v1/scoring.md
