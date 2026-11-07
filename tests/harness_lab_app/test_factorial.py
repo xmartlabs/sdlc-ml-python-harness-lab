@@ -124,6 +124,26 @@ def test_the_reading_describes_the_size_of_the_effect_not_the_sign_of_the_change
     assert "shrinks" in result["reading"]
 
 
+def test_an_open_interaction_says_when_more_cases_beat_more_repetitions():
+    """Cases narrow the interval faster only when the effect varies by case.
+
+    The reading used to say so unconditionally; a Monte Carlo check found
+    4 cases x 12 and 16 x 3 equally wide under an effect even across cases.
+    """
+    cases = [f"c{i}" for i in range(4)]
+    grid = {
+        ("bare", "s"): {c: _cell(2, 5) for c in cases},
+        ("full", "s"): {c: _cell(3, 5) for c in cases},
+        ("bare", "l"): {c: _cell(2, 5) for c in cases},
+        ("full", "l"): {c: _cell(3, 5) for c in cases},
+    }
+    result = analyze(grid, harness_levels=["bare", "full"], models=["s", "l"])
+    assert result["interaction"]["established"] is False
+    reading = result["reading"]
+    assert "helps some cases and not others" in reading
+    assert "either does" in reading
+
+
 def test_the_reading_never_says_significant_or_proves():
     result = analyze(
         SHRINKING, harness_levels=["bare", "full"], models=["haiku", "opus"]

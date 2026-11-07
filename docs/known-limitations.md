@@ -185,6 +185,33 @@ difference for you. Host-mode development still needs
 `uv sync --extra deepeval`, and a plain `uv sync` removes it again — that
 remains the price of keeping it an optional extra.
 
+### Measurement honesty: what ADR-0073 fixed and what is still open
+
+[ADR-0073](adr/0073-a-measurement-names-its-real-instrument-and-its-reach.md) closed
+five gaps an external Monte Carlo review found. The follow-ups below are planned in
+[`2026-11-measurement-honesty-follow-ups.md`](plans/2026-11-measurement-honesty-follow-ups.md)
+and are **not** built yet:
+
+- `plan_repetitions` still uses the two-proportion formula. Its figure is a floor:
+  80% promised was 66–72% (even effect) and 32–66% (uneven effect) in simulation, and
+  it cannot say whether to add cases or repetitions.
+- An arm's Wilson interval assumes every run is independent. It describes *these
+  cases*. Read as "this model on tasks of this kind", it covered only 55–58% of the
+  time at 4 cases × 24 repetitions.
+- Nothing compares the judge (`task_completion`) with the checks
+  (`task_validation_pass`), and runs the judge could not score drop out of its mean
+  uncounted.
+- A repository audit is a single sample. Repeating it 2–3 times would cover more of
+  the cases it can propose.
+- `skill_adherence` divides by whatever item list the auditor returned, unchecked
+  against the catalog.
+- `rubric_score` and the run auditor (`bench_audit.py`) still record the requested
+  model, not the one that answered. On the Claude CLI every judged score now records
+  `temperature: null`, which means unknown, not zero.
+- On the gateway the request is recorded as the effective configuration. LiteLLM
+  aliases model names, and with `drop_params: true` it can drop a temperature the
+  backend rejects without saying so.
+
 ### Runs from before scoring existed have no scores
 
 Every terminal run is now scored automatically, and re-validating rescores. Runs that

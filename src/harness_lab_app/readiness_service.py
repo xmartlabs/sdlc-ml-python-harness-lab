@@ -88,6 +88,14 @@ def classify(paths: list[str]) -> dict[str, Any]:
             found["rules_files"].append(path)
         if path in _TEST_MARKERS:
             found["test_markers"].append(path)
+        # A plugin's skills and agents sit under a per-plugin root no fixed
+        # prefix can name, so they are matched by shape before the buckets.
+        if gp.is_plugin_skill_path(path):
+            found["skills"].append(gp.skill_name(path))
+            continue
+        if gp.is_plugin_agent_path(path):
+            found["agents"].append(gp.agent_name(path))
+            continue
         for prefix, suffix, bucket in _BUCKETS:
             if path.startswith(prefix) and path.endswith(suffix):
                 found[bucket].append(_name(path, prefix, suffix))

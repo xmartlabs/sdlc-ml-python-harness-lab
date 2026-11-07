@@ -1401,10 +1401,12 @@ def test_a_treatment_that_never_invoked_its_skill_invalidates_the_summary(sessio
     summary = service.summarize("activation")
 
     assert summary["validity"]["status"] == "invalid"
-    # Invalid leads, degraded follows.
+    # Invalid leads, degraded follows — and a one-case design says its interval
+    # is about that case, last, because it bounds the reading, not the design.
     assert [issue["code"] for issue in summary["validity"]["issues"]] == [
         "treatment_not_activated",
         "design_objection",
+        "few_cases",
     ]
     assert summary["verdict"]["headline"] == "Comparison not valid"
     assert summary["verdict"]["tone"] == "invalid"

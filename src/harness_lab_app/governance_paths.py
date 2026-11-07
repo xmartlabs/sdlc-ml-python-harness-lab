@@ -29,6 +29,8 @@ Pure: constants and predicates over path strings, no I/O, no app imports.
 
 from __future__ import annotations
 
+import re
+
 #: Marker that makes a directory a skill directory, whatever it is called.
 SKILL_FILE = "/SKILL.md"
 
@@ -51,6 +53,39 @@ AGENT_ROOTS: tuple[str, ...] = (
     ".github/agents/",
     ".agents/agents/",
 )
+
+#: Claude Code plugins, as a plugin marketplace repository lays them out: each
+#: plugin under ``plugins/<plugin>/`` carries its own ``skills/`` and
+#: ``agents/``. So a repository that ships its harness as plugins has one
+#: skills root *per plugin*, which a fixed prefix cannot name. Missing them is
+#: not hypothetical: audits of ``xmartlabs/agent-skills`` were shown 2 of its
+#: skills and none of its agents, and five repeated audits said nothing about
+#: the eleven under ``plugins/``.
+#:
+#: The layout is the marker, the way ``SKILL.md`` is for a bare ``skills/``:
+#: a markdown file two named levels below ``plugins/`` in an ``agents/`` or
+#: ``skills/<name>/SKILL.md`` slot is that plugin's harness, not a product
+#: directory that happens to be called ``agents``.
+PLUGINS_ROOT = "plugins/"
+
+_PLUGIN_SKILL = re.compile(r"^plugins/([^/]+)/skills/(.+)/SKILL\.md$")
+_PLUGIN_AGENT = re.compile(r"^plugins/([^/]+)/agents/(.+)\.md$")
+
+#: The same two slots as filesystem globs, relative to :data:`PLUGINS_ROOT`,
+#: for code that walks a checkout rather than a path list.
+PLUGIN_SKILL_GLOB = "*/skills/*/SKILL.md"
+PLUGIN_AGENT_GLOB = "*/agents/**/*.md"
+
+
+def is_plugin_skill_path(path: str) -> bool:
+    """Whether a path is a skill shipped inside a Claude Code plugin."""
+    return _PLUGIN_SKILL.match(path) is not None
+
+
+def is_plugin_agent_path(path: str) -> bool:
+    """Whether a path is an agent shipped inside a Claude Code plugin."""
+    return _PLUGIN_AGENT.match(path) is not None
+
 
 #: Slash commands / prompts an agent runtime exposes.
 COMMAND_ROOTS: tuple[str, ...] = (
@@ -113,15 +148,23 @@ HUSKY_DIR = ".husky/"
 
 
 def is_skill_path(path: str) -> bool:
-    """Whether a path is a skill definition, at any depth under any root."""
+    """Whether a path is a skill definition, at any depth under any root.
+
+    Includes a skill shipped inside a plugin (``plugins/<p>/skills/<s>/``).
+    """
     if not path.endswith(SKILL_FILE):
         return False
-    return path.startswith(SKILL_ROOTS)
+    return path.startswith(SKILL_ROOTS) or is_plugin_skill_path(path)
 
 
 def is_agent_path(path: str) -> bool:
-    """Whether a path is an agent definition, at any depth under any root."""
-    return path.endswith(".md") and path.startswith(AGENT_ROOTS)
+    """Whether a path is an agent definition, at any depth under any root.
+
+    Includes an agent shipped inside a plugin (``plugins/<p>/agents/``).
+    """
+    if not path.endswith(".md"):
+        return False
+    return path.startswith(AGENT_ROOTS) or is_plugin_agent_path(path)
 
 
 def is_command_path(path: str) -> bool:
@@ -151,11 +194,29 @@ def is_hook_script(path: str) -> bool:
 
 
 def skill_name(path: str) -> str:
-    """The skill's name: its directory, whatever root it sits under."""
+    """The skill's name: its directory, whatever root it sits under.
+
+    A plugin skill is named ``<plugin>:<skill>``, the name Claude Code invokes
+    it by, which also keeps two plugins' same-named skills apart.
+    """
+    plugin = _PLUGIN_SKILL.match(path)
+    if plugin:
+        return f"{plugin.group(1)}:{plugin.group(2)}"
     for root in SKILL_ROOTS:
         if path.startswith(root):
             return path[len(root) :].removesuffix(SKILL_FILE).strip("/")
     return path.removesuffix(SKILL_FILE)
+
+
+def agent_name(path: str) -> str:
+    """The agent's name: its path below the agents root, without ``.md``.
+
+    A plugin agent is named ``<plugin>:<agent>``, as Claude Code addresses it.
+    """
+    plugin = _PLUGIN_AGENT.match(path)
+    if plugin:
+        return f"{plugin.group(1)}:{plugin.group(2)}"
+    return relative_name(path, AGENT_ROOTS, ".md")
 
 
 def relative_name(path: str, roots: tuple[str, ...], suffix: str = "") -> str:

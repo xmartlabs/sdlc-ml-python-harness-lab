@@ -249,6 +249,136 @@ def test_a_pass_fail_is_summarised_as_a_rate_not_averaged_as_one_and_zero(sessio
     assert metric["mean"] is None
 
 
+def test_judgements_by_different_judges_are_aggregated_apart(session):
+    """Switching the judge model changes the measure, like a rubric change.
+
+    `name@version` kept rubric changes apart but pooled judges, so a
+    `task_completion` trend could be an artefact of changing the judge.
+    """
+    from harness_lab_app.models import Score
+    from harness_lab_app.score_service import ScoreService
+
+    rows = [
+        ("r1", "gpt-5.4-mini", 0.2),
+        ("r2", "gpt-5.4-mini", 0.4),
+        ("r3", "claude-sonnet-5-5", 0.9),
+    ]
+    for run_id, judge, value in rows:
+        session.add(
+            Score(
+                run_id=run_id,
+                name="task_completion",
+                version="v1",
+                provenance="judgement",
+                value_num=value,
+                provenance_json={"model": judge, "effective_model": judge},
+            )
+        )
+    # A fact is never split, whatever its provenance detail says.
+    for run_id in ("r1", "r2"):
+        session.add(
+            Score(
+                run_id=run_id,
+                name="diff_lines_changed",
+                version="v1",
+                provenance="fact",
+                value_num=10.0,
+                provenance_json={"model": "irrelevant"},
+            )
+        )
+    session.commit()
+
+    metrics = ScoreService(session).aggregate()["metrics"]
+    judged = {m["judge_model"]: m for m in metrics if m["name"] == "task_completion"}
+    assert set(judged) == {"gpt-5.4-mini", "claude-sonnet-5-5"}
+    assert judged["gpt-5.4-mini"]["mean"] == pytest.approx(0.3)
+    assert judged["gpt-5.4-mini"]["runs"] == 2
+    assert judged["claude-sonnet-5-5"]["mean"] == pytest.approx(0.9)
+    (fact,) = [m for m in metrics if m["name"] == "diff_lines_changed"]
+    assert fact["judge_model"] is None
+    assert fact["runs"] == 2
+
+
+def test_the_headline_takes_the_judges_series_with_most_runs(session):
+    from harness_lab_app.models import Score
+    from harness_lab_app.overview_service import OverviewService
+
+    for index, judge in enumerate(["a", "b", "b"]):
+        session.add(
+            Score(
+                run_id=f"r{index}",
+                name="skill_adherence",
+                version="v1",
+                provenance="judgement",
+                value_num=0.5,
+                provenance_json={"model": judge},
+            )
+        )
+    session.commit()
+
+    signal = OverviewService(session)._score_signal()
+    assert signal["adherence"]["judge_model"] == "b"
+    assert signal["adherence"]["runs"] == 2
+
+
+def test_judgements_split_by_the_model_that_answered_when_it_is_known(session):
+    """A CLI's default model can change under one configured judge name.
+
+    Both periods used to pool under the configured `gpt-5.4-mini`; the series
+    now follows `effective_model`, and older scores without it keep `model`.
+    """
+    from harness_lab_app.models import Score
+    from harness_lab_app.score_service import ScoreService
+
+    rows = [
+        ("r1", {"model": "gpt-5.4-mini", "effective_model": "claude-sonnet-5"}),
+        ("r2", {"model": "gpt-5.4-mini", "effective_model": "claude-sonnet-5-5"}),
+        ("r3", {"model": "gpt-5.4-mini"}),
+    ]
+    for run_id, detail in rows:
+        session.add(
+            Score(
+                run_id=run_id,
+                name="task_completion",
+                version="v1",
+                provenance="judgement",
+                value_num=0.5,
+                provenance_json=detail,
+            )
+        )
+    session.commit()
+
+    judges = {
+        m["judge_model"]
+        for m in ScoreService(session).aggregate()["metrics"]
+        if m["name"] == "task_completion"
+    }
+    assert judges == {"claude-sonnet-5", "claude-sonnet-5-5", "gpt-5.4-mini"}
+
+
+def test_the_headline_prefers_the_newest_version_over_the_larger_series(session):
+    """A bumped metric is a new quantity; the old one must not keep leading."""
+    from harness_lab_app.models import Score
+    from harness_lab_app.overview_service import OverviewService
+
+    for index in range(3):
+        session.add(
+            Score(
+                run_id=f"old{index}",
+                name="skill_adherence",
+                version="v1",
+                value_num=0.2,
+            )
+        )
+    session.add(
+        Score(run_id="new", name="skill_adherence", version="v2", value_num=0.9)
+    )
+    session.commit()
+
+    signal = OverviewService(session)._score_signal()
+    assert signal["adherence"]["version"] == "v2"
+
+
 def test_versions_are_aggregated_apart(session):
     """A rubric change must not pool two different quantities."""
     from harness_lab_app.models import Score

@@ -203,3 +203,61 @@ def test_reading_surface_drops_the_on_demand_catalogue(tmp_path):
     # …but read coverage is a ratio over the standing rulebook only. A skill
     # nobody needed is not an unread document.
     assert reading_surface(surface) == ("CLAUDE.md", "memory/context.md")
+
+
+def test_a_plugins_skills_and_agents_are_part_of_the_surface(tmp_path):
+    """A native run on a plugin marketplace read the plugins' harness.
+
+    Scoring it against a surface that omitted them measured the lab's blind
+    spot, not the run.
+    """
+    root = tmp_path / "repo"
+    for relative in (
+        "CLAUDE.md",
+        "plugins/tribunal/skills/review-pr/SKILL.md",
+        "plugins/tribunal/agents/tribunal-refuter.md",
+        "plugins/tribunal/agents/review/deep.md",
+        # Product code that happens to sit under plugins/ is not governance.
+        "plugins/tribunal/rust/README.md",
+    ):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x\n")
+
+    files, truncated = collect_files(root)
+
+    assert not truncated
+    assert files == [
+        "CLAUDE.md",
+        "plugins/tribunal/agents/review/deep.md",
+        "plugins/tribunal/agents/tribunal-refuter.md",
+        "plugins/tribunal/skills/review-pr/SKILL.md",
+    ]
+
+
+def test_a_plugins_skills_and_agents_stay_out_of_read_coverage(tmp_path):
+    """They are on-demand catalogue, like `.claude/skills/`.
+
+    Counting them would drop a plugin marketplace's read coverage from 2/3 to
+    2/14 under the same metric version, for files nobody was meant to read.
+    """
+    root = tmp_path / "repo"
+    for relative in (
+        "CLAUDE.md",
+        "memory/context.md",
+        "plugins/tribunal/skills/review-pr/SKILL.md",
+        "plugins/tribunal/agents/tribunal-refuter.md",
+    ):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x\n")
+
+    surface = resolve_surface(
+        lab_root=root,
+        run_dir=tmp_path / "runs" / "none",
+        harness="claude",
+        harness_source="lab_root",
+    )
+
+    assert "plugins/tribunal/skills/review-pr/SKILL.md" in surface.files
+    assert reading_surface(surface) == ("CLAUDE.md", "memory/context.md")

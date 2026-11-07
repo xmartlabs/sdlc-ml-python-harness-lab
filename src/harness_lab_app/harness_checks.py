@@ -457,7 +457,6 @@ def _frontmatter(text: str) -> dict[str, str]:
     return fields
 
 
-_PLUGIN_SKILL = re.compile(r"^plugins/[^/]+/skills/[^/]+/SKILL\.md$")
 _FLAT_SKILL = re.compile(r"^\.github/skills/([^/]+)\.md$")
 # A symlinked file read through git comes back as its target path: one line,
 # no newline, ending in .md. Such a copy is a projection, not a source.
@@ -477,7 +476,8 @@ def _skill_sources(paths: list[str], read: Read) -> dict[str, str]:
         flat = _FLAT_SKILL.match(path)
         if flat and flat.group(1).lower() != "readme":
             candidates.append((flat.group(1), path))
-        elif gp.is_skill_path(path) or _PLUGIN_SKILL.match(path):
+        # `is_skill_path` covers plugin skills too (`plugins/<p>/skills/<s>/`).
+        elif gp.is_skill_path(path):
             candidates.append((path.rsplit("/", 2)[-2], path))
     sources: dict[str, str] = {}
     for name, path in candidates:

@@ -638,6 +638,8 @@ export type OverviewRate = { rate: number | null; n: number; note: string };
 export type ScoreAggregate = {
   name: string;
   version: string;
+  /** Judgements are aggregated per judge model; null for facts or an unrecorded judge. */
+  judge_model: string | null;
   category: string;
   provenance: string;
   direction: string;
@@ -958,7 +960,9 @@ export type ValidityIssue = {
     | "objective_unmeasured"
     | "floor_effect"
     | "mixed_treatment"
-    | "design_objection";
+    | "design_objection"
+    // Fewer than five paired cases: the interval describes these cases only.
+    | "few_cases";
   severity: "invalid" | "degraded";
   /** The arm the issue belongs to, when it belongs to one. */
   arm?: string | null;

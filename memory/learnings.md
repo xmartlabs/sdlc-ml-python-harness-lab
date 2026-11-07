@@ -2146,4 +2146,22 @@ that stopped resolving after its own `cd` — the clinic cases had worked only b
 checks without — and calibrate the tests on a reference, an empty and a partial
 workspace. When a whole grid fails the same way, suspect the grader first.
 
+## 2026-11-06 — Test the statistics against a known answer, not against themselves
+
+The unit tests of `statistics.py` checked that intervals contain their own point
+estimate and are reproducible. They never checked how often an interval contains the
+*truth*. A Monte Carlo review (simulated designs with a known effect, run through the
+unmodified functions) found what no unit test could. The power planner promised 80%
+and delivered 32–72%. The delta interval covered 83% at 4 cases × 24 repetitions with
+an uneven effect. One arm's Wilson interval covered 55–58% of the population rate.
+The same review found the Claude CLI transport silently ignored the requested
+temperature and swapped the model, while the lab recorded the request.
+
+**How to apply:** before claiming an interval or a plan has a property (coverage,
+power, "errs on the side of more"), simulate it: draw per-case rates, apply a known
+effect (even and uneven), call the real function, and count. About 200 draws per row
+is enough to tell 95% from 85%. Record what an instrument actually did (the
+effective model from `modelUsage`, temperature unknown on the CLI), never what it was
+asked to do. ADR-0073.
+
 <!-- Add new learnings above this line -->
