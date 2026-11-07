@@ -204,6 +204,14 @@ versions + rolled `harness_hash`), `model_condition` (temp/context/alias),
 
 ## Open threads / next steps
 
+- **After `fix/measurement-honesty` merges (ADR-0073), continue with items 6–10** of
+  `docs/plans/2026-11-measurement-honesty-follow-ups.md`: judge vs checks agreement
+  and per-arm exclusions (6), Wilson relabelled "on these cases" plus a case-clustered
+  arm interval (7), repetition planning by simulation, cases vs repetitions (8, the
+  most valuable), repeated repository audits with merged cases (9), and
+  `skill_adherence` crossed with the catalog (10). Source: Federico Trinidad's
+  "Harness Lab bajo prueba" (2026-11-06), reproduced with the lab's own code.
+
 - `make check` on `feat/end-to-end-testing-updates` fails 2 pre-existing tests in
   `test_prompt_variants.py`: `benchmarks/cli-textstats/prompt_harness.md` and
   `benchmarks/tetris-v2/prompt_harness.md` drifted from preamble + default (a

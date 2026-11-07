@@ -557,9 +557,21 @@ def plan_repetitions(
 
     Plans from the noisiest observed arm — the rate closest to 50% — once every
     arm has :data:`PLAN_MIN_SCORED_RUNS` scored runs, and from a coin flip
-    before that. It uses each arm's overall pass/fail variance, which ignores
-    what pairing by case removes, so it errs on the side of more runs. It says
-    what a next design would need; it is never a verdict on this one.
+    before that, with the textbook two-proportion formula.
+
+    **It under-plans; read it as a floor.** The formula assumes the interval
+    the lab reports is a two-proportion test's, and it is not: the reported
+    interval is the wider of the case bootstrap and Newcombe's (see
+    :func:`success_delta`), so it excludes zero less often than the formula
+    expects. A Monte Carlo check of this function's own advice (Trinidad,
+    2026-11-06: 96 runs per arm, rates drawn per case from 10-90%) found the
+    promised 80% to be 66-72% when every case moved by 20 points, and 32-66%
+    when half the cases moved by 50 and half not at all. In the uneven case
+    the split matters as much as the total — 4 cases x 24 repetitions saw the
+    move a third of the time, 32 x 3 two thirds — and this figure cannot tell
+    them apart, because it counts runs and not cases. Prefer more cases over
+    more repetitions at a fixed budget. It says what a next design would need
+    at the least; it is never a verdict on this one.
     """
     if cases <= 0:
         return None
@@ -790,7 +802,17 @@ _ISSUE_ORDER = (
     "floor_effect",
     "mixed_treatment",
     "design_objection",
+    # Last: it does not break the comparison, it bounds what it generalises to.
+    "few_cases",
 )
+
+#: Below this many paired cases the delta's interval describes the cases that
+#: ran, not the kind of task they stand for. The same threshold `tribunal
+#: compare` warns at for its clusters, and the one where a Monte Carlo check of
+#: this module's interval (Trinidad, 2026-11-06) saw its coverage of the
+#: population effect fall to ~83% at 4 cases x 24 repetitions with an effect
+#: that hit some cases and not others — against the 95% it is read as.
+MIN_PAIRED_CASES = 5
 
 
 @dataclass
@@ -959,6 +981,40 @@ def _ceiling_issue(
         remedy=(
             "Pick a case the control does not already solve, or score on a "
             "metric with room to move."
+        ),
+    )
+
+
+def _few_cases_issue(success: Mapping[str, Any] | None) -> ValidityIssue | None:
+    """Say so when too few cases were paired for the interval to generalise.
+
+    The bootstrap resamples cases, so with a handful of them it can barely see
+    how much the effect varies from case to case; Newcombe's floor counts every
+    run as independent. Both stay narrow exactly where many repetitions sit on
+    few cases, and the interval then describes *these* cases — accurate for
+    "how did it do here?", overconfident for "does it help on tasks like
+    these?", which is how a delta is usually read.
+
+    Zero paired cases means the comparison carried no per-case outcomes at
+    all — a different gap, not this one — so it stays quiet then.
+    """
+    paired = (success or {}).get("paired_cases")
+    if not isinstance(paired, int) or not 0 < paired < MIN_PAIRED_CASES:
+        return None
+    return ValidityIssue(
+        code="few_cases",
+        severity=DEGRADED,
+        arm=None,
+        detail=(
+            f"Only {paired} paired case(s): the interval describes these "
+            "cases, not tasks of this kind in general. With few cases and many "
+            "repetitions it is narrower than the case-to-case variation it "
+            "cannot see."
+        ),
+        remedy=(
+            f"Read it as a result on these cases, or add cases (at least "
+            f"{MIN_PAIRED_CASES}) — at a fixed budget, more cases with fewer "
+            "repetitions each tells more than the reverse."
         ),
     )
 
@@ -1149,6 +1205,9 @@ def assess_validity(
     floor = _floor_issue(every_arm, check_signatures)
     if floor:
         issues.append(floor)
+    few_cases = _few_cases_issue(success)
+    if few_cases:
+        issues.append(few_cases)
     for note in design_notes or []:
         issues.append(
             ValidityIssue(

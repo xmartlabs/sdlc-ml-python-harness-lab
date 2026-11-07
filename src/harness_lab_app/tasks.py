@@ -1750,10 +1750,15 @@ def _audit_repository_body(
             f"{evidence.get('health_at_pin', {}).get('status', 'unmeasured')}",
         )
 
+        # What actually served each pass. The Claude CLI ignores the requested
+        # temperature and answers a model name it cannot serve with its own
+        # default, so the request alone is not a record of the instrument.
+        served: list[llm_transport.ChatReply] = []
+
         def call(m: str, sys_: str, user: str, *, pass_number: int) -> str:
             if gateway is not None:
                 return gateway(m, sys_, user)
-            return llm_transport.chat(
+            reply = llm_transport.chat_reply(
                 m,
                 sys_,
                 user,
@@ -1766,6 +1771,8 @@ def _audit_repository_body(
                     "pass": pass_number,
                 },
             )
+            served.append(reply)
+            return reply.text
 
         raw_map = call(
             model, COMPONENT_MAP_PROMPT, render_audit_prompt(evidence), pass_number=1
@@ -1820,16 +1827,40 @@ def _audit_repository_body(
         plan = plan_cases(kept, capabilities)
         evidence = apply_case_plan(evidence, plan)
         _log_case_plan(session, target_id, evidence, plan)
-        markdown = render_markdown(findings, evidence, model=model, raw=raw)
+        recorded_model = _served_model(model, served)
+        if served:
+            evidence["llm"] = [reply.provenance() for reply in served]
+        markdown = render_markdown(findings, evidence, model=recorded_model, raw=raw)
         service.store_result(
             target_id,
             markdown=markdown,
             findings=findings,
             evidence=evidence,
-            model=model,
+            model=recorded_model,
         )
     except Exception as exc:  # the reading is optional; the record says why
         service.store_error(target_id, f"{type(exc).__name__}: {exc}")
+
+
+def _served_model(requested: str, served: list[llm_transport.ChatReply]) -> str:
+    """The model to file an audit under: what answered, not what was asked.
+
+    The requested name when nothing else is known (an injected gateway in a
+    test) or when it is what answered. When the transport substituted another
+    model, the record names it and keeps the request beside it, so an audit
+    filed as `gpt-5.4-mini` cannot turn out to have been read by Sonnet. When
+    a pass reached a model that reported nothing (a CLI too old to report
+    usage, sent a name it cannot serve), that is said too: the request is the
+    one model it certainly was not.
+    """
+    if not served:
+        return requested
+    effective = sorted({reply.model for reply in served if reply.model})
+    if any(not reply.model for reply in served):
+        effective.append("unknown")
+    if effective == [requested]:
+        return requested
+    return f"{', '.join(effective)} (requested {requested})"
 
 
 def _health_at_pin(target: TargetRepository) -> dict[str, Any]:

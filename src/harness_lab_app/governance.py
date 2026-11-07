@@ -69,6 +69,9 @@ _GLOBS = (
     *((root.rstrip("/"), "**/*.md") for root in gp.AGENT_ROOTS),
     *((root.rstrip("/"), "**/*.md") for root in gp.COMMAND_ROOTS),
     *((root.rstrip("/"), "*.md") for root in gp.ADR_ROOTS),
+    # A plugin marketplace keeps one skills/ and agents/ root per plugin.
+    (gp.PLUGINS_ROOT.rstrip("/"), gp.PLUGIN_SKILL_GLOB),
+    (gp.PLUGINS_ROOT.rstrip("/"), gp.PLUGIN_AGENT_GLOB),
 )
 
 # How many files a surface may enumerate. A repository with a thousand markdown
@@ -264,5 +267,10 @@ def reading_surface(surface: GovernanceSurface) -> tuple[str, ...]:
     this skill?" are different questions with different right answers.
     """
     return tuple(
-        path for path in surface.files if not path.startswith(_CATALOGUE_PREFIXES)
+        path
+        for path in surface.files
+        if not path.startswith(_CATALOGUE_PREFIXES)
+        # A plugin's skills and agents are catalogue too, one root per plugin.
+        and not gp.is_plugin_skill_path(path)
+        and not gp.is_plugin_agent_path(path)
     )

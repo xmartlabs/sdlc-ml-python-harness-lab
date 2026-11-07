@@ -16,8 +16,9 @@ const MESSAGES = defineMessages({
       <>
         Harness factor <code>{axis}</code>, read on {cases} case(s) every cell
         scored. Effects are measured against the first harness level, per model;
-        the cases are the unit of evidence, so more cases narrow the intervals
-        faster than more repetitions.
+        the cases are the unit of evidence, so when the harness helps some cases
+        and not others, more cases narrow the intervals faster than more
+        repetitions.
       </>
     ),
     harnessLevel: "Harness level",
@@ -50,8 +51,9 @@ const MESSAGES = defineMessages({
       <>
         Factor de arnés <code>{axis}</code>, leído sobre {cases} caso(s) con
         todas las celdas puntuadas. Los efectos se miden contra el primer nivel
-        de arnés, por modelo; los casos son la unidad de evidencia, así que más
-        casos achican los intervalos más rápido que más repeticiones.
+        de arnés, por modelo; los casos son la unidad de evidencia, así que
+        cuando el arnés ayuda en unos casos y no en otros, más casos achican los
+        intervalos más rápido que más repeticiones.
       </>
     ),
     harnessLevel: "Nivel de arnés",

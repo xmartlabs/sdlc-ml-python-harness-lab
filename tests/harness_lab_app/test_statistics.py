@@ -929,6 +929,84 @@ def test_one_bad_run_out_of_five_degrades_rather_than_invalidates():
     assert validity["status"] == "degraded"
 
 
+def _paired(n_cases: int) -> tuple:
+    """A design with ``n_cases`` paired cases of five repetitions each."""
+    control_cases = {
+        f"c{i}": [False, False, True, False, False] for i in range(n_cases)
+    }
+    treatment_cases = {f"c{i}": [True, True, False, True, True] for i in range(n_cases)}
+    control = _counted("native", n_cases, 4 * n_cases)
+    treatment = _counted("injected", 4 * n_cases, n_cases)
+    success = success_delta(
+        control,
+        treatment,
+        control_cases=control_cases,
+        treatment_cases=treatment_cases,
+    )
+    return control, treatment, success
+
+
+@pytest.mark.parametrize("n_cases", [1, 4])
+def test_few_paired_cases_bound_the_reading_without_breaking_it(n_cases):
+    """Below five cases the interval describes the cases that ran.
+
+    A Monte Carlo check of this module saw the delta interval cover the
+    population effect ~83% of the time at 4 cases x 24 repetitions with an
+    uneven effect. That is a reading caveat, not a broken comparison: it
+    degrades, never invalidates, and it is listed last.
+    """
+    control, treatment, success = _paired(n_cases)
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success,
+    )
+    assert validity["status"] == "degraded"
+    assert _codes(validity) == ["few_cases"]
+    issue = validity["issues"][0]
+    assert issue["severity"] == "degraded"
+    assert f"Only {n_cases} paired case" in issue["detail"]
+
+
+def test_five_paired_cases_raise_no_few_cases_issue():
+    control, treatment, success = _paired(5)
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success,
+    )
+    assert "few_cases" not in _codes(validity)
+
+
+def test_a_delta_with_no_per_case_outcomes_is_not_called_few_cases():
+    """Zero paired cases means none were recorded — a different gap."""
+    control, treatment = _pair([False] * 5, [True] * 5)
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+    )
+    assert "few_cases" not in _codes(validity)
+
+
+def test_few_cases_sorts_after_an_invalidating_issue():
+    control, treatment, success = _paired(2)
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success,
+        skill_usage={
+            treatment.label: {"skills": ["caveman"], "runs": 10, "invoked": 0}
+        },
+    )
+    assert validity["status"] == "invalid"
+    assert _codes(validity) == ["treatment_not_activated", "few_cases"]
+
+
 def test_a_mode_that_makes_no_causal_claim_has_nothing_to_invalidate():
     for mode in ("discovery", "cross_repo"):
         validity = assess_validity(

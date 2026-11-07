@@ -251,3 +251,100 @@ def test_a_timeout_raises_rather_than_hanging_the_caller(monkeypatch):
     monkeypatch.setattr(module.subprocess, "run", _boom)
     with pytest.raises(module.TransportError, match="timed out"):
         module._claude_cli_chat("claude-sonnet-5", "", "ping", timeout=30)
+
+
+# -- what actually served the call -------------------------------------------
+
+
+def test_the_served_model_is_read_off_the_cli_usage_report():
+    """`modelUsage` names the model that answered, not the one asked for."""
+    reply = {
+        "result": "ok",
+        "modelUsage": {
+            # A small model the CLI used for its own bookkeeping...
+            "claude-haiku-5-5": {"outputTokens": 12},
+            # ...and the one that wrote the answer.
+            "claude-sonnet-5-5": {"outputTokens": 840},
+        },
+    }
+    assert module.served_model(reply) == "claude-sonnet-5-5"
+
+
+@pytest.mark.parametrize("usage", [None, {}, "not a map", {"m": "not a dict"}])
+def test_a_reply_without_usage_names_no_model_rather_than_a_guess(usage):
+    reply = {"result": "ok"} if usage is None else {"result": "ok", "modelUsage": usage}
+    expected = "m" if usage == {"m": "not a dict"} else ""
+    assert module.served_model(reply) == expected
+
+
+def test_the_cli_reply_records_the_model_it_fell_back_to(monkeypatch):
+    """A gateway name the CLI cannot serve is answered by the CLI's default.
+
+    Before, the record kept the requested `gpt-5.4-mini` and the requested
+    temperature, so an audit served by Sonnet at the CLI's own temperature was
+    filed as a gpt-5.4-mini audit at 0.2.
+    """
+    monkeypatch.setattr(module, "available_transport", lambda: "claude_cli")
+    _cli_ready(monkeypatch)
+    _run_returns(
+        monkeypatch,
+        stdout=json.dumps(
+            {
+                "is_error": False,
+                "result": "PONG",
+                "modelUsage": {"claude-sonnet-5-5": {"outputTokens": 3}},
+            }
+        ),
+    )
+    reply = module.chat_reply("gpt-5.4-mini", "", "ping", temperature=0.2)
+
+    assert reply.text == "PONG"
+    assert reply.transport == "claude_cli"
+    assert reply.requested_model == "gpt-5.4-mini"
+    assert reply.model == "claude-sonnet-5-5"
+    assert reply.requested_temperature == 0.2
+    # The CLI takes no temperature: unknown, never the requested value.
+    assert reply.temperature is None
+    assert reply.provenance()["effective_model"] == "claude-sonnet-5-5"
+    assert reply.provenance()["temperature"] is None
+
+
+def test_a_cli_reply_without_usage_falls_back_to_the_model_it_was_sent(monkeypatch):
+    monkeypatch.setattr(module, "available_transport", lambda: "claude_cli")
+    _cli_ready(monkeypatch)
+    _run_returns(monkeypatch, stdout=json.dumps({"is_error": False, "result": "hi"}))
+
+    sent = module.chat_reply("claude-opus-5-5", "", "ping")
+    assert sent.model == "claude-opus-5-5"
+    # Nothing was forwarded and nothing was reported: unknown, not invented.
+    unsent = module.chat_reply("gpt-5.4-mini", "", "ping")
+    assert unsent.model == ""
+
+
+def test_the_gateway_reply_is_served_as_requested(monkeypatch):
+    """The gateway forwards model and temperature, so the request is the record."""
+    monkeypatch.setattr(module, "available_transport", lambda: "gateway")
+    monkeypatch.setattr(module, "gateway_config", lambda: ("http://gw.invalid", "sk"))
+    monkeypatch.setattr(module, "gateway_chat", lambda *_a, **_k: "an answer")
+
+    reply = module.chat_reply("gpt-5.4-mini", "s", "u", temperature=0.0)
+    assert (reply.model, reply.temperature) == ("gpt-5.4-mini", 0.0)
+    assert module.chat("gpt-5.4-mini", "s", "u") == "an answer"
+
+
+def test_the_model_the_cli_was_sent_wins_when_it_is_listed():
+    """A terse answer can be shorter than the CLI's own bookkeeping."""
+    reply = {
+        "modelUsage": {
+            "claude-haiku-5-5": {"outputTokens": 200},
+            "claude-sonnet-5-5": {"outputTokens": 3},
+        }
+    }
+    assert module.served_model(reply, "claude-sonnet-5-5") == "claude-sonnet-5-5"
+    # Not listed: the most output still decides.
+    assert module.served_model(reply, "claude-opus-5-5") == "claude-haiku-5-5"
+
+
+def test_absurd_token_counts_do_not_raise():
+    reply = {"modelUsage": {"a": {"outputTokens": 10**400}, "b": {"outputTokens": 1}}}
+    assert module.served_model(reply) == "b"

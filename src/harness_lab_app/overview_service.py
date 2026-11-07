@@ -182,10 +182,22 @@ class OverviewService:
         that an agent uses two of is not a good harness, and no other figure on
         this page would ever say so.
         """
-        from harness_lab_app.score_service import ScoreService
+        from harness_lab_app.score_service import ScoreService, version_rank
 
         aggregate = ScoreService(self.session).aggregate()
-        by_name = {metric["name"]: metric for metric in aggregate["metrics"]}
+        # One headline per name: the newest version first — a bumped metric is
+        # a new quantity and the old one must not keep leading — and within
+        # it, when a judgement is split by judge model, the series with the
+        # most runs. Chosen, not left to whichever row a dict kept last.
+        by_name: dict[str, dict[str, Any]] = {}
+        for metric in aggregate["metrics"]:
+            current = by_name.get(metric["name"])
+            rank = (version_rank(metric["version"]), metric["runs"])
+            if current is None or rank > (
+                version_rank(current["version"]),
+                current["runs"],
+            ):
+                by_name[metric["name"]] = metric
         return {
             "runs": aggregate["runs"],
             "adherence": by_name.get("skill_adherence"),

@@ -37,12 +37,46 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from harness_lab_app.gateway_models import GATEWAY_USER_AGENT, normalize_model_name
 
 Transport = Literal["gateway", "claude_cli", "none"]
+
+
+@dataclass(frozen=True)
+class ChatReply:
+    """One answer, and the configuration that actually produced it.
+
+    ``requested_model`` / ``requested_temperature`` are what the caller asked
+    for. ``model`` / ``temperature`` are what served the call, as far as the
+    transport can tell: the gateway forwards both, so they match the request;
+    the Claude CLI takes no temperature at all and substitutes its own default
+    model for a name it cannot serve, so its ``temperature`` is ``None``
+    (unknown, never the requested value) and its ``model`` is read back from
+    the CLI's own ``modelUsage`` report. Recording the request as if it were
+    the configuration let two "identical" audits come from different setups.
+    """
+
+    text: str
+    transport: Transport
+    requested_model: str
+    model: str
+    requested_temperature: float
+    temperature: float | None
+
+    def provenance(self) -> dict[str, Any]:
+        """The effective configuration, shaped for a score's provenance."""
+        return {
+            "transport": self.transport,
+            "requested_model": self.requested_model,
+            "effective_model": self.model,
+            "requested_temperature": self.requested_temperature,
+            "temperature": self.temperature,
+        }
+
 
 #: Mirrors the auditor's timeout; every caller passes its own.
 DEFAULT_TIMEOUT = 120
@@ -199,9 +233,42 @@ def chat(
     import, no clock read, no chance of a second network call — this module is
     the lowest layer and must stay usable in a lab with no observability
     configured. Tracing never changes what `chat` returns or raises.
+
+    A caller that records *what produced* the answer — a judge, an auditor —
+    should use :func:`chat_reply` instead, which also says which model served
+    the call and whether the requested temperature was honoured.
+    """
+    return chat_reply(
+        model,
+        system,
+        user,
+        timeout=timeout,
+        temperature=temperature,
+        trace_kind=trace_kind,
+        trace_metadata=trace_metadata,
+    ).text
+
+
+def chat_reply(
+    model: str,
+    system: str,
+    user: str,
+    *,
+    timeout: int = DEFAULT_TIMEOUT,
+    temperature: float = DEFAULT_TEMPERATURE,
+    trace_kind: str = "",
+    trace_metadata: dict | None = None,
+) -> ChatReply:
+    """:func:`chat`, plus the configuration that actually served the call.
+
+    Same transports, same failures, same tracing. The difference is the return
+    value: a :class:`ChatReply` whose ``model`` and ``temperature`` are the
+    effective ones, so a stored judgement can name its real instrument.
     """
     transport = available_transport()
     start_ns = time.time_ns() if trace_kind else 0
+    effective_model = model
+    effective_temperature: float | None = temperature
     try:
         if transport == "gateway":
             base, token = gateway_config()  # type: ignore[misc]
@@ -215,7 +282,13 @@ def chat(
                 temperature=temperature,
             )
         elif transport == "claude_cli":
-            answer = _claude_cli_chat(model, system, user, timeout=timeout)
+            answer, served_by = _claude_cli_completion(
+                model, system, user, timeout=timeout
+            )
+            # The CLI has no temperature flag: whatever it used, it was not
+            # necessarily the one requested, so the honest record is "unknown".
+            effective_temperature = None
+            effective_model = served_by or native_claude_model(model) or ""
         else:
             raise TransportNotConfigured(
                 "No LLM transport is configured: set GATEWAY_BASE_URL + "
@@ -236,19 +309,31 @@ def chat(
                 error=str(exc),
             )
         raise
+    reply = ChatReply(
+        text=answer,
+        transport=transport,
+        requested_model=model,
+        model=effective_model,
+        requested_temperature=temperature,
+        temperature=effective_temperature,
+    )
     if trace_kind:
         _trace_call(
             trace_kind,
-            model=model,
+            model=effective_model or model,
             system=system,
             user=user,
             transport=transport,
-            temperature=temperature,
-            metadata=trace_metadata,
+            temperature=effective_temperature,
+            metadata={
+                **(trace_metadata or {}),
+                "requested_model": model,
+                "requested_temperature": temperature,
+            },
             start_ns=start_ns,
             output=answer,
         )
-    return answer
+    return reply
 
 
 def _trace_call(
@@ -258,7 +343,7 @@ def _trace_call(
     system: str,
     user: str,
     transport: str,
-    temperature: float,
+    temperature: float | None,
     metadata: dict | None,
     start_ns: int,
     output: str | None = None,
@@ -351,13 +436,52 @@ def gateway_chat(
 
 
 def _claude_cli_chat(model: str, system: str, user: str, *, timeout: int) -> str:
+    """One completion from the Claude Code CLI running headless; text only."""
+    return _claude_cli_completion(model, system, user, timeout=timeout)[0]
+
+
+def served_model(data: dict[str, Any], requested: str = "") -> str:
+    """The model that wrote a CLI reply, read off its own ``modelUsage``.
+
+    ``modelUsage`` maps every model the call touched to its token counts. A
+    plain completion normally touches one. When it lists more (the CLI can run
+    a small model for its own bookkeeping), the model the CLI was sent wins if
+    it is listed — a terse answer can be shorter than the bookkeeping — and
+    otherwise the one that produced the most output. "" when the reply carries
+    no usage at all — an older CLI — which callers record as unknown rather
+    than guess.
+    """
+    usage = data.get("modelUsage")
+    if not isinstance(usage, dict) or not usage:
+        return ""
+    if requested and requested in usage:
+        return requested
+
+    def output_tokens(entry: Any) -> float:
+        if not isinstance(entry, dict):
+            return 0.0
+        value = entry.get("outputTokens", 0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0.0
+        try:
+            return float(value)
+        except OverflowError:
+            return 0.0
+
+    return max(sorted(usage), key=lambda name: output_tokens(usage[name]))
+
+
+def _claude_cli_completion(
+    model: str, system: str, user: str, *, timeout: int
+) -> tuple[str, str]:
     """One completion from the Claude Code CLI running headless.
 
-    Deliberately spartan: `--tools ""` disables every built-in tool, so this is
-    a text completion and not an agent — no filesystem access, no permission
-    prompts that could block a worker, nothing to approve. The prompt goes over
-    stdin rather than argv, because audit prompts carry clipped diffs and would
-    otherwise run into the argument-length limit.
+    Returns ``(text, served_model)``. Deliberately spartan: `--tools ""`
+    disables every built-in tool, so this is a text completion and not an
+    agent — no filesystem access, no permission prompts that could block a
+    worker, nothing to approve. The prompt goes over stdin rather than argv,
+    because audit prompts carry clipped diffs and would otherwise run into the
+    argument-length limit.
     """
     executable = claude_cli_path()
     credential = claude_cli_credential()
@@ -422,7 +546,7 @@ def _claude_cli_chat(model: str, system: str, user: str, *, timeout: int) -> str
     text = str(data.get("result") or "")
     if not text.strip():
         raise TransportError("Claude CLI returned an empty reply.")
-    return text
+    return text, served_model(data, native)
 
 
 def native_claude_model(model: str) -> str:

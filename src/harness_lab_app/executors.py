@@ -120,6 +120,10 @@ RUNNER_GOVERNANCE_DIRS = (
     *(root.rstrip("/") for root in governance_paths.BARE_SKILL_ROOTS),
     *(root.rstrip("/") for root in governance_paths.BARE_HOOK_ROOTS),
     *(root.rstrip("/") for root in governance_paths.ADR_ROOTS),
+    # Plugin-shipped skills and agents are governance the surface counts, so
+    # the lab's own `plugins/` is masked like the roots above. A target's
+    # `plugins/` lives under `/app/workspace/<run_id>/` and is never masked.
+    governance_paths.PLUGINS_ROOT.rstrip("/"),
 )
 
 # Governed *source* directories: nothing auto-loads them, but `bench_run.py`

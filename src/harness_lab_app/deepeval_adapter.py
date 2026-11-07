@@ -149,24 +149,69 @@ def _extract_json(text: str) -> str:
     return text[start : end + 1] if start != -1 and end > start else text
 
 
-def _judge_chat(model: str, prompt: str) -> str:
-    """One chat call for the judge, over whichever transport it resolved to.
+#: The temperature the judge asks for. Honoured by the gateway; the Claude CLI
+#: takes none, which the judge records as unknown rather than as this value.
+JUDGE_TEMPERATURE = 0.0
 
-    Only the Claude CLI fallback goes through :func:`llm_transport.chat` and
-    is traced (``trace_kind="judge"``); the gateway branch below calls
+
+def _judge_reply(model: str, prompt: str) -> llm_transport.ChatReply:
+    """One judge call, with the configuration that actually served it.
+
+    Only the Claude CLI fallback goes through :func:`llm_transport.chat_reply`
+    and is traced (``trace_kind="judge"``); the gateway branch calls
     :func:`llm_transport.gateway_chat` directly through this module's own
     ``_gateway_config`` (kept independent of the transport's own resolution —
-    see :func:`judge_transport`), so it does not pass through `chat` and is
-    not traced by this change.
+    see :func:`judge_transport`), so it is not traced. The gateway forwards
+    both model and temperature, so its request is its record.
     """
     base, token = _gateway_config()
     if base and token:
-        return llm_transport.gateway_chat(
-            base, token, model, "", prompt, timeout=180, temperature=0.0
+        text = llm_transport.gateway_chat(
+            base, token, model, "", prompt, timeout=180, temperature=JUDGE_TEMPERATURE
         )
-    return llm_transport.chat(
-        model, "", prompt, timeout=180, temperature=0.0, trace_kind="judge"
+        return llm_transport.ChatReply(
+            text=text,
+            transport="gateway",
+            requested_model=model,
+            model=model,
+            requested_temperature=JUDGE_TEMPERATURE,
+            temperature=JUDGE_TEMPERATURE,
+        )
+    return llm_transport.chat_reply(
+        model,
+        "",
+        prompt,
+        timeout=180,
+        temperature=JUDGE_TEMPERATURE,
+        trace_kind="judge",
     )
+
+
+def _judge_chat(model: str, prompt: str) -> str:
+    """One chat call for the judge; the text of :func:`_judge_reply`."""
+    return _judge_reply(model, prompt).text
+
+
+def served_by(replies: list[llm_transport.ChatReply]) -> dict[str, Any]:
+    """What served a judged metric, over every call it made.
+
+    A GEval metric is several calls. When they all came back from one model at
+    one temperature that pair is the record; when they did not, the record
+    says so with the full lists — a metric judged by two models is not a
+    measurement by either. Empty when no call reached a model.
+    """
+    if not replies:
+        return {}
+    models = sorted({reply.model for reply in replies})
+    temperatures = sorted(
+        {reply.temperature for reply in replies},
+        key=lambda value: (value is None, value or 0.0),
+    )
+    return {
+        "effective_model": models[0] if len(models) == 1 else models,
+        "temperature": temperatures[0] if len(temperatures) == 1 else temperatures,
+        "transport": replies[-1].transport,
+    }
 
 
 def _judge_llm(model: str) -> Any:
@@ -189,6 +234,9 @@ def _judge_llm(model: str) -> Any:
     class _LabJudge(DeepEvalBaseLLM):
         def __init__(self) -> None:
             self._name = model
+            # Every reply since the last `take_replies`, so the metric that
+            # just ran can name what actually served it.
+            self._replies: list[llm_transport.ChatReply] = []
             super().__init__(model)
 
         def load_model(self) -> None:  # pragma: no cover - trivial
@@ -197,8 +245,14 @@ def _judge_llm(model: str) -> Any:
         def get_model_name(self) -> str:
             return self._name
 
+        def take_replies(self) -> list[llm_transport.ChatReply]:
+            replies, self._replies = self._replies, []
+            return replies
+
         def generate(self, prompt: str, schema: Any = None, **_: Any) -> Any:
-            text = _judge_chat(self._name, prompt)
+            reply = _judge_reply(self._name, prompt)
+            self._replies.append(reply)
+            text = reply.text
             if schema is None:
                 return text
             cleaned = _extract_json(text)
@@ -358,6 +412,7 @@ def _judged(metrics: Any, test_case: Any, case: Any, rendered: str):
     )
 
     judge = _judge_llm(model)
+    take_replies = getattr(judge, "take_replies", None)
     outcomes = []
     for name, rubric in _GEVAL:
         metric = metrics.GEval(
@@ -373,6 +428,8 @@ def _judged(metrics: Any, test_case: Any, case: Any, rendered: str):
             metric.measure(judged_case)
         # A judge that fails has not scored zero; it has not scored.
         except Exception as error:
+            if take_replies:
+                take_replies()
             outcomes.append(
                 MetricOutcome(
                     name=name,
@@ -380,23 +437,24 @@ def _judged(metrics: Any, test_case: Any, case: Any, rendered: str):
                 )
             )
             continue
+        detail: dict[str, Any] = {
+            "metric": "GEval",
+            # `model` stays the configured judge — the key score aggregation
+            # splits on; `effective_model` is what the transport says answered.
+            "model": model,
+            "rubric": rubric,
+            "judge_transport": (
+                judge_transport() if judge is not model else "provider-default"
+            ),
+        }
+        if take_replies:
+            detail.update(served_by(take_replies()))
         outcomes.append(
             MetricOutcome(
                 name=name,
                 value=float(metric.score),
                 reason=str(getattr(metric, "reason", "") or ""),
-                provenance=_base_provenance(
-                    {
-                        "metric": "GEval",
-                        "model": model,
-                        "rubric": rubric,
-                        "judge_transport": (
-                            judge_transport()
-                            if judge is not model
-                            else "provider-default"
-                        ),
-                    }
-                ),
+                provenance=_base_provenance(detail),
             )
         )
     return outcomes

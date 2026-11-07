@@ -485,3 +485,81 @@ def test_gateway_chat_speaks_openai_compatible_json(monkeypatch):
     # The gateway wants the bare model name, and the bearer token.
     assert captured["body"]["model"] == "gpt-5.4-mini"
     assert captured["auth"] == "Bearer tok"
+
+
+# --- the judge records what actually served it -----------------------------
+
+
+def _reply(model: str, temperature: float | None) -> llm_transport.ChatReply:
+    return llm_transport.ChatReply(
+        text="{}",
+        transport="claude_cli",
+        requested_model="gpt-5.4-mini",
+        model=model,
+        requested_temperature=0.0,
+        temperature=temperature,
+    )
+
+
+def test_one_model_at_one_temperature_is_recorded_as_that_pair():
+    detail = deepeval_adapter.served_by(
+        [_reply("claude-sonnet-5-5", None), _reply("claude-sonnet-5-5", None)]
+    )
+    assert detail == {
+        "effective_model": "claude-sonnet-5-5",
+        "temperature": None,
+        "transport": "claude_cli",
+    }
+
+
+def test_a_metric_judged_by_two_models_says_so():
+    detail = deepeval_adapter.served_by(
+        [_reply("claude-sonnet-5-5", None), _reply("claude-haiku-5-5", None)]
+    )
+    assert detail["effective_model"] == ["claude-haiku-5-5", "claude-sonnet-5-5"]
+    assert deepeval_adapter.served_by([]) == {}
+
+
+def test_a_cli_judged_metric_records_the_served_model_and_unknown_temperature(
+    monkeypatch, judge
+):
+    """The judge asked for 0.0 on a model the CLI cannot serve.
+
+    Before, the score said `test-judge-model` at temperature 0 — neither of
+    which was true on the CLI transport.
+    """
+    install_fake_deepeval(monkeypatch)
+    metrics_module = sys.modules["deepeval.metrics"]
+
+    class CallingGEval(FakeMetric):
+        """A GEval stand-in that, like the real one, calls its judge."""
+
+        def measure(self, case):
+            self.kwargs["model"].generate("score this")
+            super().measure(case)
+
+    metrics_module.GEval = lambda **kw: CallingGEval(score=0.6, reason="judged", **kw)
+
+    class Base:
+        def __init__(self, model):
+            self.model = model
+
+    base_module = types.ModuleType("deepeval.models.base_model")
+    base_module.DeepEvalBaseLLM = Base
+    monkeypatch.setitem(sys.modules, "deepeval.models", types.ModuleType("m"))
+    monkeypatch.setitem(sys.modules, "deepeval.models.base_model", base_module)
+    monkeypatch.setattr(deepeval_adapter, "judge_transport", lambda: "claude_cli")
+    monkeypatch.setattr(deepeval_adapter, "_gateway_config", lambda: ("", ""))
+    monkeypatch.setattr(
+        llm_transport,
+        "chat_reply",
+        lambda *_a, **_k: _reply("claude-sonnet-5-5", None),
+    )
+
+    by_name = {o.name: o for o in measure(trajectory())}
+    provenance = by_name["task_completion"].provenance
+
+    assert provenance["model"] == "test-judge-model"
+    assert provenance["effective_model"] == "claude-sonnet-5-5"
+    assert provenance["temperature"] is None
+    assert provenance["transport"] == "claude_cli"

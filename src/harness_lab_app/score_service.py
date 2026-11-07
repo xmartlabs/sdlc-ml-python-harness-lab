@@ -16,6 +16,37 @@ from harness_lab_app.models import Audit, HarnessSource, Score, Validation
 from harness_lab_app.run_service import RunService
 
 
+def _judge_model(score: Score) -> str:
+    """The judge model a judgement was scored by, or "" for anything else.
+
+    The model that *answered* (``effective_model``) when the value recorded
+    one, the configured judge (``model``) otherwise — scores from before the
+    effective model was recorded carry only that. Keying on the configuration
+    alone would pool a CLI's default model before and after it changed under
+    one configured name. A metric judged by more than one model records a
+    list, which is its own series. A fact has no judge, and a judgement that
+    recorded none is grouped as unknown rather than guessed.
+    """
+    if score.provenance != "judgement":
+        return ""
+    detail = score.provenance_json or {}
+    if not isinstance(detail, dict):
+        return ""
+    effective = detail.get("effective_model")
+    if isinstance(effective, list) and effective:
+        return " + ".join(str(model) for model in effective)
+    if isinstance(effective, str) and effective:
+        return effective
+    model = detail.get("model")
+    return str(model) if model else ""
+
+
+def version_rank(version: str) -> tuple[int, str]:
+    """Sort key for a score version: ``v10`` after ``v2``, unknown forms last."""
+    digits = version.lstrip("vV")
+    return (int(digits), "") if digits.isdigit() else (-1, version)
+
+
 class ScoreService:
     def __init__(self, session: Session):
         self.session = session
@@ -51,12 +82,18 @@ class ScoreService:
             statement = statement.where(Score.run_id.in_(run_ids))  # type: ignore[attr-defined]
         rows = list(self.session.exec(statement).all())
 
-        grouped: dict[tuple[str, str], list[Score]] = {}
+        # A judgement is pooled only with judgements by the same judge model.
+        # `name@version` already keeps a rubric change apart; a judge change is
+        # the same kind of break — the registry says so — and used to pool
+        # anyway, so a trend could be an artefact of switching judges.
+        grouped: dict[tuple[str, str, str], list[Score]] = {}
         for row in rows:
-            grouped.setdefault((row.name, row.version), []).append(row)
+            grouped.setdefault((row.name, row.version, _judge_model(row)), []).append(
+                row
+            )
 
         metrics = []
-        for (name, version), scores in sorted(grouped.items()):
+        for (name, version, judge_model), scores in sorted(grouped.items()):
             definition = REGISTRY.get(name)
             numeric = [
                 score.value_num for score in scores if score.value_num is not None
@@ -69,6 +106,9 @@ class ScoreService:
                 {
                     "name": name,
                     "version": version,
+                    # The judge model the series was scored by; None for a
+                    # fact, or a judgement that recorded no model.
+                    "judge_model": judge_model or None,
                     "category": definition.category if definition else "",
                     "provenance": definition.provenance if definition else "",
                     "direction": definition.direction if definition else "neutral",

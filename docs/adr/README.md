@@ -101,6 +101,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0070 — The interface speaks English and Spanish](0070-the-interface-speaks-english-and-spanish.md)
 - [0071 — A grader brings its own dependencies, and never the agent's tests](0071-a-grader-brings-its-own-dependencies-and-never-the-agents-tests.md)
 - [0072 — A developer takes the harness home, and the docs follow the journey](0072-a-developer-takes-the-harness-home-and-the-docs-follow-the-journey.md)
+- [0073 — A measurement names its real instrument and its reach](0073-a-measurement-names-its-real-instrument-and-its-reach.md)
 
 ## Why ADRs exist
 

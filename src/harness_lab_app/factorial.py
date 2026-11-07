@@ -530,8 +530,14 @@ def _reading(
             "across models is not established, whatever the interval "
             f"({span}): the cases are the unit of evidence, not the runs."
         )
+    # Not "more cases narrow it faster" unconditionally: a Monte Carlo check
+    # (Trinidad, 2026-11-06) found 4 cases x 12 and 16 x 3 equally wide
+    # (69 vs 68 points) when the effect was even across cases. Cases win when
+    # the effect varies from case to case, which is the common situation and
+    # the one repetitions cannot average away — so that is the condition said.
     return (
         f"{head}, but the interval of the difference, {span}, includes zero: a "
-        "change across models is not established. More cases narrow it faster than "
-        "more repetitions."
+        "change across models is not established. When the harness helps some "
+        "cases and not others, more cases narrow it faster than more repetitions; "
+        "when it moves every case alike, either does."
     )

@@ -84,7 +84,8 @@ const MESSAGES = defineMessages({
       objective_unmeasured: "The objective was never measured",
       floor_effect: "Nothing resolved on either side",
       mixed_treatment: "The arm mixes treated and untreated runs",
-      design_objection: "The design was objected to when it was created"
+      design_objection: "The design was objected to when it was created",
+      few_cases: "Too few cases to generalise"
     } as Record<string, string>,
     comparisonNotValid: "Comparison not valid",
     readWithCare: "Read with care",
@@ -320,7 +321,8 @@ const MESSAGES = defineMessages({
       objective_unmeasured: "El objetivo nunca se midió",
       floor_effect: "Nada se resolvió en ninguno de los dos lados",
       mixed_treatment: "El brazo mezcla corridas tratadas y no tratadas",
-      design_objection: "El diseño fue objetado cuando se creó"
+      design_objection: "El diseño fue objetado cuando se creó",
+      few_cases: "Pocos casos para generalizar"
     } as Record<string, string>,
     comparisonNotValid: "La comparación no es válida",
     readWithCare: "Leé con cuidado",
