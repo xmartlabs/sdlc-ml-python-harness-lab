@@ -2164,4 +2164,33 @@ is enough to tell 95% from 85%. Record what an instrument actually did (the
 effective model from `modelUsage`, temperature unknown on the CLI), never what it was
 asked to do. ADR-0073.
 
+## 2026-11-09 — LM Studio adds an instance per load; read back what a server served
+
+- `POST /api/v1/models/load` on a model that is already loaded adds a second instance
+  (`model:2`). It does not reconfigure the first. Two test loads left three copies of a
+  27B model in VRAM. Before loading, check `loaded_instances`, and reuse or replace.
+- LM Studio may serve settings nobody asked for (`parallel: 4`). Always read back
+  `loaded_instances[].config` or `echo_load_config` instead of trusting the request.
+- llama.cpp's `n_ctx` is shared across parallel slots, so KV memory does not scale with
+  `parallel`.
+- Hybrid (Qwen3.5+) and sliding-window (Gemma, gpt-oss) architectures keep KV on only
+  some layers. A size-only KV formula overstates them about twofold.
+- *Check configuration* through the gateway sends real completions and can JIT-load a
+  22 GB model next to the one an experiment uses (2026-11-07). The local-tuning host
+  guard now asks before that happens.
+
+## 2026-11-09 — Speed tests must defeat the prompt cache; tg is bandwidth-bound
+
+- llama.cpp (LM Studio, Ollama) reuses the longest cached prefix of a prompt. A
+  deterministic filler made every larger test prompt an extension of the previous one.
+  Prefill read 1,100–2,100 tok/s, rising with size; with a unique random tag per prompt
+  it is a flat ~1,200 tok/s (bonsai-27b on an RTX 3090). A repeated prompt "read" at
+  113,000 tok/s. Seconds per agent step moved from 7.3 to 11.6.
+- Token generation is bound by memory bandwidth: `tok/s ≈ GB/s ÷ GB read per token`.
+  Published llama-bench results reach 64–81 % of that ceiling on consumer NVIDIA GPUs
+  (llama.cpp discussions #15013, #4167). 1-bit quants (bonsai Q1_0: 37 %) are
+  compute-bound, so the ceiling does not apply to them.
+- Count prompt tokens from the server's `usage.prompt_tokens`, not the requested size:
+  the tokenizer decides.
+
 <!-- Add new learnings above this line -->

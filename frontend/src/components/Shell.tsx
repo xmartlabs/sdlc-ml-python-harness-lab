@@ -12,6 +12,7 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconCompare,
+  IconCpu,
   IconFiles,
   IconFlask,
   IconHome,
@@ -38,7 +39,13 @@ const COLLAPSED_STORAGE_KEY = "ahl.sidebar.collapsed";
 
 const MESSAGES = defineMessages({
   en: {
-    groups: { evaluate: "Evaluate", evidence: "Evidence", advanced: "Advanced", system: "System" },
+    groups: {
+      evaluate: "Evaluate",
+      evidence: "Evidence",
+      local: "Local models",
+      advanced: "Advanced",
+      system: "System"
+    },
     nav: {
       home: "Home",
       newEvaluation: "New evaluation",
@@ -50,6 +57,8 @@ const MESSAGES = defineMessages({
       cases: "Cases",
       repositories: "Repositories",
       skills: "Skills",
+      tuneLocal: "Tune your local model",
+      localResults: "Results",
       runs: "Runs",
       compare: "Compare",
       benchmarks: "Benchmarks",
@@ -65,7 +74,13 @@ const MESSAGES = defineMessages({
     authOffTail: "on the server to protect it."
   },
   es: {
-    groups: { evaluate: "Evaluar", evidence: "Evidencia", advanced: "Avanzado", system: "Sistema" },
+    groups: {
+      evaluate: "Evaluar",
+      evidence: "Evidencia",
+      local: "Modelos locales",
+      advanced: "Avanzado",
+      system: "Sistema"
+    },
     nav: {
       home: "Inicio",
       newEvaluation: "Nueva evaluación",
@@ -77,6 +92,8 @@ const MESSAGES = defineMessages({
       cases: "Casos",
       repositories: "Repositorios",
       skills: "Skills",
+      tuneLocal: "Optimizá tu modelo local",
+      localResults: "Resultados",
       runs: "Corridas",
       compare: "Comparar",
       benchmarks: "Benchmarks",
@@ -136,6 +153,13 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/evidence/cases", label: "cases", icon: IconFiles },
       { to: "/evidence/repositories", label: "repositories", icon: IconRepo },
       { to: "/evidence/skills", label: "skills", icon: IconPuzzle }
+    ]
+  },
+  {
+    title: "local",
+    items: [
+      { to: "/local/tune", label: "tuneLocal", icon: IconCpu },
+      { to: "/local/results", label: "localResults", icon: IconTrophy }
     ]
   },
   {

@@ -1,0 +1,55 @@
+{
+  "id": "chatcmpl-q49qrmo6997wvl1emeau",
+  "object": "chat.completion",
+  "created": 1794186622,
+  "model": "prism-ml/bonsai-27b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "",
+        "reasoning_content": "The user wants to read a specific file named \"notes.txt\".\nI have access to a tool called `read_file` which takes a `path` argument.\nI need to call this tool with the path set to \"notes.txt\".\n\nPlan:\n1.  Call `read_file` with `path=\"notes.txt\"`.\n2.  Present the content of the file to the user.\n\nConstraint Checklist & Confidence Score:\n1. Read file notes.txt? Yes.\n2. Using tool? Yes.\n\nConfidence Score: 5/5\n\nMental Sandbox Simulation:\n- Input: \"Read the file notes.txt using the tool.\"\n- Tool Call: `read_file(path=\"notes.txt\")`\n- Output: Content of the file.\n- Result: User gets the content.\n\nKey learnings from simulation: None needed, straightforward task.\n\nStrategizing complete. I will now generate the tool call.\n",
+        "tool_calls": [
+          {
+            "type": "function",
+            "id": "ZmF88qSVLXQCR4j7eCrHPoZdUwwT9I2S",
+            "function": {
+              "name": "read_file",
+              "arguments": "{\"path\":\"notes.txt\"}"
+            }
+          }
+        ]
+      },
+      "logprobs": null,
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 274,
+    "completion_tokens": 225,
+    "total_tokens": 499,
+    "completion_tokens_details": {
+      "reasoning_tokens": 197
+    }
+  },
+  "stats": {
+    "tokens_per_second": 80.46766080150819,
+    "time_to_first_token": 0.357805,
+    "generation_time": 3.1415319999999998,
+    "stop_reason": "toolCalls"
+  },
+  "model_info": {
+    "arch": "qwen35",
+    "quant": "Q1_0",
+    "format": "gguf",
+    "context_length": 50432
+  },
+  "runtime": {
+    "name": "llama.cpp-win-x86_64-nvidia-cuda12-avx2",
+    "version": "2.65.1",
+    "supported_formats": [
+      "gguf"
+    ]
+  }
+}

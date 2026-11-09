@@ -850,3 +850,45 @@ class Attribution(SQLModel, table=True):
     steps_parsed: int = 0
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class LocalMachine(SQLModel, table=True):
+    """A machine a developer serves local models from (Tune your local model).
+
+    Entered by hand from a reference preset: the lab runs in Docker and the
+    server may sit elsewhere on the LAN, so it cannot read the hardware itself.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    memory_kind: str = "discrete"  # "unified" | "discrete"
+    gpu_gb: float = 0.0
+    ram_gb: float = 0.0
+    reserve_gb: float = 4.0
+    gpu_wired_fraction: float = 0.75
+    bandwidth_gbs: float | None = None
+    notes: str = ""
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class TuningProfile(SQLModel, table=True):
+    """One tested configuration of one model on one machine and server.
+
+    Profiles are only ever compared within the same machine and model: speed is
+    a property of the hardware, so a cross-machine comparison measures nothing.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    machine_id: int = Field(index=True)
+    server_kind: str  # "lmstudio" | "ollama"
+    server_url: str
+    model_id: str = Field(index=True)
+    label: str = ""
+    requested_config: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    served_config: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    estimate: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    results: list = Field(default_factory=list, sa_column=Column(JSON))
+    observed_memory_gb: float | None = None
+    server_version: str = ""
+    recommended: bool = False
+    created_at: datetime = Field(default_factory=utc_now)

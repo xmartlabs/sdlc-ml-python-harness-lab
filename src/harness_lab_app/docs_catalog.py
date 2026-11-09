@@ -90,6 +90,13 @@ _DOCS: list[dict[str, str]] = [
         "description": "What makes a case measure something, and what is refused.",
     },
     {
+        "slug": "local-models",
+        "file": "guide-local-models.md",
+        "group": "Reference",
+        "title": "Tune your local model",
+        "description": "Fit, load and test an LM Studio or Ollama configuration on your machine.",
+    },
+    {
         "slug": "small-models",
         "file": "guide-small-models.md",
         "group": "Reference",

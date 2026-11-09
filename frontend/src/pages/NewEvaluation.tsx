@@ -12,6 +12,7 @@ import {
 } from "../harnesses";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
+import { HostGuardModal } from "../components/HostGuardModal";
 import { ModelPicker } from "../components/ModelPicker";
 import { PromptPreview } from "../components/PromptPreview";
 import { IconAlert, IconArrowRight } from "../components/icons";
@@ -20,6 +21,7 @@ import type {
   CaseRecord,
   ExperimentMode,
   HarnessSkill,
+  LocalModelLoadCheck,
   ModelOption,
   RunConfigPayload,
   RunValidationResult,
@@ -466,6 +468,10 @@ const MESSAGES = defineMessages({
     pickAtLeastOneCaseFirst: "Pick at least one case first.",
     checking: "Checking…",
     checkConfiguration: "Check configuration",
+    loadCheckTitle: (model: string, size: string, host: string) =>
+      `Checking this configuration will load ${model} (~${size} GB) on ${host}.`,
+    loadCheckContinue: "Continue",
+    loadCheckCancel: "Cancel",
     working: "Working…",
     createAndLaunchRuns: "Create & launch runs",
     createWithoutLaunching: "Create without launching",
@@ -874,6 +880,10 @@ const MESSAGES = defineMessages({
     pickAtLeastOneCaseFirst: "Elegí al menos un caso primero.",
     checking: "Revisando…",
     checkConfiguration: "Revisar configuración",
+    loadCheckTitle: (model: string, size: string, host: string) =>
+      `Revisar esta configuración va a cargar ${model} (~${size} GB) en ${host}.`,
+    loadCheckContinue: "Continuar",
+    loadCheckCancel: "Cancelar",
     working: "Trabajando…",
     createAndLaunchRuns: "Crear y lanzar corridas",
     createWithoutLaunching: "Crear sin lanzar",
@@ -1039,6 +1049,10 @@ export function NewEvaluation() {
   const [createdId, setCreatedId] = useState<string | null>(null);
   const [check, setCheck] = useState<RunValidationResult | null>(null);
   const [checking, setChecking] = useState(false);
+  // Set when `GET /model-load-check` finds the model unloaded: the confirm
+  // step before `handleCheck`'s own request would load it. Null the rest of
+  // the time, including when the check could not resolve a host (fail open).
+  const [pendingLoadCheck, setPendingLoadCheck] = useState<LocalModelLoadCheck | null>(null);
 
   const loadModels = (refresh = false) => {
     setReloadingModels(refresh);
@@ -1061,6 +1075,18 @@ export function NewEvaluation() {
       })
       .finally(() => setReloadingModels(false));
   };
+
+  // `?executor=` preselects the executor model — the hand-off from Tune your
+  // local model's "Use in New evaluation". Read once on mount, before the
+  // catalog's own default-executor adoption (which only fires on an empty
+  // pick), so a link always wins over the gateway default.
+  useEffect(() => {
+    const requested = params.get("executor");
+    if (requested) {
+      setExecutorModel(requested);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     void loadModels().catch(() => {
@@ -1809,7 +1835,17 @@ export function NewEvaluation() {
     venue
   ]);
 
-  const handleCheck = async () => {
+  /**
+   * ADR-0070-era fix (spec 2026-11-08-local-model-tuning, "Host guard"): the
+   * preflight sends a real completion and a ~32k-token context probe, which
+   * can make LM Studio auto-load a model nobody asked for — and if a lab run
+   * already has that host busy, the load competes with it. Only a `gateway/…`
+   * or `lmstudio/…` executor can be resolved to a direct host at all, so the
+   * check is skipped for everything else; any failure of the check itself
+   * (host unreachable, unknown model, backend offline) proceeds silently —
+   * the probe runs today with no such guard, and fails no harder than before.
+   */
+  const runPreflight = async () => {
     setChecking(true);
     setError(null);
     setCheck(null);
@@ -1822,6 +1858,30 @@ export function NewEvaluation() {
     } finally {
       setChecking(false);
     }
+  };
+
+  const handleCheck = async () => {
+    const needsLoadCheck =
+      executorModel.startsWith("gateway/") ||
+      executorModel.startsWith("lmstudio/") ||
+      executorModel.startsWith("ollama/");
+    if (needsLoadCheck) {
+      // Set before the request goes out, not after it resolves — the button
+      // shows a spinner for the whole round trip, including the
+      // model-load-check itself, not just the preflight that may follow it.
+      setChecking(true);
+      try {
+        const result = await api.local.modelLoadCheck(executorModel);
+        if (result.loaded === false) {
+          setPendingLoadCheck(result);
+          setChecking(false);
+          return;
+        }
+      } catch {
+        // Fail open: proceed exactly as the page did before this check existed.
+      }
+    }
+    await runPreflight();
   };
 
   const nativeIndex = useNativeModelIndex();
@@ -2555,6 +2615,51 @@ export function NewEvaluation() {
           <p className={`callout ${check.ok ? "callout--ok" : "callout--warning"}`}>
             <strong>{check.ok ? m.ready : m.blocked}</strong> — {check.detail}
           </p>
+        ) : null}
+        {pendingLoadCheck ? (
+          pendingLoadCheck.guard &&
+          pendingLoadCheck.guard.running.length + pendingLoadCheck.guard.queued.length > 0 ? (
+            <HostGuardModal
+              action="check"
+              guard={pendingLoadCheck.guard}
+              onCancel={() => setPendingLoadCheck(null)}
+              onContinue={() => {
+                setPendingLoadCheck(null);
+                return runPreflight();
+              }}
+            />
+          ) : (
+            <div className="modal-overlay">
+              <div aria-modal="true" className="modal-dialog" role="dialog">
+                <p>
+                  {m.loadCheckTitle(
+                    pendingLoadCheck.model_bare,
+                    pendingLoadCheck.size_gb?.toFixed(1) ?? "?",
+                    pendingLoadCheck.host ?? "?"
+                  )}
+                </p>
+                <div className="toolbar">
+                  <button
+                    className="secondary"
+                    onClick={() => setPendingLoadCheck(null)}
+                    type="button"
+                  >
+                    {m.loadCheckCancel}
+                  </button>
+                  <button
+                    className="primary"
+                    onClick={() => {
+                      setPendingLoadCheck(null);
+                      void runPreflight();
+                    }}
+                    type="button"
+                  >
+                    {m.loadCheckContinue}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
         ) : null}
         <div className="toolbar">
           <button

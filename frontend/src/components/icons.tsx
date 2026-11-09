@@ -251,3 +251,11 @@ export const IconLevelUp = (p: IconProps) => (
     <path d="M20 20h-7a4 4 0 0 1-4-4V4.5" />
   </Svg>
 );
+
+/** A laptop running a local process — the "Local models" nav group. */
+export const IconCpu = (p: IconProps) => (
+  <Svg {...p}>
+    <rect height="10" rx="1.5" width="10" x="7" y="7" />
+    <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.5 4.5l2 2M17.5 17.5l2 2M4.5 19.5l2-2M17.5 6.5l2-2" />
+  </Svg>
+);

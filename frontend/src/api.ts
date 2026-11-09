@@ -44,6 +44,25 @@ import type {
   LocalSourceListing,
   GateCheckRecord,
   GroupIssueResult,
+  LocalGuardReport,
+  LocalHistoryRow,
+  LocalLoadConfig,
+  LocalLoadResult,
+  LocalMachine,
+  LocalMemoryEstimate,
+  LocalModelInfo,
+  LocalModelLoadCheck,
+  LocalProfileCompareResult,
+  LocalProfileCreatePayload,
+  LocalReference,
+  LocalReferenceDevices,
+  LocalResults,
+  LocalServedConfig,
+  LocalServerKind,
+  LocalServerTestResult,
+  LocalTestSession,
+  LocalTuningProfile,
+  MachineSpec,
   ProposalIssue,
   RunConfigPayload,
   ScoreRecord,
@@ -74,11 +93,19 @@ import type {
 
 export class ApiError extends Error {
   status: number;
+  /**
+   * The parsed `detail` payload, when the server sent one and it was a JSON
+   * object rather than a string. The host guard's 409s carry `{guard: ...}`
+   * here (and `tests` sometimes `{session: ...}`); a caller that needs the
+   * structured body reads `error.detail` instead of re-parsing `message`.
+   */
+  detail?: unknown;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, detail?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -112,9 +139,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     }
     const text = await response.text();
     let message = text || response.statusText;
+    let objectDetail: unknown;
     try {
       const parsed = JSON.parse(text) as {
-        detail?: string | string[] | { msg?: string }[];
+        detail?: string | string[] | { msg?: string }[] | Record<string, unknown>;
       };
       // A 422 from case validation carries one `detail` entry per offending
       // field, and FastAPI's own body errors carry objects. Joined here, so a
@@ -129,13 +157,38 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
         if (lines.length > 0) {
           message = lines.join("\n");
         }
+      } else if (parsed.detail && typeof parsed.detail === "object") {
+        // The local-tuning host guard: `{detail: {guard: GuardReport}}` (and
+        // `{detail: {session: TestSession}}` on a busy test host, or
+        // `{detail: {instances, message}}` on an unload the lab did not load
+        // itself). Kept structured in `detail` rather than stringified, so a
+        // caller that needs the shape reads `error.detail` instead of
+        // re-parsing `message` — but `message` itself is still made readable
+        // here, so a caller that ignores `detail` never shows a bare
+        // "Conflict".
+        objectDetail = parsed.detail;
+        const asRecord = parsed.detail as Record<string, unknown>;
+        if (asRecord.session && typeof asRecord.session === "object") {
+          const session = asRecord.session as { model_id?: string };
+          message = session.model_id
+            ? `A test session is already running on this host (${session.model_id}).`
+            : "A test session is already running on this host.";
+        } else if (typeof asRecord.message === "string") {
+          message = asRecord.message;
+        } else if (asRecord.guard) {
+          // Handled by the host guard modal; a plain message still matters for
+          // a caller that does not render that flow.
+          message = "This host is busy with a lab run.";
+        } else {
+          message = response.statusText || text;
+        }
       } else if (parsed.detail) {
         message = parsed.detail;
       }
     } catch {
       // Response body was not JSON; fall back to the raw text.
     }
-    throw new ApiError(message, response.status);
+    throw new ApiError(message, response.status, objectDetail);
   }
 
   if (response.status === 204) {
@@ -700,5 +753,147 @@ export const api = {
     request<HealResult>("/api/health/heal", {
       method: "POST",
       body: JSON.stringify({ action })
-    })
+    }),
+
+  // --- Tune your local model (spec 2026-11-08-local-model-tuning) ----------
+  local: {
+    getReference: () => request<LocalReference>("/api/local/reference"),
+    referenceDevices: () =>
+      request<LocalReferenceDevices>("/api/local/reference-devices"),
+
+    listMachines: () => request<LocalMachine[]>("/api/local/machines"),
+    createMachine: (payload: Omit<LocalMachine, "id" | "created_at">) =>
+      request<LocalMachine>("/api/local/machines", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      }),
+    updateMachine: (id: string, payload: Partial<Omit<LocalMachine, "id" | "created_at">>) =>
+      request<LocalMachine>(`/api/local/machines/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      }),
+    deleteMachine: (id: string) =>
+      request<void>(`/api/local/machines/${id}`, { method: "DELETE" }),
+
+    testServer: (kind: LocalServerKind, url: string) =>
+      request<LocalServerTestResult>("/api/local/servers/test", {
+        method: "POST",
+        body: JSON.stringify({ kind, url })
+      }),
+
+    estimate: (model: LocalModelInfo, config: LocalLoadConfig, machine: MachineSpec) =>
+      request<LocalMemoryEstimate>("/api/local/estimate", {
+        method: "POST",
+        body: JSON.stringify({ model, config, machine })
+      }),
+
+    guard: (kind: LocalServerKind, url: string) =>
+      request<LocalGuardReport>("/api/local/guard", {
+        method: "POST",
+        body: JSON.stringify({ kind, url })
+      }),
+
+    load: (
+      kind: LocalServerKind,
+      url: string,
+      modelId: string,
+      config: LocalLoadConfig,
+      acknowledgeGuard = false,
+      replace = false
+    ) =>
+      request<LocalLoadResult>("/api/local/load", {
+        method: "POST",
+        body: JSON.stringify({
+          kind,
+          url,
+          model_id: modelId,
+          config,
+          acknowledge_guard: acknowledgeGuard,
+          replace
+        })
+      }),
+
+    unload: (
+      kind: LocalServerKind,
+      url: string,
+      modelId: string,
+      acknowledgeGuard = false,
+      instanceId: string | null = null,
+      force = false
+    ) =>
+      request<void>("/api/local/unload", {
+        method: "POST",
+        body: JSON.stringify({
+          kind,
+          url,
+          model_id: modelId,
+          acknowledge_guard: acknowledgeGuard,
+          instance_id: instanceId,
+          force
+        })
+      }),
+
+    startTests: (
+      kind: LocalServerKind,
+      url: string,
+      model: LocalModelInfo,
+      config: LocalLoadConfig,
+      machine: MachineSpec,
+      served: LocalServedConfig,
+      acknowledgeGuard = false,
+      machineId: number | null = null,
+      estimate: LocalMemoryEstimate | null = null,
+      evaluateOnly = false
+    ) =>
+      request<LocalTestSession>("/api/local/tests", {
+        method: "POST",
+        body: JSON.stringify({
+          kind,
+          url,
+          model,
+          config,
+          machine,
+          served,
+          acknowledge_guard: acknowledgeGuard,
+          machine_id: machineId,
+          estimate,
+          evaluate_only: evaluateOnly
+        })
+      }),
+    getTestSession: (sessionId: string) =>
+      request<LocalTestSession>(`/api/local/tests/${sessionId}`),
+
+    listProfiles: (machineId: string, modelId: string) =>
+      request<LocalTuningProfile[]>(
+        `/api/local/profiles?machine_id=${encodeURIComponent(machineId)}&model_id=${encodeURIComponent(modelId)}`
+      ),
+    /** A machine's saved test runs, newest first, with the numbers that tell them apart. */
+    history: (machineId: string, modelId?: string) =>
+      request<LocalHistoryRow[]>(
+        `/api/local/history?machine_id=${encodeURIComponent(machineId)}` +
+          (modelId ? `&model_id=${encodeURIComponent(modelId)}` : "")
+      ),
+    /** Speed tests and local-model case runs, each ranked on its own terms. */
+    results: () => request<LocalResults>("/api/local/results"),
+    createProfile: (payload: LocalProfileCreatePayload) =>
+      request<LocalTuningProfile>("/api/local/profiles", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      }),
+    getProfile: (id: string) => request<LocalTuningProfile>(`/api/local/profiles/${id}`),
+    updateProfile: (id: string, changes: { label?: string; recommended?: boolean; observed_memory_gb?: number | null }) =>
+      request<LocalTuningProfile>(`/api/local/profiles/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(changes)
+      }),
+    deleteProfile: (id: string) =>
+      request<void>(`/api/local/profiles/${id}`, { method: "DELETE" }),
+    compareProfiles: (a: string, b: string) =>
+      request<LocalProfileCompareResult>(
+        `/api/local/profiles/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`
+      ),
+
+    modelLoadCheck: (model: string) =>
+      request<LocalModelLoadCheck>(`/api/local/model-load-check?model=${encodeURIComponent(model)}`)
+  }
 };
