@@ -36,6 +36,7 @@ from harness_lab_app.direct_hosts import (
     get_json,
     host_root,
 )
+from harness_lab_app.local_tuning.catalog import KV_CACHE_TYPES
 from harness_lab_app.local_tuning.contracts import (
     ArchShape,
     Completion,
@@ -671,7 +672,22 @@ def unsupported_settings(kind: ServerKind, config: LoadConfig) -> list[str]:
             hints.append(
                 "Set GPU offload in LM Studio's load panel; the API does not take it."
             )
+        if config.kv_cache_bytes != 2.0:
+            kv_type = _kv_cache_type_name(config.kv_cache_bytes)
+            hints.append(
+                f"Set K Cache Quantization and V Cache Quantization to {kv_type} in "
+                "LM Studio's load panel (tick both boxes, then reload the model); "
+                "the API does not take it, so the lab cannot apply or verify it."
+            )
     return hints
+
+
+def _kv_cache_type_name(kv_cache_bytes: float) -> str:
+    """Catalog name (``q8_0``, ``q4_0``…) for a KV cache bytes-per-element value."""
+    for name, value in KV_CACHE_TYPES.items():
+        if value == kv_cache_bytes:
+            return name
+    return f"{kv_cache_bytes} bytes per element"
 
 
 _DIFF_FIELDS = (

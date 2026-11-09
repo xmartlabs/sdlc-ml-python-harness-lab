@@ -3870,6 +3870,17 @@ button.secondary:hover {
   background: var(--panel-soft);
 }
 
+/* `.selectable` is a grid for card lists; a table row must stay a table row,
+   or every cell collapses into the first column. */
+.data-table tr.selectable {
+  display: table-row;
+  cursor: pointer;
+}
+
+.data-table tr.selectable.active {
+  background: var(--accent-soft);
+}
+
 .data-table td:not(:first-child) {
   font-variant-numeric: tabular-nums;
 }
@@ -4196,6 +4207,17 @@ button.danger:hover {
   padding: var(--space-5);
   display: grid;
   gap: var(--space-3);
+}
+
+/* A setting the lab cannot apply itself: the user must act on the server. */
+.field-warning {
+  display: block;
+  margin-top: var(--space-1);
+  padding: var(--space-2);
+  border-radius: 6px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  line-height: 1.4;
 }
 
 .local-tune-step {

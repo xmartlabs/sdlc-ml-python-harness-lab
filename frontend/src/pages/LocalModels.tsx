@@ -48,6 +48,9 @@ type StepKey = (typeof STEPS)[number]["key"];
 
 const GPU_OFFLOAD_OPTIONS = [1, 0.75, 0.5, 0.25];
 
+/** Select value prefix that tells a saved machine apart from a catalog preset id. */
+const SAVED_MACHINE_PREFIX = "saved:";
+
 /** Placeholder sent with `evaluate_only: true` — the backend ignores it and
  * reads the server's own served config instead. */
 const EMPTY_SERVED_CONFIG: LocalServedConfig = {
@@ -85,6 +88,8 @@ const MESSAGES = defineMessages({
       heading: "Your machine",
       presetLabel: "Reference machine",
       presetCustom: "Other…",
+      savedGroup: "My machines",
+      referenceGroup: "Reference machines",
       memoryKind: "Memory type",
       unified: "Unified (CPU and GPU share it)",
       discrete: "Discrete GPU + system RAM",
@@ -154,6 +159,8 @@ const MESSAGES = defineMessages({
       ollamaNote:
         "Ollama: flash attention and the KV cache type are server environment settings (OLLAMA_FLASH_ATTENTION, OLLAMA_KV_CACHE_TYPE) — set them on the server and restart it. Context, GPU offload and eval batch are applied per request.",
       lmstudioNote: "LM Studio: GPU offload beyond this request is also adjustable by hand in the app.",
+      lmstudioKvCacheWarning:
+        "LM Studio does not take this through its API. Before loading, open the model's load panel, tick K Cache Quantization and V Cache Quantization, pick {type} in both and reload — otherwise it stays f16 and the lab cannot tell.",
       tooltips: {
         contextLength:
           "Tokens the model can see at once. The harness system prompt alone is ~14k tokens, so agents need at least 32k, ideally 64k. Each doubling roughly doubles KV cache memory.",
@@ -164,7 +171,7 @@ const MESSAGES = defineMessages({
         kvCacheOnGpu:
           "Faster on GPU, but uses VRAM. Off moves the KV cache to system RAM, which is slower.",
         kvCacheType:
-          "f16 is the baseline. q8_0 halves KV cache memory with a small quality loss; q4_0 saves more at a larger quality cost.",
+          "f16 is the baseline. q8_0 halves KV cache memory with a small quality loss; q4_0 saves more at a larger quality cost. LM Studio: its API cannot set this — tick K Cache Quantization and V Cache Quantization in the load panel and pick the same type, or the server keeps f16 and the estimate will not match.",
         evalBatchSize:
           "Tokens processed per step while reading the prompt. Bigger is faster prefill, at the cost of a bigger compute buffer.",
         numExperts: "Active experts per token in a mixture-of-experts model."
@@ -304,6 +311,8 @@ const MESSAGES = defineMessages({
       heading: "Tu máquina",
       presetLabel: "Máquina de referencia",
       presetCustom: "Otra…",
+      savedGroup: "Mis máquinas",
+      referenceGroup: "Máquinas de referencia",
       memoryKind: "Tipo de memoria",
       unified: "Unificada (CPU y GPU la comparten)",
       discrete: "GPU discreta + RAM del sistema",
@@ -373,6 +382,8 @@ const MESSAGES = defineMessages({
       ollamaNote:
         "Ollama: flash attention y el tipo de caché KV son ajustes del entorno del servidor (OLLAMA_FLASH_ATTENTION, OLLAMA_KV_CACHE_TYPE) — configuralos en el servidor y reiniciá. Contexto, offload a GPU y eval batch se aplican por pedido.",
       lmstudioNote: "LM Studio: el offload a GPU más allá de este pedido también es ajustable a mano en la app.",
+      lmstudioKvCacheWarning:
+        "LM Studio no lo recibe por su API. Antes de cargar, abrí el panel de carga del modelo, tildá K Cache Quantization y V Cache Quantization, elegí {type} en los dos y recargá — si no, queda en f16 y el lab no tiene forma de saberlo.",
       tooltips: {
         contextLength:
           "Tokens que el modelo puede ver a la vez. Solo el system prompt del harness son ~14k tokens, así que los agentes necesitan al menos 32k, idealmente 64k. Cada duplicación duplica aproximadamente la memoria de caché KV.",
@@ -383,7 +394,7 @@ const MESSAGES = defineMessages({
         kvCacheOnGpu:
           "Más rápida en GPU, pero usa VRAM. Apagada mueve la caché KV a la RAM del sistema, más lento.",
         kvCacheType:
-          "f16 es la base. q8_0 reduce a la mitad la memoria de caché KV con poca pérdida de calidad; q4_0 ahorra más con más pérdida de calidad.",
+          "f16 es la base. q8_0 reduce a la mitad la memoria de caché KV con poca pérdida de calidad; q4_0 ahorra más con más pérdida de calidad. LM Studio: su API no permite fijarlo — tildá K Cache Quantization y V Cache Quantization en el panel de carga y elegí el mismo tipo, o el servidor sigue en f16 y la estimación no va a coincidir.",
         evalBatchSize:
           "Tokens procesados por paso al leer el prompt. Más grande es un prefill más rápido, a costa de un buffer de cómputo más grande.",
         numExperts: "Expertos activos por token en un modelo mixture-of-experts."
@@ -651,6 +662,12 @@ export function LocalModels() {
   // still the latest one in flight when it comes back.
   const estimateSeq = useRef(0);
 
+  // Catalog name of the selected KV cache type (f16, q8_0, q4_0…).
+  const kvCacheTypeName =
+    Object.entries(reference?.kv_cache_types ?? { f16: 2 }).find(
+      ([, bytes]) => bytes === loadConfig.kv_cache_bytes
+    )?.[0] ?? "f16";
+
   const machine: LocalMachine | undefined = savedMachines.find(
     (candidate) => candidate.name === machineName
   );
@@ -862,6 +879,7 @@ export function LocalModels() {
   const applySavedMachine = (name: string) => {
     setMachineName(name);
     const found = savedMachines.find((item) => item.name === name);
+    setPresetId(found ? `${SAVED_MACHINE_PREFIX}${found.id}` : "");
     if (found) {
       setMemoryKind(found.memory_kind);
       setGpuGb(found.gpu_gb);
@@ -870,6 +888,19 @@ export function LocalModels() {
       setWiredFraction(found.gpu_wired_fraction);
       setBandwidthGbs(found.bandwidth_gbs != null ? String(found.bandwidth_gbs) : "");
     }
+  };
+
+  // The machine select mixes saved machines (prefixed values) with catalog presets.
+  const handleMachineSelect = (value: string) => {
+    if (value.startsWith(SAVED_MACHINE_PREFIX)) {
+      const id = value.slice(SAVED_MACHINE_PREFIX.length);
+      const found = savedMachines.find((item) => item.id === id);
+      if (found) {
+        applySavedMachine(found.name);
+      }
+      return;
+    }
+    applyPreset(value);
   };
 
   const handleSaveMachine = () => {
@@ -890,6 +921,7 @@ export function LocalModels() {
       })
       .then((created) => {
         setSavedMachines((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+        setPresetId(`${SAVED_MACHINE_PREFIX}${created.id}`);
         setNotice(m.machine.saved);
       })
       .catch((err: Error) => setError(err.message));
@@ -898,7 +930,10 @@ export function LocalModels() {
   const handleDeleteMachine = (id: string) => {
     api.local
       .deleteMachine(id)
-      .then(() => setSavedMachines((current) => current.filter((item) => item.id !== id)))
+      .then(() => {
+        setSavedMachines((current) => current.filter((item) => item.id !== id));
+        setPresetId((current) => (current === `${SAVED_MACHINE_PREFIX}${id}` ? "" : current));
+      })
       .catch((err: Error) => setError(err.message));
   };
 
@@ -1279,13 +1314,27 @@ export function LocalModels() {
             <div className="form-grid">
               <label className="field">
                 <span>{m.machine.presetLabel}</span>
-                <select onChange={(event) => applyPreset(event.target.value)} value={presetId}>
+                <select onChange={(event) => handleMachineSelect(event.target.value)} value={presetId}>
                   <option value="">{m.machine.presetCustom}</option>
-                  {(reference?.machines ?? []).map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.label}
-                    </option>
-                  ))}
+                  {savedMachines.length > 0 ? (
+                    <optgroup label={m.machine.savedGroup}>
+                      {savedMachines.map((item) => (
+                        <option key={item.id} value={`${SAVED_MACHINE_PREFIX}${item.id}`}>
+                          {item.name} · {item.gpu_gb} GB
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null}
+                  <optgroup label={m.machine.referenceGroup}>
+                    {/* The catalog's own "other" entry duplicates the empty option above. */}
+                    {(reference?.machines ?? [])
+                      .filter((item) => item.id !== "other")
+                      .map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.label}
+                        </option>
+                      ))}
+                  </optgroup>
                 </select>
               </label>
               <label className="field">
@@ -1665,6 +1714,11 @@ export function LocalModels() {
                       </option>
                     ))}
                   </select>
+                  {serverKind === "lmstudio" && kvCacheTypeName !== "f16" ? (
+                    <span className="field-warning small">
+                      {m.config.lmstudioKvCacheWarning.replace("{type}", kvCacheTypeName)}
+                    </span>
+                  ) : null}
                 </label>
                 <label className="field">
                   <span>
