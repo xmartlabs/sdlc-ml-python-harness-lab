@@ -557,6 +557,14 @@ def test_unsupported_settings_lmstudio_gpu_offload():
     assert any("GPU offload" in hint for hint in hints)
 
 
+def test_unsupported_settings_lmstudio_kv_cache_type():
+    # LM Studio's load API has no KV cache quantization field: it must be set
+    # by hand (K/V Cache Quantization in the load panel) or it is never applied.
+    config = LoadConfig(context_length=8192, kv_cache_bytes=0.5625)
+    hints = servers.unsupported_settings("lmstudio", config)
+    assert any("K Cache Quantization" in hint and "q4_0" in hint for hint in hints)
+
+
 def test_unsupported_settings_none_when_fully_supported():
     config = LoadConfig(context_length=8192)
     assert servers.unsupported_settings("ollama", config) == []

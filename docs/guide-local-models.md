@@ -11,7 +11,8 @@ To measure *how reliably* a model does real work once it runs, continue with
 
 ## What the page does
 
-1. **Your machine.** Pick a reference machine or enter your own figures. The lab runs
+1. **Your machine.** Pick one of your saved machines (listed first, under *My
+   machines*), a reference machine, or enter your own figures. The lab runs
    in Docker and the server may be on another computer, so it cannot read your
    hardware: you tell it. The page shows the command that prints the exact numbers.
 2. **Your server.** LM Studio or Ollama, on `localhost` or a LAN address. *Test
@@ -94,7 +95,11 @@ is not using CUDA. Run `ollama ps` on the device; the PROCESSOR column should re
 
 - **LM Studio (0.4+)** loads through its API with context length, eval batch, flash
   attention, KV-cache offload and experts, and echoes the configuration it applied.
-  **GPU offload is set in the app's load panel**; the API does not take it. Turn on
+  **GPU offload is set in the app's load panel**; the API does not take it. The same
+  goes for the **KV cache type**: tick *K Cache Quantization* and *V Cache
+  Quantization* in the load panel, pick the type you chose in the lab and reload the
+  model. Otherwise it stays `f16`, and since LM Studio does not echo it back the lab
+  cannot detect the mismatch. Turn on
   *Serve on Local Network* to reach it from another machine.
 - **Ollama** takes context length, batch and GPU layers *per request*, so the lab sends
   them with every call. Flash attention and the KV cache type are server settings:
