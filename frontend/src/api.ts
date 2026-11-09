@@ -767,12 +767,12 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload)
       }),
-    updateMachine: (id: string, payload: Partial<Omit<LocalMachine, "id" | "created_at">>) =>
+    updateMachine: (id: number, payload: Partial<Omit<LocalMachine, "id" | "created_at">>) =>
       request<LocalMachine>(`/api/local/machines/${id}`, {
         method: "PUT",
         body: JSON.stringify(payload)
       }),
-    deleteMachine: (id: string) =>
+    deleteMachine: (id: number) =>
       request<void>(`/api/local/machines/${id}`, { method: "DELETE" }),
 
     testServer: (kind: LocalServerKind, url: string) =>
@@ -868,7 +868,7 @@ export const api = {
         `/api/local/profiles?machine_id=${encodeURIComponent(machineId)}&model_id=${encodeURIComponent(modelId)}`
       ),
     /** A machine's saved test runs, newest first, with the numbers that tell them apart. */
-    history: (machineId: string, modelId?: string) =>
+    history: (machineId: number, modelId?: string) =>
       request<LocalHistoryRow[]>(
         `/api/local/history?machine_id=${encodeURIComponent(machineId)}` +
           (modelId ? `&model_id=${encodeURIComponent(modelId)}` : "")
@@ -880,15 +880,15 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload)
       }),
-    getProfile: (id: string) => request<LocalTuningProfile>(`/api/local/profiles/${id}`),
-    updateProfile: (id: string, changes: { label?: string; recommended?: boolean; observed_memory_gb?: number | null }) =>
+    getProfile: (id: number) => request<LocalTuningProfile>(`/api/local/profiles/${id}`),
+    updateProfile: (id: number, changes: { label?: string; recommended?: boolean; observed_memory_gb?: number | null }) =>
       request<LocalTuningProfile>(`/api/local/profiles/${id}`, {
         method: "PATCH",
         body: JSON.stringify(changes)
       }),
-    deleteProfile: (id: string) =>
+    deleteProfile: (id: number) =>
       request<void>(`/api/local/profiles/${id}`, { method: "DELETE" }),
-    compareProfiles: (a: string, b: string) =>
+    compareProfiles: (a: number, b: number) =>
       request<LocalProfileCompareResult>(
         `/api/local/profiles/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`
       ),

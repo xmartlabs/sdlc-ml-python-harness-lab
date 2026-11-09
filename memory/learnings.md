@@ -2193,4 +2193,15 @@ asked to do. ADR-0073.
 - Count prompt tokens from the server's `usage.prompt_tokens`, not the requested size:
   the tokenizer decides.
 
+## 2026-11-09 — Frontend id types must match the backend's integer ids
+
+- SQLModel tables return integer `id`s, but `frontend/src/types.ts` typed the local
+  machine/profile ids as `string`. A select value parsed back with `slice()` compared
+  `"1" === 1`, so picking a saved machine silently did nothing — and because test
+  history is saved only when a machine is selected, every test went unpersisted.
+  Type ids as `number` so `tsc` flags string/number comparisons.
+- LM Studio's REST API neither takes nor echoes the KV cache quantization (K/V Cache
+  Quantization in its load panel). The lab can only record the type the user selected;
+  a reliable quantized-KV test is a manual load plus evaluate-only mode.
+
 <!-- Add new learnings above this line -->
