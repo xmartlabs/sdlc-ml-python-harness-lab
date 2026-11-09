@@ -83,6 +83,7 @@ from harness_lab_app.gateway_catalog_service import GatewayCatalogService
 from harness_lab_app.harness_lifecycle import drafting, sanitizer
 from harness_lab_app.improvement_service import ImprovementError, ImprovementService
 from harness_lab_app.leaderboard_service import LeaderboardService
+from harness_lab_app.local_api import local_router
 from harness_lab_app.observability_service import ObservabilityService
 from harness_lab_app.overview_service import OverviewService
 from harness_lab_app.run_service import (
@@ -271,6 +272,7 @@ def create_app() -> FastAPI:
     # a per-route dependency so routes added later are covered by default
     # (ADR-0015).
     app.add_middleware(SessionMiddleware)
+    app.include_router(local_router)
 
     @app.on_event("startup")
     def startup() -> None:

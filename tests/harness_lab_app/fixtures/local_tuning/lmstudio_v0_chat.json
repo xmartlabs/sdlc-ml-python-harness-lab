@@ -1,0 +1,46 @@
+{
+  "id": "chatcmpl-n6eei33eoulmn92rnvmvff",
+  "object": "chat.completion",
+  "created": 1794186620,
+  "model": "prism-ml/bonsai-27b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "",
+        "reasoning_content": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Request:** \"Say hello in five words.\"\n   -",
+        "tool_calls": []
+      },
+      "logprobs": null,
+      "finish_reason": "length"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 16,
+    "completion_tokens": 32,
+    "total_tokens": 48,
+    "completion_tokens_details": {
+      "reasoning_tokens": 32
+    }
+  },
+  "stats": {
+    "tokens_per_second": 79.38011809713053,
+    "time_to_first_token": 0.24906299999999998,
+    "generation_time": 0.639589,
+    "stop_reason": "maxPredictedTokensReached"
+  },
+  "model_info": {
+    "arch": "qwen35",
+    "quant": "Q1_0",
+    "format": "gguf",
+    "context_length": 50432
+  },
+  "runtime": {
+    "name": "llama.cpp-win-x86_64-nvidia-cuda12-avx2",
+    "version": "2.65.1",
+    "supported_formats": [
+      "gguf"
+    ]
+  }
+}

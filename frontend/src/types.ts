@@ -1773,3 +1773,404 @@ export type HealResult = {
   ok: boolean;
   detail: string;
 };
+
+/**
+ * "Tune your local model" (`/local/tune`): mirrors
+ * `src/harness_lab_app/local_tuning/contracts.py` field for field. Prefixed
+ * `Local…` only where the bare name would collide with an existing type.
+ */
+export type LocalServerKind = "lmstudio" | "ollama";
+export type LocalMemoryKind = "unified" | "discrete";
+
+export type LocalVerdict = "ok" | "tight" | "fail" | "inconclusive" | "not_applicable";
+export type LocalConfidence = "exact" | "good" | "rough";
+
+export type RefMachine = {
+  id: string;
+  label: string;
+  memory_kind: LocalMemoryKind;
+  gpu_gb: number;
+  ram_gb: number;
+  reserve_gb: number;
+  /** Memory bandwidth, GB/s; 0 = unknown. */
+  bandwidth_gbs: number;
+  /** Present when the preset's memory layout is not the Mac default (0.75) — e.g. a Jetson's unified 1.0. */
+  gpu_wired_fraction?: number;
+};
+
+export type LocalReference = {
+  machines: RefMachine[];
+  context_options: number[];
+  eval_batch_options: number[];
+  kv_cache_types: Record<string, number>;
+  default_load: LocalLoadConfig;
+  defaults: { lmstudio_url: string; ollama_url: string };
+};
+
+export type LocalMachine = {
+  id: string;
+  name: string;
+  memory_kind: LocalMemoryKind;
+  gpu_gb: number;
+  ram_gb: number;
+  reserve_gb: number;
+  gpu_wired_fraction: number;
+  bandwidth_gbs: number | null;
+  notes: string;
+  created_at: string;
+};
+
+export type MachineSpec = {
+  memory_kind: LocalMemoryKind;
+  gpu_gb: number;
+  ram_gb: number;
+  reserve_gb: number;
+  gpu_wired_fraction: number;
+  bandwidth_gbs?: number | null;
+};
+
+export type LocalArchShape = {
+  layers: number;
+  kv_layers: number;
+  kv_heads: number;
+  head_dim: number;
+  sliding_window: number | null;
+  swa_layers: number;
+};
+
+export type LocalServedConfig = {
+  context_length: number | null;
+  gpu_offload: number | null;
+  flash_attention: boolean | null;
+  offload_kv_cache_to_gpu: boolean | null;
+  eval_batch_size: number | null;
+  num_experts: number | null;
+  parallel: number | null;
+  vram_bytes: number | null;
+  /** The instance the lab loaded, when the backend can tell them apart. */
+  instance_id: string | null;
+};
+
+export type LocalModelInfo = {
+  id: string;
+  display_name: string;
+  arch: string;
+  params: string;
+  quantization: string;
+  bits_per_weight: number | null;
+  size_bytes: number | null;
+  max_context: number | null;
+  is_moe: boolean;
+  supports_tools: boolean | null;
+  loaded: boolean;
+  instance_ids: string[];
+  served: LocalServedConfig | null;
+  shape: LocalArchShape | null;
+};
+
+export type LocalLoadConfig = {
+  context_length: number;
+  gpu_offload: number;
+  flash_attention: boolean | null;
+  offload_kv_cache_to_gpu: boolean | null;
+  eval_batch_size: number | null;
+  num_experts: number | null;
+  parallel: number;
+  kv_cache_bytes: number;
+};
+
+export type LocalConfigDiff = {
+  field: string;
+  requested: unknown;
+  served: unknown;
+};
+
+export type LocalMemoryBreakdown = {
+  weights_gb: number;
+  kv_cache_gb: number;
+  overhead_gb: number;
+  total_gb: number;
+  gpu_gb: number;
+  ram_gb: number;
+  available_gb: number;
+  low_gb: number | null;
+  high_gb: number | null;
+};
+
+export type LocalMemoryEstimate = {
+  breakdown: LocalMemoryBreakdown;
+  verdict: LocalVerdict;
+  confidence: LocalConfidence;
+  lever: string;
+  notes: string[];
+};
+
+/** How a measured write speed compares to the hardware's bandwidth ceiling. */
+export type LocalHeadroomLevel =
+  | "near_ceiling"
+  | "some_headroom"
+  | "far_below"
+  | "compute_bound";
+
+export type LocalHeadroom = {
+  level: LocalHeadroomLevel;
+  ceiling_tps: number;
+  fraction: number;
+  typical_tps: [number, number];
+  bytes_per_token_gb: number;
+  reading: string;
+};
+
+/** How a reference device holds its memory. */
+export type LocalReferenceDeviceKind = "gpu" | "unified" | "cpu";
+
+/** One piece of hardware the lab keeps published speeds for. */
+export type LocalReferenceDevice = {
+  id: string;
+  label: string;
+  kind: LocalReferenceDeviceKind;
+  /** Memory bandwidth, GB/s; null = unknown (e.g. H100, where PCIe/SXM differ). */
+  bandwidth_gbs: number | null;
+  memory: string;
+};
+
+/** One model the lab keeps published speeds for. */
+export type LocalReferenceModel = {
+  id: string;
+  label: string;
+  params: string;
+  quant: string;
+  /** File size in GB, when a server or llama-bench reported one. */
+  size_gb: number | null;
+};
+
+/** One published single-user speed for a model/device pair (`REFERENCE_DEVICES`). */
+export type LocalReferenceRow = {
+  model: string;
+  device: string;
+  tg: number;
+  pp: number | null;
+  runtime: string;
+  note: string;
+  source: string;
+  /** Read from a summary table or a third-party aggregator, not a raw bench row. */
+  secondary: boolean;
+  /** The bandwidth ceiling for this model/device pair, when computable. */
+  ceiling_tps: number | null;
+  /** `tg / ceiling_tps`, when both are known. */
+  fraction: number | null;
+};
+
+export type LocalReferenceDevices = {
+  devices: LocalReferenceDevice[];
+  models: LocalReferenceModel[];
+  rows: LocalReferenceRow[];
+};
+
+export type LocalTestName = "fit" | "speed" | "window" | "agent";
+
+export type LocalTestResult = {
+  name: LocalTestName;
+  verdict: LocalVerdict;
+  reading: string;
+  detail: Record<string, unknown>;
+};
+
+export type LocalTestSession = {
+  id: string;
+  server_url: string;
+  model_id: string;
+  status: "running" | "done" | "failed";
+  current: string;
+  results: LocalTestResult[];
+  error: string;
+  /** The history row this session was saved as (a machine was given), once it finished. */
+  profile_id: string | null;
+};
+
+export type LocalActiveRunRef = {
+  run_id: string;
+  state: string;
+  model: string;
+  experiment_id: string | null;
+};
+
+export type LocalGuardReport = {
+  host: string;
+  running: LocalActiveRunRef[];
+  queued: LocalActiveRunRef[];
+  clear: boolean;
+  /** True when gateway routing could not be fetched, so gateway runs on this host could not be checked. */
+  routing_unknown: boolean;
+};
+
+export type LocalServerTestResult = {
+  kind: LocalServerKind;
+  url: string;
+  reachable: boolean;
+  models: LocalModelInfo[];
+  error: string;
+};
+
+export type LocalLoadResult = {
+  served: LocalServedConfig;
+  diff: LocalConfigDiff[];
+  unsupported: string[];
+  /** True when the model was already loaded with this config and nothing was loaded. */
+  reused: boolean;
+};
+
+/** The 409 body `load`/`unload`/`tests` answer with when the host guard fires. */
+export type LocalGuardBlockedDetail = {
+  guard: LocalGuardReport;
+};
+
+/** The 409 body `tests` answers with when a session is already running on the host. */
+export type LocalTestsBusyDetail = {
+  session: LocalTestSession;
+};
+
+/** The 409 body `tests` answers with in evaluate-only mode when the model is not loaded. */
+export type LocalNotLoadedDetail = {
+  not_loaded: string;
+  message: string;
+};
+
+/**
+ * The 409 body `unload` answers with when the model has instances the lab
+ * did not load itself — unloading needs an explicit `force: true` to proceed.
+ */
+export type LocalUnloadForeignInstancesDetail = {
+  instances: string[];
+  message: string;
+};
+
+export type LocalTuningProfile = {
+  id: string;
+  machine_id: string;
+  server_kind: LocalServerKind;
+  server_url: string;
+  model_id: string;
+  label: string;
+  requested_config: LocalLoadConfig;
+  served_config: LocalServedConfig;
+  estimate: LocalMemoryEstimate;
+  results: LocalTestResult[];
+  observed_memory_gb: number | null;
+  recommended: boolean;
+  created_at: string;
+};
+
+export type LocalProfileCreatePayload = {
+  machine_id: string;
+  server_kind: LocalServerKind;
+  server_url: string;
+  model_id: string;
+  label: string;
+  requested_config: LocalLoadConfig;
+  served_config: LocalServedConfig;
+  estimate: LocalMemoryEstimate;
+  results: LocalTestResult[];
+  observed_memory_gb?: number | null;
+};
+
+/** One of the handful of numbers a history row and a comparison need (`history.summarize`). */
+export type LocalResultSummary = {
+  verdicts: Partial<Record<LocalTestName, LocalVerdict>>;
+  seconds_per_step: number | null;
+  read_tokens_per_second: number | null;
+  write_tokens_per_second: number | null;
+  agent_passed: number | null;
+  agent_total: number | null;
+  context_length: number | null;
+  estimated_gb: number | null;
+};
+
+/** One row of `GET /api/local/history`: a saved profile with its summary numbers. */
+export type LocalHistoryRow = {
+  profile: LocalTuningProfile;
+  summary: LocalResultSummary;
+};
+
+/** Which side a metric favors, "tie" within noise, or "" when not measured on both. */
+export type LocalComparisonWinner = "a" | "b" | "tie" | "";
+
+export type LocalComparisonMetricRow = {
+  key: string;
+  label: string;
+  better: "higher" | "lower";
+  a: number | null;
+  b: number | null;
+  delta_pct: number | null;
+  winner: LocalComparisonWinner;
+};
+
+export type LocalComparisonVerdictRow = {
+  name: LocalTestName;
+  a: LocalVerdict | null;
+  b: LocalVerdict | null;
+  winner: LocalComparisonWinner;
+};
+
+export type LocalComparison = {
+  rows: LocalComparisonMetricRow[];
+  verdicts: LocalComparisonVerdictRow[];
+  overall: "a" | "b" | "tie";
+  summary: string;
+  noise_pct: number;
+};
+
+export type LocalProfileCompareResult = {
+  a: LocalTuningProfile | null;
+  b: LocalTuningProfile | null;
+  comparable: boolean;
+  reason: string;
+  /** Present whenever `comparable` is true. */
+  comparison?: LocalComparison;
+};
+
+/** `GET /api/local/results`: speed-test ranking and local-model case runs. */
+export type LocalSpeedRow = LocalResultSummary & {
+  profile_id: string;
+  machine: string;
+  machine_id: string;
+  model_id: string;
+  label: string;
+  server_kind: LocalServerKind;
+  recommended: boolean;
+  created_at: string;
+  /** Null when the speed test recorded none (no bandwidth/model size, or an older row). */
+  headroom?: LocalHeadroom | null;
+  /** The reference model id matching this row's model, or null if none matched. */
+  reference_model?: string | null;
+};
+
+export type LocalCaseRow = {
+  model: string;
+  harness: string;
+  case_id: string;
+  /** The condition label the run answered for, or the prompt variant without one. */
+  arm: string;
+  runs: number;
+  validated_runs: number;
+  passed_runs: number;
+  test_pass_rate: number | null;
+  median_minutes: number | null;
+};
+
+export type LocalResults = {
+  speed: LocalSpeedRow[];
+  cases: LocalCaseRow[];
+};
+
+/** `GET /api/local/model-load-check`: whether the host already has the model
+ * loaded, used by New evaluation's "Check configuration" guard. */
+export type LocalModelLoadCheck = {
+  model: string;
+  host: string | null;
+  server_kind: LocalServerKind | null;
+  model_bare: string;
+  loaded: boolean | null;
+  size_gb: number | null;
+  guard: LocalGuardReport | null;
+};

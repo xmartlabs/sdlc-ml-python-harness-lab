@@ -344,6 +344,17 @@ def _apply_sqlite_compat_migrations() -> None:
                     )
                 )
 
+        local_machine_columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('localmachine')")
+            ).fetchall()
+        }
+        if local_machine_columns and "bandwidth_gbs" not in local_machine_columns:
+            connection.execute(
+                text("ALTER TABLE localmachine ADD COLUMN bandwidth_gbs FLOAT")
+            )
+
         _migrate_staged_skills(connection)
 
 

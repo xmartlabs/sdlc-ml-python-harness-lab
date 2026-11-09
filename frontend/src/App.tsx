@@ -19,6 +19,8 @@ import { HarnessByModel } from "./pages/HarnessByModel";
 import { Home } from "./pages/Home";
 import { Improvements } from "./pages/Improvements";
 import { Login } from "./pages/Login";
+import { LocalModels } from "./pages/LocalModels";
+import { LocalResults } from "./pages/LocalResults";
 import { NewEvaluation } from "./pages/NewEvaluation";
 import { Runs } from "./pages/Runs";
 import { Settings } from "./pages/Settings";
@@ -319,6 +321,8 @@ export default function App() {
         <Route element={<Repositories />} path="/evidence/repositories" />
         <Route element={<RepositoryDetail />} path="/evidence/repositories/:targetId" />
         <Route element={<Skills />} path="/evidence/skills" />
+        <Route element={<LocalModels />} path="/local/tune" />
+        <Route element={<LocalResults />} path="/local/results" />
         <Route
           element={
             <>
