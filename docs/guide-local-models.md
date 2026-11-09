@@ -96,10 +96,12 @@ is not using CUDA. Run `ollama ps` on the device; the PROCESSOR column should re
 - **LM Studio (0.4+)** loads through its API with context length, eval batch, flash
   attention, KV-cache offload and experts, and echoes the configuration it applied.
   **GPU offload is set in the app's load panel**; the API does not take it. The same
-  goes for the **KV cache type**: tick *K Cache Quantization* and *V Cache
-  Quantization* in the load panel, pick the type you chose in the lab and reload the
-  model. Otherwise it stays `f16`, and since LM Studio does not echo it back the lab
-  cannot detect the mismatch. Turn on
+  goes for the **KV cache type**, and a load sent from the lab may fall back to
+  LM Studio's defaults (`f16`). To test a quantized KV cache reliably, load the model
+  in LM Studio yourself with *K Cache Quantization* and *V Cache Quantization* ticked
+  and set to the type you chose, then pick *I load it myself — evaluate only* in
+  step 4. LM Studio never echoes the KV cache type back, so the lab records the type
+  you selected and marks it as unverifiable. Turn on
   *Serve on Local Network* to reach it from another machine.
 - **Ollama** takes context length, batch and GPU layers *per request*, so the lab sends
   them with every call. Flash attention and the KV cache type are server settings:

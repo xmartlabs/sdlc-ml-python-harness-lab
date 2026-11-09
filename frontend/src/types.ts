@@ -1808,7 +1808,7 @@ export type LocalReference = {
 };
 
 export type LocalMachine = {
-  id: string;
+  id: number;
   name: string;
   memory_kind: LocalMemoryKind;
   gpu_gb: number;
@@ -1985,7 +1985,7 @@ export type LocalTestSession = {
   results: LocalTestResult[];
   error: string;
   /** The history row this session was saved as (a machine was given), once it finished. */
-  profile_id: string | null;
+  profile_id: number | null;
 };
 
 export type LocalActiveRunRef = {
@@ -2046,8 +2046,8 @@ export type LocalUnloadForeignInstancesDetail = {
 };
 
 export type LocalTuningProfile = {
-  id: string;
-  machine_id: string;
+  id: number;
+  machine_id: number;
   server_kind: LocalServerKind;
   server_url: string;
   model_id: string;
@@ -2062,7 +2062,7 @@ export type LocalTuningProfile = {
 };
 
 export type LocalProfileCreatePayload = {
-  machine_id: string;
+  machine_id: number;
   server_kind: LocalServerKind;
   server_url: string;
   model_id: string;
@@ -2131,9 +2131,9 @@ export type LocalProfileCompareResult = {
 
 /** `GET /api/local/results`: speed-test ranking and local-model case runs. */
 export type LocalSpeedRow = LocalResultSummary & {
-  profile_id: string;
+  profile_id: number;
   machine: string;
-  machine_id: string;
+  machine_id: number;
   model_id: string;
   label: string;
   server_kind: LocalServerKind;

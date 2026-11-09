@@ -160,7 +160,7 @@ const MESSAGES = defineMessages({
         "Ollama: flash attention and the KV cache type are server environment settings (OLLAMA_FLASH_ATTENTION, OLLAMA_KV_CACHE_TYPE) — set them on the server and restart it. Context, GPU offload and eval batch are applied per request.",
       lmstudioNote: "LM Studio: GPU offload beyond this request is also adjustable by hand in the app.",
       lmstudioKvCacheWarning:
-        "LM Studio does not take this through its API. Before loading, open the model's load panel, tick K Cache Quantization and V Cache Quantization, pick {type} in both and reload — otherwise it stays f16 and the lab cannot tell.",
+        "LM Studio does not take this through its API, and a load from the lab may use its defaults (f16). To test {type} reliably: load the model in LM Studio yourself with K Cache Quantization and V Cache Quantization ticked and set to {type}, then pick \"I load it myself — evaluate only\" in step 4. The lab cannot verify it either way.",
       tooltips: {
         contextLength:
           "Tokens the model can see at once. The harness system prompt alone is ~14k tokens, so agents need at least 32k, ideally 64k. Each doubling roughly doubles KV cache memory.",
@@ -208,6 +208,8 @@ const MESSAGES = defineMessages({
       context: "Context",
       flashAttention: "Flash attention",
       kvOnGpu: "KV cache on GPU",
+      kvType: "KV cache type",
+      kvTypeUnverified: "(set by hand in LM Studio — not verifiable)",
       evalBatch: "Eval batch",
       parallel: "Parallel",
       observedLabel: "Memory the OS shows (GB)",
@@ -383,7 +385,7 @@ const MESSAGES = defineMessages({
         "Ollama: flash attention y el tipo de caché KV son ajustes del entorno del servidor (OLLAMA_FLASH_ATTENTION, OLLAMA_KV_CACHE_TYPE) — configuralos en el servidor y reiniciá. Contexto, offload a GPU y eval batch se aplican por pedido.",
       lmstudioNote: "LM Studio: el offload a GPU más allá de este pedido también es ajustable a mano en la app.",
       lmstudioKvCacheWarning:
-        "LM Studio no lo recibe por su API. Antes de cargar, abrí el panel de carga del modelo, tildá K Cache Quantization y V Cache Quantization, elegí {type} en los dos y recargá — si no, queda en f16 y el lab no tiene forma de saberlo.",
+        "LM Studio no lo recibe por su API, y una carga desde el lab puede usar sus valores por defecto (f16). Para probar {type} de forma confiable: cargá el modelo vos en LM Studio con K Cache Quantization y V Cache Quantization tildados en {type}, y en el paso 4 elegí \"Lo cargo yo — solo evaluar\". En ningún caso el lab puede verificarlo.",
       tooltips: {
         contextLength:
           "Tokens que el modelo puede ver a la vez. Solo el system prompt del harness son ~14k tokens, así que los agentes necesitan al menos 32k, idealmente 64k. Cada duplicación duplica aproximadamente la memoria de caché KV.",
@@ -431,6 +433,8 @@ const MESSAGES = defineMessages({
       context: "Contexto",
       flashAttention: "Flash attention",
       kvOnGpu: "Caché KV en GPU",
+      kvType: "Tipo de caché KV",
+      kvTypeUnverified: "(se fija a mano en LM Studio — no verificable)",
       evalBatch: "Eval batch",
       parallel: "Paralelo",
       observedLabel: "Memoria que muestra el SO (GB)",
@@ -649,7 +653,7 @@ export function LocalModels() {
   const [renameLabel, setRenameLabel] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [history, setHistory] = useState<LocalHistoryRow[]>([]);
-  const [compareSelection, setCompareSelection] = useState<string[]>([]);
+  const [compareSelection, setCompareSelection] = useState<number[]>([]);
   const [compareResult, setCompareResult] = useState<{
     comparable: boolean;
     reason: string;
@@ -893,7 +897,7 @@ export function LocalModels() {
   // The machine select mixes saved machines (prefixed values) with catalog presets.
   const handleMachineSelect = (value: string) => {
     if (value.startsWith(SAVED_MACHINE_PREFIX)) {
-      const id = value.slice(SAVED_MACHINE_PREFIX.length);
+      const id = Number(value.slice(SAVED_MACHINE_PREFIX.length));
       const found = savedMachines.find((item) => item.id === id);
       if (found) {
         applySavedMachine(found.name);
@@ -927,7 +931,7 @@ export function LocalModels() {
       .catch((err: Error) => setError(err.message));
   };
 
-  const handleDeleteMachine = (id: string) => {
+  const handleDeleteMachine = (id: number) => {
     api.local
       .deleteMachine(id)
       .then(() => {
@@ -1061,7 +1065,7 @@ export function LocalModels() {
         machineSpec,
         loadResult?.served ?? EMPTY_SERVED_CONFIG,
         acknowledgeGuard,
-        machine ? Number(machine.id) : null,
+        machine ? machine.id : null,
         estimate,
         evaluateOnly
       )
@@ -1131,14 +1135,14 @@ export function LocalModels() {
       .finally(() => setRenaming(false));
   };
 
-  const handleMarkRecommended = (id: string) => {
+  const handleMarkRecommended = (id: number) => {
     api.local
       .updateProfile(id, { recommended: true })
       .then(() => refreshHistory())
       .catch((err: Error) => setError(err.message));
   };
 
-  const handleDeleteHistoryRow = (id: string) => {
+  const handleDeleteHistoryRow = (id: number) => {
     if (!window.confirm(m.resultStep.confirmDelete)) {
       return;
     }
@@ -1151,7 +1155,7 @@ export function LocalModels() {
       .catch((err: Error) => setError(err.message));
   };
 
-  const toggleCompareSelection = (id: string) => {
+  const toggleCompareSelection = (id: number) => {
     setCompareResult(null);
     setCompareSelection((current) => {
       if (current.includes(id)) {
@@ -1844,7 +1848,12 @@ export function LocalModels() {
             ) : (
               <div className="panel subtle">
                 <h3>{m.testStep.servedConfigHeading}</h3>
-                <ServedConfigSummary messages={m} served={selectedModel?.served ?? EMPTY_SERVED_CONFIG} />
+                <ServedConfigSummary
+                  kvType={kvCacheTypeName}
+                  kvTypeUnverified={serverKind === "lmstudio"}
+                  messages={m}
+                  served={selectedModel?.served ?? EMPTY_SERVED_CONFIG}
+                />
               </div>
             )}
 
@@ -1915,7 +1924,12 @@ export function LocalModels() {
             {loadResult ? (
               <div className="panel subtle">
                 <h3>{m.resultStep.servedConfigHeading}</h3>
-                <ServedConfigSummary messages={m} served={loadResult.served} />
+                <ServedConfigSummary
+                  kvType={kvCacheTypeName}
+                  kvTypeUnverified={serverKind === "lmstudio"}
+                  messages={m}
+                  served={loadResult.served}
+                />
               </div>
             ) : null}
 
@@ -2102,10 +2116,15 @@ export function LocalModels() {
 
 function ServedConfigSummary({
   served,
-  messages
+  messages,
+  kvType = null,
+  kvTypeUnverified = false
 }: {
   served: LocalServedConfig;
   messages: ReturnType<typeof useMessages<(typeof MESSAGES)["en"]>>;
+  /** The KV cache type the lab asked for; servers never echo it back. */
+  kvType?: string | null;
+  kvTypeUnverified?: boolean;
 }) {
   const yesNo = (value: boolean | null) =>
     value === null ? "—" : value ? messages.server.yes : messages.server.no;
@@ -2123,6 +2142,14 @@ function ServedConfigSummary({
         <span className="muted small">{messages.resultStep.kvOnGpu}</span>{" "}
         {yesNo(served.offload_kv_cache_to_gpu)}
       </div>
+      {kvType ? (
+        <div>
+          <span className="muted small">{messages.resultStep.kvType}</span> {kvType}{" "}
+          {kvTypeUnverified ? (
+            <span className="muted small">{messages.resultStep.kvTypeUnverified}</span>
+          ) : null}
+        </div>
+      ) : null}
       <div>
         <span className="muted small">{messages.resultStep.evalBatch}</span>{" "}
         {served.eval_batch_size ?? "—"}
