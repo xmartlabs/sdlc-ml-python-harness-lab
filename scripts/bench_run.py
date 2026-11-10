@@ -35,10 +35,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -601,6 +602,18 @@ def run_models(args: argparse.Namespace) -> tuple[str, ...]:
         getattr(args, "executor_model", None),
         getattr(args, "planner_model", None),
     )
+    return tuple(dict.fromkeys(str(m) for m in candidates if m))
+
+
+def usage_models(
+    args: argparse.Namespace, executor_model: str | None
+) -> tuple[str, ...]:
+    """The models a run's usage is attributed to: the resolved executor first.
+
+    ``executor_model`` may come from the run record rather than the command
+    line, so :func:`run_models` alone can miss it.
+    """
+    candidates = (executor_model, getattr(args, "planner_model", None))
     return tuple(dict.fromkeys(str(m) for m in candidates if m))
 
 
@@ -1963,6 +1976,11 @@ def stamp_event_line(line: str, now_iso: str | None = None) -> str:
     return f'{{"_received_at":"{received}",' + line[1:]
 
 
+def step_clock() -> float:
+    """Monotonic seconds for timing harness steps (a seam for tests)."""
+    return time.monotonic()
+
+
 def run_opencode(
     cmd: list[str],
     log_path: Path,
@@ -2083,12 +2101,17 @@ def parse_log_usage(log_path: Path) -> dict | None:
     if files_touched:
         result["files_touched"] = sorted(files_touched)
 
-    # Detected model
-    m = re.search(
-        r"(?:Using model|model)[:\s]+([a-zA-Z0-9/._:\-]+)", text, re.IGNORECASE
-    )
-    if m:
-        result["detected_model"] = m.group(1)
+    # Detected model. opencode's --print-logs names it exactly on every stream
+    # line; the loose fallback once read "tracking" out of ordinary prose.
+    served = re.search(r"providerID=(\S+) modelID=(\S+)", text)
+    if served:
+        result["detected_model"] = f"{served.group(1)}/{served.group(2)}"
+    else:
+        m = re.search(
+            r"(?:Using model|model)[:\s]+([a-zA-Z0-9/._:\-]+)", text, re.IGNORECASE
+        )
+        if m:
+            result["detected_model"] = m.group(1)
 
     # Detected session/provider
     s = re.search(r"session[_\-]?id[:\s]+([a-zA-Z0-9\-]+)", text, re.IGNORECASE)
@@ -2131,69 +2154,156 @@ def pull_usage_litellm(run_id: str) -> dict | None:
     return None
 
 
-def pull_usage_opencode_db(run_id: str) -> dict | None:
-    """Query the local opencode SQLite DB for token usage summed across all sessions for this run.
+# Every session opencode opens is announced in its own --print-logs output as
+# `message=created id=ses_… … parentID=…` — the step's main session and every
+# sub-agent session it spawns. That line is the only join key that survives
+# both runner layouts: the session title is invented by the model (opencode's
+# `title` agent), and the session directory is `/app` for a full-harness run
+# but `/app/workspace/<run>` for a masked bare one (ADR-0049).
+_OPENCODE_SESSION_RE = re.compile(r"message=created id=(ses_[A-Za-z0-9]+)")
 
-    Matches sessions where the title contains run_id and directory is the repo root.
-    time_minutes = sum of per-session durations (excludes user breaks between steps).
-    The gateway always reports cost=0.0, so we leave cost_usd null.
+
+def opencode_session_ids(log_paths: Sequence[Path]) -> list[str]:
+    """Every opencode session id the run's own logs announce, in order, once."""
+    seen: dict[str, None] = {}
+    for path in log_paths:
+        if not path.exists():
+            continue
+        for match in _OPENCODE_SESSION_RE.finditer(path.read_text(errors="replace")):
+            seen.setdefault(match.group(1), None)
+    return list(seen)
+
+
+def opencode_db_path() -> Path:
+    """Where opencode keeps its sessions: ``$XDG_DATA_HOME`` or ``~/.local/share``."""
+    root = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(root) / "opencode" / "opencode.db"
+
+
+def _opencode_token_totals(cur: Any, ids: Sequence[str]) -> tuple[list[str], tuple]:
+    """The run's sessions (its own plus their sub-agents) and their token sums."""
+    marks = ",".join("?" for _ in ids)
+    cur.execute(
+        f"SELECT id FROM session WHERE id IN ({marks}) "  # nosec B608 - placeholders only
+        f"OR parent_id IN ({marks})",
+        (*ids, *ids),
+    )
+    every = sorted({row[0] for row in cur.fetchall()})
+    if not every:
+        return [], ()
+    marks = ",".join("?" for _ in every)
+    cur.execute(
+        f"""
+        SELECT
+            COALESCE(SUM(tokens_input), 0),
+            COALESCE(SUM(tokens_output), 0),
+            COALESCE(SUM(tokens_reasoning), 0),
+            COALESCE(SUM(tokens_cache_read), 0),
+            COALESCE(SUM(tokens_cache_write), 0),
+            COALESCE(SUM(cost), 0)
+        FROM session WHERE id IN ({marks})
+        """,  # nosec B608 - placeholders only
+        every,
+    )
+    return every, cur.fetchone()
+
+
+def _opencode_work_counts(cur: Any, every: Sequence[str]) -> tuple[int, int, int]:
+    """``(turns, model_ms, tool_calls)`` for the given sessions.
+
+    One assistant message is one model turn, and its ``time`` brackets the
+    request: the sum is how long the model itself was working, which the step
+    clock (harness start-up, tool execution) does not isolate. Zeros when the
+    schema or SQLite build cannot answer — these are a bonus over the token
+    totals, never a reason to lose them.
     """
     import sqlite3
 
-    db_path = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
-    if not db_path.exists():
+    marks = ",".join("?" for _ in every)
+    try:
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(*),
+                COALESCE(SUM(
+                    json_extract(data, '$.time.completed')
+                    - json_extract(data, '$.time.created')
+                ), 0)
+            FROM message
+            WHERE session_id IN ({marks})
+              AND json_extract(data, '$.role') = 'assistant'
+            """,  # nosec B608 - placeholders only
+            list(every),
+        )
+        turns, model_ms = cur.fetchone()
+        cur.execute(
+            f"SELECT COUNT(*) FROM part WHERE session_id IN ({marks}) "  # nosec B608
+            "AND json_extract(data, '$.type') = 'tool'",
+            list(every),
+        )
+        (tool_calls,) = cur.fetchone()
+    except sqlite3.Error:
+        return 0, 0, 0
+    return int(turns or 0), int(model_ms or 0), int(tool_calls or 0)
+
+
+def pull_usage_opencode_db(
+    session_ids: Sequence[str], db_path: Path | None = None
+) -> dict | None:
+    """Token and work totals for exactly the sessions this run opened.
+
+    Joined by session id — never by title or directory, which silently matched
+    nothing for every bare arm and for any run whose model titled its session
+    without the run id. Sub-agent sessions are included twice over: their
+    ``created`` line is in the log, and ``parent_id`` catches one that was not.
+
+    ``output_tokens`` is everything the model generated, reasoning included:
+    opencode counts reasoning separately, and a model that thinks for 40k tokens
+    has generated them whether or not they reached the answer. The reasoning
+    share is kept beside it.
+
+    Never raises: usage is evidence about a run, not a reason to fail it.
+    """
+    import sqlite3
+
+    ids = list(dict.fromkeys(session_ids))
+    path = db_path or opencode_db_path()
+    if not ids or not path.exists():
         return None
     try:
-        con = sqlite3.connect(str(db_path))
-        cur = con.cursor()
-        cur.execute(
-            """
-            SELECT
-                COUNT(*) as session_count,
-                SUM(tokens_input) as total_input,
-                SUM(tokens_output) as total_output,
-                SUM(tokens_cache_read) as total_cache_read,
-                SUM(tokens_cache_write) as total_cache_write,
-                SUM(tokens_reasoning) as total_reasoning,
-                SUM(time_updated - time_created) as total_active_ms
-            FROM session
-            WHERE title LIKE ?
-              AND directory = ?
-              AND (tokens_input > 0 OR tokens_output > 0)
-            """,
-            (f"%{run_id}%", str(REPO_ROOT)),
-        )
-        row = cur.fetchone()
-        con.close()
-        if not row or row[0] == 0:
-            return None
-        (
-            session_count,
-            total_input,
-            total_output,
-            cache_read,
-            cache_write,
-            reasoning,
-            total_active_ms,
-        ) = row
-        result: dict = {
-            "input_tokens": int(total_input or 0) or None,
-            "output_tokens": int(total_output or 0) or None,
-        }
-        if reasoning:
-            result["tokens_reasoning"] = int(reasoning)
-        if cache_read:
-            result["tokens_cache_read"] = int(cache_read)
-        if cache_write:
-            result["tokens_cache_write"] = int(cache_write)
-        if session_count and session_count > 1:
-            result["turns"] = int(session_count)
-        if total_active_ms and total_active_ms > 0:
-            # Sum of per-session durations = actual LLM execution time (excludes user breaks between steps)
-            result["time_minutes"] = round(total_active_ms / 60000.0, 1)
-        return result
-    except Exception:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
         return None
+    try:
+        cur = con.cursor()
+        every, totals = _opencode_token_totals(cur, ids)
+        if not every:
+            return None
+        turns, model_ms, tool_calls = _opencode_work_counts(cur, every)
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+    tokens_in, tokens_out, reasoning, cache_read, cache_write, cost = totals
+    result: dict = {
+        "sessions": len(every),
+        "input_tokens": int(tokens_in),
+        "output_tokens": int(tokens_out) + int(reasoning),
+        "reasoning_tokens": int(reasoning),
+        "cache_read_tokens": int(cache_read),
+        "cache_creation_tokens": int(cache_write),
+        "turns": turns or None,
+        "tool_calls": tool_calls or None,
+        "model_minutes": round(model_ms / 60000.0, 2) if model_ms else None,
+        "usage_source": "opencode_db",
+    }
+    # opencode prices a model from its catalog; a direct-host model has no
+    # price there and reports 0. A positive cost is kept; a zero is left to
+    # `self_hosted_cost`, which knows whether that zero is a fact about the
+    # model or a gap in opencode's catalog.
+    if cost:
+        result["cost_usd"] = round(float(cost), 6)
+    return result
 
 
 def pull_usage_langfuse(session_id: str) -> dict | None:
@@ -2352,6 +2462,97 @@ def write_usage_json(out_dir: Path, usage: dict | None) -> Path:
     path = out_dir / "usage.json"
     path.write_text(json.dumps(skeleton, indent=2))
     return path
+
+
+# Model ids served by a machine the operator owns. Direct lanes carry the
+# backend as an opencode provider prefix; gateway aliases name it as the alias
+# prefix (``gateway/lmstudio-qwen3.6-35b``), the same convention the gateway
+# catalog groups by.
+_SELF_HOSTED_DIRECT = ("lmstudio/", "ollama/")
+_SELF_HOSTED_ALIASES = ("lmstudio-", "ollama-")
+
+
+def is_self_hosted_model(model: str | None) -> bool:
+    """True when ``model`` runs on a local host — no per-token price exists."""
+    if not model:
+        return False
+    if model.startswith(_SELF_HOSTED_DIRECT):
+        return True
+    alias = model[len("gateway/") :] if model.startswith("gateway/") else model
+    return alias.startswith(_SELF_HOSTED_ALIASES)
+
+
+def self_hosted_cost(harness: str, models: Sequence[str]) -> float | None:
+    """``0.0`` when every model this run addressed is self-hosted, else ``None``.
+
+    Only opencode actually talks to the addressed model: claude and codex drop
+    a ``lmstudio/…`` id and fall back to their own cloud default
+    (:func:`_native_model`), so for them a local id says nothing about spend.
+    """
+    if harness != "opencode" or not models:
+        return None
+    return 0.0 if all(is_self_hosted_model(m) for m in models) else None
+
+
+def assemble_usage(
+    out_dir: Path,
+    opencode_log: Path,
+    *,
+    run_id: str,
+    session_id: str,
+    harness: str,
+    models: Sequence[str],
+    harness_seconds: float,
+    completed_steps: int,
+    stop_reason: str | None,
+    prompt_kinds: Sequence[str],
+) -> dict:
+    """Every usage source merged into the one dict ``usage.json`` records.
+
+    One function for the managed and the interactive path: the two used to
+    merge in different orders, so the same run could record different numbers
+    depending on how it was launched.
+
+    Two figures are the lab's own instrument and override every source,
+    because a comparison is only fair when each arm is measured the same way:
+
+    * ``time_minutes`` — the step clock, the wall time of every harness
+      invocation summed. The same clock for opencode, claude and codex, for a
+      masked bare arm and a full-harness one. Provisioning, scoring and
+      archiving stay outside it.
+    * ``cost_usd`` — ``0.0`` when every addressed model is self-hosted
+      (:func:`self_hosted_cost`): measured as free, not unknown.
+    """
+    db_usage = None
+    if harness == "opencode":
+        logs = [opencode_log, *sorted((out_dir / "steps").glob("step-*.log"))]
+        db_usage = pull_usage_opencode_db(opencode_session_ids(logs))
+    remote_usage = pull_usage_litellm(run_id) or pull_usage_langfuse(session_id)
+    # Lowest priority first: claude stream-json events (claude runs) < log
+    # estimates < opencode DB < remote API.
+    usage = merge_usage(
+        collect_claude_usage(out_dir),
+        parse_log_usage(opencode_log),
+        db_usage,
+        remote_usage,
+    )
+    if completed_steps:
+        usage["steps"] = completed_steps
+        usage["time_minutes"] = round(harness_seconds / 60.0, 2)
+        usage["time_source"] = "step_clock"
+    free = self_hosted_cost(harness, models)
+    if free is not None and usage.get("cost_usd") in (None, "", 0, 0.0):
+        usage["cost_usd"] = free
+        usage["cost_source"] = "self_hosted"
+    if stop_reason:
+        usage["stop_reason"] = stop_reason
+    if prompt_kinds:
+        # One entry per executed step, naming the template that wrote its
+        # prompt. The SWE-bench leak was invisible in every stored number and
+        # turned up only by opening a step prompt by hand; this makes the class
+        # of defect readable straight off the artifacts.
+        usage["prompt_kinds"] = list(prompt_kinds)
+    return usage
 
 
 # ---------------------------------------------------------------------------
@@ -3032,6 +3233,8 @@ def main(argv: list[str] | None = None) -> int:
     max_steps = max(1, args.max_steps)
     steps_dir = out_dir / "steps"
     completed_steps = 0
+    # Wall time of every harness invocation, summed: the run's time figure.
+    harness_seconds = 0.0
     # Which criterion ended the step loop. Recorded because a cost comparison
     # between two arms is only readable against how each of them terminated:
     # an arm that ran out of budget did not spend more, it was cut off.
@@ -3159,6 +3362,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.harness == "claude"
                 else None
             )
+            step_started = step_clock()
             rc = run_opencode(
                 cmd,
                 step_log,
@@ -3167,6 +3371,7 @@ def main(argv: list[str] | None = None) -> int:
                 cwd=agent_cwd,
                 events_path=events_path,
             )
+            harness_seconds += step_clock() - step_started
             completed_steps += 1
 
             print("-" * 66)
@@ -3270,24 +3475,18 @@ def main(argv: list[str] | None = None) -> int:
         # Still write usage.json before exiting
         print()
         print("  [4/5] Writing usage skeleton...")
-        log_usage = parse_log_usage(opencode_log)
-        remote_usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id)
-        db_usage = pull_usage_opencode_db(args.run)
-        usage: dict = {}
-        # claude stream-json events are the ground truth for claude runs.
-        usage.update(collect_claude_usage(out_dir))
-        if log_usage:
-            usage.update(log_usage)
-        if db_usage:
-            usage.update(db_usage)
-        if remote_usage:
-            usage.update(remote_usage)
-        if completed_steps:
-            usage["steps"] = completed_steps
-        if stop_reason:
-            usage["stop_reason"] = stop_reason
-        if prompt_kinds:
-            usage["prompt_kinds"] = list(prompt_kinds)
+        usage = assemble_usage(
+            out_dir,
+            opencode_log,
+            run_id=args.run,
+            session_id=session_id,
+            harness=args.harness,
+            models=usage_models(args, executor_model),
+            harness_seconds=harness_seconds,
+            completed_steps=completed_steps,
+            stop_reason=stop_reason,
+            prompt_kinds=prompt_kinds,
+        )
         write_usage_json(out_dir, usage or None)
         if args.fresh:
             # Managed web run: the API owns scoring (POST /score), so Phase 5
@@ -3376,25 +3575,18 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print("  [4/5] Enriching with usage data...")
 
-    log_usage = parse_log_usage(opencode_log)
-    remote_usage = pull_usage_litellm(args.run) or pull_usage_langfuse(session_id)
-    db_usage = pull_usage_opencode_db(args.run)
-
-    # Merge priority (highest wins): remote API > opencode DB > log estimates >
-    # claude stream-json events (claude runs: the only populated source).
-    merged_usage = merge_usage(
-        collect_claude_usage(out_dir), log_usage, db_usage, remote_usage
+    merged_usage = assemble_usage(
+        out_dir,
+        opencode_log,
+        run_id=args.run,
+        session_id=session_id,
+        harness=args.harness,
+        models=usage_models(args, executor_model),
+        harness_seconds=harness_seconds,
+        completed_steps=completed_steps,
+        stop_reason=stop_reason,
+        prompt_kinds=prompt_kinds,
     )
-    if completed_steps > 1:
-        merged_usage["steps"] = completed_steps
-    if stop_reason:
-        merged_usage["stop_reason"] = stop_reason
-    if prompt_kinds:
-        # One entry per executed step, naming the template that wrote its
-        # prompt. The SWE-bench leak was invisible in every stored number and
-        # turned up only by opening a step prompt by hand; this makes the class
-        # of defect readable straight off the artifacts.
-        merged_usage["prompt_kinds"] = list(prompt_kinds)
 
     usage_path = write_usage_json(out_dir, merged_usage or None)
     if merged_usage:

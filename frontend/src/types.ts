@@ -887,6 +887,13 @@ export type DeltaRecord = {
   relative: number | null;
   direction: string;
   exceeds_spread: boolean | null;
+  /**
+   * False when either arm lacks this metric on some run. The delta is then
+   * withheld; absent on summaries computed by an older backend.
+   */
+  comparable?: boolean;
+  control_missing?: number;
+  treatment_missing?: number;
 };
 
 export type CaseMatrixRow = {
@@ -962,6 +969,7 @@ export type ValidityIssue = {
     | "mixed_treatment"
     | "design_objection"
     // Fewer than five paired cases: the interval describes these cases only.
+    | "incomplete_cost_metrics"
     | "few_cases";
   severity: "invalid" | "degraded";
   /** The arm the issue belongs to, when it belongs to one. */

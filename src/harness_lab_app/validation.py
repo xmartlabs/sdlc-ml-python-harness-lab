@@ -266,6 +266,15 @@ def collect_cost(run_dir: Path) -> dict[str, Any]:
         "billed_tokens": billed,
         "cost_usd": usage.get("cost_usd"),
         "time_minutes": usage.get("time_minutes"),
+        # How long the model itself was generating, summed over its turns
+        # (opencode only). Beside the step clock, not instead of it.
+        "model_minutes": usage.get("model_minutes"),
+        "reasoning_tokens": usage.get("reasoning_tokens"),
+        # Where each figure came from, so a reader can tell a measured $0
+        # (self-hosted) from a missing one, and the step clock from an estimate.
+        "usage_source": usage.get("usage_source"),
+        "time_source": usage.get("time_source"),
+        "cost_source": usage.get("cost_source"),
     }
 
 
