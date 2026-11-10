@@ -103,6 +103,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0072 — A developer takes the harness home, and the docs follow the journey](0072-a-developer-takes-the-harness-home-and-the-docs-follow-the-journey.md)
 - [0073 — A measurement names its real instrument and its reach](0073-a-measurement-names-its-real-instrument-and-its-reach.md)
 - [0074 — The lab applies a local configuration and verifies what was served](0074-the-lab-applies-a-local-configuration-and-verifies-what-was-served.md)
+- [0075 — Every arm is measured by the same instrument](0075-every-arm-is-measured-by-the-same-instrument.md)
 
 ## Why ADRs exist
 

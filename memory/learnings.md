@@ -3,6 +3,25 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## 2026-11-09 — Join opencode usage by session id; never by title or directory
+
+`pull_usage_opencode_db` matched sessions with `title LIKE '%run_id%' AND directory = /app`.
+Both conditions were wrong. opencode's `title` agent (the run's own model) writes the
+title, so whether a run got tokens depended on what the model wrote. A masked bare arm
+runs opencode in `/app/workspace/<run>`, so every bare run recorded nothing. In one
+10-run experiment, 7 runs had no tokens or time, and the 3 that did undercounted
+(5.8 min recorded for a 109-min run). The reliable key is in the run's own log: opencode
+`--print-logs` prints `message=created id=ses_… parentID=…` for every session, sub-agents
+included. Two smaller traps in the same reader: it stored the cache as `tokens_cache_read`
+while `collect_cost` reads `cache_read_tokens`, and it left opencode's reasoning tokens out
+of output. Rules:
+(1) Join on an id the lab controls or observes, never on text a model writes.
+(2) Before trusting a usage reader, check that every arm of a real experiment has the
+field. A metric one arm lacks is a gap, not a difference.
+(3) The opencode store dies with the runner container. A missed read cannot be
+backfilled, so test the reader against a real DB (the host's
+`~/.local/share/opencode/opencode.db` has the same schema).
+
 ## Rebuilding an exception with `type(exc)(message)` breaks any subclass with its own signature (2026-09-23)
 
 The auditor's retry ended with `raise type(last)(f"{last} (after N attempts)")`.

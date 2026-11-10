@@ -609,3 +609,32 @@ def test_a_module_from_the_workspace_is_never_called_a_missing_dependency(tmp_pa
     own = validation.workspace_modules(tmp_path)
     assert "ml_pipeline" in own
     assert validation.classify_inconclusive(1, output, own_modules=own) is None
+
+
+def test_a_measured_zero_cost_is_kept_with_where_it_came_from(tmp_path):
+    """A self-hosted run costs $0 — a fact, distinguishable from a gap."""
+    from harness_lab_app.validation import collect_cost
+
+    (tmp_path / "usage.json").write_text(
+        json.dumps(
+            {
+                "input_tokens": 1000,
+                "output_tokens": 300,
+                "reasoning_tokens": 120,
+                "cost_usd": 0.0,
+                "cost_source": "self_hosted",
+                "time_minutes": 12.5,
+                "time_source": "step_clock",
+                "model_minutes": 9.0,
+                "usage_source": "opencode_db",
+            }
+        )
+    )
+
+    cost = collect_cost(tmp_path)
+
+    assert cost["cost_usd"] == 0.0
+    assert cost["cost_source"] == "self_hosted"
+    assert cost["time_source"] == "step_clock"
+    assert cost["model_minutes"] == 9.0
+    assert cost["reasoning_tokens"] == 120

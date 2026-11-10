@@ -85,6 +85,7 @@ const MESSAGES = defineMessages({
       floor_effect: "Nothing resolved on either side",
       mixed_treatment: "The arm mixes treated and untreated runs",
       design_objection: "The design was objected to when it was created",
+      incomplete_cost_metrics: "The arms cannot be compared on cost",
       few_cases: "Too few cases to generalise"
     } as Record<string, string>,
     comparisonNotValid: "Comparison not valid",
@@ -210,6 +211,9 @@ const MESSAGES = defineMessages({
     deltaTitle: "Δ",
     beyondNoise: "Beyond noise?",
     unknown: "unknown",
+    notComparable: "not comparable",
+    missingRuns: (control: number, treatment: number) =>
+      `missing in ${control} control / ${treatment} treatment run(s)`,
     yes: "yes",
     noWithinVariance: "no — within run-to-run variance",
     caseMatrix: "Case matrix",
@@ -322,6 +326,7 @@ const MESSAGES = defineMessages({
       floor_effect: "Nada se resolvió en ninguno de los dos lados",
       mixed_treatment: "El brazo mezcla corridas tratadas y no tratadas",
       design_objection: "El diseño fue objetado cuando se creó",
+      incomplete_cost_metrics: "Los brazos no se pueden comparar en costo",
       few_cases: "Pocos casos para generalizar"
     } as Record<string, string>,
     comparisonNotValid: "La comparación no es válida",
@@ -449,6 +454,9 @@ const MESSAGES = defineMessages({
     deltaTitle: "Δ",
     beyondNoise: "¿Más allá del ruido?",
     unknown: "desconocido",
+    notComparable: "no comparable",
+    missingRuns: (control: number, treatment: number) =>
+      `falta en ${control} corrida(s) de control / ${treatment} de tratamiento`,
     yes: "sí",
     noWithinVariance: "no — dentro de la varianza entre corridas",
     caseMatrix: "Matriz de casos",
@@ -1672,16 +1680,27 @@ function ExperimentDetail({
                   <td className="mono small">{delta.name}</td>
                   <td className="mono small">{formatNumber(delta.control)}</td>
                   <td className="mono small">{formatNumber(delta.treatment)}</td>
-                  <td className={`mono small ${deltaClass(delta)}`}>
-                    {deltaLabel(delta)}
-                  </td>
-                  <td className="small">
-                    {delta.exceeds_spread === null
-                      ? m.unknown
-                      : delta.exceeds_spread
-                        ? m.yes
-                        : m.noWithinVariance}
-                  </td>
+                  {delta.comparable === false ? (
+                    <>
+                      <td className="mono small muted">{m.notComparable}</td>
+                      <td className="small muted">
+                        {m.missingRuns(delta.control_missing ?? 0, delta.treatment_missing ?? 0)}
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td className={`mono small ${deltaClass(delta)}`}>
+                        {deltaLabel(delta)}
+                      </td>
+                      <td className="small">
+                        {delta.exceeds_spread === null
+                          ? m.unknown
+                          : delta.exceeds_spread
+                            ? m.yes
+                            : m.noWithinVariance}
+                      </td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>

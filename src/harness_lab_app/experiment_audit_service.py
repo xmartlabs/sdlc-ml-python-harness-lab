@@ -43,6 +43,7 @@ RUN_METRICS = (
     "rubric_score",
     "cost_usd",
     "billed_tokens",
+    "output_tokens",
     "wall_time_minutes",
     "agent_turns",
     "agent_tool_calls",
@@ -68,8 +69,10 @@ EXPERIMENT_AUDIT_SYSTEM_PROMPT = (
     "Los brazos y qué difiere entre ellos, en una línea cada uno.\n"
     "## Resultado\n"
     "Éxito y costo por brazo con los números tal cual vienen (pasa/no pasa, "
-    "test_pass_rate, costo en USD, tokens facturados, minutos). Una tabla corta "
-    "está bien.\n"
+    "test_pass_rate, costo en USD, tokens facturados, tokens generados, minutos). "
+    "Una tabla corta está bien. Si un delta viene con comparable=false, escribí "
+    "'no comparable' y cuántas corridas no lo midieron; nunca compares un número "
+    "contra un faltante.\n"
     "## Qué se usó y qué no\n"
     "Por brazo: qué documentos de gobernanza leyó y cuáles no; qué skills invocó, "
     "cuáles se le pidieron y no invocó, y cuáles tenía disponibles y nunca abrió. "
@@ -290,6 +293,9 @@ def build_evidence(session: Session, experiment_id: str) -> dict[str, Any]:
                         "treatment": d.get("treatment"),
                         "direction": d.get("direction"),
                         "exceeds_spread": d.get("exceeds_spread"),
+                        "comparable": d.get("comparable", True),
+                        "control_missing": d.get("control_missing", 0),
+                        "treatment_missing": d.get("treatment_missing", 0),
                     }
                     for d in c.get("deltas") or []
                 ],

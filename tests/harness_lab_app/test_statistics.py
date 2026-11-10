@@ -1438,3 +1438,96 @@ def test_the_outcome_metrics_are_not_read_as_a_price():
     )
 
     assert _tie(control, treatment)["headline"] == "No difference observed"
+
+
+# --------------------------------------------------------------------------
+# A metric one arm lacks is not compared
+# --------------------------------------------------------------------------
+
+
+def test_a_metric_missing_from_some_runs_is_not_compared():
+    """The bare arm had no tokens on any run and the full harness on three of
+    five; the page drew that as a token difference between the harnesses."""
+    from harness_lab_app.statistics import compare, summarize_condition
+
+    control = summarize_condition(
+        "bare", [{"task_validation_pass": True, "cost_usd": 0.0}] * 5
+    )
+    treatment = summarize_condition(
+        "full",
+        [{"task_validation_pass": True, "cost_usd": 0.0, "billed_tokens": 6e5}] * 3
+        + [{"task_validation_pass": True, "cost_usd": 0.0}] * 2,
+    )
+
+    by_name = {
+        d.name: d
+        for d in compare(control, treatment, {"billed_tokens": "lower_is_better"})
+    }
+
+    tokens = by_name["billed_tokens"]
+    assert tokens.comparable is False
+    assert (tokens.control_missing, tokens.treatment_missing) == (5, 2)
+    assert tokens.absolute is None and tokens.exceeds_spread is None
+    # A metric both arms measured on every run still compares.
+    assert by_name["cost_usd"].comparable is True
+    assert by_name["cost_usd"].absolute == 0.0
+
+
+def test_an_incomplete_cost_metric_degrades_validity_and_leaves_the_headline():
+    from harness_lab_app.statistics import assess_validity, summarize_condition
+
+    control = summarize_condition(
+        "bare",
+        [{"task_validation_pass": True, "cost_usd": 0.0, "wall_time_minutes": 9.0}] * 2,
+    )
+    treatment = summarize_condition(
+        "full",
+        [
+            {
+                "task_validation_pass": True,
+                "cost_usd": 0.0,
+                "wall_time_minutes": 12.0,
+                "billed_tokens": 5e5,
+            }
+        ]
+        * 2,
+    )
+
+    validity = assess_validity(
+        mode="harness_evaluation",
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+    )
+
+    (issue,) = [i for i in validity["issues"] if i["code"] == "incomplete_cost_metrics"]
+    assert issue["severity"] == "degraded"
+    assert "billed_tokens (bare 2/2 missing)" in issue["detail"]
+    # Measured on both sides, so not named.
+    assert "wall_time_minutes" not in issue["detail"]
+
+    answer = verdict(
+        mode="harness_evaluation",
+        cases=1,
+        repetitions=2,
+        control=control,
+        treatment=treatment,
+        success=success_delta(control, treatment),
+    )
+    metrics = {h["metric"] for h in answer["highlights"]}
+    assert "billed_tokens" not in metrics
+    assert "wall_time_minutes" in metrics
+
+
+def test_complete_cost_metrics_raise_no_issue():
+    from harness_lab_app.statistics import assess_validity, summarize_condition
+
+    runs = [{"task_validation_pass": True, "cost_usd": 0.0, "billed_tokens": 1.0}] * 2
+    control = summarize_condition("bare", runs)
+    treatment = summarize_condition("full", runs)
+
+    validity = assess_validity(
+        mode="harness_evaluation", control=control, treatment=treatment
+    )
+
+    assert all(i["code"] != "incomplete_cost_metrics" for i in validity["issues"])

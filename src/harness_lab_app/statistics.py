@@ -105,6 +105,14 @@ class Delta:
     # own. Not a significance test — a guard against reading a delta that sits
     # entirely inside the spread.
     exceeds_spread: bool | None = None
+    # False when either arm is missing this metric for any of its runs. A mean
+    # over the runs that happened to record a figure is not the arm's mean —
+    # 3 of 5 runs with tokens against 0 of 5 was rendered as a cost difference.
+    # The difference is then withheld, not computed on the survivors.
+    comparable: bool = True
+    # Runs without a value, per arm: what the reader needs to fix it.
+    control_missing: int = 0
+    treatment_missing: int = 0
 
     @property
     def improved(self) -> bool | None:
@@ -208,7 +216,13 @@ def compare(
             control=control_mean,
             treatment=treatment_mean,
             direction=directions.get(name, "neutral"),
+            control_missing=_missing_runs(left, control),
+            treatment_missing=_missing_runs(right, treatment),
         )
+        delta.comparable = not (delta.control_missing or delta.treatment_missing)
+        if not delta.comparable:
+            deltas.append(delta)
+            continue
         if control_mean is not None and treatment_mean is not None:
             delta.absolute = treatment_mean - control_mean
             if control_mean != 0:
@@ -232,6 +246,38 @@ def compare(
             )
         deltas.append(delta)
     return deltas
+
+
+def _missing_runs(aggregate: Aggregate | None, arm: ConditionSummary) -> int:
+    """Runs of ``arm`` that recorded no value for this metric."""
+    if aggregate is None:
+        return arm.runs
+    return aggregate.missing
+
+
+def incomplete_metrics(
+    control: ConditionSummary,
+    treatment: ConditionSummary,
+    names: Sequence[str],
+) -> dict[str, dict[str, int]]:
+    """``{metric: {arm: runs without it}}`` for metrics one side lacks.
+
+    Only metrics at least one arm measured somewhere: a metric neither arm ever
+    produced (a judge that was never configured) is absent, not asymmetric.
+    """
+    gaps: dict[str, dict[str, int]] = {}
+    for name in names:
+        left = control.metrics.get(name)
+        right = treatment.metrics.get(name)
+        if not (left and left.n) and not (right and right.n):
+            continue
+        missing = {
+            control.label: _missing_runs(left, control),
+            treatment.label: _missing_runs(right, treatment),
+        }
+        if any(missing.values()):
+            gaps[name] = missing
+    return gaps
 
 
 def success_delta(
@@ -605,10 +651,14 @@ def plan_repetitions(
 # Graded outcome first, then what it cost. `billed_tokens` rather than
 # `total_tokens`: the latter excludes the prompt cache and once showed a
 # full-harness arm using fewer tokens than a bare one while costing 71% more.
+# `output_tokens` beside it because on a self-hosted model the bill is $0 and
+# what a harness costs is time — and decode, the generated tokens, is the slow
+# half of it.
 HEADLINE_METRICS = (
     "test_pass_rate",
     "cost_usd",
     "billed_tokens",
+    "output_tokens",
     "agent_steps",
     "wall_time_minutes",
 )
@@ -634,6 +684,11 @@ def _highlight(
     left = control.metrics.get(name)
     right = treatment.metrics.get(name)
     if not left or not right or left.mean is None or right.mean is None:
+        return None
+    # A headline figure must be a whole-arm figure on both sides: a mean over
+    # the three runs that happened to log tokens, set against another arm's
+    # five, is two different populations behind one arrow.
+    if left.missing or right.missing:
         return None
     # The reader needs to know which way is good: "10,712 → 7,223 tokens"
     # reads as an improvement, and for a cost it is — but the page used to
@@ -802,9 +857,15 @@ _ISSUE_ORDER = (
     "floor_effect",
     "mixed_treatment",
     "design_objection",
+    "incomplete_cost_metrics",
     # Last: it does not break the comparison, it bounds what it generalises to.
     "few_cases",
 )
+
+#: The cost-of-the-outcome figures a harness comparison is read on. An arm
+#: missing one of these cannot be compared on what it cost, whatever its pass
+#: rate says.
+COST_METRICS = ("cost_usd", "billed_tokens", "wall_time_minutes")
 
 #: Below this many paired cases the delta's interval describes the cases that
 #: ran, not the kind of task they stand for. The same threshold `tribunal
@@ -981,6 +1042,50 @@ def _ceiling_issue(
         remedy=(
             "Pick a case the control does not already solve, or score on a "
             "metric with room to move."
+        ),
+    )
+
+
+def _incomplete_cost_issue(
+    control: ConditionSummary | None, treatment: ConditionSummary | None
+) -> ValidityIssue | None:
+    """Say so when the arms cannot be compared on what they cost.
+
+    The outcome comparison stands — this is ``degraded``, not ``invalid`` — but
+    the cost half of the answer is withheld until every run of both arms has
+    the figure. It used to be computed anyway: a bare arm with no token data
+    and a full-harness arm with three of five became "tokens: — → 755k".
+    """
+    if control is None or treatment is None:
+        return None
+    gaps = incomplete_metrics(control, treatment, COST_METRICS)
+    if not gaps:
+        return None
+    parts = [
+        f"{name} ("
+        + ", ".join(
+            f"{label} {missing}/{arm.runs}"
+            for (label, missing), arm in zip(
+                arms.items(), (control, treatment), strict=True
+            )
+            if missing
+        )
+        + " missing)"
+        for name, arms in gaps.items()
+    ]
+    return ValidityIssue(
+        code="incomplete_cost_metrics",
+        severity=DEGRADED,
+        arm=None,
+        detail=(
+            "The arms cannot be compared on cost: "
+            + "; ".join(parts)
+            + ". Those deltas are withheld rather than computed on the runs "
+            "that happened to record a figure."
+        ),
+        remedy=(
+            "Re-run the affected repetitions with a lab version that records "
+            "usage for every harness and arm, then read the cost comparison."
         ),
     )
 
@@ -1205,6 +1310,9 @@ def assess_validity(
     floor = _floor_issue(every_arm, check_signatures)
     if floor:
         issues.append(floor)
+    incomplete = _incomplete_cost_issue(control, treatment)
+    if incomplete:
+        issues.append(incomplete)
     few_cases = _few_cases_issue(success)
     if few_cases:
         issues.append(few_cases)

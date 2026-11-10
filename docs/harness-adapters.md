@@ -63,6 +63,24 @@ rendering (`→ Read(path)`, `→ Bash(cmd)`, final stats line). Three consumers
   *real* skill invocations (the `Skill` tool), not just SKILL.md reads.
 - **usage.json** (`bench_run.collect_claude_usage`): tokens, cost, turns,
   duration and modified files summed from the per-step `result` events.
+
+`opencode` runs get their usage from opencode's own SQLite store
+(`$XDG_DATA_HOME/opencode/opencode.db`, default `~/.local/share/…`), read inside the
+runner container before it exits. The join key is the session id: every session
+opencode opens is announced in its `--print-logs` output as
+`message=created id=ses_… parentID=…`, and `bench_run.opencode_session_ids` collects
+them from the step logs. `pull_usage_opencode_db` then sums exactly those sessions plus
+any sub-agent session whose `parent_id` points at one: tokens (input, output +
+reasoning, cache read/write), turns (assistant messages), tool calls (`tool` parts) and
+`model_minutes`. Title and directory are never used. The title is written by the model,
+and the directory is `/app` for a full-harness run but `/app/workspace/<run>` for a
+masked bare one (ADR-0049), so joining on either silently dropped whole arms
+([ADR-0075](adr/0075-every-arm-is-measured-by-the-same-instrument.md)).
+
+For every harness, `time_minutes` is the **step clock** (wall time of each harness
+invocation, summed by `bench_run`), and `cost_usd` is `0` when every addressed model is
+self-hosted and the harness is opencode. Both are set in `bench_run.assemble_usage`,
+which the managed and the interactive paths share.
 - **Audit**: step logs now show the tool timeline, so audits stop being
   narrative-only.
 

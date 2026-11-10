@@ -208,8 +208,10 @@ class EfficiencyEvaluator:
             ("total_tokens", cost.get("total_tokens")),
             ("billed_tokens", cost.get("billed_tokens")),
             ("cache_read_tokens", cost.get("cache_read_tokens")),
+            ("output_tokens", cost.get("output_tokens")),
             ("cost_usd", cost.get("cost_usd")),
             ("wall_time_minutes", cost.get("time_minutes")),
+            ("model_minutes", cost.get("model_minutes")),
             ("agent_steps", effort.get("steps")),
             # The work measures. `agent_steps` counts harness restarts, so on
             # its own it reads a loop-protocol difference as an agent

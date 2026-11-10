@@ -286,3 +286,26 @@ def test_a_human_score_is_not_filed_as_the_judges():
     )
 
     assert RubricJudgeEvaluator().evaluate(context) == []
+
+
+def test_efficiency_records_a_zero_cost_and_the_generated_tokens():
+    """`if value is not None`, never truthiness: $0 is a measurement."""
+    scores = EfficiencyEvaluator().evaluate(
+        EvaluationContext(
+            run_id="r1",
+            validation={
+                "cost": {
+                    "total_tokens": 1300,
+                    "output_tokens": 300,
+                    "cost_usd": 0.0,
+                    "time_minutes": 12.5,
+                    "model_minutes": 9.0,
+                },
+            },
+        )
+    )
+    by_name = {score.name: score.value for score in scores}
+    assert by_name["cost_usd"] == 0.0
+    assert by_name["output_tokens"] == 300.0
+    assert by_name["wall_time_minutes"] == 12.5
+    assert by_name["model_minutes"] == 9.0

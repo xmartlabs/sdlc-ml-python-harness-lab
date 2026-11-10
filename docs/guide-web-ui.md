@@ -951,13 +951,15 @@ second borrows the authority of the first.
 |---|---|
 | `task_validation_pass` | every one of the case's validation commands exited 0. The success metric of every experiment |
 | `test_pass_rate` | passed ÷ *conclusive* checks. Its resolution is the number of validation commands the case declares: one command makes it binary, ten make it a gradient. A check that timed out, was killed, could not find its command or had no network is excluded, never counted as a failure ([ADR-0048](adr/0048-a-check-that-did-not-measure-is-not-a-failure.md), [ADR-0062](adr/0062-a-check-the-environment-failed-is-not-a-verdict.md)) |
-| `cost_usd` | what the provider charged, from the CLI's own accounting |
+| `cost_usd` | what the provider charged, from the CLI's own accounting. **`0` for a self-hosted model on opencode** (`lmstudio/…`, `ollama/…`, `gateway/lmstudio-…`): measured as free, not unknown. `usage.json` says so in `cost_source: self_hosted` |
 | `billed_tokens` | **every token billed**: input + output + prompt cache written + prompt cache re-read. This is what a harness actually costs — a 25-skill catalog in the system prompt is re-read on every turn |
 | `total_tokens` | uncached input + output only. Kept for continuity with older runs; it can move *down* while cost moves up, so read `billed_tokens` |
 | `cache_read_tokens` | the prompt cache re-read across the run's turns, on its own |
+| `output_tokens` | every token the model **generated**, reasoning included. On a self-hosted model, where the bill is $0, this is what a harness costs: decode is the slow half of inference |
 | `agent_steps` | harness **restarts**, not work: one invocation that ran fifty turns counts 1. Alone it reads a stop-criterion difference as an agent difference — read it with `agent_turns` and the run's `stop_reason` |
 | `agent_turns`, `agent_tool_calls` | the work measures |
-| `wall_time_minutes` | the agent's own duration, not created-to-ended (the worker runs at concurrency 1, so a run can sit queued for hours) |
+| `wall_time_minutes` | the **step clock**: wall time of every harness invocation, summed. The same clock for opencode, claude and codex, and for a masked bare arm and a full-harness one. Queueing, provisioning and scoring are outside it |
+| `model_minutes` | (opencode) how long the model itself spent answering, summed over its turns. The gap to `wall_time_minutes` is tool execution and harness overhead |
 
 ##### Observations — what the record shows
 
@@ -1227,7 +1229,11 @@ that wrote it, and it never replaces the cards: it is a layer over them.
 Under that it keeps outcome, efficiency and behaviour in separate rows, shows every
 mean with its spread, colours a delta by the metric's **declared direction** (a drop
 in cost is a win; a drop in pass rate is not), and flags a delta that sits inside
-run-to-run variance. Below it, the **case matrix** shows where a treatment helped and
+run-to-run variance. A metric that **either arm lacks on any run** is shown as
+*not comparable* with how many runs are missing it, never as a delta computed on the runs
+that happened to record it; when that metric is `cost_usd`, `billed_tokens` or
+`wall_time_minutes`, the validity block adds **The arms cannot be compared on cost**
+and the headline leaves that figure out. Below it, the **case matrix** shows where a treatment helped and
 where it did not — an average of "+8 points" can be "fixed four cases, broke two".
 
 Two caveats are raised automatically because they are the ones that read as

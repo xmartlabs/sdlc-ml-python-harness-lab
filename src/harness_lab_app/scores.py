@@ -183,6 +183,21 @@ _EFFICIENCY = [
         description="Prompt-cache tokens re-read across the run's turns.",
     ),
     _d(
+        name="output_tokens",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="efficiency",
+        minimum=0.0,
+        description=(
+            "Tokens the model generated across the run, reasoning included. "
+            "On a self-hosted model this is what costs time: decode is the "
+            "slow half of inference."
+        ),
+    ),
+    _d(
         name="cost_usd",
         category=EFFICIENCY,
         kind=NUMERIC,
@@ -191,7 +206,10 @@ _EFFICIENCY = [
         version="v1",
         source="efficiency",
         minimum=0.0,
-        description="Reported spend for the run.",
+        description=(
+            "Reported spend for the run. 0 for a self-hosted model on opencode "
+            "— measured as free, not unknown."
+        ),
     ),
     _d(
         name="agent_steps",
@@ -239,7 +257,26 @@ _EFFICIENCY = [
         version="v1",
         source="efficiency",
         minimum=0.0,
-        description="Wall-clock duration of the run.",
+        description=(
+            "Wall-clock time of every harness invocation, summed (the step "
+            "clock). The same clock for every harness and arm; provisioning "
+            "and scoring are outside it."
+        ),
+    ),
+    _d(
+        name="model_minutes",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="efficiency",
+        minimum=0.0,
+        description=(
+            "Minutes the model spent answering, summed over its turns "
+            "(opencode). The gap to wall_time_minutes is tool execution and "
+            "harness overhead."
+        ),
     ),
     _d(
         name="diff_lines_changed",

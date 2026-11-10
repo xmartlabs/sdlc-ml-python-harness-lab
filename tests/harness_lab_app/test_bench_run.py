@@ -953,3 +953,252 @@ def test_git_output_that_is_not_utf8_never_raises(tmp_path):
         cwd=tmp_path,
     )
     assert isinstance(result.stdout, str)
+
+
+# --------------------------------------------------------------------------
+# Usage: opencode sessions joined by id, one clock for every arm
+# --------------------------------------------------------------------------
+
+# Verbatim shape of opencode 1.19.5 `--print-logs` lines. The bare arm's session
+# lives under the run's workspace (ADR-0049 masking); the full-harness arm's
+# under /app. The old title/directory join matched neither reliably.
+_BARE_LOG = (
+    "timestamp=2026-11-07T19:51:47.755Z level=INFO run=c313e96e message=created "
+    "id=ses_bareMain01 slug=mighty-pixel version=1.19.5 projectID=499d "
+    'directory=/app/workspace/tetris-v2-K-035 path="" workspaceID=undefined '
+    'parentID=undefined title="Tetris in pygame"\n'
+    "timestamp=2026-11-07T19:51:48.082Z level=INFO run=c313e96e message=stream "
+    "providerID=lmstudio modelID=prism-ml/bonsai-27b session.id=ses_bareMain01 "
+    "small=true agent=title mode=primary\n"
+)
+_FULL_LOG = (
+    "timestamp=2026-11-07T20:01:00.000Z level=INFO run=aa message=created "
+    "id=ses_fullMain01 slug=neon-mountain version=1.19.5 projectID=499d "
+    'directory=/app path="" workspaceID=undefined parentID=undefined\n'
+    "timestamp=2026-11-07T20:02:00.000Z level=INFO run=aa message=created "
+    "id=ses_fullChild1 slug=sub version=1.19.5 projectID=499d "
+    'directory=/app path="" workspaceID=undefined parentID=ses_fullMain01\n'
+)
+
+
+def _opencode_db(path: Path, sessions: list[dict]) -> Path:
+    """A minimal opencode.db with the three tables the reader touches."""
+    import sqlite3
+
+    con = sqlite3.connect(path)
+    con.executescript(
+        """
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, title TEXT,
+            tokens_input INTEGER, tokens_output INTEGER, tokens_reasoning INTEGER,
+            tokens_cache_read INTEGER, tokens_cache_write INTEGER, cost REAL
+        );
+        CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT);
+        CREATE TABLE part (id TEXT PRIMARY KEY, session_id TEXT, data TEXT);
+        """
+    )
+    for n, s in enumerate(sessions):
+        con.execute(
+            "INSERT INTO session VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                s["id"],
+                s.get("parent_id"),
+                s.get("directory", "/app"),
+                s.get("title", "an invented title"),
+                s.get("input", 0),
+                s.get("output", 0),
+                s.get("reasoning", 0),
+                s.get("cache_read", 0),
+                s.get("cache_write", 0),
+                s.get("cost", 0.0),
+            ),
+        )
+        for turn in range(s.get("turns", 0)):
+            con.execute(
+                "INSERT INTO message VALUES (?,?,?)",
+                (
+                    f"msg_{n}_{turn}",
+                    s["id"],
+                    json.dumps(
+                        {
+                            "role": "assistant",
+                            "time": {"created": 0, "completed": 30_000},
+                        }
+                    ),
+                ),
+            )
+        for call in range(s.get("tools", 0)):
+            con.execute(
+                "INSERT INTO part VALUES (?,?,?)",
+                (f"prt_{n}_{call}", s["id"], json.dumps({"type": "tool"})),
+            )
+    con.commit()
+    con.close()
+    return path
+
+
+def test_session_ids_come_from_the_run_logs_for_both_runner_layouts(tmp_path):
+    bare = tmp_path / "step-1.log"
+    bare.write_text(_BARE_LOG)
+    full = tmp_path / "step-2.log"
+    full.write_text(_FULL_LOG + _FULL_LOG)  # a repeated line counts once
+
+    ids = bench_run.opencode_session_ids([bare, full, tmp_path / "missing.log"])
+
+    assert ids == ["ses_bareMain01", "ses_fullMain01", "ses_fullChild1"]
+
+
+def test_a_masked_bare_session_is_counted_whatever_its_title_or_directory(tmp_path):
+    """Every bare arm recorded no tokens: its session sits under
+    /app/workspace/<run>, and the old query demanded directory = /app plus a
+    title containing the run id — a title the model writes, not the lab."""
+    db = _opencode_db(
+        tmp_path / "opencode.db",
+        [
+            {
+                "id": "ses_bareMain01",
+                "directory": "/app/workspace/tetris-v2-K-035",
+                "title": "Tetris in pygame",
+                "input": 100_000,
+                "output": 2_000,
+                "reasoning": 500,
+                "turns": 4,
+                "tools": 3,
+            },
+            # Another run's session in the same DB must not leak in.
+            {"id": "ses_otherRun", "input": 9_999_999, "output": 9_999},
+        ],
+    )
+
+    usage = bench_run.pull_usage_opencode_db(["ses_bareMain01"], db_path=db)
+
+    assert usage is not None
+    assert usage["input_tokens"] == 100_000
+    # Generated tokens include reasoning: the model produced them either way.
+    assert usage["output_tokens"] == 2_500
+    assert usage["reasoning_tokens"] == 500
+    assert usage["turns"] == 4
+    assert usage["tool_calls"] == 3
+    assert usage["model_minutes"] == 2.0  # 4 turns x 30 s
+    assert usage["usage_source"] == "opencode_db"
+    # opencode reports 0 for an unpriced model; that is left to the
+    # self-hosted rule, not recorded as a measured price here.
+    assert "cost_usd" not in usage
+
+
+def test_sub_agent_sessions_are_summed_with_their_parent(tmp_path):
+    db = _opencode_db(
+        tmp_path / "opencode.db",
+        [
+            {"id": "ses_fullMain01", "input": 50_000, "output": 1_000, "cache_read": 7},
+            # Not announced in the log, but its parent was: still this run's.
+            {"id": "ses_hiddenKid", "parent_id": "ses_fullMain01", "input": 5_000},
+        ],
+    )
+
+    usage = bench_run.pull_usage_opencode_db(["ses_fullMain01"], db_path=db)
+
+    assert usage["sessions"] == 2
+    assert usage["input_tokens"] == 55_000
+    # The key collect_cost reads; `tokens_cache_read` was never picked up.
+    assert usage["cache_read_tokens"] == 7
+
+
+def test_no_sessions_or_no_db_is_unknown_never_zero(tmp_path):
+    db = _opencode_db(tmp_path / "opencode.db", [{"id": "ses_x", "input": 1}])
+    assert bench_run.pull_usage_opencode_db([], db_path=db) is None
+    assert bench_run.pull_usage_opencode_db(["ses_absent"], db_path=db) is None
+    assert (
+        bench_run.pull_usage_opencode_db(["ses_x"], db_path=tmp_path / "nope.db")
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("harness", "models", "expected"),
+    [
+        ("opencode", ["lmstudio/prism-ml/bonsai-27b"], 0.0),
+        ("opencode", ["ollama/qwen3.6:27b"], 0.0),
+        ("opencode", ["gateway/lmstudio-qwen3.6-35b"], 0.0),
+        # One cloud model in the run and nothing can be said about spend.
+        ("opencode", ["lmstudio/a", "gateway/gpt-5"], None),
+        ("opencode", ["gateway/claude-sonnet"], None),
+        # claude/codex drop a local id and use their own cloud default.
+        ("claude", ["lmstudio/prism-ml/bonsai-27b"], None),
+        ("opencode", [], None),
+    ],
+)
+def test_self_hosted_cost_is_zero_only_when_every_model_is_local(
+    harness, models, expected
+):
+    assert bench_run.self_hosted_cost(harness, models) == expected
+
+
+def test_both_arms_get_the_same_usage_fields(tmp_path, monkeypatch):
+    """The bare and full-harness arms of one experiment must be measured by the
+    same instrument; a field one arm has and the other lacks is a gap in the
+    comparison, not a difference between harnesses."""
+    db = _opencode_db(
+        tmp_path / "opencode.db",
+        [
+            {
+                "id": "ses_bareMain01",
+                "directory": "/app/workspace/r",
+                "input": 10,
+                "output": 2,
+                "turns": 1,
+                "tools": 1,
+            },
+            {"id": "ses_fullMain01", "input": 30, "output": 4, "turns": 2, "tools": 1},
+            {"id": "ses_fullChild1", "parent_id": "ses_fullMain01", "input": 5},
+        ],
+    )
+    monkeypatch.setattr(bench_run, "opencode_db_path", lambda: db)
+    for name in ("pull_usage_litellm", "pull_usage_langfuse"):
+        monkeypatch.setattr(bench_run, name, lambda *_a, **_k: None)
+
+    recorded = {}
+    for arm, log_text in (("bare", _BARE_LOG), ("full", _FULL_LOG)):
+        out_dir = tmp_path / arm
+        (out_dir / "steps").mkdir(parents=True)
+        (out_dir / "steps" / "step-1.log").write_text(log_text)
+        recorded[arm] = bench_run.assemble_usage(
+            out_dir,
+            out_dir / "opencode.log",
+            run_id=f"run-{arm}",
+            session_id=f"bench-run-{arm}",
+            harness="opencode",
+            models=["lmstudio/prism-ml/bonsai-27b"],
+            harness_seconds=90.0,
+            completed_steps=1,
+            stop_reason="completion_signal",
+            prompt_kinds=["case"],
+        )
+
+    measured = ("input_tokens", "output_tokens", "turns", "tool_calls", "cost_usd")
+    for arm, usage in recorded.items():
+        for key in measured:
+            assert usage.get(key) is not None, (arm, key)
+        assert usage["time_minutes"] == 1.5, arm
+        assert usage["time_source"] == "step_clock"
+        assert usage["cost_usd"] == 0.0
+        assert usage["cost_source"] == "self_hosted"
+    assert recorded["full"]["input_tokens"] == 35  # child session included
+
+
+def test_the_step_clock_is_the_recorded_time_and_spans_every_step(
+    tmp_path, monkeypatch
+):
+    """`time_minutes` came from opencode session spans that only covered the
+    sessions whose title matched — 5.8 min recorded for a 109-minute run."""
+    clock = iter([0.0, 120.0, 1000.0, 1180.0])
+    monkeypatch.setattr(bench_run, "step_clock", lambda: next(clock))
+
+    code, out_dir, _ = _managed_run(
+        tmp_path, monkeypatch, rc=0, argv_extra=("--max-steps", "2")
+    )
+
+    assert code == 0
+    usage = json.loads((out_dir / "usage.json").read_text())
+    assert usage["time_minutes"] == 5.0  # (120 + 180) s across both steps
+    assert usage["time_source"] == "step_clock"
