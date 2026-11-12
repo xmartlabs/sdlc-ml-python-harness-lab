@@ -1062,6 +1062,134 @@ def workspace_fingerprint(workspace: Path) -> str | None:
     return hashlib.sha256((status.stdout + diff.stdout).encode()).hexdigest()
 
 
+# A snapshot is a copy of what the agent wrote, not of what it installed. The
+# same exclusions as diff.patch (DIFF_EXCLUDED_DIRS) plus .git, and a size cap:
+# a workspace that grew past it is snapshotted as a diff instead, never skipped
+# silently (ADR-0076).
+SNAPSHOT_MAX_BYTES = 50 * 1024 * 1024
+
+
+def _snapshot_ignore(_dir: str, names: list[str]) -> list[str]:
+    return [n for n in names if n in DIFF_EXCLUDED_DIRS or n == ".git"]
+
+
+def _tree_bytes(root: Path, limit: int) -> int:
+    """Bytes under ``root`` outside the excluded dirs, stopping past ``limit``."""
+    total = 0
+    for path in root.rglob("*"):
+        rel = path.relative_to(root).parts
+        if any(part in DIFF_EXCLUDED_DIRS or part == ".git" for part in rel):
+            continue
+        if path.is_file() and not path.is_symlink():
+            total += path.stat().st_size
+            if total > limit:
+                break
+    return total
+
+
+def _snapshot_git_diff(workspace: Path, steps_dir: Path, step_n: int) -> dict:
+    """``steps/step-N.diff``: the working tree against HEAD, new files included.
+
+    Done on a **throwaway copy of the index** (``GIT_INDEX_FILE``), never the
+    agent's own: `git add -N` there makes untracked files visible to the diff,
+    and the agent's staged changes — which a reset of the real index would
+    silently drop between two of its steps — are never touched. Bytes in, bytes
+    out: a ``--binary`` patch decoded as text with replacement characters would
+    no longer apply.
+    """
+    git_dir = subprocess.run(
+        ["git", "-C", str(workspace), "rev-parse", "--absolute-git-dir"],
+        capture_output=True,
+        text=True,
+    )
+    if git_dir.returncode != 0:
+        return {"step": step_n, "kind": "error", "error": git_dir.stderr[-200:]}
+    real_index = Path(git_dir.stdout.strip()) / "index"
+    with tempfile.TemporaryDirectory() as scratch:
+        index = Path(scratch) / "index"
+        if real_index.is_file():
+            shutil.copyfile(real_index, index)
+        env = {**os.environ, "GIT_INDEX_FILE": str(index)}
+        subprocess.run(
+            ["git", "-C", str(workspace), "add", "-N", "."],
+            capture_output=True,
+            env=env,
+        )
+        diff = subprocess.run(
+            ["git", "-C", str(workspace), "diff", "--binary", "HEAD"],
+            capture_output=True,
+            env=env,
+        )
+    if diff.returncode != 0:
+        return {
+            "step": step_n,
+            "kind": "error",
+            "error": diff.stderr.decode(errors="replace")[-200:],
+        }
+    dest = steps_dir / f"step-{step_n}.diff"
+    dest.write_bytes(diff.stdout)
+    return {"step": step_n, "kind": "diff", "path": dest.name}
+
+
+def snapshot_step(
+    workspace: Path, steps_dir: Path, step_n: int, *, git_workspace: bool | None = None
+) -> dict:
+    """Record the workspace as it stood when step ``step_n`` ended (ADR-0076).
+
+    The per-step reward grades these after the run, in the worker, with the
+    case's own checks — the agent never sees them, so measuring cannot change
+    what is measured. Two forms:
+
+    * ``snapshot`` — a copy of the tree at ``steps/step-N.snapshot/`` for a
+      build-from-scratch workspace (no ``.git``), small enough to copy.
+    * ``diff`` — ``steps/step-N.diff`` against the repository's HEAD for a
+      cloned repository (SWE-bench, a target), where copying the clone every
+      step would cost more than the run. Replayable onto the base commit.
+
+    Never raises: a missing snapshot is a gap in the reward curve, recorded as
+    such, not a reason to stop a run that is working.
+    """
+    if not workspace.is_dir():
+        return {"step": step_n, "kind": "missing"}
+    is_git = (workspace / ".git").exists() if git_workspace is None else git_workspace
+    try:
+        if not is_git and _tree_bytes(workspace, SNAPSHOT_MAX_BYTES) <= (
+            SNAPSHOT_MAX_BYTES
+        ):
+            dest = steps_dir / f"step-{step_n}.snapshot"
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(
+                workspace,
+                dest,
+                symlinks=True,
+                ignore_dangling_symlinks=True,
+                ignore=_snapshot_ignore,
+            )
+            return {"step": step_n, "kind": "snapshot", "path": dest.name}
+        if is_git:
+            return _snapshot_git_diff(workspace, steps_dir, step_n)
+        return {"step": step_n, "kind": "too_large"}
+    except Exception as exc:  # a snapshot must never stop the run
+        return {"step": step_n, "kind": "error", "error": repr(exc)[:200]}
+
+
+def write_step_meta(steps_dir: Path, meta: dict) -> None:
+    """Write ``steps/step-N.meta.json``: the step's snapshot, clock and stop.
+
+    The step's own cost is *not* computed here: claude records it in the step's
+    ``result`` event and the worker reads it from there
+    (``step_reward.claude_step_cost``); opencode sessions are per step and
+    priced from its database. What only the runner knows is the step clock,
+    which snapshot form it took, and the SWE lane's live verdict.
+    """
+    path = steps_dir / f"step-{meta['step']}.meta.json"
+    try:
+        path.write_text(json.dumps(meta, indent=2, sort_keys=True))
+    except OSError as exc:
+        print(f"  ⚠️  could not write {path.name}: {exc!r}")
+
+
 def swe_step_evaluation(workspace: Path, spec: dict) -> dict | None:
     """Objective F2P/P2P check against the provisioned install (never raises).
 
@@ -3371,7 +3499,8 @@ def main(argv: list[str] | None = None) -> int:
                 cwd=agent_cwd,
                 events_path=events_path,
             )
-            harness_seconds += step_clock() - step_started
+            step_seconds = step_clock() - step_started
+            harness_seconds += step_seconds
             completed_steps += 1
 
             print("-" * 66)
@@ -3383,12 +3512,33 @@ def main(argv: list[str] | None = None) -> int:
                 stop_reason = "harness_error"
                 break
 
+            # The workspace as this step left it, for the per-step reward
+            # (ADR-0076). Taken before any stop check so the step that ends the
+            # loop is on the curve too, and graded later by the worker — never
+            # here, where the agent could come to see its own reward.
+            steps_dir.mkdir(exist_ok=True)
+            step_meta = snapshot_step(workspace, steps_dir, step_n)
+            step_meta["seconds"] = round(step_seconds, 2)
+            step_meta["prompt_kind"] = prompt_kind
+
             if is_swe_bench:
                 # SWE-bench lane: the stop criterion is objective — evaluate the
                 # F2P/P2P subset now and stop the loop the moment it resolves.
                 swe_eval = swe_step_evaluation(workspace, case_spec or {})
                 if swe_eval is not None:
                     last_swe_eval = swe_eval
+                    # Kept, not only printed: this is the step's reward on the
+                    # SWE lane, measured live by the same F2P/P2P criterion.
+                    step_meta["swe_eval"] = {
+                        key: swe_eval.get(key)
+                        for key in (
+                            "resolved",
+                            "f2p_passed",
+                            "f2p_total",
+                            "p2p_passed",
+                            "p2p_total",
+                        )
+                    }
                     print(
                         f"  SWEBENCH: resolved={swe_eval['resolved']} "
                         f"F2P={swe_eval['f2p_passed']}/{swe_eval['f2p_total']} "
@@ -3399,7 +3549,9 @@ def main(argv: list[str] | None = None) -> int:
                             f"  ✅ SWE-bench resolved after step {step_n} — stopping."
                         )
                         stop_reason = "swe_resolved"
+                        write_step_meta(steps_dir, step_meta)
                         break
+            write_step_meta(steps_dir, step_meta)
 
             if max_steps > 1:
                 # A step that changed nothing in the workspace is the strongest

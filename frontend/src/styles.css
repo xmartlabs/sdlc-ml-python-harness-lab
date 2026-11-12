@@ -4244,3 +4244,61 @@ button.danger:hover {
   color: var(--muted);
   border: 1px solid var(--line);
 }
+
+/* Per-step reward panel (ADR-0076): one hue for magnitude, status only with
+   an icon and a word, never colour alone. */
+.step-reward-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 12px 0 16px;
+}
+
+.step-reward-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-soft);
+}
+
+.step-reward-tile strong {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  color: var(--text);
+}
+
+.step-reward-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 140px;
+}
+
+.step-reward-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.step-reward-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--xl-purple);
+}
+
+.step-reward-after td {
+  background: var(--panel-soft);
+}
+
+.step-reward-regression {
+  color: var(--danger);
+}
+
+.step-reward-table .chip {
+  margin: 0 4px 4px 0;
+}

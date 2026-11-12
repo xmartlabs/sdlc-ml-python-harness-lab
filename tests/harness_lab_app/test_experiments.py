@@ -2310,3 +2310,109 @@ def test_a_partial_vs_full_harness_ladder_runs_as_harness_by_model(lab):
     assert len(block["harness_levels"]) == 3
     rungs = {(row["model"], row["level"]) for row in block["harness_effect"]}
     assert len(rungs) == 4  # two rungs above 'none', on two models
+
+
+# --------------------------------------------------------------------------
+# Leave-one-out pruning (ADR-0076)
+# --------------------------------------------------------------------------
+
+
+def test_removed_item_names_the_one_skill_a_treatment_drops():
+    from harness_lab_app.experiment_service import removed_item
+
+    control = {"prompt_variant": "harness", "skills_disabled": []}
+    assert (
+        removed_item(control, {**control, "skills_disabled": ["verify_changes"]})
+        == "skill:verify_changes"
+    )
+    # Two at once is not leave-one-out; neither is a different prompt.
+    assert removed_item(control, {**control, "skills_disabled": ["a", "b"]}) is None
+    assert (
+        removed_item(
+            control,
+            {"prompt_variant": "default", "skills_disabled": ["verify_changes"]},
+        )
+        is None
+    )
+
+
+def test_a_pruning_family_reports_a_removal_verdict_per_skill(session):
+    """Removing one skill changed nothing on three cases: removable.
+
+    Removing the other doubled the cost to resolve while both arms passed
+    everything — the success rate cannot see that, the per-step reward can.
+    """
+    from harness_lab_app.models import Case, CaseType, Score
+    from harness_lab_app.skills_catalog import known_skill_names
+
+    governed = sorted(known_skill_names())[:2]
+    if len(governed) < 2:
+        pytest.skip("not enough governed skills in this checkout")
+    cheap, costly = governed
+    service = ExperimentService(session)
+    cases = ["prune-a", "prune-b", "prune-c"]
+    for case_id in cases:
+        session.add(
+            Case(
+                case_id=case_id,
+                name=case_id,
+                type=CaseType.single_prompt,
+                prompt_variants={"harness": "Do it.", "default": "Do it."},
+            )
+        )
+    session.commit()
+    control = {"prompt_variant": "harness", "skills_disabled": []}
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="prune-claude-haiku-2x",
+            name="Pruning",
+            question="Which skills can go?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=cases,
+            repetitions=3,
+            family_id="prune-claude-haiku",
+            conditions=[
+                ExperimentConditionCreate(
+                    label="full-harness", role=ConditionRole.control, overrides=control
+                ),
+                ExperimentConditionCreate(
+                    label=f"without-{cheap}",
+                    overrides={**control, "skills_disabled": [cheap]},
+                ),
+                ExperimentConditionCreate(
+                    label=f"without-{costly}",
+                    overrides={**control, "skills_disabled": [costly]},
+                ),
+            ],
+        )
+    )
+    runs = service.launch(
+        "prune-claude-haiku-2x",
+        _base_config(case_id=cases[0], prompt_variant="harness"),
+    )
+    for run in runs:
+        _score(session, run, passed=True)
+        cost = 0.60 if run.condition_label == f"without-{costly}" else 0.30
+        session.add(
+            Score(
+                run_id=run.run_id,
+                name="cost_to_resolve_usd",
+                version=1,
+                value_num=cost,
+            )
+        )
+    session.commit()
+
+    pruning = service.summarize("prune-claude-haiku-2x")["pruning"]
+
+    by_item = {row["item"]: row for row in pruning}
+    assert by_item[f"skill:{cheap}"]["decision"] == "removable"
+    assert by_item[f"skill:{costly}"]["decision"] == "keep"
+    assert "cost_to_resolve_usd" in by_item[f"skill:{costly}"]["reason"]
+    # Keep first: the reader meets what must stay before what may go.
+    assert pruning[0]["decision"] == "keep"
+
+
+def test_a_non_pruning_experiment_has_no_pruning_block(lab):
+    lab.create_experiment(_payload())
+    assert lab.summarize("migration-safety")["pruning"] is None

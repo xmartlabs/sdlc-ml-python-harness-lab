@@ -284,3 +284,152 @@ def test_a_failed_setup_makes_the_checks_inconclusive_not_failed(patched_setting
         for check in objective["checks"]
     )
     assert [phase for phase, _ in executor.calls] == ["setup"]
+
+
+# --------------------------------------------------------------------------
+# Per-step reward: each step's snapshot graded by the same checks (ADR-0076)
+# --------------------------------------------------------------------------
+
+
+class SnapshotAwareExecutor:
+    """Passes a check only for the snapshots named in ``passing``."""
+
+    def __init__(self, passing: set[str]):
+        self.passing = passing
+        self.calls: list[list[str]] = []
+
+    def start(self, run_id: str, command: list[str], **kwargs) -> FakeHandle:
+        self.calls.append(command)
+        ok = any(name in command[-1] for name in self.passing)
+        return FakeHandle([], 0 if ok else 1)
+
+
+def _seed_steps(run_dir: Path, steps: int, cost: float = 0.25) -> None:
+    steps_dir = run_dir / "steps"
+    for n in range(1, steps + 1):
+        snap = steps_dir / f"step-{n}.snapshot"
+        snap.mkdir(parents=True)
+        (snap / "main.py").write_text(f"# step {n}\n")
+        (steps_dir / f"step-{n}.meta.json").write_text(
+            json.dumps({"step": n, "kind": "snapshot", "seconds": 30})
+        )
+        (steps_dir / f"step-{n}.events.jsonl").write_text(
+            json.dumps(
+                {
+                    "type": "result",
+                    "total_cost_usd": cost,
+                    "num_turns": 3,
+                    "usage": {"input_tokens": 100, "output_tokens": 10},
+                }
+            )
+            + "\n"
+        )
+
+
+def test_validate_steps_grades_every_snapshot_and_finds_the_resolving_step(
+    patched_settings,
+):
+    engine = make_engine()
+    with Session(engine) as session:
+        run_dir = patched_settings / "run-steps"
+        seed_case_and_run(session, "run-steps", run_dir)
+        _seed_steps(run_dir, steps=3)
+        executor = SnapshotAwareExecutor(passing={"step-2.snapshot", "step-3.snapshot"})
+
+        trajectory = ValidationService(session, executor=executor).validate_steps(
+            "run-steps"
+        )
+
+        assert trajectory is not None
+        # One check per step, each pointed at that step's snapshot — never at
+        # the final workspace.
+        assert len(executor.calls) == 3
+        assert all("/steps/step-" in call[-1] for call in executor.calls)
+        assert not any("workspace/run-steps" in call[-1] for call in executor.calls)
+        assert [s["progress"] for s in trajectory["steps"]] == [0.0, 1.0, 1.0]
+        assert trajectory["steps_to_resolve"] == 2
+        assert trajectory["cost_to_resolve_usd"] == 0.5
+        assert trajectory["post_resolution_cost_share"] == pytest.approx(1 / 3)
+        stored = ValidationService(session).get_validation("run-steps")
+        assert stored is not None
+        assert stored.objective["per_step"]["steps_to_resolve"] == 2
+
+
+def test_validate_steps_is_none_for_a_run_without_step_records(patched_settings):
+    engine = make_engine()
+    with Session(engine) as session:
+        seed_case_and_run(session, "run-old", patched_settings / "run-old")
+        service = ValidationService(session, executor=FakeExecutor(exit_code=0))
+        assert service.validate_steps("run-old") is None
+
+
+def test_validate_steps_reads_the_swe_lane_live_verdict(patched_settings):
+    engine = make_engine()
+    with Session(engine) as session:
+        run_dir = patched_settings / "run-swe"
+        seed_case_and_run(session, "run-swe", run_dir)
+        steps_dir = run_dir / "steps"
+        steps_dir.mkdir(parents=True)
+        for n, (f2p, resolved) in enumerate([(0, False), (1, True)], start=1):
+            (steps_dir / f"step-{n}.meta.json").write_text(
+                json.dumps(
+                    {
+                        "step": n,
+                        "kind": "diff",
+                        "swe_eval": {
+                            "resolved": resolved,
+                            "f2p_passed": f2p,
+                            "f2p_total": 1,
+                            "p2p_passed": 18,
+                            "p2p_total": 18,
+                        },
+                    }
+                )
+            )
+        executor = FakeExecutor(exit_code=0)
+
+        trajectory = ValidationService(session, executor=executor).validate_steps(
+            "run-swe"
+        )
+
+        assert executor.calls == []  # no re-run: the runner measured it live
+        assert trajectory is not None
+        assert trajectory["steps_to_resolve"] == 2
+        assert trajectory["steps"][0]["progress"] < 1.0
+        assert trajectory["sources"] == ["swe_live"]
+
+
+def test_a_check_that_does_not_name_the_workspace_sits_the_step_pass_out(
+    patched_settings,
+):
+    """A tamper guard on the lab's own git state grades the final state.
+
+    Run against every step it would credit each one with the final verdict and
+    inflate the early steps' progress, so it is left out of the per-step pass.
+    """
+    from sqlmodel import select
+
+    from harness_lab_app.models import Case
+
+    engine = make_engine()
+    with Session(engine) as session:
+        run_dir = patched_settings / "run-guard"
+        seed_case_and_run(session, "run-guard", run_dir)
+        case = session.exec(select(Case)).one()
+        case.validation_commands = [
+            "git -C /app diff --quiet HEAD -- benchmarks/x/tests",
+            "BENCH_SMOKE=1 python {workspace}/main.py",
+        ]
+        session.add(case)
+        session.commit()
+        _seed_steps(run_dir, steps=2)
+        executor = SnapshotAwareExecutor(passing={"step-2.snapshot"})
+
+        trajectory = ValidationService(session, executor=executor).validate_steps(
+            "run-guard"
+        )
+
+        assert len(executor.calls) == 2  # the smoke per step; never the guard
+        assert not any("git -C /app" in call[-1] for call in executor.calls)
+        assert [s["total"] for s in trajectory["steps"]] == [1, 1]
+        assert trajectory["steps_to_resolve"] == 2

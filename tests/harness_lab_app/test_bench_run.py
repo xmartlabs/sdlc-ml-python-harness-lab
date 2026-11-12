@@ -1202,3 +1202,134 @@ def test_the_step_clock_is_the_recorded_time_and_spans_every_step(
     usage = json.loads((out_dir / "usage.json").read_text())
     assert usage["time_minutes"] == 5.0  # (120 + 180) s across both steps
     assert usage["time_source"] == "step_clock"
+
+
+# --------------------------------------------------------------------------
+# Per-step snapshots for the step reward (ADR-0076)
+# --------------------------------------------------------------------------
+
+
+def test_snapshot_step_copies_a_scratch_workspace_without_installed_dirs(tmp_path):
+    ws = tmp_path / "ws"
+    (ws / "__pycache__").mkdir(parents=True)
+    (ws / ".venv" / "lib").mkdir(parents=True)
+    (ws / "main.py").write_text("print(1)\n")
+    (ws / "__pycache__" / "main.pyc").write_bytes(b"\0")
+    (ws / ".venv" / "lib" / "big.so").write_bytes(b"\0" * 10)
+    steps = tmp_path / "steps"
+    steps.mkdir()
+
+    meta = bench_run.snapshot_step(ws, steps, 1)
+
+    assert meta == {"step": 1, "kind": "snapshot", "path": "step-1.snapshot"}
+    snap = steps / "step-1.snapshot"
+    assert (snap / "main.py").read_text() == "print(1)\n"
+    assert not (snap / "__pycache__").exists()
+    assert not (snap / ".venv").exists()
+
+
+def test_snapshot_step_is_a_point_in_time_copy(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    steps = tmp_path / "steps"
+    steps.mkdir()
+    (ws / "main.py").write_text("v1\n")
+    bench_run.snapshot_step(ws, steps, 1)
+    (ws / "main.py").write_text("v2\n")
+    bench_run.snapshot_step(ws, steps, 2)
+
+    assert (steps / "step-1.snapshot" / "main.py").read_text() == "v1\n"
+    assert (steps / "step-2.snapshot" / "main.py").read_text() == "v2\n"
+
+
+def test_snapshot_step_records_a_cloned_repo_as_a_diff_with_new_files(tmp_path):
+    import subprocess
+
+    ws = tmp_path / "repo"
+    ws.mkdir()
+    ident = ["-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q", str(ws)], check=True)
+    (ws / "a.py").write_text("x = 1\n")
+    subprocess.run(["git", "-C", str(ws), "add", "-A"], check=True)
+    subprocess.run(["git", *ident, "-C", str(ws), "commit", "-qm", "base"], check=True)
+    (ws / "a.py").write_text("x = 2\n")
+    (ws / "new.py").write_text("y = 1\n")
+    steps = tmp_path / "steps"
+    steps.mkdir()
+
+    meta = bench_run.snapshot_step(ws, steps, 3)
+
+    assert meta["kind"] == "diff"
+    patch = (steps / "step-3.diff").read_text()
+    assert "x = 2" in patch
+    assert "new.py" in patch
+    # The intent-to-add lived in a throwaway index: nothing is left in the
+    # agent's own index, not even an intent-to-add entry for new.py.
+    staged = subprocess.run(
+        ["git", "-C", str(ws), "diff", "--cached", "--name-only"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert staged.stdout == ""
+    status = subprocess.run(
+        ["git", "-C", str(ws), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "?? new.py" in status.stdout
+
+
+def test_snapshot_step_keeps_the_agents_own_staged_changes(tmp_path):
+    """A reset of the real index between steps would drop what the agent staged."""
+    import subprocess
+
+    ws = tmp_path / "repo"
+    ws.mkdir()
+    ident = ["-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q", str(ws)], check=True)
+    (ws / "a.py").write_text("x = 1\n")
+    subprocess.run(["git", "-C", str(ws), "add", "-A"], check=True)
+    subprocess.run(["git", *ident, "-C", str(ws), "commit", "-qm", "base"], check=True)
+    (ws / "a.py").write_text("x = 2\n")
+    subprocess.run(["git", "-C", str(ws), "add", "a.py"], check=True)  # the agent's
+    steps = tmp_path / "steps"
+    steps.mkdir()
+
+    bench_run.snapshot_step(ws, steps, 1)
+
+    staged = subprocess.run(
+        ["git", "-C", str(ws), "diff", "--cached", "--name-only"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert staged.stdout.strip() == "a.py"
+    assert "x = 2" in (steps / "step-1.diff").read_text()
+
+
+def test_snapshot_step_never_raises_on_a_missing_workspace(tmp_path):
+    steps = tmp_path / "steps"
+    steps.mkdir()
+    assert bench_run.snapshot_step(tmp_path / "gone", steps, 1) == {
+        "step": 1,
+        "kind": "missing",
+    }
+
+
+def test_snapshot_step_records_too_large_rather_than_skipping(tmp_path, monkeypatch):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "blob.bin").write_bytes(b"\0" * 64)
+    steps = tmp_path / "steps"
+    steps.mkdir()
+    monkeypatch.setattr(bench_run, "SNAPSHOT_MAX_BYTES", 10)
+
+    assert bench_run.snapshot_step(ws, steps, 1)["kind"] == "too_large"
+
+
+def test_write_step_meta_writes_one_file_per_step(tmp_path):
+    bench_run.write_step_meta(tmp_path, {"step": 2, "kind": "snapshot", "seconds": 3})
+    data = json.loads((tmp_path / "step-2.meta.json").read_text())
+    assert data == {"kind": "snapshot", "seconds": 3, "step": 2}

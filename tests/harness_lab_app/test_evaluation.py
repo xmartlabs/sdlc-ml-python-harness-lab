@@ -309,3 +309,87 @@ def test_efficiency_records_a_zero_cost_and_the_generated_tokens():
     assert by_name["output_tokens"] == 300.0
     assert by_name["wall_time_minutes"] == 12.5
     assert by_name["model_minutes"] == 9.0
+
+
+# --------------------------------------------------------------------------
+# Per-step reward (ADR-0076)
+# --------------------------------------------------------------------------
+
+
+def _per_step_context(trajectory_rows: list[dict]) -> EvaluationContext:
+    from harness_lab_app.step_reward import build_trajectory
+
+    trajectory = build_trajectory(trajectory_rows).as_dict()
+    return EvaluationContext(
+        run_id="r", validation={"objective": {"per_step": trajectory}}
+    )
+
+
+def test_step_reward_scores_a_run_solved_early_and_kept_running() -> None:
+    from harness_lab_app.evaluation import StepRewardEvaluator
+
+    context = _per_step_context(
+        [
+            {"step": 1, "progress": 1.0, "cost_usd": 0.3},
+            {"step": 2, "progress": 1.0, "cost_usd": 0.3},
+            {"step": 3, "progress": 1.0, "cost_usd": 0.4},
+        ]
+    )
+    scores = {s.name: s for s in StepRewardEvaluator().evaluate(context)}
+
+    assert scores["steps_to_resolve"].value == 1.0
+    assert scores["cost_to_resolve_usd"].value == pytest.approx(0.3)
+    assert scores["post_resolution_cost_share"].value == pytest.approx(0.7)
+    assert scores["progress_auc"].value == 1.0
+    assert scores["step_regressions"].value == 0.0
+    for score in scores.values():
+        score.as_row()  # every one of them is declared in the registry
+        assert get_definition(score.name).provenance == FACT
+
+
+def test_step_reward_falls_back_to_tokens_when_the_run_was_free() -> None:
+    from harness_lab_app.evaluation import StepRewardEvaluator
+
+    context = _per_step_context(
+        [
+            {"step": 1, "progress": 1.0, "cost_usd": 0.0, "billed_tokens": 100},
+            {"step": 2, "progress": 1.0, "cost_usd": 0.0, "billed_tokens": 900},
+        ]
+    )
+    scores = {s.name: s for s in StepRewardEvaluator().evaluate(context)}
+    share = scores["post_resolution_cost_share"]
+    assert share.value == pytest.approx(0.9)
+    assert share.provenance_detail["basis"] == "billed_tokens"
+
+
+def test_step_reward_emits_nothing_for_a_run_without_step_records() -> None:
+    from harness_lab_app.evaluation import StepRewardEvaluator
+
+    assert StepRewardEvaluator().evaluate(EvaluationContext(run_id="r")) == []
+    assert (
+        StepRewardEvaluator().evaluate(
+            EvaluationContext(run_id="r", validation={"objective": {"passed": True}})
+        )
+        == []
+    )
+
+
+def test_an_unresolved_run_has_progress_scores_but_no_resolution_scores() -> None:
+    from harness_lab_app.evaluation import StepRewardEvaluator
+
+    context = _per_step_context(
+        [
+            {"step": 1, "progress": 0.5, "cost_usd": 0.1},
+            {"step": 2, "progress": 0.3, "cost_usd": 0.1},
+        ]
+    )
+    names = {s.name for s in StepRewardEvaluator().evaluate(context)}
+    assert names == {"progress_auc", "step_regressions"}
+
+
+def test_step_reward_rides_in_every_profile_that_reads_efficiency() -> None:
+    from harness_lab_app.evaluation import PROFILES
+
+    for name, evaluators in PROFILES.items():
+        if "efficiency" in evaluators:
+            assert "step_reward" in evaluators, name

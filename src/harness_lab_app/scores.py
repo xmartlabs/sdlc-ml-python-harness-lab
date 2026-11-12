@@ -305,6 +305,90 @@ _EFFICIENCY = [
     ),
 ]
 
+# --- Level 2b: per-step reward (RL-inspired, ADR-0076) ---------------------
+# The case's own checks run on the workspace after every step, so each step is
+# credited with the progress it made. Facts, not judgements: the same commands
+# as `test_pass_rate`, pointed at a snapshot. Absent — never zero — for a run
+# that left no step snapshots.
+_STEP_REWARD = [
+    _d(
+        name="steps_to_resolve",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="step_reward",
+        minimum=1.0,
+        description=(
+            "First step after which every conclusive check passed. Absent when "
+            "the run never resolved. Unlike agent_steps it does not count the "
+            "steps the loop kept running after the work was done."
+        ),
+    ),
+    _d(
+        name="cost_to_resolve_usd",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="step_reward",
+        minimum=0.0,
+        description=(
+            "Spend up to and including the resolving step. The price of the "
+            "solution, separated from the price of the stop criterion — two "
+            "arms that both pass every check still differ here."
+        ),
+    ),
+    _d(
+        name="post_resolution_cost_share",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="step_reward",
+        minimum=0.0,
+        maximum=1.0,
+        description=(
+            "Share of the run's spend that came after it was already resolved: "
+            "re-reading, extra tests, scope creep. Falls back to billed tokens "
+            "on a self-hosted model, where the spend is measured as free."
+        ),
+    ),
+    _d(
+        name="progress_auc",
+        category=OUTCOME,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="step_reward",
+        minimum=0.0,
+        maximum=1.0,
+        description=(
+            "Mean progress over the run's steps (area under the progress "
+            "curve). 1.0 is solved in step one and kept; arriving later or "
+            "breaking passing checks lowers it. The RL return without discount."
+        ),
+    ),
+    _d(
+        name="step_regressions",
+        category=OUTCOME,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="step_reward",
+        minimum=0.0,
+        description=(
+            "Steps after which fewer checks passed than before — work that "
+            "broke work. Invisible to every end-of-run score."
+        ),
+    ),
+]
+
 # --- Level 4: harness behaviour (the LLM audit, made structural) ----------
 _BEHAVIORAL = [
     _d(
@@ -444,7 +528,13 @@ _TRAJECTORY = [
 
 REGISTRY: dict[str, ScoreDefinition] = {
     definition.name: definition
-    for definition in (*_OUTCOME, *_EFFICIENCY, *_TRAJECTORY, *_BEHAVIORAL)
+    for definition in (
+        *_OUTCOME,
+        *_EFFICIENCY,
+        *_STEP_REWARD,
+        *_TRAJECTORY,
+        *_BEHAVIORAL,
+    )
 }
 
 

@@ -6,6 +6,7 @@ import { ArtifactsPanel } from "../components/ArtifactsPanel";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HarnessCatalog } from "../components/HarnessCatalog";
 import { ScoresPanel } from "../components/ScoresPanel";
+import { StepRewardPanel } from "../components/StepRewardPanel";
 import { LogViewer } from "../components/LogViewer";
 import { Markdown } from "../components/Markdown";
 import { SandboxPanel } from "../components/SandboxPanel";
@@ -1947,6 +1948,7 @@ export function RunDetail({
           <span className="muted">data/runs/{run.run_id}</span>
         </div>
         <ScoresPanel runId={run.run_id} />
+        <StepRewardPanel runId={run.run_id} />
         <ArtifactsPanel runId={run.run_id} />
       </div>
       </div>

@@ -1135,6 +1135,26 @@ def create_app() -> FastAPI:
         """The score corpus, one entry per definition, with direction attached."""
         return ScoreService(session).aggregate()
 
+    @app.get("/api/scores/step-credit")
+    def step_credit(session: Session = Depends(get_session)):
+        """Per-item reward across the corpus: the pruning shortlist (ADR-0076)."""
+        from harness_lab_app.step_reward_service import StepRewardService
+
+        return StepRewardService(session).corpus()
+
+    @app.get("/api/runs/{run_id}/step-reward")
+    def get_step_reward(run_id: str, session: Session = Depends(get_session)):
+        """The run's per-step reward: progress after each step (ADR-0076)."""
+        from harness_lab_app.step_reward_service import StepRewardService
+
+        trajectory = StepRewardService(session).trajectory(run_id)
+        if trajectory is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No per-step reward for this run (it left no step snapshots).",
+            )
+        return trajectory
+
     @app.get("/api/runs/{run_id}/scores")
     def get_run_scores(run_id: str, session: Session = Depends(get_session)):
         return ScoreService(session).list_scores(run_id)

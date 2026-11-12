@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING, Any
 
 from sqlmodel import Session, select
@@ -19,6 +20,29 @@ from harness_lab_app.models import Attribution, utc_now
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+# opencode logs each shell command as `permission=bash pattern="<command>"`.
+_OPENCODE_BASH_RE = re.compile(r'permission=bash pattern="((?:[^"\\]|\\.)*)"')
+
+
+def _claude_bash_commands(lines: list[str]) -> list[str]:
+    """Every Bash command a claude step ran, from its stream-json events."""
+    commands: list[str] = []
+    for raw in lines:
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "assistant":
+            continue
+        for block in (event.get("message") or {}).get("content", []):
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("name") == "Bash"
+            ):
+                commands.append(str((block.get("input") or {}).get("command", "")))
+    return commands
 
 
 class AttributionService:
@@ -63,6 +87,42 @@ class AttributionService:
         fingerprint = meta.get("harness_fingerprint", {})
         skills = fingerprint.get("skills", {}) if isinstance(fingerprint, dict) else {}
         return sorted(skills) if isinstance(skills, dict) else []
+
+    def per_step_consulted(self, run_id: str) -> dict[int, list[str]]:
+        """What each step opened from the harness: skills and governance docs.
+
+        The run-level attribution sums every step; the per-step reward needs to
+        know *when* an item was in context so it can be read beside the
+        progress made in that step (ADR-0076). Same parsers, same governance
+        surface as :meth:`index_run`, applied one step file at a time.
+        """
+        from harness_lab_app.attribution import parse_claude_events, parse_logs
+        from harness_lab_app.step_reward import consulted_items, step_record_files
+
+        run_dir = self._run_dir(run_id)
+        records = step_record_files(run_dir)
+        if not records:
+            return {}
+        meta = self._metadata(run_dir)
+        surface = tuple(self._governance(run_dir, meta).get("reading_surface") or ())
+        found: dict[int, list[str]] = {}
+        for number, files in records.items():
+            # claude steps carry both a log and a richer events file; the
+            # events file wins when it exists.
+            events = files.get("events")
+            log = files.get("log")
+            if events is not None:
+                lines = events.read_text(errors="replace").splitlines()
+                parsed = parse_claude_events(lines)
+                commands = _claude_bash_commands(lines)
+            elif log is not None:
+                text = log.read_text(errors="replace")
+                parsed = parse_logs(text)
+                commands = _OPENCODE_BASH_RE.findall(text)
+            else:
+                continue
+            found[number] = consulted_items(parsed, surface, commands)
+        return found
 
     def index_run(self, run_id: str) -> Attribution:
         run_dir = self._run_dir(run_id)

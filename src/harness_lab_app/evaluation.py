@@ -237,6 +237,84 @@ class EfficiencyEvaluator:
         return scores
 
 
+class StepRewardEvaluator:
+    """Level 2b — which step made the progress, and what came after (ADR-0076).
+
+    Reads the trajectory the validation service built by grading every step's
+    snapshot with the case's own checks. Emits nothing for a run that left no
+    per-step record: an old run is "not measured", never "zero".
+    """
+
+    id = "step_reward"
+
+    def evaluate(self, context: EvaluationContext) -> list[ScoreValue]:
+        objective = (context.validation or {}).get("objective") or {}
+        trajectory = objective.get("per_step") or {}
+        if not trajectory.get("measured"):
+            return []
+        steps = trajectory.get("steps") or []
+        curve = " → ".join(
+            "?" if step.get("progress") is None else f"{step['progress']:.0%}"
+            for step in steps
+        )
+        detail = {
+            "sources": trajectory.get("sources", []),
+            "unmeasured_steps": trajectory.get("unmeasured_steps", 0),
+        }
+        scores = [
+            ScoreValue(
+                "progress_auc",
+                float(trajectory["progress_auc"]),
+                reason=f"progress per step: {curve}",
+                provenance_detail=detail,
+            ),
+            ScoreValue(
+                "step_regressions",
+                float(trajectory.get("step_regressions") or 0),
+                reason=f"progress per step: {curve}",
+                provenance_detail=detail,
+            ),
+        ]
+        resolved_at = trajectory.get("steps_to_resolve")
+        if resolved_at is not None:
+            scores.append(
+                ScoreValue(
+                    "steps_to_resolve",
+                    float(resolved_at),
+                    reason=f"all checks passing after step {resolved_at} of "
+                    f"{len(steps)}",
+                    provenance_detail=detail,
+                )
+            )
+            cost = trajectory.get("cost_to_resolve_usd")
+            if cost is not None:
+                scores.append(
+                    ScoreValue(
+                        "cost_to_resolve_usd",
+                        float(cost),
+                        reason=f"spend through step {resolved_at}",
+                        provenance_detail=detail,
+                    )
+                )
+            # Money first; tokens when the run was free (self-hosted), so a
+            # local model's wasted tail is still visible.
+            share = trajectory.get("post_resolution_cost_share")
+            basis = "cost_usd"
+            if share is None:
+                share = trajectory.get("post_resolution_token_share")
+                basis = "billed_tokens"
+            if share is not None:
+                scores.append(
+                    ScoreValue(
+                        "post_resolution_cost_share",
+                        float(share),
+                        reason=f"{share:.0%} of {basis} spent after step {resolved_at}",
+                        provenance_detail=detail | {"basis": basis},
+                    )
+                )
+        return scores
+
+
 class HarnessBehaviorEvaluator:
     """Level 4 — what the auditor judged about the harness's own contribution.
 
@@ -435,6 +513,7 @@ PROFILES: dict[str, tuple[str, ...]] = {
         "deterministic",
         "llm_judge",
         "efficiency",
+        "step_reward",
         "skill_usage",
         "harness_audit",
         "deepeval",
@@ -443,12 +522,13 @@ PROFILES: dict[str, tuple[str, ...]] = {
         "deterministic",
         "llm_judge",
         "efficiency",
+        "step_reward",
         "skill_usage",
         "harness_audit",
         "deepeval",
     ),
     "outcome_only": ("deterministic",),
-    "no_judgement": ("deterministic", "efficiency", "skill_usage"),
+    "no_judgement": ("deterministic", "efficiency", "step_reward", "skill_usage"),
 }
 
 EVALUATORS = {
@@ -457,6 +537,7 @@ EVALUATORS = {
         DeterministicEvaluator(),
         RubricJudgeEvaluator(),
         EfficiencyEvaluator(),
+        StepRewardEvaluator(),
         SkillUsageEvaluator(),
         HarnessBehaviorEvaluator(),
         DeepEvalEvaluator(),

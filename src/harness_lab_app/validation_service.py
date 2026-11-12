@@ -240,6 +240,11 @@ class ValidationService:
         )
 
         validation = self._upsert(run_id)
+        # The per-step trajectory is computed by `validate_steps` and lives on
+        # the same JSON; a re-validate of the final state must not erase it.
+        previous_steps = (validation.objective or {}).get("per_step")
+        if previous_steps is not None:
+            objective = {**objective, "per_step": previous_steps}
         validation.objective = objective
         validation.cost = cost
         validation.effort = effort
@@ -262,6 +267,153 @@ class ValidationService:
         self.session.commit()
         self.session.refresh(validation)
         return validation
+
+    def _step_costs(self, run_id: str, steps: list[int]) -> dict[int, dict[str, Any]]:
+        """Each step's own cost: claude's per-step ``result`` event when present."""
+        from harness_lab_app.step_reward import claude_step_cost, step_record_files
+
+        records = step_record_files(self._run_dir(run_id))
+        costs: dict[int, dict[str, Any]] = {}
+        for step in steps:
+            events = records.get(step, {}).get("events")
+            if events is not None:
+                cost = claude_step_cost(events.read_text(errors="replace").splitlines())
+                if cost:
+                    costs[step] = cost
+        return costs
+
+    def validate_steps(self, run_id: str) -> dict[str, Any] | None:
+        """Grade every step's snapshot with the case's own checks (ADR-0076).
+
+        The per-step reward: the same spec, the same executor and the same
+        parser as the final validation (ADR-0075), pointed at
+        ``steps/step-N.snapshot`` instead of the final workspace. Run after the
+        agent has finished, so the agent never sees a reward it could steer by.
+
+        The SWE lane needs no re-run: the runner already measured F2P/P2P live
+        after every step and kept it in ``step-N.meta.json``. A step recorded
+        as a diff (a cloned target repository) is listed but not graded — its
+        checks run inside the repository and replaying a diff per step onto a
+        fresh clone is not done yet; the gap shows as an unmeasured step.
+
+        Stored on ``Validation.objective["per_step"]`` and returned; None when
+        the run left no per-step record at all.
+        """
+        from harness_lab_app.attribution_service import AttributionService
+        from harness_lab_app.step_reward import (
+            build_trajectory,
+            progress_of,
+            read_step_meta,
+            snapshot_dirs,
+            swe_progress,
+        )
+
+        run_dir = self._run_dir(run_id)
+        meta = read_step_meta(run_dir)
+        snapshots = dict(snapshot_dirs(run_dir))
+        if not meta and not snapshots:
+            return None
+
+        services = RunService(self.session)
+        run = services.get_run(run_id)
+        config = services.get_run_config(run.run_config_id)
+        case = CaseService(self.session).get_case(config.case_id)
+        target_commands: list[str] | None = None
+        if config.target_repo_id:
+            with contextlib.suppress(TargetError):
+                target = TargetService(self.session).get_target(config.target_repo_id)
+                target_commands = list(target.validation_commands) or None
+        spec = build_validation_spec(case, run_id, target_commands)
+        final_workspace = spec["workspace"]
+
+        consulted = AttributionService(self.session).per_step_consulted(run_id)
+        steps_numbers = sorted(set(meta) | set(snapshots))
+        costs = self._step_costs(run_id, steps_numbers)
+        rows: list[dict[str, Any]] = []
+        for step in steps_numbers:
+            step_meta = meta.get(step, {})
+            row: dict[str, Any] = {
+                "step": step,
+                "snapshot": step_meta.get("kind")
+                or ("snapshot" if step in snapshots else "missing"),
+                "seconds": step_meta.get("seconds"),
+                "consulted": consulted.get(step, []),
+                **costs.get(step, {}),
+            }
+            swe = step_meta.get("swe_eval")
+            if isinstance(swe, dict) and swe.get("f2p_total"):
+                row["passed"] = int(swe.get("f2p_passed") or 0)
+                row["total"] = int(swe.get("f2p_total") or 0)
+                row["progress"] = swe_progress(swe)
+                row["source"] = "swe_live"
+            elif step in snapshots and spec["commands"] and not spec.get("local"):
+                snapshot_rel = f"data/runs/{run_id}/steps/{snapshots[step].name}"
+                # Only a command that names the workspace can be pointed at a
+                # snapshot. One that does not (an absolute path of its own, a
+                # tamper guard on the lab's git state) would grade the *final*
+                # state and credit it to every step, so it sits this pass out.
+                pointed = [
+                    [*argv[:-1], argv[-1].replace(final_workspace, snapshot_rel)]
+                    for argv in spec["commands"]
+                    if argv and final_workspace in argv[-1]
+                ]
+                if not pointed:
+                    row["progress"] = None
+                    row["source"] = "unmeasured"
+                    rows.append(row)
+                    continue
+                step_spec = {
+                    **spec,
+                    "commands": pointed,
+                    # The graders' deps were installed for the final run (and
+                    # live in the run dir); a per-step pass reuses them.
+                    "setup": [],
+                }
+                objective = self._run_objective(step_spec, run_id)
+                conclusive = [
+                    c for c in objective["checks"] if c.get("conclusive") is not False
+                ]
+                row["passed"] = sum(1 for c in conclusive if c.get("passed"))
+                row["total"] = len(conclusive)
+                row["progress"] = progress_of(objective)
+                row["source"] = "snapshot_checks"
+            else:
+                row["progress"] = None
+                row["source"] = "unmeasured"
+            rows.append(row)
+
+        trajectory = build_trajectory(rows).as_dict()
+        trajectory["sources"] = sorted({row["source"] for row in rows})
+        validation = self._upsert(run_id)
+        objective = dict(validation.objective or {})
+        objective["per_step"] = trajectory
+        validation.objective = objective
+        validation.updated_at = utc_now()
+        self.session.add(validation)
+        resolved = trajectory.get("steps_to_resolve")
+        self.session.add(
+            RunEvent(
+                run_id=run_id,
+                level="info",
+                message=(
+                    f"Per-step reward: {len(rows)} step(s) graded; "
+                    + (
+                        f"resolved at step {resolved}"
+                        if resolved
+                        else "never fully resolved"
+                    )
+                    + (
+                        f", {trajectory['post_resolution_cost_share']:.0%} of cost "
+                        "spent after resolution"
+                        if trajectory.get("post_resolution_cost_share") is not None
+                        else ""
+                    )
+                    + "."
+                ),
+            )
+        )
+        self.session.commit()
+        return trajectory
 
     def apply_subjective(
         self,
