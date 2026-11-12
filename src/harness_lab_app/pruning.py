@@ -107,6 +107,10 @@ class RemovalVerdict:
     success_interval: tuple[float, float] | None
     metric_intervals: dict[str, dict[str, Any]] = field(default_factory=dict)
     margins: dict[str, float] = field(default_factory=dict)
+    # Required metrics (PRUNING_METRICS) with no case paired across both arms.
+    # Any one of them holds a removal open: success alone is not the evidence
+    # the rule asks for.
+    missing_metrics: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -157,18 +161,30 @@ def assess_removal(
         )
 
     metric_intervals: dict[str, dict[str, Any]] = {}
+    missing: list[str] = []
     for name, direction in PRUNING_METRICS.items():
         control_values = (control_metrics or {}).get(name) or {}
         treatment_values = (treatment_metrics or {}).get(name) or {}
         interval = paired_mean_interval(control_values, treatment_values)
         if interval is None:
+            # Not measured on any case both arms ran (old runs without
+            # snapshots, an arm that never resolved). Recorded, never skipped:
+            # skipping it let a removal rest on the success rate alone.
+            missing.append(name)
             continue
         baseline_values = [v for values in control_values.values() for v in values]
         baseline = stats.fmean(baseline_values) if baseline_values else 0.0
         if baseline == 0.0 and interval == (0.0, 0.0):
-            # Both arms at zero (a self-hosted model is measured as free): the
-            # metric carries no evidence either way, and a margin of 0% of 0
-            # would hold every verdict at "inconclusive" forever.
+            # Both arms measured at exactly zero (a self-hosted model is free).
+            # That is a measurement, and it says removal changed nothing; a
+            # margin of 0% of 0 would otherwise hold the verdict open forever.
+            metric_intervals[name] = {
+                "interval": interval,
+                "control_mean": baseline,
+                "bound": 0.0,
+                "direction": direction,
+                "note": "both arms at zero",
+            }
             continue
         bound = abs(baseline) * relative_margin
         metric_intervals[name] = {
@@ -209,6 +225,13 @@ def assess_removal(
             f"only {paired} case(s) paired; at least {MIN_PAIRED_CASES} are "
             "needed before anything is called removable"
         )
+    elif missing:
+        decision = INCONCLUSIVE
+        reason = (
+            f"{', '.join(missing)} not measured on any paired case — a removal "
+            "needs every metric inside its margin, not the success rate alone "
+            "(are these runs from before per-step snapshots?)"
+        )
     elif open_reasons:
         decision, reason = INCONCLUSIVE, "; ".join(open_reasons) + " — run more cases"
     else:
@@ -226,4 +249,5 @@ def assess_removal(
         success_interval=success_ci,
         metric_intervals=metric_intervals,
         margins=margins,
+        missing_metrics=missing,
     )

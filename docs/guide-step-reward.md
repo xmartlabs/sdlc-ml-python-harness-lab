@@ -84,7 +84,10 @@ check, the success rate cannot tell them apart — this still can.
    event. opencode reports cost per run, so its steps have no cost yet; progress
    and regressions are still measured.
 4. The trajectory is stored on the run's validation (`objective.per_step`), scored
-   into the registry, and shown in the run's **Per-step reward** panel.
+   into the registry, and shown in the run's **Per-step reward** panel. A
+   re-score also **removes** any `step_reward` score the new trajectory no longer
+   supports — a run that stops resolving after a re-validation loses its
+   `steps_to_resolve` instead of keeping the old one.
 
 **The agent never sees its reward.** Grading happens after the run, in the worker.
 Running the checks inside the loop would let the agent read its score and change
@@ -121,8 +124,10 @@ block with one verdict per skill:
   control.
 - **keep** — an interval sits wholly past a margin: removing the skill made the
   agent fail more, resolve later, or pay more.
-- **inconclusive** — an interval straddles the margin, or fewer than three cases
-  were paired. Run more cases before deciding.
+- **inconclusive** — an interval straddles the margin, fewer than three cases
+  were paired, or a required metric was never measured on a paired case (runs
+  from before per-step snapshots carry success but no `cost_to_resolve_usd` or
+  `progress_auc`). Success alone never makes a skill removable.
 
 "No difference observed" is never enough to remove anything. With few runs almost
 nothing shows a difference, so that rule would empty the harness one

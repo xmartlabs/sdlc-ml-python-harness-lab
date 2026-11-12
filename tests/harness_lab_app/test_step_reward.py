@@ -416,3 +416,154 @@ def test_swe_progress_is_the_issue_not_the_tests_that_already_passed() -> None:
     done = {"resolved": True, "f2p_passed": 1, "f2p_total": 1}
     assert step_reward.swe_progress(done) == 1.0
     assert step_reward.swe_progress({"f2p_total": 0}) is None
+
+
+# --------------------------------------------------------------------------
+# Re-scoring never leaves a stale step-reward score behind (PR #45 review)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def scored_session():
+    """One in-memory database shared by every connection the service opens."""
+    from sqlmodel import Session, SQLModel, create_engine
+    from sqlmodel.pool import StaticPool
+
+    # Registers every table on the metadata before it is created; run alone,
+    # nothing else has imported the models yet.
+    import harness_lab_app.models  # noqa: F401
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as db_session:
+        yield db_session
+
+
+def _seed_scored_run(session, tmp_path, monkeypatch, run_id: str = "run-r"):
+    from types import SimpleNamespace
+
+    from harness_lab_app import score_service as score_service_module
+    from harness_lab_app.models import Case, CaseType, Run, RunConfig, Validation
+
+    session.add(
+        Case(
+            case_id="c1",
+            name="c1",
+            type=CaseType.build_from_scratch,
+            prompt_variants={"default": "Do it."},
+        )
+    )
+    config = RunConfig(case_id="c1", prompt_variant="default")
+    session.add(config)
+    session.commit()
+    session.refresh(config)
+    session.add(Run(run_id=run_id, run_config_id=config.id))
+    session.add(Validation(run_id=run_id))
+    session.commit()
+    monkeypatch.setattr(
+        score_service_module,
+        "get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path, repo_root=tmp_path),
+    )
+
+
+def _set_trajectory(session, run_id: str, rows: list[dict] | None) -> None:
+    from sqlmodel import select
+
+    from harness_lab_app.models import Validation
+
+    validation = session.exec(
+        select(Validation).where(Validation.run_id == run_id)
+    ).one()
+    objective = dict(validation.objective or {})
+    if rows is None:
+        objective.pop("per_step", None)
+    else:
+        objective["per_step"] = step_reward.build_trajectory(rows).as_dict()
+    validation.objective = objective
+    session.add(validation)
+    session.commit()
+
+
+def _step_scores(session, run_id: str) -> dict[str, float | None]:
+    from sqlmodel import select
+
+    from harness_lab_app.models import Score
+
+    return {
+        row.name: row.value_num
+        for row in session.exec(select(Score).where(Score.run_id == run_id)).all()
+        if row.source == "step_reward"
+    }
+
+
+def test_a_run_that_stops_resolving_loses_its_resolution_scores(
+    scored_session, tmp_path, monkeypatch
+) -> None:
+    session = scored_session
+    from harness_lab_app.score_service import ScoreService
+
+    _seed_scored_run(session, tmp_path, monkeypatch)
+    _set_trajectory(
+        session,
+        "run-r",
+        [
+            {"step": 1, "progress": 1.0, "cost_usd": 0.3},
+            {"step": 2, "progress": 1.0, "cost_usd": 0.3},
+        ],
+    )
+    ScoreService(session).evaluate_run("run-r", profile="no_judgement")
+    assert _step_scores(session, "run-r")["steps_to_resolve"] == 1.0
+
+    # Re-validated after a grader fix: it never actually resolved.
+    _set_trajectory(
+        session,
+        "run-r",
+        [
+            {"step": 1, "progress": 0.5, "cost_usd": 0.3},
+            {"step": 2, "progress": 0.5, "cost_usd": 0.3},
+        ],
+    )
+    ScoreService(session).evaluate_run("run-r", profile="no_judgement")
+
+    scores = _step_scores(session, "run-r")
+    assert set(scores) == {"progress_auc", "step_regressions"}
+    assert scores["progress_auc"] == 0.5
+
+
+def test_a_run_whose_curve_disappears_loses_every_step_reward_score(
+    scored_session, tmp_path, monkeypatch
+) -> None:
+    session = scored_session
+    from harness_lab_app.score_service import ScoreService
+
+    _seed_scored_run(session, tmp_path, monkeypatch)
+    _set_trajectory(session, "run-r", [{"step": 1, "progress": 1.0, "cost_usd": 0.3}])
+    ScoreService(session).evaluate_run("run-r", profile="no_judgement")
+    assert _step_scores(session, "run-r")
+
+    _set_trajectory(session, "run-r", None)
+    ScoreService(session).evaluate_run("run-r", profile="no_judgement")
+
+    assert _step_scores(session, "run-r") == {}
+
+
+def test_a_profile_without_the_evaluator_leaves_its_scores_alone(
+    scored_session, tmp_path, monkeypatch
+) -> None:
+    session = scored_session
+    """Invalidation is the emitting evaluator's, never another profile's."""
+    from harness_lab_app.score_service import ScoreService
+
+    _seed_scored_run(session, tmp_path, monkeypatch)
+    _set_trajectory(session, "run-r", [{"step": 1, "progress": 1.0, "cost_usd": 0.3}])
+    ScoreService(session).evaluate_run("run-r", profile="no_judgement")
+    before = _step_scores(session, "run-r")
+
+    ScoreService(session).evaluate_run("run-r", profile="outcome_only")
+
+    assert _step_scores(session, "run-r") == before

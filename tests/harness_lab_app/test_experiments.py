@@ -2393,14 +2393,8 @@ def test_a_pruning_family_reports_a_removal_verdict_per_skill(session):
     for run in runs:
         _score(session, run, passed=True)
         cost = 0.60 if run.condition_label == f"without-{costly}" else 0.30
-        session.add(
-            Score(
-                run_id=run.run_id,
-                name="cost_to_resolve_usd",
-                version=1,
-                value_num=cost,
-            )
-        )
+        for name, value in (("cost_to_resolve_usd", cost), ("progress_auc", 1.0)):
+            session.add(Score(run_id=run.run_id, name=name, version=1, value_num=value))
     session.commit()
 
     pruning = service.summarize("prune-claude-haiku-2x")["pruning"]
@@ -2411,6 +2405,66 @@ def test_a_pruning_family_reports_a_removal_verdict_per_skill(session):
     assert "cost_to_resolve_usd" in by_item[f"skill:{costly}"]["reason"]
     # Keep first: the reader meets what must stay before what may go.
     assert pruning[0]["decision"] == "keep"
+
+
+def test_a_pruning_family_without_step_scores_removes_nothing(session):
+    """Success alone is not evidence of a removal (PR #45 review).
+
+    Runs from before per-step snapshots carry `task_validation_pass` but no
+    `cost_to_resolve_usd`/`progress_auc`. A clean success record on three cases
+    must read *inconclusive*, never *removable*.
+    """
+    from harness_lab_app.models import Case, CaseType
+    from harness_lab_app.skills_catalog import known_skill_names
+
+    governed = sorted(known_skill_names())[:1]
+    if not governed:
+        pytest.skip("no governed skills in this checkout")
+    service = ExperimentService(session)
+    cases = ["prune-a", "prune-b", "prune-c"]
+    for case_id in cases:
+        session.add(
+            Case(
+                case_id=case_id,
+                name=case_id,
+                type=CaseType.single_prompt,
+                prompt_variants={"harness": "Do it.", "default": "Do it."},
+            )
+        )
+    session.commit()
+    control = {"prompt_variant": "harness", "skills_disabled": []}
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id="prune-claude-haiku-1x",
+            name="Pruning",
+            question="Which skills can go?",
+            mode=ExperimentMode.harness_evaluation,
+            case_ids=cases,
+            repetitions=3,
+            family_id="prune-claude-haiku",
+            conditions=[
+                ExperimentConditionCreate(
+                    label="full-harness", role=ConditionRole.control, overrides=control
+                ),
+                ExperimentConditionCreate(
+                    label=f"without-{governed[0]}",
+                    overrides={**control, "skills_disabled": governed},
+                ),
+            ],
+        )
+    )
+    runs = service.launch(
+        "prune-claude-haiku-1x",
+        _base_config(case_id=cases[0], prompt_variant="harness"),
+    )
+    for run in runs:
+        _score(session, run, passed=True)
+    session.commit()
+
+    (row,) = service.summarize("prune-claude-haiku-1x")["pruning"]
+
+    assert row["decision"] == "inconclusive"
+    assert row["missing_metrics"] == ["cost_to_resolve_usd", "progress_auc"]
 
 
 def test_a_non_pruning_experiment_has_no_pruning_block(lab):

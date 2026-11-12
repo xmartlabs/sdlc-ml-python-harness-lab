@@ -67,8 +67,15 @@ harness, one treatment per skill with exactly that skill disabled, family prefix
 bootstraps: **removable** only when success loses at most 5 points and
 `cost_to_resolve_usd` / `progress_auc` move at most 20% of the control, across the
 whole interval; **keep** when an interval sits past a margin; **inconclusive**
-otherwise or below three paired cases. "No difference observed" never removes
-anything.
+otherwise, below three paired cases, or when either metric was not measured on a
+paired case. "No difference observed" never removes anything, and neither does a
+success rate alone.
+
+**A re-score removes the step-reward scores it no longer emits.** Scores are
+upserted by `(name, version)`, so a value an evaluator stops emitting used to
+survive. An evaluator that declares `invalidates_missing` owns the registry
+names whose `source` is its id; `ScoreService.evaluate_run` deletes those it did
+not re-emit, and only for evaluators the profile ran.
 
 ## Consequences
 

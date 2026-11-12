@@ -246,6 +246,11 @@ class StepRewardEvaluator:
     """
 
     id = "step_reward"
+    # Every value this evaluator emits is derived from one trajectory, so a
+    # re-score must also *remove* the ones it no longer emits: a run that stops
+    # resolving after a re-validation would otherwise keep `steps_to_resolve`
+    # and `cost_to_resolve_usd` from before, and pruning would read them.
+    invalidates_missing: ClassVar[bool] = True
 
     def evaluate(self, context: EvaluationContext) -> list[ScoreValue]:
         objective = (context.validation or {}).get("objective") or {}
@@ -543,6 +548,30 @@ EVALUATORS = {
         DeepEvalEvaluator(),
     )
 }
+
+
+def owned_definitions(profile: str) -> set[str]:
+    """Score names a re-score under ``profile`` may delete when not re-emitted.
+
+    Only evaluators that declare ``invalidates_missing`` own their names this
+    way, and only the ones the profile runs: a profile that never ran the
+    evaluator says nothing about its scores. A name belongs to an evaluator
+    through the registry's ``source``, which is the evaluator's id.
+    """
+    from harness_lab_app.scores import REGISTRY
+
+    if profile not in PROFILES:
+        return set()
+    owners = {
+        evaluator_id
+        for evaluator_id in PROFILES[profile]
+        if getattr(EVALUATORS[evaluator_id], "invalidates_missing", False)
+    }
+    return {
+        definition.name
+        for definition in REGISTRY.values()
+        if definition.source in owners
+    }
 
 
 def run_profile(profile: str, context: EvaluationContext) -> list[ScoreValue]:
