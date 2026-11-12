@@ -3,6 +3,18 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## 2026-11-12 — "Claude" authored commits because `.git/config` said so, not because an agent committed
+
+PR #45 showed its two commits authored by `Claude <claude@anthropic.com>`. No agent ran
+`git commit`: this repo's `.git/config` held a `[user]` block (name Claude), written by
+an earlier agent session, and a repo-local identity overrides the developer's global and
+`includeIf` identities — so the developer's own commits were recorded as Claude. PRs
+#42-#44 separately carried Claude Code's default `Co-authored-by: Claude` trailer. Fix:
+the `[user]` block removed, attribution disabled in user settings, an Authorship
+section in `.github/standards.md` (mirrored in every adapter), and the
+`commit-authorship` commit-msg hook that refuses an agent identity or AI co-author line.
+**Check `git var GIT_AUTHOR_IDENT` before trusting who a commit will be recorded as.**
+
 ## 2026-11-12 — End-of-run scores hid that every tetris-v2 run was solved in step 1
 
 Regrading three `tetris-v2` claude runs after every step (K-019 lab root, K-020 bare,

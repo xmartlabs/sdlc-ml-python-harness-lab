@@ -106,3 +106,4 @@ verify endpoints with `make opencode-doctor`. Full guide: `.github/portability.m
 - Prefer `make` targets and `uv` workflows.
 - When implementing or testing changes, create or update documentation in `docs/`.
 - Use absolute imports only.
+- The developer is the sole author of every commit and PR: never commit, push or branch unless asked, never set a git identity, never add AI co-author or "Generated with" lines (see `.github/standards.md` → Authorship).

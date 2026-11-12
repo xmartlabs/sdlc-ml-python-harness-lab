@@ -84,7 +84,7 @@ setup-hooks:
 	@if [ ! -d .venv ]; then make install; fi
 	@echo "📦 Syncing dev dependencies required for hooks..."
 	@uv sync --group dev
-	@. $(VENV_DIR)/bin/activate && pre-commit install
+	@. $(VENV_DIR)/bin/activate && pre-commit install --hook-type pre-commit --hook-type commit-msg
 	@echo "✅ Hooks installed!"
 
 # =============================================================================
