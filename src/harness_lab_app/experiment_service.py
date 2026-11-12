@@ -457,6 +457,63 @@ def _capability_block(
     return {"tiers": order, "arms": arms}
 
 
+# A pruning family (ADR-0076): one control with the full harness and one
+# treatment per item, each removing exactly that item. `scripts/prune.py`
+# names the family with this prefix; the summary reads it as leave-one-out.
+PRUNING_FAMILY_PREFIX = "prune-"
+
+
+def removed_item(control: dict[str, Any], treatment: dict[str, Any]) -> str | None:
+    """The single item a treatment removes relative to its control, or None.
+
+    Today an item is a skill (``skills_disabled``). Anything else — two skills
+    at once, a different prompt — is not a leave-one-out arm and gets no
+    pruning verdict, rather than a verdict about the wrong thing.
+    """
+    if {k: v for k, v in control.items() if k != "skills_disabled"} != {
+        k: v for k, v in treatment.items() if k != "skills_disabled"
+    }:
+        return None
+    removed = set(treatment.get("skills_disabled") or []) - set(
+        control.get("skills_disabled") or []
+    )
+    added = set(control.get("skills_disabled") or []) - set(
+        treatment.get("skills_disabled") or []
+    )
+    if len(removed) != 1 or added:
+        return None
+    return f"skill:{removed.pop()}"
+
+
+def _pruning_block(
+    conditions: list[ExperimentCondition],
+    control_label: str,
+    outcomes: dict[str, dict[str, list[bool]]],
+    case_metrics: dict[str, dict[str, dict[str, list[float]]]],
+) -> list[dict[str, Any]]:
+    """One removal verdict per leave-one-out treatment arm, keep-first."""
+    from harness_lab_app.pruning import assess_removal
+
+    control = next(c for c in conditions if c.label == control_label)
+    verdicts: list[dict[str, Any]] = []
+    for condition in conditions:
+        if condition.label == control_label:
+            continue
+        item = removed_item(control.overrides or {}, condition.overrides or {})
+        if item is None:
+            continue
+        verdict = assess_removal(
+            item=item,
+            control_success=outcomes.get(control_label, {}),
+            treatment_success=outcomes.get(condition.label, {}),
+            control_metrics=case_metrics.get(control_label, {}),
+            treatment_metrics=case_metrics.get(condition.label, {}),
+        )
+        verdicts.append({"arm": condition.label, **verdict.as_dict()})
+    order = {"keep": 0, "inconclusive": 1, "removable": 2}
+    return sorted(verdicts, key=lambda v: (order.get(v["decision"], 9), v["item"]))
+
+
 def repetition_warning(repetitions: int) -> str | None:
     """State plainly what a given N does and does not support."""
     if repetitions < 2:
@@ -609,6 +666,14 @@ class ExperimentService:
         # the control's `skills_disabled`. Reading the arm's own overrides alone
         # left that arm with an empty skill list, so the observation that none
         # of its twenty-five skills was ever opened had nowhere to land.
+        # Per arm, per metric, per case: the values the pruning verdict reads
+        # (ADR-0076). Only metrics whose direction is fixed in PRUNING_METRICS.
+        from harness_lab_app.pruning import PRUNING_METRICS
+
+        pruning_metrics = tuple(PRUNING_METRICS)
+        case_metrics: dict[str, dict[str, dict[str, list[float]]]] = {
+            condition.label: {} for condition in conditions
+        }
         removed_elsewhere: dict[str, list[str]] = {}
         for condition in conditions:
             mine = set((condition.overrides or {}).get("skills_disabled") or [])
@@ -658,6 +723,14 @@ class ExperimentService:
                 for name in sorted(names):
                     if name not in usage["skills"]:
                         usage["skills"].append(name)
+            for metric in pruning_metrics:
+                metric_value = values.get(metric)
+                if isinstance(metric_value, (int, float)) and not isinstance(
+                    metric_value, bool
+                ):
+                    case_metrics[label].setdefault(metric, {}).setdefault(
+                        case_id, []
+                    ).append(float(metric_value))
             passed = values.get("task_validation_pass")
             if passed is not None:
                 outcomes[label].setdefault(case_id, []).append(bool(passed))
@@ -863,6 +936,14 @@ class ExperimentService:
             # cases are tagged `tier:<name>` (ADR-0069). None otherwise.
             "capability": _capability_block(
                 self.session, experiment.case_ids, conditions, outcomes
+            ),
+            # Leave-one-out: can each ablated item go? (ADR-0076). Only for a
+            # pruning family, whose every treatment removes exactly one item.
+            "pruning": (
+                _pruning_block(conditions, control.label, outcomes, case_metrics)
+                if control is not None
+                and str(experiment.family_id or "").startswith(PRUNING_FAMILY_PREFIX)
+                else None
             ),
         }
 

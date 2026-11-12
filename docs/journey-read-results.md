@@ -57,6 +57,12 @@ reading of the numbers, not a new measurement.
 - **The run list's failure label** says who failed: *model not served*,
   *CLI too old*, *endpoint down*, *harness error* are the lab's and are not counted
   as attempts; *agent error* is the agent's.
+- **Per-step reward** regrades the workspace after every step with the case's own
+  checks (an idea borrowed from reinforcement learning). It shows the step that
+  resolved the task, what that cost, and how much was spent *after* it — the
+  number to watch when two arms both pass everything. Each step also lists the
+  skills and documents it opened; that is co-occurrence, not cause.
+  [How it works](guide-step-reward.md).
 - **Run audit** reads the run's artifacts and reports how the agent worked: which
   skills it consulted, loops, whether it followed the working loop. It is the
   input to [improving the template](journey-improve-the-template.md).
@@ -69,6 +75,10 @@ reading of the numbers, not a new measurement.
   lab holds. Good for "which configurations have we tried"; not for a decision.
 - **Evidence → Findings** is where a result you trust becomes a claim the team can
   see, with the experiment that supports it.
+- **Which skills can go?** `make prune` runs the full harness against the same
+  harness minus one skill, per skill, and the experiment summary's `pruning` block
+  says *removable*, *keep* or *inconclusive* against a declared margin.
+  [Per-step reward → ablation](guide-step-reward.md#from-when-to-why-credit-then-ablation).
 
 ## When to believe a result
 

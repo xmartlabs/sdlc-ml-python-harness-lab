@@ -204,6 +204,15 @@ versions + rolled `harness_hash`), `model_condition` (temp/context/alias),
 
 ## Open threads / next steps
 
+- **Per-step reward (ADR-0076, 2026-11-12, uncommitted).** RL-inspired: the runner
+  snapshots the workspace after every step, the worker regrades each snapshot with the
+  case's checks, five `step_reward` scores, per-step credit, and `make prune`
+  (leave-one-out skill ablation with a non-inferiority margin). Guide:
+  `docs/guide-step-reward.md`. Next: run a first real `make prune` on 3+ cases per
+  model tier; regrade target-repo diffs per step; per-step cost for opencode;
+  consider `governance_read_coverage@v3` counting shell reads; decide separately
+  whether `steps_to_resolve` should ever stop the loop (kept out on purpose).
+
 - **After `fix/measurement-honesty` merges (ADR-0073), continue with items 6–10** of
   `docs/plans/2026-11-measurement-honesty-follow-ups.md`: judge vs checks agreement
   and per-arm exclusions (6), Wilson relabelled "on these cases" plus a case-clustered

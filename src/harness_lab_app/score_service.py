@@ -11,7 +11,11 @@ from harness_lab_app.attribution import read_step_events, read_step_logs
 from harness_lab_app.attribution_service import AttributionService
 from harness_lab_app.case_service import CaseService
 from harness_lab_app.config import get_settings
-from harness_lab_app.evaluation import EvaluationContext, run_profile
+from harness_lab_app.evaluation import (
+    EvaluationContext,
+    owned_definitions,
+    run_profile,
+)
 from harness_lab_app.models import Audit, HarnessSource, Score, Validation
 from harness_lab_app.run_service import RunService
 
@@ -248,6 +252,16 @@ class ScoreService:
                 select(Score).where(Score.run_id == run_id)
             ).all()
         }
+        # A value an evaluator no longer emits is no longer true of the run
+        # (a curve that stopped resolving, a run whose snapshots were lost).
+        # Left in place it would be read as current — by an aggregate, and by
+        # a pruning verdict. Only names the profile's own evaluators declare
+        # they own are removed (`owned_definitions`).
+        emitted = {row["name"] for row in rows}
+        owned = owned_definitions(profile)
+        for (name, _version), score in list(existing.items()):
+            if name in owned and name not in emitted:
+                self.session.delete(score)
         stored: list[Score] = []
         for row in rows:
             key = (row["name"], row["version"])

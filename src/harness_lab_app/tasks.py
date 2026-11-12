@@ -816,6 +816,7 @@ def _execute_run_body(
                 if failure is None:
                     _run_objective_validation(session, run_id)
                     _autoscore_run(session, run_id)
+                    _run_step_validation(session, run_id)
             # Attribution is useful for any run that produced step logs
             # (including cancelled/failed), so index it regardless of outcome.
             _index_attribution(session, run_id)
@@ -1303,6 +1304,30 @@ def _run_objective_validation(session: Session, run_id: str) -> None:
         session.commit()
 
 
+def _run_step_validation(session: Session, run_id: str) -> None:
+    """Grade every step's snapshot with the case's checks (ADR-0076).
+
+    After the final validation, which installed the graders' dependencies the
+    per-step pass reuses, and before scoring, which reads the trajectory.
+    Best-effort like every post-run step: a run with no reward curve is a run
+    with a gap in a chart, never a failed run.
+    """
+    from harness_lab_app.validation_service import ValidationService
+
+    try:
+        ValidationService(session).validate_steps(run_id)
+    except Exception as exc:  # the step reward must never fail the run
+        session.rollback()
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="warning",
+                message=f"Per-step reward could not be computed: {exc!r}",
+            )
+        )
+        session.commit()
+
+
 @celery_app.task(name="harness_lab_app.tasks.execute_run", acks_late=True)
 def execute_run(run_id: str) -> None:
     init_db()
@@ -1318,6 +1343,9 @@ def validate_run(run_id: str) -> None:
         # Re-validate also completes SWE-bench runs that were parked awaiting a
         # manual score before auto-scoring existed (or whose validation ran late).
         _autoscore_run(session, run_id)
+        # The per-step reward re-grades the snapshots too, so a re-validate
+        # after a grader fix refreshes the curve along with the verdict.
+        _run_step_validation(session, run_id)
         # Scores come after validation because they read its verdict, cost and
         # effort; re-scoring overwrites in place, so a re-validate refreshes
         # them rather than accumulating contradictions.

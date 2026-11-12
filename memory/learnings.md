@@ -3,6 +3,38 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## 2026-11-12 — "Claude" authored commits because `.git/config` said so, not because an agent committed
+
+PR #45 showed its two commits authored by `Claude <claude@anthropic.com>`. No agent ran
+`git commit`: this repo's `.git/config` held a `[user]` block (name Claude), written by
+an earlier agent session, and a repo-local identity overrides the developer's global and
+`includeIf` identities — so the developer's own commits were recorded as Claude. PRs
+#42-#44 separately carried Claude Code's default `Co-authored-by: Claude` trailer. Fix:
+the `[user]` block removed, attribution disabled in user settings, an Authorship
+section in `.github/standards.md` (mirrored in every adapter), and the
+`commit-authorship` commit-msg hook that refuses an agent identity or AI co-author line.
+**Check `git var GIT_AUTHOR_IDENT` before trusting who a commit will be recorded as.**
+
+## 2026-11-12 — End-of-run scores hid that every tetris-v2 run was solved in step 1
+
+Regrading three `tetris-v2` claude runs after every step (K-019 lab root, K-020 bare,
+K-034 harness prompt) gave 10/10 after step 1 in all three; 74%, 71% and 32% of the
+spend came after that. The extra steps re-ran `ls`/`cat`, wrote their own tests,
+added unrequested features ("hold piece") and, in K-019/K-020, read
+`benchmarks/tetris-v2/task.yaml` and `scoring.md` — the agent went looking for the
+grader. No end-of-run score could see it: every run passed, `agent_steps` measures
+the stop rule. This is what ADR-0076's per-step reward exists for.
+
+Two traps found on the way. **Replaying edits from stream-json needs GNU sed and a
+`python` on PATH** — on macOS, BSD `sed -i` and a missing `python` make the agent's
+own `sed -i`/`python - <<EOF` mutations fail silently and the replay diverges; only
+byte-comparing the replay with the archived workspace caught it. **Agents read the
+harness with `cat`/`sed -n`, not only the Read tool** — K-034 read four governance
+docs that way and `parse_claude_events` recorded `files_read: []`. The per-step
+credit scans shell reads against the run's surface; the run-level
+`governance_read_coverage@v2` still does not (changing it would change a score's
+meaning — needs a v3).
+
 ## 2026-11-09 — Join opencode usage by session id; never by title or directory
 
 `pull_usage_opencode_db` matched sessions with `title LIKE '%run_id%' AND directory = /app`.

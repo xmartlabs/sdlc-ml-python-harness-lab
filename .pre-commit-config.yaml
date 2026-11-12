@@ -30,3 +30,16 @@ repos:
     rev: v8.28.0
     hooks:
       - id: gitleaks
+
+  # Every commit is authored by the developer, never an AI agent: refuses an
+  # agent identity (a stray `[user]` in .git/config) and AI co-author trailers.
+  # Runs at the commit-msg stage, which `make setup-hooks` installs.
+  - repo: local
+    hooks:
+      - id: commit-authorship
+        name: commit authored by the developer, not an AI agent
+        entry: python3 scripts/check_commit_authorship.py
+        language: system
+        stages: [commit-msg]
+        always_run: true
+        pass_filenames: true

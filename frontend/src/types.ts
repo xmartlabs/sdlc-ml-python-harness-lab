@@ -192,6 +192,49 @@ export type ValidationRecord = {
   composite: number | null;
 };
 
+/** One step of a run's per-step reward (ADR-0076). */
+export type StepOutcome = {
+  step: number;
+  /** Share of conclusive checks passing after this step; null = not measured. */
+  progress: number | null;
+  /** Change in progress this step caused. */
+  reward: number | null;
+  cost_usd: number | null;
+  billed_tokens: number | null;
+  passed: number | null;
+  total: number | null;
+  /** Skills (`skill:`) and governance docs (`doc:`) opened in this step. */
+  consulted: string[];
+};
+
+export type StepCredit = {
+  item: string;
+  kind: "co_occurrence";
+  steps: number[];
+  reward_when_consulted: number;
+  measured_steps: number;
+};
+
+/** A run's per-step reward: progress after every step, graded by the case's checks. */
+export type StepRewardRecord = {
+  steps: StepOutcome[];
+  measured: boolean;
+  resolved: boolean;
+  final_progress: number | null;
+  best_progress: number | null;
+  steps_to_resolve: number | null;
+  steps_to_best: number | null;
+  cost_to_resolve_usd: number | null;
+  post_resolution_cost_share: number | null;
+  post_resolution_token_share: number | null;
+  post_best_cost_share: number | null;
+  progress_auc: number | null;
+  step_regressions: number;
+  unmeasured_steps: number;
+  credit: StepCredit[];
+  sources: string[];
+};
+
 export type AttributionRecord = {
   run_id: string;
   tools: Record<string, number>;

@@ -84,7 +84,7 @@ setup-hooks:
 	@if [ ! -d .venv ]; then make install; fi
 	@echo "📦 Syncing dev dependencies required for hooks..."
 	@uv sync --group dev
-	@. $(VENV_DIR)/bin/activate && pre-commit install
+	@. $(VENV_DIR)/bin/activate && pre-commit install --hook-type pre-commit --hook-type commit-msg
 	@echo "✅ Hooks installed!"
 
 # =============================================================================
@@ -564,6 +564,15 @@ ladder:
 	@[ -n "$(MODEL)" ] || { echo "❌ MODEL is required. Example: MODEL=claude-haiku-4-5-20251001"; exit 1; }
 	@uv run python scripts/ladder.py $(if $(CASES),--cases $(CASES),) --model $(MODEL) --harness $(or $(HARNESS),claude) --reps $(or $(REPS),2) $(if $(LAUNCH),--launch,)
 
+# Leave-one-out pruning (ADR-0076): full harness vs the same harness minus one
+# skill, per skill. The summary says removable / keep / inconclusive per skill.
+# Without ITEMS, the skills the per-step reward credits least are tried first.
+# Usage: make prune MODEL=claude-haiku-4-5-20251001 CASES="tetris-v2 cli-textstats-v1 clinic-slots-t1" [ITEMS="a b" TOP=4 REPS=3 HARNESS=claude LAUNCH=1]
+prune:
+	@[ -n "$(MODEL)" ] || { echo "❌ MODEL is required. Example: MODEL=claude-haiku-4-5-20251001"; exit 1; }
+	@[ -n "$(CASES)" ] || { echo "❌ CASES is required (3+ cases for a verdict)."; exit 1; }
+	@uv run python scripts/prune.py --cases $(CASES) --model $(MODEL) --harness $(or $(HARNESS),claude) --reps $(or $(REPS),3) --top $(or $(TOP),4) $(if $(ITEMS),--items $(ITEMS),) $(if $(LAUNCH),--launch,)
+
 # Read-only readiness checklist before a demo: docker, credential (names only),
 # API and cases. Writes nothing. Usage: make demo-check [API=http://localhost:8009]
 demo-check:
@@ -997,4 +1006,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill
+.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill prune

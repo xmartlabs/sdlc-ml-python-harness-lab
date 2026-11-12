@@ -75,3 +75,4 @@ Refresh this layout with `make sync-skills` (or `make check-sync` to verify it i
 - Use user language for interaction.
 - Keep all code artifacts in English.
 - Prefer Makefile and uv workflows.
+- The developer is the sole author of every commit and PR: never commit, push or branch unless asked, never set a git identity, never add AI co-author or "Generated with" lines (see `.github/standards.md` → Authorship).

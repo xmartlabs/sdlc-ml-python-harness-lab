@@ -95,6 +95,7 @@ Read and follow:
 - Prefer `make` targets and `uv` workflows.
 - Update docs in `docs/` when implementation or tests change.
 - Use absolute imports only.
+- The developer is the sole author of every commit and PR: never commit, push or branch unless asked, never set a git identity, never add AI co-author or "Generated with" lines (see `.github/standards.md` → Authorship).
 
 ## Operating discipline (Antigravity)
 

@@ -2,6 +2,7 @@ import type {
   ArtifactRecord,
   AttentionFeed,
   AttributionRecord,
+  StepRewardRecord,
   AuditRecord,
   CompareAuditRecord,
   ExperimentAuditRecord,
@@ -688,6 +689,8 @@ export const api = {
     }),
   getAttribution: (runId: string) =>
     request<AttributionRecord>(`/api/runs/${runId}/attribution`),
+  getStepReward: (runId: string) =>
+    request<StepRewardRecord>(`/api/runs/${runId}/step-reward`),
   indexAttribution: (runId: string) =>
     request<AttributionRecord>(`/api/runs/${runId}/attribution/index`, {
       method: "POST"

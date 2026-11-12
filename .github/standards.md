@@ -51,6 +51,23 @@ For complex LLM prompts, prefer structured XML-like sections:
 - `<context>`
 - `<instructions>`
 
+## Authorship
+
+The developer is the sole author of every commit and pull request. AI agents
+(Claude Code, Copilot, Codex, OpenCode, any other) write code on the developer's
+behalf; they are never the author, committer, or co-author of record.
+
+- Never commit, push, or create branches unless the developer explicitly asks.
+  By default, leave changes uncommitted and suggest a branch name.
+- Never set a git identity: no `git config user.name` / `user.email`, at any
+  scope, and no `GIT_AUTHOR_*` / `GIT_COMMITTER_*` overrides. The developer's own
+  configuration decides who commits.
+- Never add AI attribution to commits or pull requests: no `Co-authored-by` an
+  agent, no "Generated with …" line, in messages, PR descriptions, or
+  suggested-commit text.
+- Enforced by the `commit-authorship` hook (`commit-msg` stage, installed by
+  `make setup-hooks`), which refuses an agent identity or an AI co-author line.
+
 ## Validation Checklist
 
 Before finalizing generated work:

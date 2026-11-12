@@ -16,6 +16,10 @@ What a developer takes away:
   broken, what to fix, from checks that read the files, not a model's opinion.
 - **The pieces that work, to keep.** The governance, the agents, or one skill,
   copied into your project with `make harness-export` — previewed first.
+- **Which step did the work, and what came after.** Borrowed from reinforcement
+  learning: every step is graded by the case's own checks, so you see the step
+  that solved it, the share of spend after it, and — by ablation — which skills
+  the harness can lose. See [Per-step reward](guide-step-reward.md).
 - **Evidence that improves the shared template** (`ml-python-base`) for the next
   developer.
 
@@ -61,6 +65,7 @@ Kept for when a journey sends you there.
 | Small and self-hosted models | [Tune your local model](guide-local-models.md), [Small models](guide-small-models.md), [Local model runtime config](local-model-runtime-config.md), [Task sizing](task-sizing.md) |
 | Registered repositories | [Target repositories](guide-target-repositories.md), [What the lab can run](guide-runner-capabilities.md) |
 | Skills | [Skill validation](guide-skill-validation.md), [Skills management](skills-management.md) |
+| Per-step reward and pruning the harness (RL-inspired) | [Per-step reward](guide-step-reward.md) |
 | Continuing a run | [Run continuation](guide-run-continuation.md) |
 | SWE-bench | [Curated set](swebench-curated-set.md) |
 | Run traces | [Langfuse](guide-langfuse-observability.md) |

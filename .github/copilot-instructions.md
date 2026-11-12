@@ -123,3 +123,4 @@ Orchestration policy reference:
 - Keep all code artifacts in English.
 - Prefer `Makefile` commands and `uv` workflow.
 - When implementing and testing new changes, create or update documentation in `docs/`.
+- The developer is the sole author of every commit and PR: never commit, push or branch unless asked, never set a git identity, never add AI co-author or "Generated with" lines (see `.github/standards.md` → Authorship).
