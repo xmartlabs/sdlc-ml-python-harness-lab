@@ -353,11 +353,14 @@ class ValidationService:
         ``steps/step-N.snapshot`` instead of the final workspace. Run after the
         agent has finished, so the agent never sees a reward it could steer by.
 
-        The SWE lane needs no re-run: the runner already measured F2P/P2P live
-        after every step and kept it in ``step-N.meta.json``. A step recorded
-        as a diff (a cloned target repository) is listed but not graded — its
-        checks run inside the repository and replaying a diff per step onto a
-        fresh clone is not done yet; the gap shows as an unmeasured step.
+        The SWE lane needs no re-run when the runner measured F2P/P2P live
+        after every step and kept it in ``step-N.meta.json``. SWE-bench Pro
+        cannot be measured live (its suite runs in docker, which the runner
+        lacks), so each step recorded as a diff with its ``base`` is rebuilt
+        into a self-contained clone and graded here with the case's own
+        command; a suite that did not run leaves that step unmeasured. A
+        target repository's per-step diffs are listed but not regraded yet;
+        the gap shows as an unmeasured step.
 
         Stored on ``Validation.objective["per_step"]`` and returned; None when
         the run left no per-step record at all.
