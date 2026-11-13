@@ -1104,11 +1104,27 @@ def _snapshot_git_diff(workspace: Path, steps_dir: Path, step_n: int) -> dict:
     )
     if git_dir.returncode != 0:
         return {"step": step_n, "kind": "error", "error": git_dir.stderr[-200:]}
+    # The commit the diff is taken against. Recorded because HEAD moves when the
+    # agent commits, and the worker can only rebuild this step's tree — to grade
+    # it where the runner could not (SWE-bench Pro needs docker) — from the
+    # exact base the diff was cut from. The commit stays in the archived clone.
+    head = subprocess.run(
+        ["git", "-C", str(workspace), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    base = head.stdout.strip() if head.returncode == 0 else ""
     real_index = Path(git_dir.stdout.strip()) / "index"
     with tempfile.TemporaryDirectory() as scratch:
         index = Path(scratch) / "index"
         if real_index.is_file():
-            shutil.copyfile(real_index, index)
+            # copy2, not copyfile: the index's mtime is how git spots a "racy"
+            # entry — a file edited in the same second the index was written,
+            # whose cached stat cannot prove it unchanged. A copy stamped *now*
+            # makes every such entry look safely older than the index, so git
+            # trusts the stale stat and a same-size edit vanishes from the
+            # diff (the step looks like it changed nothing).
+            shutil.copy2(real_index, index)
         env = {**os.environ, "GIT_INDEX_FILE": str(index)}
         subprocess.run(
             ["git", "-C", str(workspace), "add", "-N", "."],
@@ -1128,7 +1144,10 @@ def _snapshot_git_diff(workspace: Path, steps_dir: Path, step_n: int) -> dict:
         }
     dest = steps_dir / f"step-{step_n}.diff"
     dest.write_bytes(diff.stdout)
-    return {"step": step_n, "kind": "diff", "path": dest.name}
+    meta = {"step": step_n, "kind": "diff", "path": dest.name}
+    if base:
+        meta["base"] = base
+    return meta
 
 
 def snapshot_step(
@@ -1924,8 +1943,12 @@ def build_claude_cmd(
     native = _native_model(executor_model)
     if native:
         cmd += ["--model", native]
+    # `--add-dir <directories...>` is variadic: written as two tokens it also
+    # swallows the prompt that follows as one more directory, and the CLI dies
+    # with "Input must be provided ... when using --print" before any model
+    # call. The `=` form binds exactly one value.
     for directory in add_dirs:
-        cmd += ["--add-dir", str(directory)]
+        cmd.append(f"--add-dir={directory}")
     cmd.append(message)
     return cmd
 
@@ -2500,7 +2523,13 @@ def collect_claude_usage(out_dir: Path) -> dict:
 
     input_tokens = output_tokens = 0
     cache_read_tokens = cache_creation_tokens = 0
-    cost = 0.0
+    # `total_cost_usd` is the *session's* running total, not the response's:
+    # a session that answers again — a background task finishing after the
+    # agent's final message — emits a second `result` carrying the first's
+    # cost plus its own. So cost is the last value per session, summed across
+    # sessions (one per step). `usage`, `num_turns` and `duration_ms` are
+    # per-response and are summed. eda-ml-iris K-002 reported $0.83 for $0.49.
+    session_cost: dict[str, float] = {}
     turns = tool_calls = 0
     duration_ms = 0
     files_modified: set[str] = set()
@@ -2545,11 +2574,13 @@ def collect_claude_usage(out_dir: Path) -> dict:
                 cache_read_tokens += usage.get("cache_read_input_tokens") or 0
                 cache_creation_tokens += usage.get("cache_creation_input_tokens") or 0
                 if isinstance(event.get("total_cost_usd"), (int, float)):
-                    cost += event["total_cost_usd"]
+                    session = f"{path.name}:{event.get('session_id') or ''}"
+                    session_cost[session] = float(event["total_cost_usd"])
                 turns += event.get("num_turns") or 0
                 duration_ms += event.get("duration_ms") or 0
     if not saw_result and tool_calls == 0:
         return {}
+    cost = sum(session_cost.values())
     collected: dict = {
         "turns": turns or None,
         "tool_calls": tool_calls or None,

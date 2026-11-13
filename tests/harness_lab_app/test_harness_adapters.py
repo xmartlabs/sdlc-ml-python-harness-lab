@@ -139,10 +139,17 @@ def test_preflight_claude_in_docker_requires_credentials(monkeypatch):
 
 
 def test_claude_cmd_registers_extra_skill_directories_before_the_prompt():
-    cmd = bench_run.build_claude_cmd(None, "do it", add_dirs=(Path("/app"),))
-    assert cmd[-3:] == ["--add-dir", "/app", "do it"]
+    cmd = bench_run.build_claude_cmd(
+        None, "do it", add_dirs=(Path("/app"), Path("/extra"))
+    )
+    # `--add-dir` is variadic: as two tokens it swallowed the prompt as another
+    # directory and the CLI exited "Input must be provided". Bound with `=`.
+    assert cmd[-3:] == ["--add-dir=/app", "--add-dir=/extra", "do it"]
+    assert "--add-dir" not in cmd
     # Nothing added, nothing emitted: the existing command shape is unchanged.
-    assert "--add-dir" not in bench_run.build_claude_cmd(None, "do it")
+    assert not any(
+        part.startswith("--add-dir") for part in bench_run.build_claude_cmd(None, "x")
+    )
 
 
 def test_a_lab_root_claude_run_started_inside_a_clone_needs_a_staged_catalog(tmp_path):

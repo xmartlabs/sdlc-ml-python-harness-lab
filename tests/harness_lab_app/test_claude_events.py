@@ -13,6 +13,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from harness_lab_app import run_failures
 from harness_lab_app.attribution import (
     HARNESS_READING_SURFACE,
@@ -145,6 +147,49 @@ def test_collect_claude_usage_aggregates(tmp_path):
     assert usage["time_minutes"] == 3.0
     assert usage["files_modified"] == ["/app/workspace/r1/src/mod.py"]
     assert usage["detected_model"] == "claude-haiku-4-5-20251001"
+
+
+def test_a_session_that_answers_twice_is_not_charged_twice(tmp_path):
+    """`total_cost_usd` is the session's running total, `usage` is per-response.
+
+    A background task finishing after the agent's final message makes the
+    session answer again and emit a second `result` (eda-ml-iris K-002):
+    summing both costs reported $0.83 for a run that cost $0.49.
+    """
+    steps = tmp_path / "steps"
+    steps.mkdir()
+    (steps / "step-1.events.jsonl").write_text(
+        _event(
+            "result",
+            session_id="s1",
+            num_turns=41,
+            total_cost_usd=0.3397,
+            usage={"input_tokens": 244, "output_tokens": 13421},
+        )
+        + "\n"
+        + _event(
+            "result",
+            session_id="s1",
+            num_turns=1,
+            total_cost_usd=0.4117,
+            usage={"input_tokens": 10, "output_tokens": 224},
+        )
+        + "\n"
+    )
+    (steps / "step-2.events.jsonl").write_text(
+        _event(
+            "result",
+            session_id="s2",
+            num_turns=12,
+            total_cost_usd=0.0820,
+            usage={"input_tokens": 65, "output_tokens": 1818},
+        )
+        + "\n"
+    )
+    usage = bench_run.collect_claude_usage(tmp_path)
+    assert usage["cost_usd"] == pytest.approx(0.4117 + 0.0820)
+    assert usage["output_tokens"] == 13421 + 224 + 1818
+    assert usage["turns"] == 41 + 1 + 12
 
 
 def test_collect_claude_usage_empty_when_no_events(tmp_path):
