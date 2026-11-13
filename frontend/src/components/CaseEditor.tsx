@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 import { api } from "../api";
-import { SWE_CASE_TYPES } from "../caseLabels";
+import { SWE_CASE_TYPES, uninstallableRequirements } from "../caseLabels";
 import { defineMessages, useMessages } from "../i18n";
 import type { CaseCreatePayload, CaseRecord } from "../types";
 
@@ -61,6 +61,13 @@ const MESSAGES = defineMessages({
         objective score. {runId} is substituted.
       </>
     ),
+    validationRequirementsLabel: "Grader requirements (pinned, one per line)",
+    validationRequirementsHint:
+      "Installed before the checks run, which is offline in a clean container " +
+      "with only the standard library, pytest, pyyaml and requests.",
+    requirementsNotInstallable: (lines: string) =>
+      `Not installable, so the setup step would skip it: ${lines}. Use a ` +
+      "package name with an optional version (numpy==2.4.6, pandas>=2.2).",
     scoringRubric: "Scoring rubric",
     saving: "Saving…",
     save: "Save",
@@ -119,6 +126,13 @@ const MESSAGES = defineMessages({
         cero hace fallar el puntaje objetivo. Se sustituye {runId}.
       </>
     ),
+    validationRequirementsLabel: "Dependencias del evaluador (fijadas, una por línea)",
+    validationRequirementsHint:
+      "Se instalan antes de los checks, que corren sin red en un contenedor " +
+      "limpio con solo la biblioteca estándar, pytest, pyyaml y requests.",
+    requirementsNotInstallable: (lines: string) =>
+      `No se puede instalar, el paso de setup lo saltearía: ${lines}. Usá un ` +
+      "nombre de paquete con versión opcional (numpy==2.4.6, pandas>=2.2).",
     scoringRubric: "Rúbrica de puntuación",
     saving: "Guardando…",
     save: "Guardar",
@@ -154,6 +168,7 @@ type Draft = {
   scoringRubric: string;
   constraints: string;
   validationCommands: string;
+  validationRequirements: string;
 };
 
 function toDraft(item: CaseRecord): Draft {
@@ -173,7 +188,10 @@ function toDraft(item: CaseRecord): Draft {
     })),
     scoringRubric: item.scoring_rubric ?? "",
     constraints: (item.constraints ?? []).join("\n"),
-    validationCommands: (item.validation_commands ?? []).join("\n")
+    validationCommands: (item.validation_commands ?? []).join("\n"),
+    validationRequirements: (
+      item.metadata_json?.validation_requirements ?? []
+    ).join("\n")
   };
 }
 
@@ -211,6 +229,11 @@ function toPayload(caseId: string, draft: Draft): CaseCreatePayload {
     scoring_rubric: draft.scoringRubric,
     constraints: toLines(draft.constraints),
     validation_commands: toLines(draft.validationCommands),
+    // Only the key this form owns: the server merges it into the stored
+    // metadata, so the starter dir and a SWE case's data are kept.
+    metadata_json: {
+      validation_requirements: toLines(draft.validationRequirements)
+    },
     max_steps: Number.isFinite(draft.maxSteps) ? draft.maxSteps : 1
   };
 }
@@ -231,6 +254,8 @@ export function CaseEditor({
   // define the benchmark, so editing them would silently invalidate every
   // comparison already recorded against the case.
   const readOnly = SWE_CASE_TYPES.has(caseRecord.type);
+  // What the setup step would skip; the server refuses it too, this says so first.
+  const badRequirements = uninstallableRequirements(draft.validationRequirements);
 
   useEffect(() => {
     let cancelled = false;
@@ -583,6 +608,26 @@ export function CaseEditor({
       </label>
 
       <label>
+        <span>{m.validationRequirementsLabel}</span>
+        <textarea
+          disabled={readOnly}
+          onChange={(event) =>
+            patch({ validationRequirements: event.target.value })
+          }
+          placeholder={"numpy==2.4.6\npandas==3.1.0"}
+          rows={2}
+          value={draft.validationRequirements}
+        />
+        {badRequirements.length > 0 ? (
+          <span className="error-text">
+            {m.requirementsNotInstallable(badRequirements.join(", "))}
+          </span>
+        ) : (
+          <small className="muted">{m.validationRequirementsHint}</small>
+        )}
+      </label>
+
+      <label>
         <span>{m.scoringRubric}</span>
         <textarea
           disabled={readOnly}
@@ -596,7 +641,7 @@ export function CaseEditor({
         {readOnly ? null : (
           <button
             className="primary"
-            disabled={busy !== null}
+            disabled={busy !== null || badRequirements.length > 0}
             onClick={handleSave}
             type="button"
           >

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from sqlmodel import Session, select
 
-from harness_lab_app.case_validation import check_case
+from harness_lab_app.case_validation import check_case, check_requirements
 from harness_lab_app.config import get_settings
 from harness_lab_app.models import Case, CaseStatus, CaseSyncState, CaseType, utc_now
 from harness_lab_app.skill_import import safe_relpath
@@ -127,6 +127,24 @@ def resolve_prompt_variant_text(case: Case, variant: str) -> str | None:
     return None
 
 
+def _merge_metadata(
+    stored: dict[str, Any] | None, incoming: dict[str, Any] | None
+) -> dict[str, Any]:
+    """``stored`` with ``incoming`` laid over it, key by key.
+
+    A key the caller names replaces the stored one, and an empty value
+    (``None``, ``""``, ``[]``, ``{}``) removes it — so a form that owns one key
+    can clear it without knowing, or wiping, the rest.
+    """
+    merged = dict(stored or {})
+    for key, value in (incoming or {}).items():
+        if value in (None, "", [], {}):
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged
+
+
 class CaseService:
     def __init__(self, session: Session):
         self.session = session
@@ -198,6 +216,7 @@ class CaseService:
             dict(data.success_criteria or {}),
             str(getattr(data.type, "value", data.type) or ""),
         )
+        problems += check_requirements(data.metadata_json)
         if problems:
             raise CaseValidationError(problems)
 
@@ -213,6 +232,7 @@ class CaseService:
             raise CaseExistsError(f"Case already exists: {data.case_id}")
         self._validated(data)
         case = Case(**data.model_dump())
+        case.metadata_json = _merge_metadata({}, data.metadata_json)
         self.session.add(case)
         self.session.commit()
         self.session.refresh(case)
@@ -224,6 +244,12 @@ class CaseService:
         # same shapes, and an edit is exactly when somebody is trying to fix one.
         self._validated(data)
         payload = data.model_dump()
+        # Merged, not replaced: the editor sends no metadata, and a plain
+        # assignment wiped `validation_requirements` (ADR-0071), `starter_dir`
+        # and a SWE case's instance data on the first edit of anything else.
+        case.metadata_json = _merge_metadata(
+            case.metadata_json, payload.pop("metadata_json", None)
+        )
         for field_name, value in payload.items():
             setattr(case, field_name, value)
         case.updated_at = utc_now()

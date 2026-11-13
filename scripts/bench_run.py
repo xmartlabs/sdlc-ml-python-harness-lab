@@ -68,6 +68,7 @@ from create_run import (
 )
 
 from harness_lab_app.provenance import enrich_metadata
+from harness_lab_app.validation import render_command
 
 try:
     import yaml
@@ -1663,7 +1664,7 @@ def _provision_git_target(
     swe.clone_checkout(workspace, repo_url, commit)
 
     for command in [str(item) for item in target.get("setup", []) if str(item).strip()]:
-        rendered = command.format(workspace=str(workspace))
+        rendered = render_command(command, str(workspace), workspace.name)
         print(f"  setup: {rendered}")
         # Shell is intentional and is the contract: setup entries are
         # operator-authored shell lines (`uv sync && make build`), exactly like

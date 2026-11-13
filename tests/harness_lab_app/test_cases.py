@@ -329,3 +329,155 @@ def test_a_case_with_validation_requirements_reads_back_through_the_api_schema()
         metadata_json={"validation_requirements": ["pandas==3.1.0"]},
     )
     assert record.metadata_json["validation_requirements"] == ["pandas==3.1.0"]
+
+
+def test_editing_a_case_keeps_what_its_metadata_holds(session):
+    """The case editor sends no `metadata_json`; an edit replaced it with `{}`.
+
+    That silently dropped `validation_requirements` (ADR-0071), `starter_dir`
+    and a SWE case's instance data the first time anyone fixed a typo.
+    """
+    service = CaseService(session)
+    service.create_case(
+        CaseCreate(
+            case_id="graded-case",
+            name="Graded case",
+            type=CaseType.build_from_scratch,
+            prompt_variants={"default": "Build it."},
+            metadata_json={
+                "validation_requirements": ["numpy==2.4.6"],
+                "starter_dir": "benchmarks/x/starter",
+            },
+        )
+    )
+
+    updated = service.update_case(
+        "graded-case",
+        CaseCreate(
+            case_id="graded-case",
+            name="Graded case, renamed",
+            type=CaseType.build_from_scratch,
+            prompt_variants={"default": "Build it."},
+        ),
+    )
+
+    assert updated.name == "Graded case, renamed"
+    assert updated.metadata_json == {
+        "validation_requirements": ["numpy==2.4.6"],
+        "starter_dir": "benchmarks/x/starter",
+    }
+
+
+def test_an_edit_that_sends_requirements_replaces_only_those(session):
+    service = CaseService(session)
+    service.create_case(
+        CaseCreate(
+            case_id="graded-case",
+            name="Graded case",
+            type=CaseType.build_from_scratch,
+            metadata_json={
+                "validation_requirements": ["numpy==2.4.6"],
+                "starter_dir": "benchmarks/x/starter",
+            },
+        )
+    )
+
+    updated = service.update_case(
+        "graded-case",
+        CaseCreate(
+            case_id="graded-case",
+            name="Graded case",
+            type=CaseType.build_from_scratch,
+            metadata_json={"validation_requirements": ["pandas==3.1.0"]},
+        ),
+    )
+    assert updated.metadata_json == {
+        "validation_requirements": ["pandas==3.1.0"],
+        "starter_dir": "benchmarks/x/starter",
+    }
+
+    cleared = service.update_case(
+        "graded-case",
+        CaseCreate(
+            case_id="graded-case",
+            name="Graded case",
+            type=CaseType.build_from_scratch,
+            metadata_json={"validation_requirements": []},
+        ),
+    )
+    assert cleared.metadata_json == {"starter_dir": "benchmarks/x/starter"}
+
+
+def test_a_new_case_does_not_store_an_empty_requirements_list(session):
+    """The Cases form always sends the key; empty means "none", not a value."""
+    case = CaseService(session).create_case(
+        CaseCreate(
+            case_id="plain-case",
+            name="Plain case",
+            type=CaseType.single_prompt,
+            metadata_json={"validation_requirements": []},
+        )
+    )
+    assert case.metadata_json == {}
+
+
+def test_a_requirement_the_setup_step_would_drop_is_refused_on_save(session):
+    """Copilot on #47: the editor stored any line, and the setup step then
+    skipped the ones it could not pass to pip without a word. The case showed a
+    dependency it would never install, and its checks ended inconclusive."""
+    import pytest
+
+    from harness_lab_app.case_service import CaseValidationError
+
+    service = CaseService(session)
+    with pytest.raises(CaseValidationError) as refused:
+        service.create_case(
+            CaseCreate(
+                case_id="bad-deps",
+                name="Bad deps",
+                type=CaseType.build_from_scratch,
+                metadata_json={
+                    "validation_requirements": [
+                        "numpy==2.4.6",
+                        "pandas; rm -rf /",
+                        "git+https://example.invalid/pkg.git",
+                    ]
+                },
+            )
+        )
+    problems = refused.value.problems
+    # One message per line it would skip, each naming that line first.
+    assert [line.split(" ", 1)[0] for line in problems] == [
+        "'pandas;",
+        "'git+https://example.invalid/pkg.git'",
+    ]
+
+
+def test_an_edit_with_a_requirement_the_setup_step_would_drop_is_refused(session):
+    import pytest
+
+    from harness_lab_app.case_service import CaseValidationError
+
+    service = CaseService(session)
+    service.create_case(
+        CaseCreate(
+            case_id="graded",
+            name="Graded",
+            type=CaseType.build_from_scratch,
+            metadata_json={"validation_requirements": ["numpy==2.4.6"]},
+        )
+    )
+    with pytest.raises(CaseValidationError):
+        service.update_case(
+            "graded",
+            CaseCreate(
+                case_id="graded",
+                name="Graded",
+                type=CaseType.build_from_scratch,
+                metadata_json={"validation_requirements": ["numpy 2.4.6"]},
+            ),
+        )
+    # Refused, so nothing was half-applied.
+    assert service.get_case("graded").metadata_json == {
+        "validation_requirements": ["numpy==2.4.6"]
+    }

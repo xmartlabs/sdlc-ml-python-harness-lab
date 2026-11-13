@@ -32,7 +32,11 @@ import re
 import shlex
 from dataclasses import dataclass
 
-from harness_lab_app.validation import is_executable_command, names_a_document
+from harness_lab_app.validation import (
+    is_executable_command,
+    names_a_document,
+    requirement_is_installable,
+)
 
 REASON_MULTILINE = (
     "spans several lines; the case stores one shell command per line, so a "
@@ -71,6 +75,13 @@ REASON_INTERPRETER_MISMATCH = (
     "hands a {kind} file to `{interpreter}`, which cannot run it: the check "
     "exits with a collection or syntax error before anything is measured, so "
     "it fails on every run whatever the agent did"
+)
+REASON_RUNS_THE_AGENTS_TESTS = (
+    "runs a test suite inside the workspace, and a case with no repository "
+    "starts from an empty one: every test there is one the agent wrote, so "
+    "the grade becomes its own exam (ADR-0071). Write the check yourself — "
+    'an inline `python3 -c "..."` that imports the agent\'s module and '
+    "asserts one behaviour"
 )
 REASON_NO_RUBRIC = (
     "has validation commands but no scoring rubric, so nothing can grade the "
@@ -118,9 +129,25 @@ _INTERPRETER_CANNOT_RUN: dict[str, tuple[tuple[str, ...], str, str]] = {
 }
 _LOOP_GUARDS = ("|| exit", "||exit", "set -e", "|| return", "&& exit")
 
+# A test runner pointed at the workspace: `pytest {workspace}/…`, `python -m
+# pytest` after a `cd {workspace}`, `node {workspace}/x.test.js`, `npm test`.
+# Read per shell segment, so `cd {workspace} && pytest -q` is caught and a
+# `python3 -c` check that merely opens `test_results.json` is not.
+_TEST_RUNNERS = frozenset({"pytest", "jest", "vitest", "mocha"})
+_PYTHONS = frozenset({"python", "python3"})
+_PYTHON_TEST_MODULES = frozenset({"pytest", "unittest", "nose2"})
+# Make targets that conventionally run the project's tests. `check` is in: a
+# drafted case with no repository has no Makefile but the agent's.
+_MAKE_TEST_TARGETS = frozenset({"test", "tests", "check", "unittest", "unit"})
+_TEST_FILE_RE = re.compile(
+    r"(^|/)(test_[^/]*\.py|[^/]*_test\.py|[^/]*\.(test|spec)\.[cm]?[jt]sx?)$"
+)
+_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|\|")
+
 _ALWAYS_TRUE = frozenset({"true", ":", "exit 0", "/bin/true"})
 _PY_FILE_READS = ("open(", "read_text", "Path(", "glob(", "listdir", "walk(", "stat(")
 _PY_PREDICATES = ("any(", "all(", "re.search", "re.match", "in text", "in content")
+_PY_WORKSPACE_USES = ("sys.path", "import_module", "runpy", "subprocess", "exec(")
 
 
 @dataclass(frozen=True)
@@ -211,8 +238,14 @@ def _is_tautological(command: str) -> bool:
     if tokens[0].startswith("python") and "-c" in tokens:
         body = tokens[tokens.index("-c") + 1] if "-c" in tokens[:-1] else ""
         reads_a_file = any(marker in body for marker in _PY_FILE_READS)
+        # Importing or running what the agent wrote is reading it too: a
+        # predicate over the module it returned can fail. The workspace has to
+        # be named, or `import sys` alone would excuse a check of literals.
+        uses_the_workspace = "{workspace}" in body and any(
+            marker in body for marker in _PY_WORKSPACE_USES
+        )
         only_predicates = any(marker in body for marker in _PY_PREDICATES)
-        if only_predicates and not reads_a_file:
+        if only_predicates and not (reads_a_file or uses_the_workspace):
             return True
     return False
 
@@ -311,10 +344,140 @@ def check_command(command: str) -> CommandProblem | None:
     return None
 
 
+def _runs_a_workspace_test_suite(command: str) -> bool:
+    """Whether this command hands the workspace's own tests to a test runner.
+
+    A segment counts when it runs a test runner (``pytest``, ``python -m
+    pytest``, ``jest``…, ``npm test``) or an interpreter on a test file, and
+    either names ``{workspace}`` or follows a ``cd {workspace}``. A
+    ``python3 -c`` check is never one: its argument is the lab's own code,
+    whatever file names appear inside it.
+    """
+    in_workspace = False
+    for segment in _SEGMENT_SPLIT_RE.split(command):
+        tokens = _tokens(segment.strip())
+        if not tokens:
+            continue
+        tokens = _strip_launch_prefix(tokens)
+        if not tokens:
+            continue
+        head = tokens[0].rsplit("/", 1)[-1]
+        names_workspace = "{workspace}" in segment
+        if head == "cd":
+            in_workspace = names_workspace
+            continue
+        if head in _PYTHONS and "-c" in tokens:
+            continue
+        if _is_test_runner(head, tokens) and (names_workspace or in_workspace):
+            return True
+    return False
+
+
+def _strip_launch_prefix(tokens: list[str]) -> list[str]:
+    """``tokens`` without what only changes *how* the command is launched.
+
+    Leading ``VAR=value`` assignments, and ``timeout`` with its own options and
+    duration. Only those: dropping every ``-…`` token after ``timeout`` also
+    dropped the ``-m`` of ``python -m pytest`` and hid the runner.
+    """
+    while tokens and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[0]):
+        tokens = tokens[1:]
+    if tokens[:1] == ["timeout"]:
+        rest = tokens[1:]
+        while rest and rest[0].startswith("-"):
+            # `-k 5` / `-s KILL` take a value; `--foreground` does not.
+            takes_value = rest[0] in {"-k", "-s", "--kill-after", "--signal"}
+            rest = rest[2:] if takes_value else rest[1:]
+        if rest and re.match(r"^\d+(\.\d+)?[smhd]?$", rest[0]):
+            rest = rest[1:]
+        tokens = rest
+    return tokens
+
+
+def _is_test_runner(head: str, tokens: list[str]) -> bool:
+    """Whether this segment's program runs a test suite."""
+    args = tokens[1:]
+    if head in _TEST_RUNNERS:
+        return True
+    if head in _PYTHONS:
+        module = args[args.index("-m") + 1] if "-m" in args[:-1] else ""
+        return module in _PYTHON_TEST_MODULES or any(
+            _TEST_FILE_RE.search(arg) for arg in args
+        )
+    if head in {"node", "deno", "bun"}:
+        return any(_TEST_FILE_RE.search(arg) for arg in args)
+    if head in {"npx", "pnpm", "yarn"} and set(args[:1]) & _TEST_RUNNERS:
+        return True
+    if head in {"npm", "pnpm", "yarn"}:
+        return args[:1] == ["test"] or args[:2] == ["run", "test"]
+    if head in {"make", "gmake"}:
+        # The target, not the options and their values: `make -C dir test`.
+        targets = [
+            arg
+            for position, arg in enumerate(args)
+            if not arg.startswith("-")
+            and "=" not in arg
+            and not (position > 0 and args[position - 1] in {"-C", "-f"})
+        ]
+        return bool(set(targets) & _MAKE_TEST_TARGETS)
+    return False
+
+
+def check_drafted_command(
+    command: str, *, in_repository: bool
+) -> CommandProblem | None:
+    """:func:`check_command`, plus the rule only a drafted case can break.
+
+    A drafted case with no repository starts from an empty workspace, so a
+    check that runs a test suite there runs the agent's own tests. Kept out of
+    :func:`check_command` on purpose: a hand-written case that ships its tests
+    in a starter, or one written for a repository, runs a suite the agent did
+    not write, and the editor has no way to tell those apart.
+    """
+    problem = check_command(command)
+    if problem is not None:
+        return problem
+    if not in_repository and _runs_a_workspace_test_suite(command):
+        return CommandProblem(command, REASON_RUNS_THE_AGENTS_TESTS)
+    return None
+
+
 def check_commands(commands: list[str]) -> list[CommandProblem]:
     """Every reason the lab refuses this set of validation commands."""
     problems = [check_command(command) for command in commands]
     return [problem for problem in problems if problem is not None]
+
+
+REASON_REQUIREMENT_NOT_INSTALLABLE = (
+    "is not a requirement the validation setup step will install: it takes a "
+    "plain distribution name with an optional version (`numpy==2.4.6`, "
+    "`pandas>=2.2`, `requests[socks]`) and skips anything else, so this line "
+    "would be shown on the case and never installed, and every check that "
+    "imports it would end inconclusive"
+)
+
+
+def check_requirements(metadata: object) -> list[str]:
+    """Every ``validation_requirements`` entry the setup step would skip.
+
+    ``build_validation_spec`` drops what it cannot pass to pip, silently: the
+    case would show the dependency and the run would never install it. Refused
+    here instead, where the person typing it can still fix it.
+    """
+    raw = (
+        metadata.get("validation_requirements") if isinstance(metadata, dict) else None
+    )
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return [
+            "validation_requirements must be a list of requirements, one per entry."
+        ]
+    return [
+        f"{str(item)!r} {REASON_REQUIREMENT_NOT_INSTALLABLE}."
+        for item in raw
+        if not isinstance(item, str) or not requirement_is_installable(item)
+    ]
 
 
 #: Case types whose score comes from the objective verdict, not from a rubric.

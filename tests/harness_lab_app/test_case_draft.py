@@ -53,6 +53,12 @@ def test_generate_case_draft_markdown_fences():
         assert res.max_steps == 5
 
 
+# A check the lab writes and runs; the agent never authors it (ADR-0071).
+LAB_CHECK = (
+    "python3 -c \"import sys; sys.path.insert(0, '{workspace}'); "
+    'import snake; sys.exit(0 if snake.step(1) == 2 else 1)"'
+)
+
 HEREDOC = (
     "node - <<'NODE'\n"
     "const assert = require('assert');\n"
@@ -75,9 +81,9 @@ def _draft(commands: list[str], subject: str = "s") -> str:
 
 def test_screen_commands_drops_multiline_and_prose_with_reasons():
     accepted, dropped = screen_commands(
-        [HEREDOC, "Run the game and check it works", "pytest {workspace}/test_x.py -q"]
+        [HEREDOC, "Run the game and check it works", LAB_CHECK]
     )
-    assert accepted == ["pytest {workspace}/test_x.py -q"]
+    assert accepted == [LAB_CHECK]
     assert [item.command for item in dropped] == [
         HEREDOC,
         "Run the game and check it works",
@@ -105,13 +111,13 @@ def test_generate_case_draft_retries_once_when_nothing_is_runnable():
         calls.append((model, system, user))
         if len(calls) == 1:
             return _draft([HEREDOC], subject="first")
-        return _draft(["pytest {workspace}/test_snake.py -q"], subject="second")
+        return _draft([LAB_CHECK], subject="second")
 
     with patch("harness_lab_app.case_draft_service._call_model", side_effect=fake_chat):
         res = generate_case_draft(CaseDraftRequest(description="snake game"))
 
     assert res.subject == "second"
-    assert res.validation_commands == ["pytest {workspace}/test_snake.py -q"]
+    assert res.validation_commands == [LAB_CHECK]
     assert res.dropped_commands == []
     assert res.attempts == 2
     # The retry carries the model's own answer and the reasons it was refused,
@@ -198,7 +204,7 @@ def test_generate_case_draft_rides_the_shared_transport(monkeypatch):
         trace_metadata=None,
     ):
         seen.update(model=model, system=system, user=user, timeout=timeout)
-        return _draft(["pytest {workspace}/test_x.py -q"])
+        return _draft([LAB_CHECK])
 
     monkeypatch.delenv("CASE_DRAFT_MODEL", raising=False)
     monkeypatch.delenv("GATEWAY_DEFAULT_MODEL", raising=False)
@@ -214,7 +220,7 @@ def test_generate_case_draft_rides_the_shared_transport(monkeypatch):
         CaseDraftRequest(description="Build a thing")
     )
 
-    assert res.validation_commands == ["pytest {workspace}/test_x.py -q"]
+    assert res.validation_commands == [LAB_CHECK]
     assert seen["model"] == "claude-haiku-4-5"
     assert seen["system"] == _SYSTEM_PROMPT
     assert "Build a thing" in seen["user"]
@@ -317,7 +323,7 @@ def test_a_draft_without_a_target_carries_no_repository_context(monkeypatch):
             {
                 "subject": "s",
                 "instruction": "i",
-                "validation_commands": ["pytest {workspace}/test_x.py -q"],
+                "validation_commands": [LAB_CHECK],
                 "max_steps": 5,
             }
         )
@@ -336,7 +342,7 @@ def _full_draft(**overrides) -> str:
     payload = {
         "subject": "JSON config merger",
         "instruction": "Write {workspace}/merge.py that merges two config files.",
-        "validation_commands": ["pytest {workspace}/test_merge.py -q"],
+        "validation_commands": [LAB_CHECK],
         "max_steps": 10,
         "case_id": "json-config-merger",
         "description": "Measures whether the agent can merge nested configs.",
@@ -450,3 +456,155 @@ def test_the_draft_prompt_asks_for_a_rubric():
     from harness_lab_app.case_draft_service import _SYSTEM_PROMPT
 
     assert '"scoring_rubric"' in _SYSTEM_PROMPT
+
+
+# --- What the grade is made of (ADR-0071, ADR-0076) --------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest {workspace}/test_pipeline.py -q",
+        "cd {workspace} && python -m pytest -q",
+        "python3 -m pytest {workspace}/tests -q",
+        "node {workspace}/snake.test.js",
+        "npx jest {workspace}",
+        "cd {workspace} && npm test",
+        # Copilot on #47: the standard library runner and a Makefile target.
+        "python3 -m unittest discover -s {workspace}",
+        "cd {workspace} && python -m unittest -v",
+        "make -C {workspace} test",
+        "cd {workspace} && make check",
+        "make --directory={workspace} test",
+        "timeout 60 python -m pytest {workspace}/tests",
+    ],
+)
+def test_a_drafted_check_that_runs_the_agents_own_tests_is_dropped(command):
+    """eda-ml-iris-categ-numerico graded every run on the tests it wrote.
+
+    The workspace of a case with no repository starts empty, so any test file
+    in it is the agent's. Six easy tests then pass where twenty-five demanding
+    ones fail one: the grade measures the subject's own exam (ADR-0071).
+    """
+    accepted, dropped = screen_commands([command, LAB_CHECK])
+    assert accepted == [LAB_CHECK]
+    assert [item.command for item in dropped] == [command]
+    assert "agent" in dropped[0].reason and "wrote" in dropped[0].reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A target the case asks the agent to build, not a test suite.
+        "make -C {workspace} build && test -x {workspace}/bin/app",
+        # The lab's own shipped suite, outside the workspace (ADR-0071).
+        "cd {workspace} && python -m pytest -c /dev/null -q /app/benchmarks/x/tests/test_x.py",
+        # unittest the library, imported by the lab's own inline check.
+        "python3 -c \"import unittest, sys; sys.path.insert(0, '{workspace}'); import m; sys.exit(0 if m.f() else 1)\"",
+    ],
+)
+def test_a_drafted_check_that_is_not_the_agents_suite_is_kept(command):
+    accepted, dropped = screen_commands([command])
+    assert accepted == [command], dropped
+    assert dropped == []
+
+
+def test_inside_a_repository_its_own_test_suite_is_the_grade():
+    """A repo_task runs against a clone whose tests the agent did not write."""
+    accepted, dropped = screen_commands(
+        ["cd {workspace} && python -m pytest -q", "make -C {workspace} test"],
+        in_repository=True,
+    )
+    assert accepted == [
+        "cd {workspace} && python -m pytest -q",
+        "make -C {workspace} test",
+    ]
+    assert dropped == []
+
+
+def test_a_check_that_imports_a_named_test_of_the_lab_is_not_mistaken_for_one():
+    """Only running a test the agent wrote is refused, not the word "test"."""
+    command = "python3 -c \"import json; d=json.load(open('{workspace}/test_results.json')); assert d\""
+    accepted, dropped = screen_commands([command])
+    assert accepted == [command]
+    assert dropped == []
+
+
+def test_the_draft_prompt_forbids_grading_with_the_agents_tests():
+    assert "never" in _SYSTEM_PROMPT.lower()
+    assert "tests the agent" in _SYSTEM_PROMPT
+    # The old advice, which produced exactly that, is gone.
+    assert "pytest {workspace}/test_*.py" not in _SYSTEM_PROMPT
+    assert "have the instruction ask for it and run it" not in _SYSTEM_PROMPT
+
+
+def test_the_draft_prompt_asks_for_one_check_per_behaviour():
+    """Per-step progress is the share of checks passing (ADR-0076).
+
+    One `pytest file.py` makes every step read 0 or 1, so the curve shows
+    nothing of how the agent got there.
+    """
+    assert "one check per behaviour" in _SYSTEM_PROMPT
+    assert "per-step" in _SYSTEM_PROMPT
+
+
+def test_a_draft_declares_what_its_graders_import():
+    """eda-ml-iris-categ-numerico-K-003: `No module named 'numpy'` in the runner.
+
+    The checks run offline in a clean runner that ships no scientific stack;
+    what they import is installed first only when the case declares it.
+    """
+    fake = _draft([LAB_CHECK])
+    payload = json.loads(fake)
+    payload["validation_requirements"] = ["numpy==2.4.6", "pandas>=2.2"]
+    with patch(
+        "harness_lab_app.case_draft_service._call_model",
+        return_value=json.dumps(payload),
+    ):
+        res = generate_case_draft(CaseDraftRequest(description="iris pipeline"))
+    assert res.validation_requirements == ["numpy==2.4.6", "pandas>=2.2"]
+    assert '"validation_requirements"' in _SYSTEM_PROMPT
+
+
+def test_a_requirement_the_lab_would_not_install_is_dropped_from_the_draft():
+    """The install line is a shell command: only a plain name and version passes."""
+    payload = json.loads(_draft([LAB_CHECK]))
+    payload["validation_requirements"] = [
+        "numpy==2.4.6",
+        "numpy==2.4.6",
+        "pandas; rm -rf /",
+        "git+https://example.invalid/pkg.git",
+        "",
+        42,
+    ]
+    with patch(
+        "harness_lab_app.case_draft_service._call_model",
+        return_value=json.dumps(payload),
+    ):
+        res = generate_case_draft(CaseDraftRequest(description="d"))
+    assert res.validation_requirements == ["numpy==2.4.6"]
+
+
+def test_a_draft_with_no_requirements_says_so_with_an_empty_list():
+    with patch(
+        "harness_lab_app.case_draft_service._call_model",
+        return_value=_draft([LAB_CHECK]),
+    ):
+        res = generate_case_draft(CaseDraftRequest(description="d"))
+    assert res.validation_requirements == []
+
+
+def test_a_draft_for_a_repository_keeps_its_test_suite_as_the_grade(monkeypatch):
+    """Even when the checkout could not be read: the workspace is still a clone."""
+    from harness_lab_app import case_draft_service
+
+    monkeypatch.setattr(case_draft_service, "_load_repo_context", lambda _t: "")
+    with patch(
+        "harness_lab_app.case_draft_service._call_model",
+        return_value=_draft(["cd {workspace} && python -m pytest -q"]),
+    ):
+        res = generate_case_draft(
+            CaseDraftRequest(description="add a refund endpoint", target_id="payments")
+        )
+    assert res.validation_commands == ["cd {workspace} && python -m pytest -q"]
+    assert res.dropped_commands == []

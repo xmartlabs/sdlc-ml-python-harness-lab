@@ -25,9 +25,16 @@ What makes a draft worth saving is its **validation command**: a shell command t
 exits non-zero when the agent failed. The lab screens every command the model
 proposes and drops those that could not measure anything — a command that cannot
 run, a check that passes whatever the agent did, a path outside the workspace, a
-document handed to an interpreter. Each drop is shown with its reason. A case that
-has commands but no rubric is refused, because nothing could grade it. The full
-list of refusals and why they exist: [case formation](guide-case-formation.md).
+document handed to an interpreter, a test suite the agent itself would write. Each
+drop is shown with its reason. A case that has commands but no rubric is refused,
+because nothing could grade it. The full list of refusals and why they exist:
+[case formation](guide-case-formation.md#what-the-case-assistant-does-with-these-rules).
+
+The draft also fills **Grader requirements**: the pinned packages its checks import
+(numpy, pandas…), installed before they run. Validation is offline in a clean
+container, so a check that imports a package not listed there ends inconclusive and
+measures nothing. Expect several small checks rather than one: per-step progress is
+the share of checks passing, and one all-or-nothing command hides it.
 
 Two other screens draft the same way, with more context:
 

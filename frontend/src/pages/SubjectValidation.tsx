@@ -714,6 +714,10 @@ export function SubjectValidation() {
   // The drafted rubric, kept so the case saves: a case with commands and no
   // rubric is refused (case_validation.REASON_NO_RUBRIC).
   const [rubric, setRubric] = useState("");
+  // What the drafted checks import (ADR-0071). Saved with the case so they are
+  // installed before the checks run; an existing case keeps its own, because
+  // the server merges metadata on update and this one is then left empty.
+  const [requirements, setRequirements] = useState<string[]>([]);
   const [caseId, setCaseId] = useState("");
 
   // Step 2 — AI Case Assistant.
@@ -783,6 +787,7 @@ export function SubjectValidation() {
 
   const selectExistingCase = (c: CaseRecord) => {
     setCaseId(c.case_id);
+    setRequirements([]);
     setSubject(c.name || c.case_id);
     const variants = c.prompt_variants ? Object.keys(c.prompt_variants) : [];
     const variantKey = variants.includes("default")
@@ -982,6 +987,7 @@ export function SubjectValidation() {
           setMaxSteps(draft.max_steps);
         }
         setRubric(draft.scoring_rubric ?? "");
+        setRequirements(draft.validation_requirements ?? []);
         setAiDropped(draft.dropped_commands ?? []);
         const kept = draft.validation_commands?.length ?? 0;
         const retried = draft.attempts > 1 ? m.retriedSuffix : "";
@@ -1016,6 +1022,11 @@ export function SubjectValidation() {
         scoring_rubric: rubric.trim() || m.defaultRubric(subject),
         constraints: [],
         validation_commands: executable,
+        // Only when a draft named some: an empty list would clear the
+        // requirements of an existing case this step is updating.
+        ...(requirements.length > 0
+          ? { metadata_json: { validation_requirements: requirements } }
+          : {}),
         max_steps: maxSteps
       });
       if (caseId) {

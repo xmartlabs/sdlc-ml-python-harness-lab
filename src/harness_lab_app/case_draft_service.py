@@ -14,7 +14,7 @@ from pathlib import Path
 from sqlmodel import Session
 
 from harness_lab_app import case_validation, llm_transport
-from harness_lab_app.case_validation import check_command
+from harness_lab_app.case_validation import check_drafted_command
 from harness_lab_app.config import read_env_file_value
 from harness_lab_app.models import CaseType
 from harness_lab_app.schemas import (
@@ -22,6 +22,7 @@ from harness_lab_app.schemas import (
     CaseDraftResponse,
     DroppedCommand,
 )
+from harness_lab_app.validation import requirement_is_installable
 
 # Drafting a case is a bounded generation, not a judgement over long logs, so
 # it rides the summary tier of whichever transport is active (ADR-0043):
@@ -55,21 +56,29 @@ _SYSTEM_PROMPT = (
     "Guidelines:\n"
     "- NEVER generate trivial toy tasks (like 'sum two numbers', 'hello world', or printing text). Always design realistic, self-contained software engineering problems (e.g., building a data structure, parsing a format, writing a service utility, or implementing an API client with edge cases).\n"
     "- For meta/style/token-efficiency skills (like 'caveman', 'be-terse', TDD, etc.), design a substantial software task with automated unit tests. The goal is to measure whether the agent can successfully deliver working code and tests while operating under the skill's style or token constraints.\n"
-    "- Validation commands MUST verify actual functional correctness and exit non-zero on failure. Prefer running test suites (e.g. `pytest {workspace}/test_*.py` or running a python script with assertions) rather than mere file existence checks like `test -s`.\n"
-    "- The agent instruction should clearly describe expected inputs, outputs, file paths in `{workspace}`, and requirements.\n\n"
+    "- Validation commands MUST verify actual functional correctness and exit non-zero on failure: import what the agent built and assert what it does, rather than mere file existence checks like `test -s`.\n"
+    "- The agent instruction should clearly describe expected inputs, outputs, file paths in `{workspace}`, and the exact public names (modules, functions, CLI flags) your checks will call.\n\n"
+    "Who writes the grade:\n"
+    "- You write the checks; never the tests the agent writes. Without a 'Repository context' the workspace starts EMPTY, so any test file in it is the agent's own, and grading with it lets six easy tests pass where twenty-five demanding ones fail one. A command that runs a test suite inside {workspace} (`pytest {workspace}/...`, `cd {workspace} && python -m pytest`, `npm test`, `node {workspace}/x.test.js`) is refused for that reason.\n"
+    "- The instruction may still ask the agent to write tests: they are part of the work, never the grade.\n\n"
+    "One check per behaviour:\n"
+    "- Write one check per behaviour the instruction asks for, each able to pass or fail on its own. Progress is graded per-step as the share of checks passing, so a single all-or-nothing command shows every step as 0 or 1 and hides how the agent got there.\n"
+    "- Order them from the most basic (the module imports, the entry point runs) to the most demanding, so partial work reads as partial.\n\n"
+    "What the checks import:\n"
+    "- The checks run OFFLINE in a clean Python 3.11 container that has only the standard library, pytest, pyyaml and requests. Whatever else they import (numpy, pandas, scikit-learn, joblib, …) must be listed in validation_requirements, pinned, or every check fails on `No module named ...` and measures nothing. Anything the agent installs during its run is gone by then.\n\n"
     "Hard rules for validation_commands (commands that break them are discarded):\n"
     "- Each command is exactly ONE line. It is executed verbatim with `sh -c`. No heredocs (`<<`), no multi-line scripts, no line breaks inside a command.\n"
     '- For a check with several statements, inline it: `python3 -c "import sys; ...; sys.exit(0 if ok else 1)"` or `node -e "const m=require(\'{workspace}/x.js\'); if(!m.f) process.exit(1)"`. Separate statements with `;`.\n'
     "- Every command must start with one of: python3, python, pytest, node, npm, npx, sh, bash, make, uv, go, cargo, timeout — or reference {workspace}.\n"
     "- Every command must reference {workspace} (the agent's working directory) when it touches files.\n"
-    "- If the agent must produce a test file, have the instruction ask for it and run it (`pytest {workspace}/test_x.py -q`, `node {workspace}/x.test.js`) instead of writing the test inline.\n"
-    "- Prefer 2 to 6 focused commands over one giant one; each must be able to fail.\n"
+    "- Prefer 3 to 10 focused commands over one giant one; each must be able to fail.\n"
     '- A loop must propagate the failure: write `for f in {workspace}/tests/test_*.sh; do bash "$f" || exit 1; done`, never `...; do bash "$f"; done` — the second returns only the LAST command\'s status, so any number of failures ahead of one pass is reported as a pass.\n'
     "- Every command must be able to fail on the untouched repository. A check whose predicate is a literal you wrote (`any(p in text for p in patterns)` with no file read), a bare `echo`, `true`, or `test -e {workspace}` is not a check: it reports a pass whatever the agent did, and it will be refused.\n\n"
     "Return a strict JSON object with these exact keys:\n"
     '- "subject": concise string naming the tool/feature under test (e.g. "caveman: token-efficient Python module implementation")\n'
     '- "instruction": clear, precise, comprehensive prompt the agent will receive in its workspace to perform the task\n'
-    '- "validation_commands": array of single-line shell commands that run after the agent stops and exit non-zero if the agent failed (e.g. ["pytest {workspace}/test_module.py -q", "python3 -c "import json,sys; d=json.load(open(\'{workspace}/out.json\')); sys.exit(0 if d.get(\'ok\') else 1)""])\n'
+    "- \"validation_commands\": array of single-line shell commands that run after the agent stops and exit non-zero if the agent failed, one per behaviour (e.g. [\"python3 -c \"import sys; sys.path.insert(0, '{workspace}'); import merge; sys.exit(0 if merge.merge({'a': 1}, {'b': 2}) == {'a': 1, 'b': 2} else 1)\"\", \"python3 -c \"import json,sys; d=json.load(open('{workspace}/out.json')); sys.exit(0 if d.get('ok') else 1)\"\"])\n"
+    '- "validation_requirements": array of pinned pip requirements the checks import beyond the standard library, pytest, pyyaml and requests (e.g. ["numpy==2.4.6", "pandas==3.1.0"]). Use [] when they import nothing else. Never the agent\'s own dependencies unless a check imports them.\n'
     '- "max_steps": integer step budget (5, 10, 15, 20, or 25, default 15)\n'
     '- "case_id": lowercase kebab-case identifier for this case, 3 to 40 characters, no spaces (e.g. "json-config-merger")\n'
     '- "description": one or two sentences saying what the case measures, for a person browsing the catalog. Not the instruction.\n'
@@ -181,7 +190,9 @@ def _raw_commands(parsed: dict) -> list[str]:
     return []
 
 
-def screen_commands(raw: list[str]) -> tuple[list[str], list[DroppedCommand]]:
+def screen_commands(
+    raw: list[str], *, in_repository: bool = False
+) -> tuple[list[str], list[DroppedCommand]]:
     """Split the model's commands into what the lab would run and what it would drop.
 
     Mirrors every way a command dies downstream, and defers to the same rules
@@ -195,11 +206,16 @@ def screen_commands(raw: list[str]) -> tuple[list[str], list[DroppedCommand]]:
     with an empty stdin exits 0, a pass that measures nothing) and the rest is
     dropped one line at a time; and ``build_validation_spec`` skips anything
     that does not look executable, without saying so.
+
+    One rule is the draft's alone: without a repository the workspace starts
+    empty, so a check that runs a test suite there grades the agent with its
+    own tests (ADR-0071). ``in_repository`` lifts it — a clone's suite is not
+    the agent's.
     """
     accepted: list[str] = []
     dropped: list[DroppedCommand] = []
     for command in raw:
-        problem = check_command(command)
+        problem = check_drafted_command(command, in_repository=in_repository)
         if problem is None:
             accepted.append(command)
         else:
@@ -218,8 +234,9 @@ def _correction_prompt(dropped: list[DroppedCommand]) -> str:
         "Rewrite the same checks so that each command is ONE line executed by "
         "`sh -c`: no heredocs, no line breaks; inline multi-statement checks with "
         '`python3 -c "..."` or `node -e "..."` and `;`. Every command must '
-        "start with a known binary or reference {workspace}. Return the full JSON "
-        "object again with all four keys."
+        "start with a known binary or reference {workspace}, and none may run a "
+        "test suite the agent wrote: import its module and assert one behaviour "
+        "per check instead. Return the full JSON object again with every key."
     )
 
 
@@ -280,6 +297,25 @@ def _step_prompts(raw: object, case_type: str) -> list[str]:
     return [str(item).strip() for item in raw if str(item).strip()]
 
 
+def _validation_requirements(raw: object) -> list[str]:
+    """What the checks import, as the validation setup step would install it.
+
+    Only a plain name-and-version passes — the same rule the setup step
+    applies, so a draft never shows a requirement that would be silently
+    dropped at run time. Order kept, duplicates removed.
+    """
+    if not isinstance(raw, list):
+        return []
+    kept: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if text and text not in kept and requirement_is_installable(text):
+            kept.append(text)
+    return kept
+
+
 def _max_steps(raw: object) -> int:
     return raw if isinstance(raw, int) and 1 <= raw <= 100 else 10
 
@@ -337,7 +373,11 @@ def generate_case_draft(req: CaseDraftRequest) -> CaseDraftResponse:
             chosen_model, _SYSTEM_PROMPT, prompt, target_id=req.target_id
         )
         parsed = _parse_draft(raw_response)
-        commands, dropped = screen_commands(_raw_commands(parsed))
+        # The target, not whether its context loaded: a clone whose checkout
+        # could not be read is still a clone, and its suite is not the agent's.
+        commands, dropped = screen_commands(
+            _raw_commands(parsed), in_repository=bool(req.target_id.strip())
+        )
         if commands or not dropped:
             break
         # Nothing runnable, but the model did try: show it exactly what died
@@ -363,6 +403,9 @@ def generate_case_draft(req: CaseDraftRequest) -> CaseDraftResponse:
         subject=subject,
         instruction=instruction,
         validation_commands=commands,
+        validation_requirements=_validation_requirements(
+            parsed.get("validation_requirements")
+        ),
         max_steps=max_steps,
         dropped_commands=dropped,
         attempts=attempts,

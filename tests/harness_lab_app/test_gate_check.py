@@ -130,3 +130,20 @@ def test_summarize_passes_only_when_something_actually_ran():
         )["passed"]
         is True
     )
+
+
+def test_a_case_check_with_braces_of_its_own_dry_runs(lab_root: Path):
+    from types import SimpleNamespace
+
+    from harness_lab_app.gate_check_service import build_case_dry_run_spec
+
+    case = SimpleNamespace(
+        case_id="c",
+        validation_commands=[
+            "python3 -c \"import sys; d={'a': 1}; sys.exit(0)\" {workspace}"
+        ],
+    )
+    spec = build_case_dry_run_spec(
+        case, _target(pinned_commit="abc123"), "workspace/dry"
+    )
+    assert "d={'a': 1}" in spec["commands"][-1]["argv"][-1]

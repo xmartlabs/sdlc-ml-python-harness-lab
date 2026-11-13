@@ -24,7 +24,7 @@ import shlex
 from typing import TYPE_CHECKING, Any
 
 from harness_lab_app.runner_capabilities import shell_for_command
-from harness_lab_app.validation import is_executable_command
+from harness_lab_app.validation import is_executable_command, render_command
 
 if TYPE_CHECKING:
     from harness_lab_app.models import TargetRepository
@@ -68,7 +68,7 @@ def _provision_commands(
     for raw in target.setup_commands:
         if not is_executable_command(raw):
             continue
-        rendered = raw.format(workspace=workspace, run_id=f"gate-{target.target_id}")
+        rendered = render_command(raw, workspace, f"gate-{target.target_id}")
         commands.append(
             {
                 "phase": "setup",
@@ -114,7 +114,7 @@ def build_case_dry_run_spec(
         )
     commands = _provision_commands(target, workspace, commit)
     for raw in validation:
-        rendered = raw.format(workspace=workspace, run_id=f"dry-{case.case_id}")
+        rendered = render_command(raw, workspace, f"dry-{case.case_id}")
         commands.append(
             {
                 "phase": "validate",
