@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 from sqlmodel import Session, select
 
-from harness_lab_app.case_validation import check_case
+from harness_lab_app.case_validation import check_case, check_requirements
 from harness_lab_app.config import get_settings
 from harness_lab_app.models import Case, CaseStatus, CaseSyncState, CaseType, utc_now
 from harness_lab_app.skill_import import safe_relpath
@@ -216,6 +216,7 @@ class CaseService:
             dict(data.success_criteria or {}),
             str(getattr(data.type, "value", data.type) or ""),
         )
+        problems += check_requirements(data.metadata_json)
         if problems:
             raise CaseValidationError(problems)
 

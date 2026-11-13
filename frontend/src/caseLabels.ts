@@ -65,3 +65,19 @@ export function runAttemptSuffix(runId: string, caseId: string): string {
   const match = runId.match(/-(K-\d+)$/);
   return match ? match[1] : "";
 }
+
+// The rule the validation setup step applies before it hands a requirement to
+// pip (`harness_lab_app.validation._REQUIREMENT_RE`): a distribution name,
+// optional extras, an optional version clause. Anything else it skips without a
+// word, so a form that stored it would show a dependency the run never installs.
+// The server refuses the same lines on save; this only says so while typing.
+const INSTALLABLE_REQUIREMENT =
+  /^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?((==|>=|<=|~=|!=|>|<)[A-Za-z0-9.*+!_-]+(,(==|>=|<=|~=|!=|>|<)[A-Za-z0-9.*+!_-]+)*)?$/;
+
+/** The non-empty lines of a requirements field the setup step would skip. */
+export function uninstallableRequirements(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !INSTALLABLE_REQUIREMENT.test(line));
+}

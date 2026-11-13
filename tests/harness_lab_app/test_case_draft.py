@@ -470,6 +470,13 @@ def test_the_draft_prompt_asks_for_a_rubric():
         "node {workspace}/snake.test.js",
         "npx jest {workspace}",
         "cd {workspace} && npm test",
+        # Copilot on #47: the standard library runner and a Makefile target.
+        "python3 -m unittest discover -s {workspace}",
+        "cd {workspace} && python -m unittest -v",
+        "make -C {workspace} test",
+        "cd {workspace} && make check",
+        "make --directory={workspace} test",
+        "timeout 60 python -m pytest {workspace}/tests",
     ],
 )
 def test_a_drafted_check_that_runs_the_agents_own_tests_is_dropped(command):
@@ -483,6 +490,23 @@ def test_a_drafted_check_that_runs_the_agents_own_tests_is_dropped(command):
     assert accepted == [LAB_CHECK]
     assert [item.command for item in dropped] == [command]
     assert "agent" in dropped[0].reason and "wrote" in dropped[0].reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # A target the case asks the agent to build, not a test suite.
+        "make -C {workspace} build && test -x {workspace}/bin/app",
+        # The lab's own shipped suite, outside the workspace (ADR-0071).
+        "cd {workspace} && python -m pytest -c /dev/null -q /app/benchmarks/x/tests/test_x.py",
+        # unittest the library, imported by the lab's own inline check.
+        "python3 -c \"import unittest, sys; sys.path.insert(0, '{workspace}'); import m; sys.exit(0 if m.f() else 1)\"",
+    ],
+)
+def test_a_drafted_check_that_is_not_the_agents_suite_is_kept(command):
+    accepted, dropped = screen_commands([command])
+    assert accepted == [command], dropped
+    assert dropped == []
 
 
 def test_inside_a_repository_its_own_test_suite_is_the_grade():

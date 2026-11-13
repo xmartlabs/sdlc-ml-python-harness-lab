@@ -187,8 +187,11 @@ per-step reward makes worth stating:
 
 - **It never grades with the agent's tests.** Without a repository the workspace starts
   empty, so a drafted command that runs a test suite inside `{workspace}` —
-  `pytest {workspace}/…`, `cd {workspace} && python -m pytest`, `npm test`,
-  `node {workspace}/x.test.js` — is dropped, and the reason is shown next to the draft.
+  `pytest {workspace}/…`, `cd {workspace} && python -m pytest`, `python -m unittest`,
+  `make -C {workspace} test` (or `check`), `npm test`, `node {workspace}/x.test.js` — is
+  dropped, and the reason is shown next to the draft. A `make` target that builds
+  something, and the lab's own suite under `/app/benchmarks/`, are not suites the agent
+  wrote and are kept.
   The assistant writes inline checks instead: import the agent's module, assert one
   behaviour. A draft for a repository (`target_id`) keeps the repository's suite, which
   the agent did not write. The rule is the draft's alone: a hand-written case whose tests
@@ -197,7 +200,10 @@ per-step reward makes worth stating:
   (pinned; only a plain name and version, as the setup step requires), and the Cases form
   and the case editor show them as **Grader requirements**. They are saved under
   `metadata_json.validation_requirements`, which a later edit of anything else keeps:
-  the server merges metadata key by key, and an empty list clears only that key.
+  the server merges metadata key by key, and an empty list clears only that key. A line
+  the setup step would skip (`numpy 2.4.6`, `git+https://…`) is flagged as you type and
+  refused on save with a 422, from every form and the API — otherwise the case would
+  show a dependency the run never installs.
 - **One check per behaviour.** Per-step progress is the share of checks passing
   ([ADR-0076](adr/0076-per-step-reward.md)), so one all-or-nothing command shows every
   step as 0 or 1. The assistant is asked for 3 to 10 checks, ordered from the most basic

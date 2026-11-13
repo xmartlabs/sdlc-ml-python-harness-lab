@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { api } from "../api";
-import { SWE_CASE_TYPES, caseTestCounts, shortInstanceLabel } from "../caseLabels";
+import {
+  SWE_CASE_TYPES,
+  caseTestCounts,
+  shortInstanceLabel,
+  uninstallableRequirements
+} from "../caseLabels";
 import { EmptyState } from "../components/EmptyState";
 import { HelpPanel } from "../components/HelpPanel";
 import { Spinner } from "../components/Spinner";
@@ -125,6 +130,9 @@ const MESSAGES = defineMessages({
       "The checks run offline in a clean container with only the standard " +
       "library, pytest, pyyaml and requests. List anything else they import " +
       "(numpy==2.4.6), or every check that imports it ends inconclusive.",
+    requirementsNotInstallable: (lines: string) =>
+      `Not installable, so the setup step would skip it: ${lines}. Use a ` +
+      "package name with an optional version (numpy==2.4.6, pandas>=2.2).",
     scoringRubricLabel: "Scoring rubric — required once the case has a command",
     scoringRubricPlaceholder:
       "10 = every validation command passes and the maze, scoring and ghost chase all work. 5 = it renders and moves but scoring or collisions are missing. 0 = nothing runs.",
@@ -255,6 +263,9 @@ const MESSAGES = defineMessages({
       "Los checks corren sin red en un contenedor limpio que solo trae la " +
       "biblioteca estándar, pytest, pyyaml y requests. Listá todo lo demás que " +
       "importen (numpy==2.4.6), o cada check que lo importe queda inconcluso.",
+    requirementsNotInstallable: (lines: string) =>
+      `No se puede instalar, el paso de setup lo saltearía: ${lines}. Usá un ` +
+      "nombre de paquete con versión opcional (numpy==2.4.6, pandas>=2.2).",
     scoringRubricLabel: "Rúbrica de puntuación — obligatoria si el caso tiene un comando",
     scoringRubricPlaceholder:
       "10 = pasan todos los comandos de validación y el laberinto, el puntaje y la persecución de fantasmas funcionan. 5 = renderiza y se mueve pero falta puntaje o colisiones. 0 = no corre nada.",
@@ -340,6 +351,10 @@ export function Cases({
   // One command per line, the shape the case stores and the runner executes.
   const [commandText, setCommandText] = useState("");
   const [requirementsText, setRequirementsText] = useState("");
+  const badRequirements = useMemo(
+    () => uninstallableRequirements(requirementsText),
+    [requirementsText]
+  );
   const [stepPrompts, setStepPrompts] = useState<string[]>([]);
   const [aiDescription, setAiDescription] = useState("");
   const [aiModel, setAiModel] = useState("");
@@ -904,7 +919,13 @@ export function Cases({
               rows={3}
               value={requirementsText}
             />
-            <small className="muted">{m.validationRequirementsHint}</small>
+            {badRequirements.length > 0 ? (
+              <span className="error-text">
+                {m.requirementsNotInstallable(badRequirements.join(", "))}
+              </span>
+            ) : (
+              <small className="muted">{m.validationRequirementsHint}</small>
+            )}
           </label>
           <label className="full">
             <span>{m.scoringRubricLabel}</span>
@@ -933,7 +954,7 @@ export function Cases({
         <div className="panel-actions">
           <button
             className="primary"
-            disabled={isSaving}
+            disabled={isSaving || badRequirements.length > 0}
             onClick={() => void handleCreate()}
             type="button"
           >

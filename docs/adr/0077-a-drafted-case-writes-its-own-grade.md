@@ -39,7 +39,8 @@ real draft for an Iris pipeline lost its EDA check to it.
 
 1. **The assistant writes the grade; it never runs the agent's tests.** Without a target
    repository the workspace starts empty, so a drafted command that runs a test suite
-   inside `{workspace}` is dropped with its reason (`check_drafted_command`). The prompt
+   inside `{workspace}` (pytest, unittest, a `make` test target, `npm test`, a test file
+   handed to an interpreter) is dropped with its reason (`check_drafted_command`). The prompt
    asks for inline checks that import the agent's module and assert one behaviour. A
    draft with a `target_id` keeps the repository's suite, even when its checkout could
    not be read. The rule applies to drafts only. On save, a hand-written case whose tests
@@ -48,7 +49,10 @@ real draft for an Iris pipeline lost its EDA check to it.
 2. **A draft declares what its checks import.** `validation_requirements` is part of the
    draft and goes through the same filter as the setup step (`requirement_is_installable`).
    It is shown and editable as **Grader requirements**, and saved under
-   `metadata_json.validation_requirements`.
+   `metadata_json.validation_requirements`. Saving refuses (422) any line the setup step
+   would skip (`check_requirements`), whichever form or API call sends it, and the forms
+   flag it while it is typed; the browser's copy of the rule is tested against the
+   server's.
 3. **Metadata is merged, key by key.** On create and update, a key the payload names
    replaces the stored one, an empty value removes it, and keys it does not name are
    kept. A form can then own one key without knowing the rest.

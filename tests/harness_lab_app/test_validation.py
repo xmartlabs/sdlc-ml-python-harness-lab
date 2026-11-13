@@ -675,3 +675,18 @@ def test_render_command_fills_only_the_labs_placeholders():
     assert render_command("awk '{{print}}' {workspace}", "ws", "r") == (
         "awk '{print}' ws"
     )
+
+
+def test_the_browser_screens_requirements_with_the_setup_steps_own_rule():
+    """The forms flag uninstallable lines while typing; the server refuses them on
+    save. Two copies of one rule drift, so the browser's is held to this one."""
+    import re
+
+    from harness_lab_app.validation import _REQUIREMENT_RE
+
+    source = (
+        Path(__file__).resolve().parents[2] / "frontend" / "src" / "caseLabels.ts"
+    ).read_text()
+    found = re.search(r"const INSTALLABLE_REQUIREMENT =\s*/(.+)/;", source)
+    assert found, "caseLabels.ts must define INSTALLABLE_REQUIREMENT"
+    assert found.group(1) == _REQUIREMENT_RE.pattern

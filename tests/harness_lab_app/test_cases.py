@@ -419,3 +419,65 @@ def test_a_new_case_does_not_store_an_empty_requirements_list(session):
         )
     )
     assert case.metadata_json == {}
+
+
+def test_a_requirement_the_setup_step_would_drop_is_refused_on_save(session):
+    """Copilot on #47: the editor stored any line, and the setup step then
+    skipped the ones it could not pass to pip without a word. The case showed a
+    dependency it would never install, and its checks ended inconclusive."""
+    import pytest
+
+    from harness_lab_app.case_service import CaseValidationError
+
+    service = CaseService(session)
+    with pytest.raises(CaseValidationError) as refused:
+        service.create_case(
+            CaseCreate(
+                case_id="bad-deps",
+                name="Bad deps",
+                type=CaseType.build_from_scratch,
+                metadata_json={
+                    "validation_requirements": [
+                        "numpy==2.4.6",
+                        "pandas; rm -rf /",
+                        "git+https://example.invalid/pkg.git",
+                    ]
+                },
+            )
+        )
+    problems = refused.value.problems
+    # One message per line it would skip, each naming that line first.
+    assert [line.split(" ", 1)[0] for line in problems] == [
+        "'pandas;",
+        "'git+https://example.invalid/pkg.git'",
+    ]
+
+
+def test_an_edit_with_a_requirement_the_setup_step_would_drop_is_refused(session):
+    import pytest
+
+    from harness_lab_app.case_service import CaseValidationError
+
+    service = CaseService(session)
+    service.create_case(
+        CaseCreate(
+            case_id="graded",
+            name="Graded",
+            type=CaseType.build_from_scratch,
+            metadata_json={"validation_requirements": ["numpy==2.4.6"]},
+        )
+    )
+    with pytest.raises(CaseValidationError):
+        service.update_case(
+            "graded",
+            CaseCreate(
+                case_id="graded",
+                name="Graded",
+                type=CaseType.build_from_scratch,
+                metadata_json={"validation_requirements": ["numpy 2.4.6"]},
+            ),
+        )
+    # Refused, so nothing was half-applied.
+    assert service.get_case("graded").metadata_json == {
+        "validation_requirements": ["numpy==2.4.6"]
+    }

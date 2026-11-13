@@ -32,7 +32,11 @@ import re
 import shlex
 from dataclasses import dataclass
 
-from harness_lab_app.validation import is_executable_command, names_a_document
+from harness_lab_app.validation import (
+    is_executable_command,
+    names_a_document,
+    requirement_is_installable,
+)
 
 REASON_MULTILINE = (
     "spans several lines; the case stores one shell command per line, so a "
@@ -130,6 +134,11 @@ _LOOP_GUARDS = ("|| exit", "||exit", "set -e", "|| return", "&& exit")
 # Read per shell segment, so `cd {workspace} && pytest -q` is caught and a
 # `python3 -c` check that merely opens `test_results.json` is not.
 _TEST_RUNNERS = frozenset({"pytest", "jest", "vitest", "mocha"})
+_PYTHONS = frozenset({"python", "python3"})
+_PYTHON_TEST_MODULES = frozenset({"pytest", "unittest", "nose2"})
+# Make targets that conventionally run the project's tests. `check` is in: a
+# drafted case with no repository has no Makefile but the agent's.
+_MAKE_TEST_TARGETS = frozenset({"test", "tests", "check", "unittest", "unit"})
 _TEST_FILE_RE = re.compile(
     r"(^|/)(test_[^/]*\.py|[^/]*_test\.py|[^/]*\.(test|spec)\.[cm]?[jt]sx?)$"
 )
@@ -349,11 +358,7 @@ def _runs_a_workspace_test_suite(command: str) -> bool:
         tokens = _tokens(segment.strip())
         if not tokens:
             continue
-        # Leading `VAR=value` assignments and `timeout N` do not change what runs.
-        while tokens and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[0]):
-            tokens = tokens[1:]
-        if tokens[:1] == ["timeout"]:
-            tokens = [t for t in tokens[1:] if not re.match(r"^-|^\d", t)]
+        tokens = _strip_launch_prefix(tokens)
         if not tokens:
             continue
         head = tokens[0].rsplit("/", 1)[-1]
@@ -361,20 +366,60 @@ def _runs_a_workspace_test_suite(command: str) -> bool:
         if head == "cd":
             in_workspace = names_workspace
             continue
-        if head in {"python", "python3"} and "-c" in tokens:
+        if head in _PYTHONS and "-c" in tokens:
             continue
-        runner = (
-            head in _TEST_RUNNERS
-            or (head in {"python", "python3"} and tokens[1:3] == ["-m", "pytest"])
-            or (head in {"npx", "pnpm", "yarn"} and set(tokens[1:2]) & _TEST_RUNNERS)
-            or (head in {"npm", "pnpm", "yarn"} and tokens[1:2] == ["test"])
-            or (
-                head in {"python", "python3", "node", "deno", "bun"}
-                and any(_TEST_FILE_RE.search(t) for t in tokens[1:])
-            )
-        )
-        if runner and (names_workspace or in_workspace):
+        if _is_test_runner(head, tokens) and (names_workspace or in_workspace):
             return True
+    return False
+
+
+def _strip_launch_prefix(tokens: list[str]) -> list[str]:
+    """``tokens`` without what only changes *how* the command is launched.
+
+    Leading ``VAR=value`` assignments, and ``timeout`` with its own options and
+    duration. Only those: dropping every ``-…`` token after ``timeout`` also
+    dropped the ``-m`` of ``python -m pytest`` and hid the runner.
+    """
+    while tokens and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[0]):
+        tokens = tokens[1:]
+    if tokens[:1] == ["timeout"]:
+        rest = tokens[1:]
+        while rest and rest[0].startswith("-"):
+            # `-k 5` / `-s KILL` take a value; `--foreground` does not.
+            takes_value = rest[0] in {"-k", "-s", "--kill-after", "--signal"}
+            rest = rest[2:] if takes_value else rest[1:]
+        if rest and re.match(r"^\d+(\.\d+)?[smhd]?$", rest[0]):
+            rest = rest[1:]
+        tokens = rest
+    return tokens
+
+
+def _is_test_runner(head: str, tokens: list[str]) -> bool:
+    """Whether this segment's program runs a test suite."""
+    args = tokens[1:]
+    if head in _TEST_RUNNERS:
+        return True
+    if head in _PYTHONS:
+        module = args[args.index("-m") + 1] if "-m" in args[:-1] else ""
+        return module in _PYTHON_TEST_MODULES or any(
+            _TEST_FILE_RE.search(arg) for arg in args
+        )
+    if head in {"node", "deno", "bun"}:
+        return any(_TEST_FILE_RE.search(arg) for arg in args)
+    if head in {"npx", "pnpm", "yarn"} and set(args[:1]) & _TEST_RUNNERS:
+        return True
+    if head in {"npm", "pnpm", "yarn"}:
+        return args[:1] == ["test"] or args[:2] == ["run", "test"]
+    if head in {"make", "gmake"}:
+        # The target, not the options and their values: `make -C dir test`.
+        targets = [
+            arg
+            for position, arg in enumerate(args)
+            if not arg.startswith("-")
+            and "=" not in arg
+            and not (position > 0 and args[position - 1] in {"-C", "-f"})
+        ]
+        return bool(set(targets) & _MAKE_TEST_TARGETS)
     return False
 
 
@@ -401,6 +446,38 @@ def check_commands(commands: list[str]) -> list[CommandProblem]:
     """Every reason the lab refuses this set of validation commands."""
     problems = [check_command(command) for command in commands]
     return [problem for problem in problems if problem is not None]
+
+
+REASON_REQUIREMENT_NOT_INSTALLABLE = (
+    "is not a requirement the validation setup step will install: it takes a "
+    "plain distribution name with an optional version (`numpy==2.4.6`, "
+    "`pandas>=2.2`, `requests[socks]`) and skips anything else, so this line "
+    "would be shown on the case and never installed, and every check that "
+    "imports it would end inconclusive"
+)
+
+
+def check_requirements(metadata: object) -> list[str]:
+    """Every ``validation_requirements`` entry the setup step would skip.
+
+    ``build_validation_spec`` drops what it cannot pass to pip, silently: the
+    case would show the dependency and the run would never install it. Refused
+    here instead, where the person typing it can still fix it.
+    """
+    raw = (
+        metadata.get("validation_requirements") if isinstance(metadata, dict) else None
+    )
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return [
+            "validation_requirements must be a list of requirements, one per entry."
+        ]
+    return [
+        f"{str(item)!r} {REASON_REQUIREMENT_NOT_INSTALLABLE}."
+        for item in raw
+        if not isinstance(item, str) or not requirement_is_installable(item)
+    ]
 
 
 #: Case types whose score comes from the objective verdict, not from a rubric.
