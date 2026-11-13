@@ -3,6 +3,55 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## 2026-11-13 — Four traps found by the first real runs of the per-step reward
+
+**`claude --add-dir <dir> <prompt>` eats the prompt.** `--add-dir` is variadic, so
+the prompt became another directory and the CLI exited "Input must be provided …
+when using --print" before any model call (ansible-0ea K-001). Latent since 2026-09-23
+but only reached by claude + `lab_root` + an agent cwd inside a clone (the staged
+skill catalog); ansible-0ea was the first run to hit it. Use `--add-dir=<dir>`.
+
+**`total_cost_usd` is the session's running total; `usage` is per-response.** A
+background task finishing after the agent's final message makes the session emit a
+second `result`. Summing costs reported eda-ml-iris K-002 at $0.83 for $0.49. Cost
+= last value per session; tokens/turns/duration = sum.
+
+**A copy of git's index must keep its mtime** (`copy2`, not `copyfile`). git flags a
+"racy" entry (edited in the index's second, same size) only by comparing with the
+index's mtime; a copy stamped now makes git trust the stale stat and the edit
+vanishes from the step diff. Intermittent — reproduce by forcing the times.
+
+**A tree graded in another container must be a self-contained clone.** A `git
+worktree`'s `.git` file (and `--shared`'s alternates) point at the archive by a
+worker path; in the SWE-bench Pro image `ansible-test` ran `git ls-files`, died,
+and the step read F2P=0/4 — the validator's placeholder for "suite never ran".
+`git clone --local` (hardlinked objects) works. Treat `SWEBENCH-ERROR:` as unmeasured.
+
+**The API can serve stale rows.** SQLite WAL on the macOS Docker bind mount: the
+API's pooled connections alternated between the old and new `per_step` within one
+second while fresh connections and the worker saw the new one. `docker compose
+restart api` cleared it. Suspect this before suspecting the code when the UI
+disagrees with `sqlite3 data/app/harness_lab.db`.
+
+## 2026-11-12 — A step-1 solve still pays for a second step, and a lab_root agent can read the lab's history
+
+First live per-step run (tetris-v2-K-046, claude + Haiku 4.5, `default` prompt,
+`lab_root`): every per-step number reconciled with the stream-json `result` events and
+Haiku list prices (step 1 $0.1067106 + step 2 $0.1077296 = `cost_usd` $0.21444; billed
+tokens 151,318 + 507,521 = 658,839). Solved 10/10 at step 1; step 2 changed nothing
+(identical snapshots) yet cost 50% of the spend, 77% of billed tokens and 55% of wall
+time. That second step is structural: the loop stops on "step changed nothing" or on
+the `ALL MILESTONES COMPLETE` sentinel, and the step-1 prompt does not teach the
+sentinel, so a run solved in step 1 can only stop after step 2. Changing that is the
+open loop-stop decision (ADR needed; it changes `agent_steps`/cost comparability).
+
+In that idle step the agent ran `git log --all | grep tetris` and `git show` on the
+commit that added the tetris-v2 tests and rubric, then read `task.yaml` and ran its
+tamper guard. A `lab_root` run's cwd is `/app` — the whole lab checkout — and no mask
+level covers `.git`, `workspace/` or `data/runs/`, so earlier runs' solutions
+(`workspace/tetris-v2-K-043/main.py`) are readable from every arm. K-046 did not open
+them, but nothing prevents it: a contamination risk for comparisons.
+
 ## 2026-11-12 — "Claude" authored commits because `.git/config` said so, not because an agent committed
 
 PR #45 showed its two commits authored by `Claude <claude@anthropic.com>`. No agent ran

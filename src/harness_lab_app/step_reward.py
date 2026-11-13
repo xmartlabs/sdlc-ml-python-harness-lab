@@ -115,6 +115,32 @@ def swe_progress(swe: Mapping[str, Any]) -> float | None:
     return min(fixed * kept, 0.99)
 
 
+_SWE_VERDICT_RE = re.compile(
+    r"resolved=(?P<resolved>True|False)\s+"
+    r"F2P=(?P<f2p_passed>\d+)/(?P<f2p_total>\d+)\s+"
+    r"P2P=(?P<p2p_passed>\d+)/(?P<p2p_total>\d+)"
+)
+
+
+def parse_swe_verdict(text: str | None) -> dict[str, Any] | None:
+    """The ``resolved=… F2P=x/n P2P=y/m`` verdict as a ``swe_eval`` mapping.
+
+    The same shape the runner records live in ``step-N.meta.json``, so a step
+    graded afterwards in the worker (SWE-bench Pro, which needs docker the
+    runner does not have) goes through :func:`swe_progress` like any other.
+    """
+    match = _SWE_VERDICT_RE.search(text or "")
+    if match is None:
+        return None
+    return {
+        "resolved": match.group("resolved") == "True",
+        **{
+            key: int(match.group(key))
+            for key in ("f2p_passed", "f2p_total", "p2p_passed", "p2p_total")
+        },
+    }
+
+
 def snapshot_dirs(run_dir: Path) -> list[tuple[int, Path]]:
     """The run's per-step workspace snapshots, in step order."""
     steps = run_dir / "steps"
@@ -181,38 +207,50 @@ def read_step_meta(run_dir: Path) -> dict[int, dict[str, Any]]:
     return meta
 
 
+_BILLED_USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
+
+
 def claude_step_cost(lines: Iterable[str]) -> dict[str, Any]:
-    """One claude step's cost, from the terminal ``result`` event of its stream.
+    """One claude step's cost, from the ``result`` events of its stream.
 
     Per-turn usage inside the stream is a streaming snapshot that undercounts
-    (ADR-0039); the ``result`` event is the step's total of record.
+    (ADR-0039); the ``result`` events are the step's figures of record. A step
+    usually has one, but a session that answers again — a background task
+    finishing after the final message — emits another, and the two kinds of
+    field add up differently: ``usage`` and ``num_turns`` cover that response
+    only and are summed, while ``total_cost_usd`` is the session's running
+    total, so the last value per session is the cost.
     """
-    result: dict[str, Any] | None = None
+    session_cost: dict[str, float] = {}
+    billed = output = turns = 0
+    saw_result = False
     for raw in lines:
         try:
             event = json.loads(raw)
         except (TypeError, ValueError):
             continue
-        if isinstance(event, dict) and event.get("type") == "result":
-            result = event
-    if result is None:
+        if not isinstance(event, dict) or event.get("type") != "result":
+            continue
+        saw_result = True
+        usage = event.get("usage") or {}
+        billed += sum(int(usage.get(key) or 0) for key in _BILLED_USAGE_KEYS)
+        output += int(usage.get("output_tokens") or 0)
+        turns += int(event.get("num_turns") or 0)
+        cost = event.get("total_cost_usd")
+        if isinstance(cost, (int, float)):
+            session_cost[str(event.get("session_id") or "")] = float(cost)
+    if not saw_result:
         return {}
-    usage = result.get("usage") or {}
-    billed = sum(
-        int(usage.get(key) or 0)
-        for key in (
-            "input_tokens",
-            "output_tokens",
-            "cache_read_input_tokens",
-            "cache_creation_input_tokens",
-        )
-    )
-    cost = result.get("total_cost_usd")
     return {
-        "cost_usd": float(cost) if isinstance(cost, (int, float)) else None,
+        "cost_usd": sum(session_cost.values()) if session_cost else None,
         "billed_tokens": billed,
-        "output_tokens": int(usage.get("output_tokens") or 0),
-        "turns": result.get("num_turns"),
+        "output_tokens": output,
+        "turns": turns or None,
     }
 
 

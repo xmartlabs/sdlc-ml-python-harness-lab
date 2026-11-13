@@ -1260,6 +1260,15 @@ def test_snapshot_step_records_a_cloned_repo_as_a_diff_with_new_files(tmp_path):
     meta = bench_run.snapshot_step(ws, steps, 3)
 
     assert meta["kind"] == "diff"
+    # The commit the diff was cut from, so the worker can rebuild this step's
+    # tree after the run even if the agent commits and moves HEAD later.
+    head = subprocess.run(
+        ["git", "-C", str(ws), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert meta["base"] == head.stdout.strip()
     patch = (steps / "step-3.diff").read_text()
     assert "x = 2" in patch
     assert "new.py" in patch
@@ -1279,6 +1288,47 @@ def test_snapshot_step_records_a_cloned_repo_as_a_diff_with_new_files(tmp_path):
         check=True,
     )
     assert "?? new.py" in status.stdout
+
+
+def test_snapshot_step_sees_a_same_size_edit_made_in_the_index_second(tmp_path):
+    """Racy git: an edit in the same second the index was written, same size.
+
+    git spots such an entry only by comparing it with the index's own mtime.
+    The snapshot copies the index to a throwaway file; a copy stamped with the
+    current time made the entry look safely old, git trusted the stale stat,
+    and the edit vanished from the step's diff — intermittently, whenever the
+    copy landed in a later second. Forced here by staging the file a minute in
+    the past and keeping the edit in that second: a copy that drops the
+    index's mtime is stamped *now*, a minute after, exactly like a snapshot
+    taken later — and git then trusts the stale stat.
+    """
+    import os
+    import subprocess
+    import time
+
+    ws = tmp_path / "repo"
+    ws.mkdir()
+    ident = ["-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q", str(ws)], check=True)
+    # ctime cannot be set from Python; a second boundary crossed between two
+    # writes would expose the edit by ctime and pass the test by luck.
+    subprocess.run(
+        ["git", "-C", str(ws), "config", "core.trustctime", "false"], check=True
+    )
+    past = int(time.time()) - 60
+    (ws / "a.py").write_text("x = 1\n")
+    os.utime(ws / "a.py", (past, past))  # staged with this cached mtime
+    subprocess.run(["git", "-C", str(ws), "add", "-A"], check=True)
+    subprocess.run(["git", *ident, "-C", str(ws), "commit", "-qm", "base"], check=True)
+    os.utime(ws / ".git" / "index", (past, past))  # index written that second
+    (ws / "a.py").write_text("x = 2\n")  # same size...
+    os.utime(ws / "a.py", (past, past))  # ...and the same cached mtime
+    steps = tmp_path / "steps"
+    steps.mkdir()
+
+    bench_run.snapshot_step(ws, steps, 1)
+
+    assert "x = 2" in (steps / "step-1.diff").read_text()
 
 
 def test_snapshot_step_keeps_the_agents_own_staged_changes(tmp_path):

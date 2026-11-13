@@ -216,6 +216,68 @@ def test_claude_step_cost_is_empty_without_a_result_event() -> None:
     assert step_reward.claude_step_cost(["not json", json.dumps({"type": "x"})]) == {}
 
 
+def test_a_step_whose_session_answers_twice_keeps_its_cost_and_all_its_tokens() -> None:
+    """eda-ml-iris K-002, step 1: a background task finished after the final
+    message and the session emitted a second `result`. Its cost is the
+    session's running total; its `usage` is that one response only. Reading
+    just the last event kept the cost and dropped 97% of the step's tokens."""
+
+    def result(cost: float, turns: int, output: int, cache_read: int) -> str:
+        return json.dumps(
+            {
+                "type": "result",
+                "session_id": "s1",
+                "total_cost_usd": cost,
+                "num_turns": turns,
+                "usage": {
+                    "input_tokens": 0,
+                    "output_tokens": output,
+                    "cache_read_input_tokens": cache_read,
+                    "cache_creation_input_tokens": 0,
+                },
+            }
+        )
+
+    cost = step_reward.claude_step_cost(
+        [result(0.3397, 41, 13421, 1559152), result(0.4117, 1, 224, 18646)]
+    )
+    assert cost["cost_usd"] == pytest.approx(0.4117)
+    assert cost["billed_tokens"] == 13421 + 1559152 + 224 + 18646
+    assert cost["output_tokens"] == 13421 + 224
+    assert cost["turns"] == 42
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "resolved=True F2P=4/4 P2P=26/26",
+            {
+                "resolved": True,
+                "f2p_passed": 4,
+                "f2p_total": 4,
+                "p2p_passed": 26,
+                "p2p_total": 26,
+            },
+        ),
+        (
+            "SWEBENCH: resolved=False F2P=1/3 P2P=10/12",
+            {
+                "resolved": False,
+                "f2p_passed": 1,
+                "f2p_total": 3,
+                "p2p_passed": 10,
+                "p2p_total": 12,
+            },
+        ),
+        ("resolved=False (docker unavailable — Pro lane needs it)", None),
+        (None, None),
+    ],
+)
+def test_parse_swe_verdict_reads_the_validator_line(text, expected) -> None:
+    assert step_reward.parse_swe_verdict(text) == expected
+
+
 def test_consulted_items_name_skills_and_governance_docs() -> None:
     parsed = {
         "skills_consulted": ["verify_changes"],

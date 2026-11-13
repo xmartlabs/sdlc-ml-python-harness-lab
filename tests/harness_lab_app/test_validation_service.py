@@ -399,6 +399,185 @@ def test_validate_steps_reads_the_swe_lane_live_verdict(patched_settings):
         assert trajectory["sources"] == ["swe_live"]
 
 
+class SweProVerdictExecutor:
+    """Prints a SWE-bench verdict per rebuilt step tree, like the Pro validator.
+
+    Step 1's tree still has the bug, step 2's has the fix; the tree is told
+    apart by the file the diff wrote into it, read back through the
+    `--repo-dir` the service appends.
+    """
+
+    def __init__(self, broken: bool = False):
+        self.broken = broken
+        self.calls: list[list[str]] = []
+
+    def start(self, run_id: str, command: list[str], **kwargs) -> FakeHandle:
+        self.calls.append(command)
+        if self.broken:
+            # What `evaluate_containerized` prints when the container never
+            # produced a result: a placeholder 0/n beside the error.
+            return FakeHandle(
+                [
+                    "SWEBENCH: resolved=False F2P=0/2 P2P=0/5",
+                    "  (parser produced no output.json)",
+                    "SWEBENCH-ERROR: parser produced no output.json",
+                ],
+                1,
+            )
+        tree = Path(command[-1].split("--repo-dir ", 1)[1])
+        assert tree.is_absolute()  # the validator resolves it from its own cwd
+        fixed = (tree / "fix.py").read_text().strip() == "fixed = True"
+        verdict = (
+            "SWEBENCH: resolved=True F2P=2/2 P2P=5/5"
+            if fixed
+            else "SWEBENCH: resolved=False F2P=0/2 P2P=5/5"
+        )
+        return FakeHandle([verdict + "\n"], 0 if fixed else 1)
+
+
+def _seed_swe_pro_run(session: Session, run_dir: Path) -> Path:
+    """A SWE Pro run whose step 1 tried and failed, and step 2 fixed it."""
+    import subprocess
+
+    from sqlmodel import select
+
+    from harness_lab_app.models import Case
+
+    seed_case_and_run(session, run_dir.name, run_dir)
+    case = session.exec(select(Case)).one()
+    case.type = CaseType.swe_pro_instance
+    case.validation_commands = [
+        "python /app/scripts/swebench_pro_validate.py --run {run_id}"
+    ]
+    session.add(case)
+    session.commit()
+
+    clone = run_dir / "workspace"
+    clone.mkdir()
+    ident = ["-c", "user.email=t@t", "-c", "user.name=t"]
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *ident, "-C", str(clone), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    subprocess.run(["git", "init", "-q", str(clone)], check=True)
+    (clone / "fix.py").write_text("fixed = False\n")
+    git("add", "-A")
+    git("commit", "-qm", "provisioned")
+    base = git("rev-parse", "HEAD").strip()
+    steps_dir = run_dir / "steps"
+    steps_dir.mkdir()
+    for n, body in ((1, "fixed = False  # tried\n"), (2, "fixed = True\n")):
+        (clone / "fix.py").write_text(body)
+        (steps_dir / f"step-{n}.diff").write_text(git("diff", "HEAD"))
+        (steps_dir / f"step-{n}.meta.json").write_text(
+            json.dumps(
+                {"step": n, "kind": "diff", "path": f"step-{n}.diff", "base": base}
+            )
+        )
+    return clone
+
+
+@pytest.fixture
+def swe_pro_settings(tmp_path, monkeypatch):
+    runs_dir = tmp_path / "data" / "runs"
+    monkeypatch.setattr(
+        vs_module,
+        "get_settings",
+        lambda: SimpleNamespace(data_runs_dir=runs_dir, repo_root=tmp_path),
+    )
+    return runs_dir
+
+
+def test_a_swe_pro_step_is_regraded_in_the_worker_from_its_diff(
+    swe_pro_settings, monkeypatch
+):
+    """The Pro suite needs docker, which the runner has not: the live verdict
+    was skipped and both steps of ansible-0fd K-001 came out unmeasured. The
+    worker rebuilds each step's tree from its diff and grades it."""
+    engine = make_engine()
+    with Session(engine) as session:
+        run_dir = swe_pro_settings / "run-pro"
+        clone = _seed_swe_pro_run(session, run_dir)
+        executor = SweProVerdictExecutor()
+        monkeypatch.setattr(vs_module, "SubprocessRunExecutor", lambda: executor)
+
+        trajectory = ValidationService(session).validate_steps("run-pro")
+
+        assert len(executor.calls) == 2
+        assert all("--run run-pro --repo-dir /" in c[-1] for c in executor.calls)
+        assert trajectory is not None
+        assert trajectory["sources"] == ["swe_regraded"]
+        assert [s["progress"] for s in trajectory["steps"]] == [0.0, 1.0]
+        assert trajectory["steps_to_resolve"] == 2
+        # The worktrees are gone; the archived clone is untouched.
+        assert not list(run_dir.glob("step-tree-*"))
+        assert (clone / "fix.py").read_text() == "fixed = True\n"
+
+
+def test_a_swe_pro_suite_that_never_ran_is_unmeasured_not_zero(
+    swe_pro_settings, monkeypatch
+):
+    """The first live re-grade of ansible-0fd read 0/4 F2P for a step whose
+    diff is the final, 4/4-resolved one: the container produced no result and
+    the validator printed its 0/n placeholder. That is no measurement at all —
+    reading it as "no test passes" would record a regression that never was."""
+    from sqlmodel import select
+
+    from harness_lab_app.models import RunEvent
+
+    engine = make_engine()
+    with Session(engine) as session:
+        _seed_swe_pro_run(session, swe_pro_settings / "run-pro")
+        broken = SweProVerdictExecutor(broken=True)
+        monkeypatch.setattr(vs_module, "SubprocessRunExecutor", lambda: broken)
+
+        trajectory = ValidationService(session).validate_steps("run-pro")
+
+        assert trajectory is not None
+        assert [s["progress"] for s in trajectory["steps"]] == [None, None]
+        assert trajectory["unmeasured_steps"] == 2
+        assert trajectory["progress_auc"] is None
+        messages = [e.message for e in session.exec(select(RunEvent)).all()]
+        assert any("the suite did not run" in m for m in messages)
+
+
+def test_a_run_with_no_gradable_step_says_so_instead_of_never_resolved(
+    patched_settings,
+):
+    """`2 step(s) graded; never fully resolved` was printed for a run where
+    nothing was graded at all — a statement about the agent that was really a
+    statement about the grader."""
+    from sqlmodel import select
+
+    from harness_lab_app.models import RunEvent
+
+    engine = make_engine()
+    with Session(engine) as session:
+        run_dir = patched_settings / "run-diff"
+        seed_case_and_run(session, "run-diff", run_dir)
+        steps_dir = run_dir / "steps"
+        steps_dir.mkdir(parents=True)
+        for n in (1, 2):
+            (steps_dir / f"step-{n}.meta.json").write_text(
+                json.dumps({"step": n, "kind": "diff"})
+            )
+
+        trajectory = ValidationService(
+            session, executor=FakeExecutor(exit_code=0)
+        ).validate_steps("run-diff")
+
+        assert trajectory is not None
+        assert trajectory["unmeasured_steps"] == 2
+        messages = [e.message for e in session.exec(select(RunEvent)).all()]
+        assert any("none of 2 step(s) could be graded" in m for m in messages)
+        assert not any("never fully resolved" in m for m in messages)
+
+
 def test_a_check_that_does_not_name_the_workspace_sits_the_step_pass_out(
     patched_settings,
 ):

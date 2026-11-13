@@ -32,11 +32,20 @@ from swebench_pro_common import docker_available, evaluate_containerized
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", required=True, help="Run id")
+    parser.add_argument(
+        "--repo-dir",
+        default=None,
+        help=(
+            "Grade this tree instead of the archived workspace — one step's "
+            "rebuilt tree for the per-step reward (ADR-0076). Must live under "
+            "the repo so the docker daemon can bind-mount it."
+        ),
+    )
     args = parser.parse_args(argv)
 
     run_dir = _ROOT / "data" / "runs" / args.run
     spec_path = run_dir / "case_spec.json"
-    repo_dir = run_dir / "workspace"
+    repo_dir = Path(args.repo_dir).resolve() if args.repo_dir else run_dir / "workspace"
     if not spec_path.exists():
         print(f"SWEBENCH: resolved=False (no case_spec.json at {spec_path})")
         return 1
@@ -63,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     if result.get("error"):
         print(f"  ({result['error']})")
+        # The F2P=0/n above is a placeholder, not a measurement: the suite
+        # never produced a result. Marked on its own line so a reader that
+        # must not mistake it for "no test passes" (the per-step reward,
+        # ADR-0076) can tell, while the verdict line keeps its format.
+        print(f"SWEBENCH-ERROR: {result['error']}")
     print(result["raw"][-2000:])
     return 0 if result["resolved"] else 1
 
