@@ -72,6 +72,13 @@ REASON_INTERPRETER_MISMATCH = (
     "exits with a collection or syntax error before anything is measured, so "
     "it fails on every run whatever the agent did"
 )
+REASON_RUNS_THE_AGENTS_TESTS = (
+    "runs a test suite inside the workspace, and a case with no repository "
+    "starts from an empty one: every test there is one the agent wrote, so "
+    "the grade becomes its own exam (ADR-0071). Write the check yourself — "
+    'an inline `python3 -c "..."` that imports the agent\'s module and '
+    "asserts one behaviour"
+)
 REASON_NO_RUBRIC = (
     "has validation commands but no scoring rubric, so nothing can grade the "
     "run: it would park in awaiting_manual_score with no scale to grade against"
@@ -118,9 +125,20 @@ _INTERPRETER_CANNOT_RUN: dict[str, tuple[tuple[str, ...], str, str]] = {
 }
 _LOOP_GUARDS = ("|| exit", "||exit", "set -e", "|| return", "&& exit")
 
+# A test runner pointed at the workspace: `pytest {workspace}/…`, `python -m
+# pytest` after a `cd {workspace}`, `node {workspace}/x.test.js`, `npm test`.
+# Read per shell segment, so `cd {workspace} && pytest -q` is caught and a
+# `python3 -c` check that merely opens `test_results.json` is not.
+_TEST_RUNNERS = frozenset({"pytest", "jest", "vitest", "mocha"})
+_TEST_FILE_RE = re.compile(
+    r"(^|/)(test_[^/]*\.py|[^/]*_test\.py|[^/]*\.(test|spec)\.[cm]?[jt]sx?)$"
+)
+_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|\|")
+
 _ALWAYS_TRUE = frozenset({"true", ":", "exit 0", "/bin/true"})
 _PY_FILE_READS = ("open(", "read_text", "Path(", "glob(", "listdir", "walk(", "stat(")
 _PY_PREDICATES = ("any(", "all(", "re.search", "re.match", "in text", "in content")
+_PY_WORKSPACE_USES = ("sys.path", "import_module", "runpy", "subprocess", "exec(")
 
 
 @dataclass(frozen=True)
@@ -211,8 +229,14 @@ def _is_tautological(command: str) -> bool:
     if tokens[0].startswith("python") and "-c" in tokens:
         body = tokens[tokens.index("-c") + 1] if "-c" in tokens[:-1] else ""
         reads_a_file = any(marker in body for marker in _PY_FILE_READS)
+        # Importing or running what the agent wrote is reading it too: a
+        # predicate over the module it returned can fail. The workspace has to
+        # be named, or `import sys` alone would excuse a check of literals.
+        uses_the_workspace = "{workspace}" in body and any(
+            marker in body for marker in _PY_WORKSPACE_USES
+        )
         only_predicates = any(marker in body for marker in _PY_PREDICATES)
-        if only_predicates and not reads_a_file:
+        if only_predicates and not (reads_a_file or uses_the_workspace):
             return True
     return False
 
@@ -308,6 +332,68 @@ def check_command(command: str) -> CommandProblem | None:
         )
     if _unanchored_paths(command):
         return CommandProblem(command, REASON_UNANCHORED, anchor_workspace(command))
+    return None
+
+
+def _runs_a_workspace_test_suite(command: str) -> bool:
+    """Whether this command hands the workspace's own tests to a test runner.
+
+    A segment counts when it runs a test runner (``pytest``, ``python -m
+    pytest``, ``jest``…, ``npm test``) or an interpreter on a test file, and
+    either names ``{workspace}`` or follows a ``cd {workspace}``. A
+    ``python3 -c`` check is never one: its argument is the lab's own code,
+    whatever file names appear inside it.
+    """
+    in_workspace = False
+    for segment in _SEGMENT_SPLIT_RE.split(command):
+        tokens = _tokens(segment.strip())
+        if not tokens:
+            continue
+        # Leading `VAR=value` assignments and `timeout N` do not change what runs.
+        while tokens and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[0]):
+            tokens = tokens[1:]
+        if tokens[:1] == ["timeout"]:
+            tokens = [t for t in tokens[1:] if not re.match(r"^-|^\d", t)]
+        if not tokens:
+            continue
+        head = tokens[0].rsplit("/", 1)[-1]
+        names_workspace = "{workspace}" in segment
+        if head == "cd":
+            in_workspace = names_workspace
+            continue
+        if head in {"python", "python3"} and "-c" in tokens:
+            continue
+        runner = (
+            head in _TEST_RUNNERS
+            or (head in {"python", "python3"} and tokens[1:3] == ["-m", "pytest"])
+            or (head in {"npx", "pnpm", "yarn"} and set(tokens[1:2]) & _TEST_RUNNERS)
+            or (head in {"npm", "pnpm", "yarn"} and tokens[1:2] == ["test"])
+            or (
+                head in {"python", "python3", "node", "deno", "bun"}
+                and any(_TEST_FILE_RE.search(t) for t in tokens[1:])
+            )
+        )
+        if runner and (names_workspace or in_workspace):
+            return True
+    return False
+
+
+def check_drafted_command(
+    command: str, *, in_repository: bool
+) -> CommandProblem | None:
+    """:func:`check_command`, plus the rule only a drafted case can break.
+
+    A drafted case with no repository starts from an empty workspace, so a
+    check that runs a test suite there runs the agent's own tests. Kept out of
+    :func:`check_command` on purpose: a hand-written case that ships its tests
+    in a starter, or one written for a repository, runs a suite the agent did
+    not write, and the editor has no way to tell those apart.
+    """
+    problem = check_command(command)
+    if problem is not None:
+        return problem
+    if not in_repository and _runs_a_workspace_test_suite(command):
+        return CommandProblem(command, REASON_RUNS_THE_AGENTS_TESTS)
     return None
 
 

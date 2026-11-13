@@ -638,3 +638,40 @@ def test_a_measured_zero_cost_is_kept_with_where_it_came_from(tmp_path):
     assert cost["time_source"] == "step_clock"
     assert cost["model_minutes"] == 9.0
     assert cost["reasoning_tokens"] == 120
+
+
+def test_a_check_with_braces_of_its_own_renders_and_does_not_crash(
+    tmp_path, monkeypatch
+):
+    """`str.format` read `{'a': 1}` in an inline check as a placeholder.
+
+    The case editor accepted the command, and validation then died on
+    `KeyError: "'a'"` for every run of the case. Only `{workspace}` and
+    `{run_id}` are the lab's; every other brace is the check's own code.
+    """
+    monkeypatch.setattr(
+        "harness_lab_app.validation.get_settings",
+        lambda: SimpleNamespace(data_runs_dir=tmp_path),
+    )
+    case = _case(
+        validation_commands=[
+            "python3 -c \"import sys; d={'a': 1}; "
+            "sys.exit(0 if d['a'] == 1 and '{run_id}' else 1)\" {workspace}",
+            "awk '{print $1}' {workspace}/out.txt",
+        ]
+    )
+    spec = build_validation_spec(case, "r1")
+    rendered = [argv[-1] for argv in spec["commands"]]
+    assert "d={'a': 1}" in rendered[0]
+    assert "'r1'" in rendered[0] and rendered[0].endswith("workspace/r1")
+    assert rendered[1] == "awk '{print $1}' workspace/r1/out.txt"
+
+
+def test_render_command_fills_only_the_labs_placeholders():
+    from harness_lab_app.validation import render_command
+
+    assert render_command("{workspace}/{run_id} {x} {}", "ws", "r") == "ws/r {x} {}"
+    # Doubled braces were the escape under `str.format`; they still mean one.
+    assert render_command("awk '{{print}}' {workspace}", "ws", "r") == (
+        "awk '{print}' ws"
+    )

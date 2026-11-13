@@ -119,6 +119,12 @@ const MESSAGES = defineMessages({
     promptBody: "Prompt body",
     stepPromptsLabel: "Step prompts — one per line, driving step 2 onward",
     validationCommandsLabel: "Validation commands — one per line",
+    validationRequirementsLabel:
+      "Grader requirements — pinned pip packages the checks import, one per line",
+    validationRequirementsHint:
+      "The checks run offline in a clean container with only the standard " +
+      "library, pytest, pyyaml and requests. List anything else they import " +
+      "(numpy==2.4.6), or every check that imports it ends inconclusive.",
     scoringRubricLabel: "Scoring rubric — required once the case has a command",
     scoringRubricPlaceholder:
       "10 = every validation command passes and the maze, scoring and ghost chase all work. 5 = it renders and moves but scoring or collisions are missing. 0 = nothing runs.",
@@ -243,6 +249,12 @@ const MESSAGES = defineMessages({
     promptBody: "Cuerpo del prompt",
     stepPromptsLabel: "Prompts de paso — uno por línea, maneja el paso 2 en adelante",
     validationCommandsLabel: "Comandos de validación — uno por línea",
+    validationRequirementsLabel:
+      "Dependencias del evaluador — paquetes pip fijados que importan los checks, uno por línea",
+    validationRequirementsHint:
+      "Los checks corren sin red en un contenedor limpio que solo trae la " +
+      "biblioteca estándar, pytest, pyyaml y requests. Listá todo lo demás que " +
+      "importen (numpy==2.4.6), o cada check que lo importe queda inconcluso.",
     scoringRubricLabel: "Rúbrica de puntuación — obligatoria si el caso tiene un comando",
     scoringRubricPlaceholder:
       "10 = pasan todos los comandos de validación y el laberinto, el puntaje y la persecución de fantasmas funcionan. 5 = renderiza y se mueve pero falta puntaje o colisiones. 0 = no corre nada.",
@@ -327,6 +339,7 @@ export function Cases({
   const [scoringRubric, setScoringRubric] = useState("");
   // One command per line, the shape the case stores and the runner executes.
   const [commandText, setCommandText] = useState("");
+  const [requirementsText, setRequirementsText] = useState("");
   const [stepPrompts, setStepPrompts] = useState<string[]>([]);
   const [aiDescription, setAiDescription] = useState("");
   const [aiModel, setAiModel] = useState("");
@@ -492,6 +505,7 @@ export function Cases({
       // The server screened these: what is left is one runnable command per
       // line, which is the only shape this textarea preserves.
       setCommandText((draft.validation_commands ?? []).join("\n"));
+      setRequirementsText((draft.validation_requirements ?? []).join("\n"));
       if (draft.max_steps) setMaxSteps(draft.max_steps);
       setAiDropped(draft.dropped_commands ?? []);
 
@@ -540,6 +554,13 @@ export function Cases({
           .split("\n")
           .map((item) => item.trim())
           .filter(Boolean),
+        // What the checks import, installed before they run (ADR-0071).
+        metadata_json: {
+          validation_requirements: requirementsText
+            .split("\n")
+            .map((item) => item.trim())
+            .filter(Boolean)
+        },
         max_steps: maxSteps
       });
       onSelectCase(created.case_id);
@@ -871,9 +892,19 @@ export function Cases({
             <span>{m.validationCommandsLabel}</span>
             <textarea
               onChange={(event) => setCommandText(event.target.value)}
-              placeholder="pytest {workspace}/test_summary.py -q"
+              placeholder={`python3 -c "import sys; sys.path.insert(0, '{workspace}'); import summary; sys.exit(0 if summary.words('a b') == 2 else 1)"`}
               value={commandText}
             />
+          </label>
+          <label className="full">
+            <span>{m.validationRequirementsLabel}</span>
+            <textarea
+              onChange={(event) => setRequirementsText(event.target.value)}
+              placeholder={"numpy==2.4.6\npandas==3.1.0"}
+              rows={3}
+              value={requirementsText}
+            />
+            <small className="muted">{m.validationRequirementsHint}</small>
           </label>
           <label className="full">
             <span>{m.scoringRubricLabel}</span>

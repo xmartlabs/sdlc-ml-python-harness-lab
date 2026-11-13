@@ -119,6 +119,30 @@ _REQUIREMENT_RE = re.compile(
 #: Where a run's grader dependencies are installed, relative to the lab root.
 VALIDATION_DEPS_DIR = "validation-deps"
 
+# The lab's two placeholders, and the doubled braces `str.format` read as one.
+# One left-to-right pass, so `{{workspace}}` stays the literal `{workspace}` it
+# always was.
+_PLACEHOLDER_RE = re.compile(r"\{\{|\}\}|\{workspace\}|\{run_id\}")
+
+
+def render_command(command: str, workspace: str, run_id: str) -> str:
+    """A validation command with the lab's placeholders filled in.
+
+    Only ``{workspace}`` and ``{run_id}`` are the lab's. Every other brace is
+    the check's own code — a dict in a ``python3 -c`` check, an awk program, a
+    JS object — and ``str.format`` read each as a placeholder: the case editor
+    accepted ``d={'a': 1}`` and validation then died on ``KeyError`` for every
+    run of the case. ``{{`` and ``}}`` still mean one brace, as they did.
+    """
+    values = {
+        "{workspace}": workspace,
+        "{run_id}": run_id,
+        "{{": "{",
+        "}}": "}",
+    }
+    return _PLACEHOLDER_RE.sub(lambda match: values[match.group(0)], command)
+
+
 _EXIT_CODE_REASONS = {
     -1: "not_launched",
     124: "timeout",
@@ -165,15 +189,18 @@ def workspace_modules(workspace: Path) -> set[str]:
     return names
 
 
+def requirement_is_installable(requirement: str) -> bool:
+    """Whether the validation setup step would pass this requirement to pip."""
+    return bool(_REQUIREMENT_RE.match(requirement.strip()))
+
+
 def validation_requirements(case: Any) -> list[str]:
     """The pip requirements a case's graders need, validated, in order."""
     meta = getattr(case, "metadata_json", None) or {}
     raw = meta.get("validation_requirements") if isinstance(meta, dict) else None
     if not isinstance(raw, list):
         return []
-    return [
-        str(item).strip() for item in raw if _REQUIREMENT_RE.match(str(item).strip())
-    ]
+    return [str(item).strip() for item in raw if requirement_is_installable(str(item))]
 
 
 def classify_inconclusive(
@@ -358,7 +385,7 @@ def build_validation_spec(
         # `.` for a target command: it already runs *inside* the workspace, and
         # the lab-relative path would resolve under itself after the cd.
         rendered = _portable_timeout(
-            raw.format(workspace="." if in_workspace else workspace, run_id=run_id)
+            render_command(raw, "." if in_workspace else workspace, run_id)
         )
         if in_workspace:
             rendered = f"cd {shlex.quote(workspace)} && {rendered}"

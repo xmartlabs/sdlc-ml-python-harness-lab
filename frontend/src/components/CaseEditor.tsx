@@ -61,6 +61,10 @@ const MESSAGES = defineMessages({
         objective score. {runId} is substituted.
       </>
     ),
+    validationRequirementsLabel: "Grader requirements (pinned, one per line)",
+    validationRequirementsHint:
+      "Installed before the checks run, which is offline in a clean container " +
+      "with only the standard library, pytest, pyyaml and requests.",
     scoringRubric: "Scoring rubric",
     saving: "Saving…",
     save: "Save",
@@ -119,6 +123,10 @@ const MESSAGES = defineMessages({
         cero hace fallar el puntaje objetivo. Se sustituye {runId}.
       </>
     ),
+    validationRequirementsLabel: "Dependencias del evaluador (fijadas, una por línea)",
+    validationRequirementsHint:
+      "Se instalan antes de los checks, que corren sin red en un contenedor " +
+      "limpio con solo la biblioteca estándar, pytest, pyyaml y requests.",
     scoringRubric: "Rúbrica de puntuación",
     saving: "Guardando…",
     save: "Guardar",
@@ -154,6 +162,7 @@ type Draft = {
   scoringRubric: string;
   constraints: string;
   validationCommands: string;
+  validationRequirements: string;
 };
 
 function toDraft(item: CaseRecord): Draft {
@@ -173,7 +182,10 @@ function toDraft(item: CaseRecord): Draft {
     })),
     scoringRubric: item.scoring_rubric ?? "",
     constraints: (item.constraints ?? []).join("\n"),
-    validationCommands: (item.validation_commands ?? []).join("\n")
+    validationCommands: (item.validation_commands ?? []).join("\n"),
+    validationRequirements: (
+      item.metadata_json?.validation_requirements ?? []
+    ).join("\n")
   };
 }
 
@@ -211,6 +223,11 @@ function toPayload(caseId: string, draft: Draft): CaseCreatePayload {
     scoring_rubric: draft.scoringRubric,
     constraints: toLines(draft.constraints),
     validation_commands: toLines(draft.validationCommands),
+    // Only the key this form owns: the server merges it into the stored
+    // metadata, so the starter dir and a SWE case's data are kept.
+    metadata_json: {
+      validation_requirements: toLines(draft.validationRequirements)
+    },
     max_steps: Number.isFinite(draft.maxSteps) ? draft.maxSteps : 1
   };
 }
@@ -580,6 +597,20 @@ export function CaseEditor({
         <small className="muted">
           {m.validationCommandsHint(<code>{"{run_id}"}</code>)}
         </small>
+      </label>
+
+      <label>
+        <span>{m.validationRequirementsLabel}</span>
+        <textarea
+          disabled={readOnly}
+          onChange={(event) =>
+            patch({ validationRequirements: event.target.value })
+          }
+          placeholder={"numpy==2.4.6\npandas==3.1.0"}
+          rows={2}
+          value={draft.validationRequirements}
+        />
+        <small className="muted">{m.validationRequirementsHint}</small>
       </label>
 
       <label>

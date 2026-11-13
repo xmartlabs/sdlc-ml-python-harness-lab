@@ -3,6 +3,24 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## 2026-11-13 — The case assistant still drafted the cases ADR-0071 forbids
+
+- **A rule written for `task.yaml` did not reach the drafter.** ADR-0071 banned grading
+  with the agent's own tests and required declared grader dependencies, but the case
+  assistant's prompt still advised `pytest {workspace}/test_*.py`, and no draft, form or
+  editor could carry `validation_requirements`. When a rule changes how cases are graded,
+  check `case_draft_service._SYSTEM_PROMPT` too (ADR-0077).
+- **"Inconclusive: grader dependency missing" on a non-SWE case is the runner, not the
+  worker.** Those checks run in the runner image (it has `pytest-cov`, no numpy). Reproduce
+  with `docker run --entrypoint sh harness-lab-runner:latest`, not `docker compose exec
+  worker`, which has neither and gives a misleading `--cov-report` error from the lab's
+  own `pyproject.toml`.
+- **`str.format` on a shell command breaks on its own braces.** `d={'a': 1}` in an inline
+  check passed case validation and then raised `KeyError` in every run. Render with
+  `validation.render_command`, which fills only `{workspace}`/`{run_id}`.
+- **`update_case` wiped `metadata_json`.** The editor sends no metadata; assigning every
+  payload field set it to `{}`. Metadata is merged key by key now.
+
 ## 2026-11-13 — Four traps found by the first real runs of the per-step reward
 
 **`claude --add-dir <dir> <prompt>` eats the prompt.** `--add-dir` is variadic, so

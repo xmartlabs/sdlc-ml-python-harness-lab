@@ -57,7 +57,13 @@ a literal it carries itself:
 ```sh
 # refused — matches any text containing one of its own patterns
 python3 -c "patterns=['cost']; import sys; sys.exit(0 if any(p in text for p in patterns) else 1)"
+# accepted — the predicate is over what the agent's module returned
+python3 -c "import sys; sys.path.insert(0,'{workspace}'); import pipe; s=pipe.summary(); sys.exit(0 if all(k in s for k in ('a','b')) else 1)"
 ```
+
+Importing or running what the agent wrote counts as reading it, but only when the
+check names `{workspace}` and reaches into it (`sys.path`, `importlib`, `runpy`,
+`subprocess`). `import sys` alone does not excuse a predicate over literals.
 
 **4. A multi-line entry.** The case stores one shell command per line, so a heredoc or
 a script body is split and each line is run on its own — the first often exits 0.
@@ -170,6 +176,43 @@ sets two rules for any case graded by a test suite:
 Every graded command `cd`s into the workspace first, so pass the tests an absolute path —
 `CLINIC_WORKSPACE="$PWD"`, never `CLINIC_WORKSPACE={workspace}`, which is relative to the
 lab root and stops resolving after the `cd`. A test holds every `task.yaml` to this.
+
+### What the case assistant does with these rules
+
+A case drafted from one sentence ("Generate with AI" on **Cases** and in **Subject
+validation**) gets no shipped suite, so the assistant writes the grade itself
+([ADR-0077](adr/0077-a-drafted-case-writes-its-own-grade.md)). Its prompt
+and screen (`case_draft_service`) hold it to the same two rules, plus one that the
+per-step reward makes worth stating:
+
+- **It never grades with the agent's tests.** Without a repository the workspace starts
+  empty, so a drafted command that runs a test suite inside `{workspace}` —
+  `pytest {workspace}/…`, `cd {workspace} && python -m pytest`, `npm test`,
+  `node {workspace}/x.test.js` — is dropped, and the reason is shown next to the draft.
+  The assistant writes inline checks instead: import the agent's module, assert one
+  behaviour. A draft for a repository (`target_id`) keeps the repository's suite, which
+  the agent did not write. The rule is the draft's alone: a hand-written case whose tests
+  arrive in a starter is still accepted on save.
+- **It declares what its checks import.** The draft carries `validation_requirements`
+  (pinned; only a plain name and version, as the setup step requires), and the Cases form
+  and the case editor show them as **Grader requirements**. They are saved under
+  `metadata_json.validation_requirements`, which a later edit of anything else keeps:
+  the server merges metadata key by key, and an empty list clears only that key.
+- **One check per behaviour.** Per-step progress is the share of checks passing
+  ([ADR-0076](adr/0076-per-step-reward.md)), so one all-or-nothing command shows every
+  step as 0 or 1. The assistant is asked for 3 to 10 checks, ordered from the most basic
+  to the most demanding, so partial work reads as partial.
+
+A check written this way is code in one line, and it brings its own braces —
+`d={'a': 1}`, an awk program, a JS object. Only `{workspace}` and `{run_id}` are the
+lab's placeholders (`validation.render_command`); every other brace reaches the shell
+as written, and `{{`/`}}` still mean one brace. Rendering used to go through
+`str.format`, which read `{'a': 1}` as a placeholder and failed every run of the case
+with `KeyError`.
+
+Cases drafted before this rule may still grade with the agent's tests:
+`walletsystem-concurrent-deposits` runs `pytest {workspace}/test_wallet_system.py`.
+Rewrite its checks before using it in an experiment.
 
 ## Frontend cases — graded in a real browser
 

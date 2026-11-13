@@ -542,6 +542,11 @@ class CaseDraftResponse(BaseModel):
     subject: str
     instruction: str
     validation_commands: list[str] = Field(default_factory=list)
+    # What those commands import beyond the runner's own packages, pinned. The
+    # checks run offline in a clean container, so a draft that needs numpy and
+    # does not say so grades nothing (ADR-0071). Saved under
+    # `metadata_json["validation_requirements"]`.
+    validation_requirements: list[str] = Field(default_factory=list)
     max_steps: int = 10
     # The rest of the case's shape. Optional because the subject-validation
     # wizard only needs subject/instruction/commands and fills the remaining

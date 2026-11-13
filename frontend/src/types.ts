@@ -25,6 +25,18 @@ export type CaseRecord = {
   validation_commands?: string[];
   max_steps?: number;
   origin_target_id?: string;
+  /** Case data outside the form: grader requirements, starter dir, SWE data. */
+  metadata_json?: CaseMetadata;
+};
+
+/**
+ * The keys of `metadata_json` the browser reads or writes. The server merges an
+ * edit into what is stored, so a key left out is kept and an empty one removed.
+ */
+export type CaseMetadata = {
+  /** Pinned pip requirements the checks import (ADR-0071). */
+  validation_requirements?: string[];
+  [key: string]: unknown;
 };
 
 export type CaseCreatePayload = {
@@ -41,6 +53,7 @@ export type CaseCreatePayload = {
   validation_commands: string[];
   max_steps: number;
   origin_target_id?: string;
+  metadata_json?: CaseMetadata;
 };
 
 export interface CaseDraftRequest {
@@ -62,6 +75,8 @@ export interface CaseDraftResponse {
   subject: string;
   instruction: string;
   validation_commands: string[];
+  /** Pinned pip packages those commands import; installed before they run. */
+  validation_requirements?: string[];
   max_steps: number;
   /** Commands the model wrote that the lab would not run, with the reason. */
   dropped_commands: DroppedCommand[];

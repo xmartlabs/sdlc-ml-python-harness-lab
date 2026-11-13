@@ -329,3 +329,93 @@ def test_a_case_with_validation_requirements_reads_back_through_the_api_schema()
         metadata_json={"validation_requirements": ["pandas==3.1.0"]},
     )
     assert record.metadata_json["validation_requirements"] == ["pandas==3.1.0"]
+
+
+def test_editing_a_case_keeps_what_its_metadata_holds(session):
+    """The case editor sends no `metadata_json`; an edit replaced it with `{}`.
+
+    That silently dropped `validation_requirements` (ADR-0071), `starter_dir`
+    and a SWE case's instance data the first time anyone fixed a typo.
+    """
+    service = CaseService(session)
+    service.create_case(
+        CaseCreate(
+            case_id="graded-case",
+            name="Graded case",
+            type=CaseType.build_from_scratch,
+            prompt_variants={"default": "Build it."},
+            metadata_json={
+                "validation_requirements": ["numpy==2.4.6"],
+                "starter_dir": "benchmarks/x/starter",
+            },
+        )
+    )
+
+    updated = service.update_case(
+        "graded-case",
+        CaseCreate(
+            case_id="graded-case",
+            name="Graded case, renamed",
+            type=CaseType.build_from_scratch,
+            prompt_variants={"default": "Build it."},
+        ),
+    )
+
+    assert updated.name == "Graded case, renamed"
+    assert updated.metadata_json == {
+        "validation_requirements": ["numpy==2.4.6"],
+        "starter_dir": "benchmarks/x/starter",
+    }
+
+
+def test_an_edit_that_sends_requirements_replaces_only_those(session):
+    service = CaseService(session)
+    service.create_case(
+        CaseCreate(
+            case_id="graded-case",
+            name="Graded case",
+            type=CaseType.build_from_scratch,
+            metadata_json={
+                "validation_requirements": ["numpy==2.4.6"],
+                "starter_dir": "benchmarks/x/starter",
+            },
+        )
+    )
+
+    updated = service.update_case(
+        "graded-case",
+        CaseCreate(
+            case_id="graded-case",
+            name="Graded case",
+            type=CaseType.build_from_scratch,
+            metadata_json={"validation_requirements": ["pandas==3.1.0"]},
+        ),
+    )
+    assert updated.metadata_json == {
+        "validation_requirements": ["pandas==3.1.0"],
+        "starter_dir": "benchmarks/x/starter",
+    }
+
+    cleared = service.update_case(
+        "graded-case",
+        CaseCreate(
+            case_id="graded-case",
+            name="Graded case",
+            type=CaseType.build_from_scratch,
+            metadata_json={"validation_requirements": []},
+        ),
+    )
+    assert cleared.metadata_json == {"starter_dir": "benchmarks/x/starter"}
+
+
+def test_a_new_case_does_not_store_an_empty_requirements_list(session):
+    """The Cases form always sends the key; empty means "none", not a value."""
+    case = CaseService(session).create_case(
+        CaseCreate(
+            case_id="plain-case",
+            name="Plain case",
+            type=CaseType.single_prompt,
+            metadata_json={"validation_requirements": []},
+        )
+    )
+    assert case.metadata_json == {}
