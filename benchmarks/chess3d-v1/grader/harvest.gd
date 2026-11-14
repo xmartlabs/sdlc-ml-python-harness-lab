@@ -320,6 +320,9 @@ func _scene() -> void:
 	var scene: Node = packed.instantiate()
 	root.add_child(scene)
 	current_scene = scene
+	# From here a crash is the game's: the lab's display stack came up.
+	_out["instanced"] = true
+	_save()
 	await _frames(15)
 	var size := root.get_visible_rect().size
 	_out["viewport"] = [size.x, size.y]

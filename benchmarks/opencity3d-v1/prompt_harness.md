@@ -93,6 +93,11 @@ Footprints with an area under 4 m² may be skipped; every other building must be
 - **Renderer:** `project.godot` must set
   `rendering/renderer/rendering_method="gl_compatibility"`, because the software
   renderer only supports Compatibility. A `run/main_scene` must be set.
+- **Sky on the software renderer:** a `Sky` used for ambient light or reflections
+  (the defaults when the background is a sky) crashes Godot 4.7 under `godot-render`
+  most of the time. Show a sky as the background if you like. Set the environment's
+  `ambient_light_source` to `Color` and its `reflected_light_source` to `Disabled`.
+  A crash in the rendered game fails every check of the scene.
 - **Physics:** keep the default 60 physics ticks per second. The game must behave
   the same when run with `--fixed-fps 60`.
 - **Load scripts by path.** Use `preload("res://…")`, not `class_name`, for one

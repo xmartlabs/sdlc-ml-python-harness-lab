@@ -876,7 +876,7 @@ def harvest(workspace: Path, run_id: str) -> int:
                 "--phase",
                 "logic",
             ],
-            420,
+            300,
         )
         meta["logic"] = {"exit": code, "s": round(secs, 1)}
         (grade / "logic.log").write_text(log)
@@ -903,11 +903,18 @@ def harvest(workspace: Path, run_id: str) -> int:
             f"--map={heldout_path}",
         ]
         attempts = []
+        budget = 420.0  # import 120 + logic 300 + this stays under the outer 900 s
         for _attempt in range(3):
-            code, log, secs = _godot(scene_argv, 240)
+            code, log, secs = _godot(scene_argv, max(30, int(budget)))
+            budget -= secs
             attempts.append({"exit": code, "s": round(secs, 1)})
             answered = _read_json(grade / "scene.json")
-            if code == 0 or answered.get("instanced") or code in (124, 127):
+            if (
+                code == 0
+                or answered.get("instanced")
+                or code in (124, 127)
+                or budget < 60
+            ):
                 break
         meta["scene"] = {"exit": code, "s": round(sum(a["s"] for a in attempts), 1)}
         meta["scene_attempts"] = attempts

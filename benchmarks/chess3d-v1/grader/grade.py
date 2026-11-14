@@ -352,6 +352,14 @@ def _godot(argv: list[str], timeout: int) -> tuple[int, str]:
         return 124, text[-20000:]
 
 
+def _instanced(path: Path) -> bool:
+    """Whether a rendered pass got as far as instancing the agent's scene."""
+    try:
+        return bool(json.loads(path.read_text()).get("instanced"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def harvest(workspace: Path, run_id: str) -> int:
     grade = workspace / GRADE_DIR
     if grade.exists():
@@ -406,27 +414,36 @@ def harvest(workspace: Path, run_id: str) -> int:
         meta["logic"] = {"exit": code}
         (grade / "logic.log").write_text(log)
 
-        code, log = _godot(
-            [
-                "godot-render",
-                "--path",
-                str(copy),
-                "--resolution",
-                "1280x720",
-                *script,
-                "--",
-                "--probe",
-                str(grade / "probe.json"),
-                "--out",
-                str(grade / "scene.json"),
-                "--phase",
-                "scene",
-                "--shots",
-                str(shots),
-            ],
-            300,
-        )
-        meta["scene"] = {"exit": code}
+        # The rendered pass is retried only when Godot died before the
+        # agent's scene was instanced: software OpenGL on a virtual display
+        # occasionally segfaults at start-up, and that is the lab's display
+        # stack, not the game. A crash once the scene runs is the game's.
+        attempts = []
+        for _attempt in range(3):
+            code, log = _godot(
+                [
+                    "godot-render",
+                    "--path",
+                    str(copy),
+                    "--resolution",
+                    "1280x720",
+                    *script,
+                    "--",
+                    "--probe",
+                    str(grade / "probe.json"),
+                    "--out",
+                    str(grade / "scene.json"),
+                    "--phase",
+                    "scene",
+                    "--shots",
+                    str(shots),
+                ],
+                300,
+            )
+            attempts.append(code)
+            if code in (0, 124, 127) or _instanced(grade / "scene.json"):
+                break
+        meta["scene"] = {"exit": code, "attempts": attempts}
         (grade / "scene.log").write_text(log)
     (grade / "meta.json").write_text(json.dumps(meta, indent=1))
     print(

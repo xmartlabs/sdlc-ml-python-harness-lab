@@ -53,9 +53,10 @@ the right way (`steers_left`, `steers_right`); the barriers hold (`wall_blocks`)
 same inputs give the same race (`determinism`); checkpoints count only in order
 (`checkpoint_order`); a full lap counts once (`lap_counts`); a corner cut past a
 checkpoint is not counted (`cut_not_counted`); driving backwards is flagged
-(`wrong_way`); rivals finish a lap of the unseen track (`rivals_finish_heldout`) and
-never pass through another car (`rivals_no_overlap`); the keyboard drives the car in
-the scene (`keyboard_drive`).
+(`wrong_way`); rivals finish a lap of the unseen track (`rivals_finish_heldout`),
+drive around a car stopped in the road instead of shoving it aside
+(`rivals_avoid_stopped`), and never pass through another car (`rivals_no_overlap`);
+the keyboard drives the car in the scene (`keyboard_drive`).
 
 ## Hard constraints
 
@@ -68,6 +69,11 @@ the scene (`keyboard_drive`).
 - **Renderer:** `project.godot` must set
   `rendering/renderer/rendering_method="gl_compatibility"` (the software renderer only
   supports Compatibility). A `run/main_scene` must be set.
+- **Sky on the software renderer:** a `Sky` used for ambient light or reflections
+  (the defaults when the background is a sky) crashes Godot 4.7 under `godot-render`
+  part of the time. Show a sky as the background if you like, but set the
+  environment's `ambient_light_source` to `Color` and its `reflected_light_source` to
+  `Disabled`. A crash in the rendered game fails every check of the scene.
 - **Physics at 60 ticks per second** (`physics/common/physics_ticks_per_second=60`,
   the default). The grader runs Godot with `--fixed-fps 60`.
 
@@ -118,7 +124,7 @@ holds the whole race — the single source of truth the scene renders. It must p
 | `step(ticks: int) -> void` | Advance the simulation exactly `ticks` physics ticks (1/60 s each), for every car. It may return when done or be a coroutine (`await Race.step(n)`); the grader awaits it either way. Between calls nothing moves, and a car keeps its velocity across calls: `step(10)` and ten `step(1)` give the same result. |
 | `car_state() -> Dictionary` | The player's car, see below. |
 | `respawn() -> void` | Put the player's car upright, at rest, on the centreline at the last checkpoint passed (the start if none), facing the racing direction. Race progress (lap, checkpoint, lap times) is kept. |
-| `add_rivals(count: int) -> void` | Add `count` AI cars on the grid behind the start, on the road, apart from each other and from the player. They drive the current track by themselves whenever the race advances. |
+| `add_rivals(count: int) -> void` | Add `count` AI cars on the grid behind the start, on the road, apart from each other and from the player. They drive the current track by themselves whenever the race advances, steer around slower or stopped cars (never shoving them aside), and get themselves unstuck. |
 | `rival_states() -> Array` | One `car_state()`-shaped dictionary per rival, in the order added. |
 | `race_time() -> float` | Seconds of simulated time since `reset()` or `load_track()`: ticks / 60, never wall-clock time. |
 

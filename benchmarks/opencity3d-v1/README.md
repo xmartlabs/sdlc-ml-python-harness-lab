@@ -88,11 +88,31 @@ as `task.yaml`.
 
 | Workspace | run id | Checks (44) | Notes |
 |---|---|---|---|
-| empty | TBD | TBD | the harvest fails as the entry-point check |
-| weaker build | TBD | TBD | bounding-box buildings, `height` tag ignored, player walks through walls, traffic in straight lines, no minimap |
-| reference | TBD | TBD | kept outside the repository, in `data/reference/opencity3d-v1/` (git-ignored) |
+| empty | `r1`, `run-7f3a` | 0, 0 | the harvest fails as the entry-point check; every check exits 1, none inconclusive |
+| weaker build | `r1` | 31 | fails `building_heights`, `footprints_placed`, `roof_raycast`, `street_raycast`, `footprint_shape`, `collision_geometry`, `roofs_from_above`, `walls_block`, `drive_blocked`, `traffic_on_roads`, `traffic_not_in_buildings`, `minimap_marker`, `minimap` |
+| weaker build | `r2` | 29 | the same, plus `walk` and `sprint`: its walking start fell inside a bounding box, so the player stood on a roof |
+| reference | `r1`, `r2`, `run-7f3a` | 44, 44, 44 | kept outside the repository, in `data/reference/opencity3d-v1/` (git-ignored) |
 
-Harvest wall time: TBD.
+The weaker build is the reference with five plausible shortcuts. Buildings are the
+bounding boxes of their footprints, and the `height` tag is ignored. The player moves
+without collision, traffic drives in straight lines from where it spawned, and there
+is no minimap.
+
+A full harvest takes about 20–25 s: the API pass about 3 s at a fixed 60 Hz, and the
+rendered pass about 15 s. Each check takes well under a second. Reference frame time
+on the CPU renderer, with the whole shipped city and 8 traffic cars, was p95 18–40 ms
+when runs were sequential. It climbs past the 250 ms ceiling when several renders
+share the CPU, as in a parallel calibration, so `frame_time` is an observation
+(ADR-0073), not a performance claim.
+
+**The sky crash.** In Godot 4.7.2 under `godot-render` (Xvfb with llvmpipe), a `Sky`
+used for ambient light or reflections crashes the engine (SIGSEGV) in about 3 of 4
+starts. That includes a procedural sky on the defaults. As the background only, with
+ambient light from a colour and reflections disabled, the same sky never crashed in
+10 starts. The prompt states this, because a crash fails every scene check. The
+harvest retries the rendered pass, up to 3 attempts within its budget, only when the
+engine died before the agent's scene was instanced, since that is the lab's display
+stack. A crash after that is the game's.
 
 The tamper guard passes only once the grader is committed (ADR-0071).
 

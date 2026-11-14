@@ -785,6 +785,14 @@ def _godot(argv: list[str], timeout: int) -> tuple[int, str]:
         return 124, text[-20000:]
 
 
+def _instanced(path: Path) -> bool:
+    """Whether a rendered pass got as far as instancing the agent's scene."""
+    try:
+        return bool(json.loads(path.read_text()).get("instanced"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def harvest(workspace: Path, run_id: str) -> int:
     grade = workspace / GRADE_DIR
     if grade.exists():
@@ -839,24 +847,31 @@ def harvest(workspace: Path, run_id: str) -> int:
         ]
         for phase, binary, extra, user, timeout in runs:
             started = _now()
-            code, log = _godot(
-                [
-                    *binary,
-                    "--fixed-fps",
-                    "60",
-                    "--path",
-                    str(copy),
-                    *extra,
-                    *script,
-                    *args,
-                    "--out",
-                    str(grade / f"{phase}.json"),
-                    "--phase",
-                    phase,
-                    *user,
-                ],
-                timeout,
-            )
+            # The rendered pass is retried only when Godot died before the
+            # agent's scene was instanced: software OpenGL on a virtual display
+            # occasionally segfaults at start-up, which is the lab's display
+            # stack, not the game. A crash once the scene runs is the game's.
+            for _attempt in range(3 if phase == "scene" else 1):
+                code, log = _godot(
+                    [
+                        *binary,
+                        "--fixed-fps",
+                        "60",
+                        "--path",
+                        str(copy),
+                        *extra,
+                        *script,
+                        *args,
+                        "--out",
+                        str(grade / f"{phase}.json"),
+                        "--phase",
+                        phase,
+                        *user,
+                    ],
+                    timeout,
+                )
+                if code in (0, 124, 127) or _instanced(grade / f"{phase}.json"):
+                    break
             meta[phase] = {"exit": code, "seconds": round(_now() - started, 1)}
             (grade / f"{phase}.log").write_text(log)
     (grade / "meta.json").write_text(json.dumps(meta, indent=1))

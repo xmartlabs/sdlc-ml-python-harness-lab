@@ -59,6 +59,11 @@ repetition, the fifty-move rule and insufficient material.
 - **Renderer:** `project.godot` must set
   `rendering/renderer/rendering_method="gl_compatibility"` (the software renderer only
   supports Compatibility). A `run/main_scene` must be set.
+- **Sky on the software renderer:** a `Sky` used for ambient light or reflections
+  (the defaults when the background is a sky) crashes Godot 4.7 under `godot-render`
+  part of the time. Show a sky as the background if you like, but set the
+  environment's `ambient_light_source` to `Color` and its `reflected_light_source` to
+  `Disabled`. A crash in the rendered game fails every check of the scene.
 - **Pieces may be built from primitive meshes** (cylinders, spheres, boxes); they must
   be distinguishable by shape and colour.
 

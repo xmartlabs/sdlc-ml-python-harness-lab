@@ -71,14 +71,31 @@ hangs.
 
 ## Calibration
 
-To be measured in the hardened validation lane (no network, every capability
-dropped, 4 GB of memory):
+Measured in the hardened validation lane (no network, every capability dropped,
+4 GB of memory, the grader mounted read-only), with run ids `run-7f3a` and `run-c19e`
+for every build. The reference was also checked on `run-0001` and `run-0002`, and the
+held-out rival race alone on eight seeds:
 
 | Workspace | Checks (39) | Notes |
 |---|---|---|
-| empty | TBD | the harvest fails as the entry-point check |
-| weaker build | TBD | drives and counts laps; no gate ordering or cut detection, no wrong way, no respawn, rivals that follow the centreline blindly |
-| reference | TBD | kept outside the repository, in `data/reference/racing3d-v1/` (git-ignored) |
+| empty | 0 | the harvest fails as the entry-point check; every check fails (exit 1), none is unmeasured |
+| weaker build | 32 | fails `determinism`, `cut_not_counted`, `wrong_way`, `respawn`, `upside_down`, `keyboard_reset`, `rivals_avoid_stopped` |
+| reference | 39 | on all four run ids; kept outside the repository, in `data/reference/racing3d-v1/` (git-ignored) |
+
+The weaker build is a plausible mid-tier result:
+- it never rebuilds the car on `reset()`;
+- it counts checkpoints in any order;
+- it has no wrong-way or upside-down flags;
+- `respawn()` does nothing;
+- its rivals drive the centreline at a fixed speed and shove the stopped car aside.
+
+It still drives, laps and times correctly on an honest lap, which is why
+`checkpoint_order` and `lap_counts` pass for it, while `cut_not_counted` catches the
+missing ordering rule. A second harvest of the same run id gives byte-identical
+answers.
+
+A full harvest takes about 20 s alone, and 30–40 s with eight calibrations running
+in parallel, so validation takes under a minute per run.
 
 The tamper guard passes only once the grader is committed (ADR-0071).
 
