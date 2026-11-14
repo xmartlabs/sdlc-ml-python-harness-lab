@@ -25,6 +25,7 @@ from harness_lab_app import llm_transport, run_failures
 from harness_lab_app.audit_service import AuditService
 from harness_lab_app.case_profile import (
     CaseProfileError,
+    agent_hidden_for,
     play_command_for,
     runner_image_for,
     sandbox_image_for,
@@ -169,6 +170,25 @@ def _case_prompt_text(case: Case, prompt_variant: str) -> str:
     return case.prompt_variants.get(prompt_variant, "")
 
 
+def _phase_prompts_for_variant(case: Case, prompt_variant: str) -> list[str]:
+    """A case's later-step prompts, carrying the harness when the run's variant does.
+
+    Each step is a fresh agent session, so the harness preamble that opens the
+    ``harness`` variant's step 1 would otherwise govern only the first phase of
+    a phased case and leave every later phase to the bare task (ADR-0079). The
+    preamble is the same file ``make prompts`` builds that variant from, so the
+    two cannot drift.
+    """
+    phases = list(case.step_prompts)
+    if not phases or prompt_variant != "harness":
+        return phases
+    preamble_path = get_settings().repo_root / "benchmarks" / "_harness_preamble.md"
+    if not preamble_path.is_file():
+        return phases
+    preamble = preamble_path.read_text()
+    return [f"{preamble}\n{phase}" for phase in phases]
+
+
 def _stage_harness_adapters(
     run_id: str, harness_source: object, mask: str
 ) -> list[str]:
@@ -302,12 +322,14 @@ def _write_case_spec(
             "base_commit": case.base_commit or "",
             "prompt_variant": prompt_variant,
             "prompt": _case_prompt_text(case, prompt_variant),
-            "step_prompts": list(case.step_prompts),
+            "step_prompts": _phase_prompts_for_variant(case, prompt_variant),
             "max_steps": case.max_steps,
             "constraints": list(case.constraints),
             "success_criteria": dict(case.success_criteria),
             # The starter files a bug-fix case begins from (ADR-0068).
             "starter_dir": meta.get("starter_dir", ""),
+            # What the prompt names as the entry point; main.py when unset.
+            "entry_point": meta.get("entry_point", ""),
         }
     if target:
         # An external target repository (ADR-0029). Carried alongside the case
@@ -714,19 +736,22 @@ def _watchdog_failure(outcome: StreamOutcome, settings: Any, tail: str) -> str:
     return f"Run timed out after {settings.run_timeout_seconds}s"
 
 
-def _case_runner_image(session: Session, case_id: str) -> str:
-    """The image a case's agent runs in: its own (ADR-0078), or ``""``.
+def _case_agent_machine(session: Session, case_id: str) -> tuple[str, list[str]]:
+    """The image a case's agent runs in and the grading it must not read.
 
-    A case naming an image the lab refuses fails the run here, before a
-    container starts, with the reason — never a silent fall back to the shared
-    image, which would grade a Godot case in a runner that has no Godot.
+    The image is the case's own (ADR-0078) or ``""``; the hidden paths are the
+    case's ``agent_hidden`` (ADR-0079), to which the executor adds the lab-wide
+    calibration references. A case naming something the lab refuses fails the
+    run here, before a container starts, with the reason — never a silent fall
+    back, which would grade a Godot case in a runner that has no Godot, or let
+    an agent read the grader it was told was hidden.
     """
     try:
         case = CaseService(session).get_case(case_id)
     except ValueError:
-        return ""
+        return "", []
     try:
-        return runner_image_for(case)
+        return runner_image_for(case), agent_hidden_for(case)
     except CaseProfileError as exc:
         raise RuntimeError(f"Case {case_id}: {exc}") from exc
 
@@ -795,14 +820,18 @@ def _execute_run_body(
             # hides, so the worker — which is not masked — stages them where
             # the runner can still reach them.
             _stage_harness_adapters(run_id, config_payload.harness_source, mask)
-            # Like the mask: passed only when there is something to pass, so a
-            # run of a case on the shared image reaches the executor unchanged.
+            # The mask and the image are passed only when there is something to
+            # pass; `hidden` always is, because the agent's container is the one
+            # container the calibration references must never reach.
             options: dict[str, Any] = {}
             if mask != GOVERNANCE_MASK_NONE:
                 options["governance_mask"] = mask
-            image = _case_runner_image(session, config_payload.case_id)
+            image, hidden = _case_agent_machine(session, config_payload.case_id)
             if image:
                 options["image"] = image
+            # Always passed for the agent's container — even empty, the lab's
+            # calibration references are masked out of it (ADR-0079).
+            options["hidden"] = hidden
             handle = executor.start(run_id, command, **options)
             outcome = _stream_run(
                 session,

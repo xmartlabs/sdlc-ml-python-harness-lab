@@ -13,15 +13,19 @@ Three keys, authored in ``task.yaml`` and carried in ``Case.metadata_json``:
   and desktop), so a game can be *played*, not only graded.
 - ``play_command`` — what the desktop sandbox launches on start, so "Play" is
   one click and not a terminal the person has to know what to type into.
+- ``agent_hidden`` — the case's own grading material (its grader, rubric and
+  notes) masked out of the agent's container (ADR-0079). The validation lane
+  still reads them.
 
 Every value is checked here, because each one ends up in a Docker call: an image
-name is restricted to the lab's own local images.
+name is restricted to the lab's own local images, a hidden path to the case's
+own directory.
 
-There is deliberately no "hidden path" key. A workspace without a repository of
-its own is a directory of the lab's tree, and the runner needs the lab's ``.git``
-to snapshot each step, so anything committed is one ``git show`` away from the
-agent however its working-tree copy is masked. Held-out data is generated per
-run by the grader instead (seeded with the run id), which nothing can leak.
+A hidden path stops *reading*, not a determined agent. A workspace without a
+repository of its own is a directory of the lab's tree, and the runner needs the
+lab's ``.git`` to snapshot each step, so anything committed is one ``git show``
+away however its working-tree copy is masked. Held-out data is therefore
+generated per run by the grader (seeded with the run id), never stored.
 """
 
 from __future__ import annotations
@@ -91,6 +95,43 @@ def play_command_for(case: Any) -> str:
     return value
 
 
+def _hidden_path(raw: str, case_id: str) -> str:
+    """A path under ``benchmarks/<case_id>/``, refused when it could reach outside."""
+    text = str(raw).strip()
+    parts = [part for part in text.split("/") if part]
+    if (
+        not parts
+        or text.startswith("/")
+        or ".." in parts
+        or parts[:2] != ["benchmarks", case_id]
+        or len(parts) < 3
+    ):
+        raise CaseProfileError(
+            f"agent_hidden path '{text}' must be under benchmarks/{case_id}/."
+        )
+    # A trailing slash marks a directory, which the executor masks with tmpfs.
+    return "/".join(parts) + ("/" if text.endswith("/") else "")
+
+
+def agent_hidden_for(case: Any) -> list[str]:
+    """The case's own paths the agent's container must not read, validated."""
+    meta = _meta(case)
+    raw = meta.get("agent_hidden")
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        raise CaseProfileError("agent_hidden must be a list of paths.")
+    case_id = str(
+        getattr(case, "case_id", None)
+        or meta.get("task_id")
+        or meta.get("case_id")
+        or ""
+    )
+    if not case_id:
+        raise CaseProfileError("agent_hidden needs the case id to check its paths.")
+    return [_hidden_path(item, case_id) for item in raw]
+
+
 def profile_from_task(raw: dict[str, Any]) -> dict[str, Any]:
     """The metadata keys a ``task.yaml`` declares, validated; absent keys omitted.
 
@@ -105,7 +146,23 @@ def profile_from_task(raw: dict[str, Any]) -> dict[str, Any]:
     play = play_command_for(raw)
     if play:
         profile["play_command"] = play
+    hidden = agent_hidden_for(raw)
+    if hidden:
+        profile["agent_hidden"] = hidden
+    entry = str(raw.get("entry_point") or "").strip()
+    if entry:
+        if entry.startswith("/") or ".." in entry.split("/") or "\n" in entry:
+            raise CaseProfileError(
+                f"entry_point '{entry}' must be a path inside the workspace."
+            )
+        profile["entry_point"] = entry
     return profile
 
 
-PROFILE_KEYS = ("runner_image", "sandbox_image", "play_command")
+PROFILE_KEYS = (
+    "runner_image",
+    "sandbox_image",
+    "play_command",
+    "agent_hidden",
+    "entry_point",
+)

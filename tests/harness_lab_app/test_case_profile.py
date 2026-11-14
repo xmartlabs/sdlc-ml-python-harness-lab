@@ -174,7 +174,9 @@ def test_the_shipped_3d_case_declares_its_own_machine() -> None:
     # Every other case keeps the shared images: the engine is opt-in.
     for task in sorted((REPO_ROOT / "benchmarks").glob("*/task.yaml")):
         if task.parent.name != "chess3d-v1":
-            assert profile_from_task(yaml.safe_load(task.read_text())) == {}, task
+            other = profile_from_task(yaml.safe_load(task.read_text()))
+            assert "runner_image" not in other, task
+            assert "sandbox_image" not in other, task
 
 
 # --- The executor ---------------------------------------------------------------

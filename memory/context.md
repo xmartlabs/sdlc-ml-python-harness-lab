@@ -204,17 +204,14 @@ versions + rolled `harness_hash`), `model_condition` (temp/context/alias),
 
 ## Open threads / next steps
 
-- **3D game lane (ADR-0078, 2026-11-13, uncommitted).** A case may name its own
-  `runner_image` / `sandbox_image` / `play_command` (`case_profile.py`); `make images-3d`
-  builds `harness-lab-runner-godot` + `harness-lab-sandbox-godot` (Godot 4.7.2, Xvfb,
-  llvmpipe); the run page gains a **Play** tab (noVNC desktop that starts the game).
-  First case `chess3d-v1`: GDScript harvester + 39 python-chess checks on run-seeded
-  probes, calibrated through the real worker in the hardened lane (empty 0/39, weaker
-  24/39, reference 39/39; reference in git-ignored `data/reference/chess3d-v1/`). Its
-  tamper guard goes green once the grader is committed. Next: a real frontier run
-  (and a small model) on `chess3d-v1`; then the racing case (track by seed, recorded
-  inputs, AI rivals on a held-out track) and the open-city case (OpenStreetMap
-  extract, held-out neighbourhood by seed, building-height raycasts). Guide:
+- **3D game lane (ADR-0078, ADR-0079, 2026-11-13).** A case may name its own
+  `runner_image` / `sandbox_image` / `play_command` / `agent_hidden`
+  (`case_profile.py`); `make images-3d` builds the Godot images; the run page has a
+  **Play** tab. `chess3d-v1` is paced in five `phases` (one step each, the run cannot
+  end itself before the last) and its grading material is masked out of the agent's
+  container. First frontier run (K-001, before phases): 41/41 in one step, 59 min,
+  US$10.4, no skills used (variant `default`). Next: `default` vs `harness` on a
+  frontier and a small model; then the racing and open-city cases. Guide:
   `docs/guide-3d-game-cases.md`.
 
 - **Per-step reward (ADR-0076, 2026-11-12, uncommitted).** RL-inspired: the runner

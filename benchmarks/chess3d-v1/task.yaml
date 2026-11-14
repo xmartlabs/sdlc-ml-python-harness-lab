@@ -24,6 +24,28 @@ complexity: frontier
 runner_image: harness-lab-runner-godot:latest
 sandbox_image: harness-lab-sandbox-godot:latest
 play_command: "godot --path /work -- --ai=black"
+# Named in the prompt's location header instead of the pygame default main.py.
+entry_point: project.godot
+
+# The work is paced in five phases, one step each (ADR-0079). Phase 1 is the
+# case prompt itself; these drive steps 2-5. Every phase is stored with the
+# prompt's contract appended, and under the `harness` variant with the
+# governance preamble prepended, because each step is a fresh agent session.
+# The run cannot end itself before the last phase. Per-step reward then shows
+# which milestone each model reached.
+phases:
+  - benchmarks/chess3d-v1/phases/phase-2-notation-and-game-end.md
+  - benchmarks/chess3d-v1/phases/phase-3-board-and-mouse.md
+  - benchmarks/chess3d-v1/phases/phase-4-computer-opponent.md
+  - benchmarks/chess3d-v1/phases/phase-5-finish.md
+
+# What grades the agent stays out of its container (ADR-0079): the grader, the
+# rubric and the case notes. The validation lane still reads them. The lab's
+# calibration references (data/reference/) are masked for every case.
+agent_hidden:
+  - benchmarks/chess3d-v1/grader/
+  - benchmarks/chess3d-v1/scoring.md
+  - benchmarks/chess3d-v1/README.md
 
 validation: objective
 validation_note: >

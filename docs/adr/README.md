@@ -107,6 +107,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0076 — Each step earns a reward, and the harness is pruned by ablation](0076-per-step-reward.md)
 - [0077 — A drafted case writes its own grade, and says what it imports](0077-a-drafted-case-writes-its-own-grade.md)
 - [0078 — A case can name its own machine, and its game can be played](0078-a-case-can-name-its-own-machine.md)
+- [0079 — A hard case is paced in phases, and its agent cannot read its grade](0079-a-hard-case-is-paced-in-phases-and-cannot-read-its-grade.md)
 
 ## Why ADRs exist
 

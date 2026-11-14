@@ -17,6 +17,9 @@ Three optional keys in `task.yaml`, stored in the case's metadata:
 | `runner_image` | The image the agent **and** the grader run in. Only the lab's own images (`harness-lab-<name>[:tag]`) are accepted. |
 | `sandbox_image` | The image the Terminal, Desktop and Play tabs open in. |
 | `play_command` | What the **Play** tab starts on its desktop, from the workspace copy at `/work`. One line. |
+| `entry_point` | What the prompt names as the entry point (`project.godot`); `main.py` when unset. |
+| `phases` | One prompt file per phase after the first; each runs as its own step ([ADR-0079](adr/0079-a-hard-case-is-paced-in-phases-and-cannot-read-its-grade.md)). |
+| `agent_hidden` | The case's grader, rubric and notes, masked out of the agent's container; validation still reads them. |
 
 A case without these keys runs exactly as before. The agent and its grader share
 one image on purpose: an agent that cannot launch the engine cannot test its own
@@ -82,6 +85,37 @@ Three choices make this honest:
 Per-step reward points each command at each step's snapshot by rewriting the
 workspace path. Because the answers live inside the workspace, every snapshot gets
 its own harvest. This costs about a minute per step.
+
+## Pacing: one phase per step
+
+A frontier game is too much for one prompt to measure. A strong model builds it in
+one long session and a weak one fails somewhere inside it, and in both cases the
+per-step curve has a single point. A phased case gives the agent the whole contract
+up front, so it knows the destination, then asks for one milestone per step:
+
+- Phase 1 is the case prompt and ends with *stop when this phase is done*. Each later
+  phase is a file under `phases/`.
+- Every phase is stored with the contract appended, because each step is a fresh
+  agent session. Under the `harness` variant it also carries the governance preamble,
+  so the treatment applies to every phase, not only the first.
+- The run cannot end itself before the last phase. A step that changes nothing still
+  stops it.
+- Order the phases like the rubric's ladder. The per-step reward then tells you which
+  milestone each model reached and what each phase cost.
+
+## What the agent cannot read
+
+The agent's container never sees:
+
+- `data/reference/`: every case's calibration solution;
+- the case's `agent_hidden` paths: its grader, rubric and notes.
+
+The validation lane sees both. Two things this does not cover:
+
+- In a `lab_root` run, `memory/` and `docs/` are the treatment and stay readable, so
+  never write how a case is graded there.
+- A committed file is readable with `git show HEAD:…`, which is why probes are
+  generated per run.
 
 ## Playing what a run built
 

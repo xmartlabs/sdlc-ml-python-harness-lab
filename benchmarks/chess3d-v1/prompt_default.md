@@ -86,9 +86,36 @@ colour.
 - Running the game with `godot --path {workspace} -- --ai=black` plays against the
   computer as white.
 
-## Done means
+## How the work is paced: five phases
 
-The game opens, looks like chess, and a person can play a full game against the
-computer with the mouse; and every rule above holds exactly. Test your own work —
-write your own GDScript test scripts and run them with `godot --headless --script`,
-and check what is on screen with `godot-render`.
+The whole contract above is the destination. You build it in **five phases, one per
+step**; each step ends when its phase is done and verified, and the next phase is
+given to you in the next step. Everything is graded at every step, so a phase done
+well is visible on its own.
+
+1. **Rules core** — this step.
+2. Notation and the end of the game.
+3. The 3D board and the mouse.
+4. The computer opponent.
+5. Finish: play it end to end and polish.
+
+Test your own work as you go: write your own GDScript test scripts and run them with
+`godot --headless --script`, and check what is on screen with `godot-render`.
+
+## Phase 1 of 5 — the rules core (do only this now)
+
+Create the Godot project (`project.godot` with the Compatibility renderer and the
+`Chess` autoload) and implement, in the `Chess` autoload:
+
+- `load_fen`, `fen`, `legal_moves`, `play` (UCI input is enough for now), `undo`,
+  `perft`, `turn`, `piece_at`, and the `position_changed` signal;
+- every rule of movement exactly: castling (never through, into or out of check),
+  en passant (including the one that would expose the king), pins, double check,
+  promotion to all four pieces;
+- the FEN fields exactly, including the halfmove and fullmove clocks.
+
+Verify with perft from the starting position (depth 1–4: 20, 400, 8902, 197281) and
+from at least one position that exercises castling, en passant and promotion.
+
+**Stop when phase 1 is done and verified.** Do not build the scene or the AI yet;
+state what you built and how you verified it.

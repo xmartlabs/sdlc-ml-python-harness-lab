@@ -5,6 +5,24 @@ The first case of the 3D game lane (ADR-0078): build a playable 3D chess game in
 and a computer opponent. It is meant for frontier models. Smaller models are expected
 to stop partway up the ladder, and the 39 checks say how far each one got.
 
+## How it is paced
+
+Five phases, one step each (ADR-0079):
+
+1. Rules core.
+2. Notation and the end of the game.
+3. The 3D board and the mouse.
+4. The computer opponent.
+5. Finish: play it end to end.
+
+Phase 1 is `prompt_default.md`. Phases 2–5 are in `phases/` and are stored with the
+prompt's contract appended. The run cannot end itself before phase 5, so per-step
+reward shows which milestone a model reached.
+
+The first frontier run (`K-001`, before phases) built the whole game in one 59-minute
+session and scored 41/41. That showed the case is solvable; it did not show where a
+weaker model would stop.
+
 ## How it is graded
 
 `grader/grade.py` runs in two parts. The first part takes no score of its own:
