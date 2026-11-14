@@ -1,6 +1,6 @@
 # opencity3d-v1
 
-The second case of the 3D game lane (ADR-0078): build an **open-world 3D city game in
+The third case of the 3D game lane (ADR-0078): build an **open-world 3D city game in
 Godot 4.7, generated at runtime from real map data**. The data is an OpenStreetMap
 extract of Montevideo's Ciudad Vieja. Buildings are extruded from their footprints to
 their heights, and streets are laid out from road centrelines. The player walks the

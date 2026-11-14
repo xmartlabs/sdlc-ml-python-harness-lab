@@ -420,7 +420,6 @@ def _sandbox_env(
         / f"sandbox-{kind}",
     )
     monkeypatch.setattr(tasks, "get_settings", lambda: settings)
-    monkeypatch.setattr(tasks, "_sandbox_profile", lambda _run_id: profile)
     calls: dict[str, Any] = {}
 
     def run(**kwargs: Any) -> _SandboxContainer:
@@ -432,16 +431,16 @@ def _sandbox_env(
             run=run, get=lambda name: (_ for _ in ()).throw(RuntimeError(name))
         )
     )
-    return client, calls
+    return client, calls, profile
 
 
 def test_play_opens_the_case_sandbox_and_starts_its_game(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, calls = _sandbox_env(
+    client, calls, profile = _sandbox_env(
         tmp_path, monkeypatch, (GODOT_SANDBOX, "godot --path /work")
     )
-    _name, port, url = tasks._launch_sandbox(client, "r1", "play")
+    _name, port, url = tasks._launch_sandbox(client, "r1", "play", profile)
     assert calls["image"] == GODOT_SANDBOX
     assert calls["environment"] == {
         "MODE": "desktop",
@@ -454,10 +453,10 @@ def test_play_opens_the_case_sandbox_and_starts_its_game(
 def test_desktop_and_terminal_open_in_the_case_image_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, calls = _sandbox_env(
+    client, calls, profile = _sandbox_env(
         tmp_path, monkeypatch, (GODOT_SANDBOX, "godot --path /work")
     )
-    tasks._launch_sandbox(client, "r1", "desktop")
+    tasks._launch_sandbox(client, "r1", "desktop", profile)
     assert calls["image"] == GODOT_SANDBOX
     # Only Play launches the game; Desktop is the plain desktop.
     assert calls["environment"] == {"MODE": "desktop"}
@@ -466,16 +465,16 @@ def test_desktop_and_terminal_open_in_the_case_image_too(
 def test_play_without_a_play_command_says_so(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, _calls = _sandbox_env(tmp_path, monkeypatch, ("", ""))
+    client, _calls, profile = _sandbox_env(tmp_path, monkeypatch, ("", ""))
     with pytest.raises(RuntimeError, match="no play_command"):
-        tasks._launch_sandbox(client, "r1", "play")
+        tasks._launch_sandbox(client, "r1", "play", profile)
 
 
 def test_a_case_without_a_sandbox_image_keeps_the_shared_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    client, calls = _sandbox_env(tmp_path, monkeypatch, ("", ""))
-    tasks._launch_sandbox(client, "r1", "terminal")
+    client, calls, profile = _sandbox_env(tmp_path, monkeypatch, ("", ""))
+    tasks._launch_sandbox(client, "r1", "terminal", profile)
     assert calls["image"] == "harness-lab-sandbox:latest"
     assert calls["environment"] == {"MODE": "terminal"}
 

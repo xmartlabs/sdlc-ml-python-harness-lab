@@ -2120,14 +2120,24 @@ def _sandbox_profile(run_id: str) -> tuple[str, str]:
         return sandbox_image_for(case), play_command_for(case)
 
 
-def _launch_sandbox(client: Any, run_id: str, kind: str) -> tuple[str, int, str]:
+def _launch_sandbox(
+    client: Any,
+    run_id: str,
+    kind: str,
+    profile: tuple[str, str] = ("", ""),
+) -> tuple[str, int, str]:
     """Copy the run's workspace and launch a sandbox container (worker-side).
 
     Returns (container_name, host_port, url). The bind mount uses the HOST path
     (docker-out-of-docker), and the port is docker-assigned then read back.
+
+    ``profile`` is the case's ``(sandbox_image, play_command)`` as
+    :func:`_sandbox_profile` resolved it; empty strings mean the shared image
+    and no game. Passed in rather than read here, so this stays a Docker-only
+    function that needs no database (ADR-0078).
     """
     settings = get_settings()
-    image, play_command = _sandbox_profile(run_id)
+    image, play_command = profile
     image = image or settings.sandbox_image
     if kind == "play" and not play_command:
         raise RuntimeError(
@@ -2199,10 +2209,11 @@ def start_sandbox(run_id: str, kind: str) -> None:
     with Session(engine) as session:
         service = SandboxService(session)
         try:
-            image = _sandbox_profile(run_id)[0] or settings.sandbox_image
+            profile = _sandbox_profile(run_id)
         except CaseProfileError as exc:
             service.mark_error(run_id, kind, str(exc))
             return
+        image = profile[0] or settings.sandbox_image
         try:
             client.images.get(image)
         except Exception:
@@ -2216,7 +2227,7 @@ def start_sandbox(run_id: str, kind: str) -> None:
             )
             return
         try:
-            name, port, url = _launch_sandbox(client, run_id, kind)
+            name, port, url = _launch_sandbox(client, run_id, kind, profile)
             service.mark_running(run_id, kind, name, port, url)
         except Exception as exc:
             service.mark_error(run_id, kind, repr(exc)[:800])

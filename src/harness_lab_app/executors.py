@@ -504,7 +504,7 @@ class SubprocessRunExecutor:
         governance_mask: str = GOVERNANCE_MASK_NONE,
         hardened: bool = False,
         phase: str = "",  # noqa: ARG002
-        image: str = "",  # noqa: ARG002 - the host lane has no image to choose
+        image: str = "",
         hidden: list[str] | None = None,  # noqa: ARG002 - nothing to mount over here
     ) -> RunHandle:
         # The grading masks are a container's: the host lane is the escape
@@ -515,6 +515,15 @@ class SubprocessRunExecutor:
             raise RuntimeError(
                 "Governance masking needs the docker backend: there is nothing "
                 "to mask the lab's own tree with on the host lane."
+            )
+        # A case's own image is its toolchain (ADR-0078): a Godot case run on
+        # the host would call an engine the host may not have, or grade against
+        # a different one. Refused, never silently run without it.
+        if image:
+            raise RuntimeError(
+                f"This case runs in its own image ({image}), which needs the "
+                "docker backend (HARNESS_LAB_EXECUTION_BACKEND=docker); the host "
+                "lane cannot provide it."
             )
         extra: dict[str, Any] = {}
         if hardened:

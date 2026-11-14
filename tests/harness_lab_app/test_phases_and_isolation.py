@@ -113,6 +113,38 @@ def test_reseeding_refreshes_the_phases_and_the_step_budget(
         assert case.step_prompts[0].startswith("## Phase 2 of 5")
 
 
+def test_a_case_that_drops_its_phases_goes_back_to_its_target_level(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clearing `phases` must not leave the 1 + N budget of phases that are gone."""
+    case_dir = tmp_path / "benchmarks" / "paced"
+    (case_dir / "phases").mkdir(parents=True)
+    (case_dir / "prompt_default.md").write_text(
+        "## What is being judged\n\nx\n\n## How the work is paced\n\nPhase 1.\n"
+    )
+    (case_dir / "phases" / "p2.md").write_text("## Phase 2 of 2\n")
+    task = case_dir / "task.yaml"
+    raw = {
+        "task_id": "paced",
+        "target_level": 7,
+        "prompts": {"default": "benchmarks/paced/prompt_default.md"},
+        "phases": ["benchmarks/paced/phases/p2.md"],
+    }
+    task.write_text(yaml.safe_dump(raw))
+    settings = SimpleNamespace(repo_root=tmp_path)
+    monkeypatch.setattr("harness_lab_app.case_service.get_settings", lambda: settings)
+    with Session(make_engine()) as session:
+        service = CaseService(session)
+        case = service.import_task_yaml(task)
+        assert case.max_steps == 2
+        del raw["phases"]
+        task.write_text(yaml.safe_dump(raw))
+        service.seed_benchmark_cases()
+        session.refresh(case)
+        assert case.step_prompts == []
+        assert case.max_steps == 7
+
+
 def test_the_harness_variant_carries_its_preamble_into_every_phase() -> None:
     """Otherwise governance would apply to phase 1 alone."""
     with Session(make_engine()) as session:
@@ -342,6 +374,16 @@ def test_the_host_lane_accepts_a_grading_mask_without_failing_the_run(
     )
     handle = executors.SubprocessRunExecutor().start("r", ["true"], hidden=[])
     assert handle.wait() == 0
+
+
+def test_the_host_lane_refuses_a_case_image_instead_of_ignoring_it() -> None:
+    """A Godot case run on the host would call an engine it may not have."""
+    with pytest.raises(RuntimeError, match="needs the docker backend"):
+        executors.SubprocessRunExecutor().start(
+            "r", ["true"], image="harness-lab-runner-godot:latest"
+        )
+    # No image means the shared one, which the host lane stands in for.
+    assert executors.SubprocessRunExecutor().start("r", ["true"], image="").wait() == 0
 
 
 # --- Every 3D game case follows the lane's rules -----------------------------------

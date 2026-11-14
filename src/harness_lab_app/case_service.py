@@ -406,8 +406,12 @@ class CaseService:
             phases = phase_prompts_from_task(raw, task_path)
             if phases or existing.step_prompts:
                 existing.step_prompts = phases
-                if phases:
-                    existing.max_steps = 1 + len(phases)
+                # A case that drops its phases goes back to the budget an
+                # unphased case is imported with, rather than keeping 1 + N
+                # steps for phases it no longer has.
+                existing.max_steps = (
+                    1 + len(phases) if phases else int(raw.get("target_level", 1))
+                )
             if raw.get("validation_commands"):
                 existing.validation_commands = [
                     str(cmd) for cmd in raw["validation_commands"]
