@@ -1,0 +1,114 @@
+# 3D game cases: their own machine, a grader that drives the engine, and a Play tab
+
+Some cases ask for more than code that passes tests: a 3D game a person can play.
+These cases are aimed at frontier models, and they need a game engine. Installing
+that engine in the runner every case uses would slow down every other run, so a 3D
+case brings its own image, and every person can play what a run built.
+
+The first case is [`chess3d-v1`](../benchmarks/chess3d-v1/README.md). The decision
+behind the lane is [ADR-0078](adr/0078-a-case-can-name-its-own-machine.md).
+
+## What a case can declare
+
+Three optional keys in `task.yaml`, stored in the case's metadata:
+
+| Key | What it does |
+|---|---|
+| `runner_image` | The image the agent **and** the grader run in. Only the lab's own images (`harness-lab-<name>[:tag]`) are accepted. |
+| `sandbox_image` | The image the Terminal, Desktop and Play tabs open in. |
+| `play_command` | What the **Play** tab starts on its desktop, from the workspace copy at `/work`. One line. |
+
+A case without these keys runs exactly as before. The agent and its grader share
+one image on purpose: an agent that cannot launch the engine cannot test its own
+work, and a grader in another image would judge the code against a toolchain the
+agent never saw.
+
+## The images
+
+```bash
+make images-3d
+```
+
+This builds `harness-lab-runner-godot` and `harness-lab-sandbox-godot` on top of the
+shared runner and sandbox images. `make app-up` never builds them. Each adds Godot
+4.7.2 (pinned) and a software OpenGL stack, about 230 MB.
+
+Godot runs in two modes inside the runner:
+
+- `godot --headless …` runs logic only: rules, physics and input. Under
+  `--headless`, `RenderingServer.frame_post_draw` never fires, so nothing that reads
+  pixels can run there.
+- `godot-render …` runs Godot on a private virtual display (Xvfb) with Mesa
+  llvmpipe. That gives a real OpenGL 3.3 context with no GPU, so screenshots and
+  pixel checks work. The project must use the **Compatibility** renderer.
+
+Both modes work inside the hardened validation lane: no network, every capability
+dropped, 4 GB of memory.
+
+If a case names an image that was not built, the run fails before any container
+starts, with a message that names `make images-3d`. The failure is recorded as the
+lab's, not the agent's.
+
+## How a game is graded
+
+The grader runs the agent's game instead of reading its code. In `chess3d-v1` it
+works in two parts:
+
+1. **Harvest (one command).** The harvest generates this run's probes from a seed
+   derived from the run id. It copies the agent's project to a scratch directory,
+   adds the lab's GDScript harvester, and runs it twice: once headless for the
+   rules and once rendered for the scene. Every raw answer goes to
+   `<workspace>/.lab-grade/`. The harvest judges nothing.
+2. **One command per check.** Each check reads those answers and decides one
+   behaviour against an independent reference, so `test_pass_rate` and per-step
+   reward get one step per behaviour.
+
+Three choices make this honest:
+
+- **Probes are generated, never stored.** A workspace without its own repository is
+  a directory of the lab's tree, and the runner needs the lab's `.git` to snapshot
+  each step. Anything committed is therefore one `git show` away from the agent,
+  however its working-tree copy is hidden. A probe seeded with the run id cannot be
+  read from anywhere before the run starts.
+- **The scene is driven through the screen.** The grader projects board squares to
+  pixels with the scene's own camera, injects mouse events at those pixels, and
+  reads the scene graph back. A board that renders correctly but ignores the mouse
+  fails, and so does a click handler that hits the wrong square.
+- **A failure is attributed to whoever caused it.** A missing project, a missing
+  method or a crash inside the agent's code fails the checks that depend on it. A
+  harvest that never ran, or a puzzle the lab could not generate, exits 124, which
+  the validation lane records as inconclusive (ADR-0062).
+
+Per-step reward points each command at each step's snapshot by rewriting the
+workspace path. Because the answers live inside the workspace, every snapshot gets
+its own harvest. This costs about a minute per step.
+
+## Playing what a run built
+
+On a run whose case declares a `play_command`, the run page shows a **Play** tab.
+It opens a Linux desktop in the browser (noVNC) in the case's sandbox image, with
+the game already running. If the game exits, a window shows the last lines of its
+log and the command to relaunch it from the terminal underneath. The **Desktop** and
+**Terminal** tabs open in the same image, so the engine is there too.
+
+The desktop renders on the CPU. A board game or a light scene plays well; a heavy
+scene will be slow. That limit comes from the GPU-less sandbox, not from the game.
+
+## Writing the next case
+
+The racing and open-city cases follow the same pattern:
+
+1. **State a contract the grader can drive.** Use autoload singletons for state,
+   node groups and metadata for what is on screen, and a world-to-screen function so
+   the grader can click. Put every name the grader uses in the prompt.
+2. **Generate held-out content from the run id:** tracks, positions, map tiles. For
+   a real-world map, ship an OpenStreetMap extract and choose the held-out
+   neighbourhood by seed.
+3. **Judge against an independent reference.** For chess that is python-chess. For
+   physics it is a recorded input sequence and tolerances, not a second
+   implementation of the agent's game.
+4. **Calibrate before trusting the case** (ADR-0057): an empty workspace, a plausible
+   weaker build and a reference solution. Keep the reference in
+   `data/reference/<case>/`, which is git-ignored.
+5. **Keep the frame-time check an observation** (ADR-0073). The CPU renderer is
+   consistent between runs and says nothing about a GPU.

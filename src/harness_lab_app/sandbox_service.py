@@ -10,7 +10,8 @@ from sqlmodel import Session, select
 
 from harness_lab_app.models import Sandbox, utc_now
 
-VALID_KINDS = ("terminal", "desktop")
+# `play` is a desktop that opens the case's own game on start (ADR-0078).
+VALID_KINDS = ("terminal", "desktop", "play")
 
 
 class SandboxService:

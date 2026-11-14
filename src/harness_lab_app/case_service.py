@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 from sqlmodel import Session, select
 
+from harness_lab_app.case_profile import PROFILE_KEYS, profile_from_task
 from harness_lab_app.case_validation import check_case, check_requirements
 from harness_lab_app.config import get_settings
 from harness_lab_app.models import Case, CaseStatus, CaseSyncState, CaseType, utc_now
@@ -350,6 +351,13 @@ class CaseService:
                 ]
             else:
                 meta.pop("validation_requirements", None)
+            # The machine profile is authored like the starter (ADR-0078).
+            profile = profile_from_task(raw)
+            for key in PROFILE_KEYS:
+                if key in profile:
+                    meta[key] = profile[key]
+                else:
+                    meta.pop(key, None)
             existing.metadata_json = meta
             existing.updated_at = utc_now()
             self.session.add(existing)
@@ -404,6 +412,8 @@ class CaseService:
                     if raw.get("validation_requirements")
                     else {}
                 ),
+                # Its own image and play command (ADR-0078).
+                **profile_from_task(raw),
             },
         )
         self.session.add(case)

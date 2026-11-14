@@ -1,0 +1,55 @@
+# Runner image for 3D game cases (ADR-0078): the shared runner plus the Godot
+# engine and a software OpenGL stack. A case opts in with
+# `runner_image: harness-lab-runner-godot:latest` in its task.yaml; every other
+# case keeps running in the lean shared image, which this file never changes.
+#
+# Godot runs two ways in here, and a grader needs both:
+#   godot --headless ...   logic only, no renderer: rules, physics, input.
+#   godot-render ...       a real OpenGL 3.3 context on Xvfb + Mesa llvmpipe, so
+#                          screenshots and pixel checks work with no GPU. Under
+#                          --headless `RenderingServer.frame_post_draw` never
+#                          fires, so anything that reads pixels must use this.
+# Both work with no network, cap_drop=ALL and a 4 GB limit (the hardened
+# validation lane), measured on arm64 and expected on amd64.
+ARG BASE_IMAGE=harness-lab-runner:latest
+FROM ${BASE_IMAGE}
+
+# xvfb/xauth: a virtual display. libgl1-mesa-dri + libglx-mesa0 + libegl1:
+# Mesa's llvmpipe, the CPU OpenGL driver Godot's Compatibility renderer uses.
+# The X client libraries are what the official Linux build links against.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        unzip xvfb xauth \
+        libgl1 libgl1-mesa-dri libglx-mesa0 libegl1 \
+        libxcursor1 libxinerama1 libxrandr2 libxi6 libxkbcommon0 \
+        libfontconfig1 libasound2 libpulse0 libdbus-1-3 libudev1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pinned: a case's grader is written against one engine's API and behaviour,
+# and a bump is a new instrument (ADR-0073). The label lets the lab read the
+# version without starting a container.
+ARG GODOT_VERSION=4.7.2-stable
+RUN arch="$(dpkg --print-architecture)"; \
+    case "$arch" in amd64) g=x86_64 ;; arm64) g=arm64 ;; *) echo "unsupported arch $arch" >&2; exit 1 ;; esac; \
+    curl -fsSL -o /tmp/godot.zip \
+        "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}/Godot_v${GODOT_VERSION}_linux.${g}.zip" \
+    && unzip -q /tmp/godot.zip -d /opt/godot \
+    && rm /tmp/godot.zip \
+    && ln -s "/opt/godot/Godot_v${GODOT_VERSION}_linux.${g}" /usr/local/bin/godot \
+    && godot --headless --version
+LABEL godot.version="${GODOT_VERSION}"
+
+# `godot-render <godot args>`: Godot on a private virtual display with the
+# OpenGL renderer and no audio device. `-a` picks a free display number, so two
+# checks in one container never collide.
+RUN printf '%s\n' \
+        '#!/bin/sh' \
+        '# Godot with a real (software) renderer: Xvfb + Mesa llvmpipe, no audio.' \
+        'exec xvfb-run -a -s "-screen 0 1280x720x24 -nolisten tcp" \' \
+        '    godot --rendering-driver opengl3 --audio-driver Dummy "$@"' \
+        > /usr/local/bin/godot-render \
+    && chmod +x /usr/local/bin/godot-render
+
+# Godot writes its editor/user data under $HOME; the hardened lane sets
+# HOME=/tmp, the agent lane keeps root's. Neither needs anything baked here.
+ENV GODOT_AVAILABLE=1

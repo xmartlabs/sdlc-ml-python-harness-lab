@@ -106,6 +106,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0075 — Every arm is measured by the same instrument](0075-every-arm-is-measured-by-the-same-instrument.md)
 - [0076 — Each step earns a reward, and the harness is pruned by ablation](0076-per-step-reward.md)
 - [0077 — A drafted case writes its own grade, and says what it imports](0077-a-drafted-case-writes-its-own-grade.md)
+- [0078 — A case can name its own machine, and its game can be played](0078-a-case-can-name-its-own-machine.md)
 
 ## Why ADRs exist
 

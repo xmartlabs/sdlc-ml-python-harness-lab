@@ -90,6 +90,13 @@ _DOCS: list[dict[str, str]] = [
         "description": "What makes a case measure something, and what is refused.",
     },
     {
+        "slug": "3d-game-cases",
+        "file": "guide-3d-game-cases.md",
+        "group": "Reference",
+        "title": "3D game cases",
+        "description": "Cases with their own engine image, graded by driving the game, playable in the browser.",
+    },
+    {
         "slug": "local-models",
         "file": "guide-local-models.md",
         "group": "Reference",

@@ -77,6 +77,9 @@ class ValidationService:
         # that lets it reach the daemon. Everything else is an audited
         # repository's own command and takes the hardened lane.
         hardened = not spec.get("local")
+        # Passed only when the case names one, so an executor that predates
+        # per-case images (and every fake in the tests) is called as before.
+        image = {"image": spec["image"]} if spec.get("image") else {}
         results: list[dict[str, Any]] = []
         # The graders' dependencies, installed with network before the offline
         # checks (ADR-0071). A grader that could not be equipped measured
@@ -84,7 +87,11 @@ class ValidationService:
         for command in spec.get("setup") or []:
             try:
                 handle = executor.start(
-                    f"{run_id}-setup", command, hardened=hardened, phase="setup"
+                    f"{run_id}-setup",
+                    command,
+                    hardened=hardened,
+                    phase="setup",
+                    **image,
                 )
                 output, exit_code = self._drain(handle, "validation setup")
             except Exception as exc:
@@ -125,6 +132,7 @@ class ValidationService:
                     command,
                     hardened=hardened,
                     phase="validate",
+                    **image,
                 )
                 output, exit_code = self._drain(handle, label)
             except Exception as exc:  # record the failure, never crash the run

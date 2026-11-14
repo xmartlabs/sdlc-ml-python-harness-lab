@@ -102,7 +102,7 @@ const MESSAGES = defineMessages({
       sentSpans: (spans: number, sessionId: string) => `Sent ${spans} spans to session ${sessionId}.`,
       exportFailed: "Export failed."
     },
-    tabs: { detail: "Detail", terminal: "Terminal", desktop: "Desktop" },
+    tabs: { detail: "Detail", terminal: "Terminal", desktop: "Desktop", play: "Play" },
     summary: {
       score: "Score",
       interventions: "Interventions",
@@ -373,7 +373,7 @@ const MESSAGES = defineMessages({
       sentSpans: (spans: number, sessionId: string) => `Se enviaron ${spans} spans a la sesión ${sessionId}.`,
       exportFailed: "Falló la exportación."
     },
-    tabs: { detail: "Detalle", terminal: "Terminal", desktop: "Escritorio" },
+    tabs: { detail: "Detalle", terminal: "Terminal", desktop: "Escritorio", play: "Jugar" },
     summary: {
       score: "Puntaje",
       interventions: "Intervenciones",
@@ -735,8 +735,10 @@ export function RunDetail({
   // at it. Read once, at mount — after that the tab is yours.
   const [searchParams] = useSearchParams();
   const requestedTab = searchParams.get("tab");
-  const [tab, setTab] = useState<"detail" | "terminal" | "desktop">(
-    requestedTab === "terminal" || requestedTab === "desktop" ? requestedTab : "detail"
+  const [tab, setTab] = useState<"detail" | "terminal" | "desktop" | "play">(
+    requestedTab === "terminal" || requestedTab === "desktop" || requestedTab === "play"
+      ? requestedTab
+      : "detail"
   );
   const consoleRef = useRef<HTMLDivElement | null>(null);
   // A claude run with events-based attribution has real tool counts; only fall
@@ -1290,7 +1292,11 @@ export function RunDetail({
         </p>
       </div>
       <div className="run-tabs">
-        {(["detail", "terminal", "desktop"] as const).map((name) => (
+        {/* Play only when the case ships a game to start (ADR-0078). */}
+        {(runContext?.play_command
+          ? (["detail", "play", "terminal", "desktop"] as const)
+          : (["detail", "terminal", "desktop"] as const)
+        ).map((name) => (
           <button
             className={tab === name ? "run-tab active" : "run-tab"}
             key={name}

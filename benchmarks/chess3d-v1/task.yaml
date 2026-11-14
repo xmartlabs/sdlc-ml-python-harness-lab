@@ -1,0 +1,113 @@
+task_id: chess3d-v1
+version: "1"
+status: active
+category: game-3d
+tags: [godot, 3d, game, frontier, graded, ships-tests, own-image]
+
+description: >
+  Build a playable 3D chess game in Godot 4.7 — a rules engine that is exactly
+  right, a 3D board played with the mouse, and a computer opponent — graded by a
+  shipped grader against python-chess on positions generated for each run
+  (ADR-0078). The first case of the 3D game lane: hard enough that only a
+  frontier model is expected to reach the top of the ladder, and graded so that
+  every rung below it is still measured.
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+target_level: 10
+complexity: frontier
+
+# The case's own machine (ADR-0078). The agent and the grader run in the runner
+# image with Godot; the Play and Desktop sandboxes open in the sandbox image with
+# Godot. Build both with `make images-3d`. No other case uses them.
+runner_image: harness-lab-runner-godot:latest
+sandbox_image: harness-lab-sandbox-godot:latest
+play_command: "godot --path /work -- --ai=black"
+
+validation: objective
+validation_note: >
+  The grader in benchmarks/chess3d-v1/grader/ is the grade. The first command is
+  the tamper guard; the second generates this run's probes (seeded with the run
+  id), runs the agent's project twice — rules headless, the scene on a software
+  renderer — and stores the raw answers in <workspace>/.lab-grade/. It fails only
+  when there is no Godot project. Each of the 39 checks after it is its own
+  command, deciding one behaviour against python-chess, so test_pass_rate and the
+  per-step reward have 39 steps of resolution. A check exits 124 (inconclusive)
+  only when the lab could not measure it.
+
+# The checks import python-chess, the independent rules engine every verdict is
+# decided against. Installed into the run's own folder before the offline checks.
+validation_requirements:
+  - chess==1.11.2
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/chess3d-v1/grader && test -z \"$(git -C /app status --porcelain -- benchmarks/chess3d-v1/grader)\""
+  - "cd {workspace} && timeout 900 python /app/benchmarks/chess3d-v1/grader/grade.py harvest \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check contract \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check own_code \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check renderer \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check fen_roundtrip \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check legal_moves \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check en_passant \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check castling \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check pins_and_checks \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check promotion \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check perft_shallow \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check perft_deep \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check perft_random \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check fen_tracking \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check clocks \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check san_output \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check san_disambiguation \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check san_input \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check illegal_refused \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check undo \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check mate_and_stalemate \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check draw_rules \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check status_everywhere \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check history \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check ai_legal \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check ai_mate_in_one \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check ai_mate_in_two \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check scene_loads \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check board_geometry \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check board_visible \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check board_colors \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check pieces_start \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check click_moves \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check click_illegal \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check follow_engine \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check click_promotion \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check status_label \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check ai_in_scene \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check render \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/chess3d-v1/grader/grade.py check frame_time \"$PWD\" {run_id}"
+files_forbidden:
+  - benchmarks/chess3d-v1/grader/grade.py
+  - benchmarks/chess3d-v1/grader/harvest.gd
+
+constraints:
+  - A Godot 4.7 project at the workspace root, GDScript only
+  - Only the agent's own code and assets; no addons, plugins, GDExtension or binaries
+  - The Compatibility renderer; a main scene that shows the board
+  - Do not edit the shipped grader
+
+success_criteria:
+  level_0: no Godot project, or nothing that loads
+  level_2: the Chess autoload exists with its contract, own code only, Compatibility renderer
+  level_4: legal moves and shallow perft are right in ordinary positions
+  level_6: every special rule (en passant, castling, pins, promotion, undo) and deep perft are exact
+  level_7: SAN in and out, clocks, history, mate, stalemate and every draw rule are exact
+  level_8: a 3D board renders, pieces stand where the engine says, and the mouse plays real chess
+  level_9: the board follows the engine, promotes by click, names check and mate, and keeps its frame budget
+  level_10: the computer finds forced mates in one and two and answers a mouse move on the board
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+# `harness` is `_harness_preamble.md` concatenated onto `prompt_default.md`;
+# regenerate with `make prompts`.
+prompts:
+  default: benchmarks/chess3d-v1/prompt_default.md
+  harness: benchmarks/chess3d-v1/prompt_harness.md
+
+scoring_rubric: benchmarks/chess3d-v1/scoring.md

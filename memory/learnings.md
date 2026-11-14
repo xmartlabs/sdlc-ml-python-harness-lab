@@ -2322,4 +2322,24 @@ asked to do. ADR-0073.
   Quantization in its load panel). The lab can only record the type the user selected;
   a reliable quantized-KV test is a manual load plus evaluate-only mode.
 
+## 2026-11-13 — Nothing committed is hidden from the agent; Godot headless never draws
+
+- A targetless workspace (`workspace/<run_id>/`) has no `.git` of its own. The runner
+  uses the lab's `/app/.git` for per-step snapshots, so the agent can read any committed
+  file with `git show HEAD:…`, however its working-tree copy is masked. Held-out grading
+  data must be **generated per run** (seeded with `{run_id}`), never stored and hidden
+  (ADR-0078). A `hidden_paths` tmpfs mask was built and removed for this reason.
+- Godot 4.7 under `--headless` never fires `RenderingServer.frame_post_draw`: a grader
+  awaiting it hangs forever. Pixel or screenshot work needs Xvfb + Mesa llvmpipe
+  (`godot-render` in `harness-lab-runner-godot`). Logic, autoloads, injected
+  `InputEventMouseButton` and threads all work headless.
+- A `class_name` is unknown to `--script` before the project's first `--import`; load
+  helper scripts by path (`preload("res://rules.gd")`).
+- A script error inside the agent's GDScript does not stop Godot: the call logs and
+  returns the default. A harvester can call a broken contract and keep going.
+- Graders written against a probe's literal FEN fail correct engines: a FEN may name
+  an en passant square no capture can use, which every FEN writer (and python-chess)
+  drops. Compare normalised positions. Calibration on a reference caught this and a
+  wrong light/dark square choice — both grader bugs, not engine bugs.
+
 <!-- Add new learnings above this line -->

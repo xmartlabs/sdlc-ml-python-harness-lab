@@ -204,6 +204,19 @@ versions + rolled `harness_hash`), `model_condition` (temp/context/alias),
 
 ## Open threads / next steps
 
+- **3D game lane (ADR-0078, 2026-11-13, uncommitted).** A case may name its own
+  `runner_image` / `sandbox_image` / `play_command` (`case_profile.py`); `make images-3d`
+  builds `harness-lab-runner-godot` + `harness-lab-sandbox-godot` (Godot 4.7.2, Xvfb,
+  llvmpipe); the run page gains a **Play** tab (noVNC desktop that starts the game).
+  First case `chess3d-v1`: GDScript harvester + 39 python-chess checks on run-seeded
+  probes, calibrated through the real worker in the hardened lane (empty 0/39, weaker
+  24/39, reference 39/39; reference in git-ignored `data/reference/chess3d-v1/`). Its
+  tamper guard goes green once the grader is committed. Next: a real frontier run
+  (and a small model) on `chess3d-v1`; then the racing case (track by seed, recorded
+  inputs, AI rivals on a held-out track) and the open-city case (OpenStreetMap
+  extract, held-out neighbourhood by seed, building-height raycasts). Guide:
+  `docs/guide-3d-game-cases.md`.
+
 - **Per-step reward (ADR-0076, 2026-11-12, uncommitted).** RL-inspired: the runner
   snapshots the workspace after every step, the worker regrades each snapshot with the
   case's checks, five `step_reward` scores, per-step credit, and `make prune`

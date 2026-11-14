@@ -387,6 +387,7 @@ class RunExecutor(Protocol):
         governance_mask: str = GOVERNANCE_MASK_NONE,
         hardened: bool = False,
         phase: str = "",
+        image: str = "",
     ) -> RunHandle: ...
 
 
@@ -440,6 +441,7 @@ class SubprocessRunExecutor:
         governance_mask: str = GOVERNANCE_MASK_NONE,
         hardened: bool = False,
         phase: str = "",  # noqa: ARG002
+        image: str = "",  # noqa: ARG002 - the host lane has no image to choose
     ) -> RunHandle:
         if governance_mask != GOVERNANCE_MASK_NONE:
             raise RuntimeError(
@@ -527,6 +529,7 @@ class DockerRunExecutor:
         governance_mask: str = GOVERNANCE_MASK_NONE,
         hardened: bool = False,
         phase: str = "",
+        image: str = "",
     ) -> RunHandle:
         settings = get_settings()
         host_repo_root = settings.host_repo_root or str(settings.repo_root)
@@ -534,8 +537,11 @@ class DockerRunExecutor:
             raise RuntimeError(
                 "HARNESS_LAB_HOST_REPO_ROOT must be set for the docker backend"
             )
+        # A case may name its own image (ADR-0078); `case_profile` has already
+        # restricted it to the lab's local `harness-lab-*` images.
+        image = image or settings.runner_image
         client = self._client()
-        self._require_local_image(client, settings.runner_image)
+        self._require_local_image(client, image)
         name = container_name_for_run(run_id)
         self._remove_stale_container(client, name)
         # Empty tmpfs over the duplicate skill catalogs (one catalog in the
@@ -552,7 +558,7 @@ class DockerRunExecutor:
         if hardened:
             extra.update(hardened_container_options(phase))
         container = client.containers.run(
-            image=settings.runner_image,
+            image=image,
             command=command,
             detach=True,
             name=name,
@@ -612,6 +618,13 @@ class DockerRunExecutor:
         try:
             client.images.get(image)
         except Exception as exc:
+            if image != get_settings().runner_image:
+                # A case's own image is built on demand, not by `make app-up`.
+                raise RuntimeError(
+                    f"Runner image '{image}' was not found locally. This case "
+                    "needs its own image: build it with `make images-3d` "
+                    "(see docs/guide-3d-game-cases.md)."
+                ) from exc
             raise RuntimeError(
                 f"Runner image '{image}' was not found locally. Build it from "
                 "the web UI: Health -> Docker runtime -> 'Build runner image' "
