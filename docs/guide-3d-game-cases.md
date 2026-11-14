@@ -5,8 +5,18 @@ These cases are aimed at frontier models, and they need a game engine. Installin
 that engine in the runner every case uses would slow down every other run, so a 3D
 case brings its own image, and every person can play what a run built.
 
-The first case is [`chess3d-v1`](../benchmarks/chess3d-v1/README.md). The decision
-behind the lane is [ADR-0078](adr/0078-a-case-can-name-its-own-machine.md).
+The lane has three cases, each harder in a different way:
+
+| Case | What it asks for | What makes it hard |
+|---|---|---|
+| [`chess3d-v1`](../benchmarks/chess3d-v1/README.md) | 3D chess with the mouse and an AI | exact rules, a search |
+| [`racing3d-v1`](../benchmarks/racing3d-v1/README.md) | a racing game with physics, laps and AI rivals | physics, race rules, AI on a track it never saw |
+| [`opencity3d-v1`](../benchmarks/opencity3d-v1/README.md) | an open city built from OpenStreetMap data, on foot and by car, with traffic | geometry from real data, collisions, traffic on a map it never saw |
+
+The decisions behind the lane are
+[ADR-0078](adr/0078-a-case-can-name-its-own-machine.md) (own machine, Play tab) and
+[ADR-0079](adr/0079-a-hard-case-is-paced-in-phases-and-cannot-read-its-grade.md)
+(phases, isolation). A test holds every case with `category: game-3d` to both.
 
 ## What a case can declare
 
@@ -130,7 +140,7 @@ scene will be slow. That limit comes from the GPU-less sandbox, not from the gam
 
 ## Writing the next case
 
-The racing and open-city cases follow the same pattern:
+Every case in the lane follows the same pattern:
 
 1. **State a contract the grader can drive.** Use autoload singletons for state,
    node groups and metadata for what is on screen, and a world-to-screen function so

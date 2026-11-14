@@ -109,6 +109,8 @@ GRADED_CONTRACT = {
     "clinic-rules-t3": ("test_rules.py", "CLINIC_WORKSPACE", "clinic.py"),
     # Check names the grader runs and the prompt's contract states (ADR-0078).
     "chess3d-v1": ("perft", "castling", "status_label"),
+    "racing3d-v1": ("checkpoint_order", "lap_counts", "rivals_finish_heldout"),
+    "opencity3d-v1": ("building_count", "minimap", "attribution"),
 }
 
 

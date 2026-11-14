@@ -1,0 +1,137 @@
+task_id: opencity3d-v1
+version: "1"
+status: active
+category: game-3d
+tags: [godot, 3d, game, open-world, openstreetmap, frontier, graded, ships-tests, own-image]
+
+description: >
+  Build an open-world 3D city game in Godot 4.7, generated at runtime from real
+  map data: Montevideo's Ciudad Vieja from OpenStreetMap, buildings extruded from
+  their footprints to their heights, streets from road centrelines, a player who
+  walks the city in third person and drives cars, ambient traffic that follows
+  the roads, and a minimap. Graded by a shipped grader on a held-out
+  neighbourhood generated for each run (ADR-0078), so the game must build any
+  map in the format, not only the one it was given.
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+target_level: 10
+complexity: frontier
+
+# The case's own machine (ADR-0078): the Godot runner and sandbox images, built
+# with `make images-3d`.
+runner_image: harness-lab-runner-godot:latest
+sandbox_image: harness-lab-sandbox-godot:latest
+play_command: "godot --path /work"
+entry_point: project.godot
+
+# The map the agent builds from, copied into the empty workspace before the
+# agent runs (ADR-0068): {workspace}/data/ciudad-vieja.json. The grader keeps
+# its own canonical copy in data/ and generates the held-out map from it.
+starter: benchmarks/opencity3d-v1/starter
+
+# Five phases, one step each (ADR-0079). Phase 1 is the case prompt itself.
+phases:
+  - benchmarks/opencity3d-v1/phases/phase-2-on-foot.md
+  - benchmarks/opencity3d-v1/phases/phase-3-vehicles.md
+  - benchmarks/opencity3d-v1/phases/phase-4-living-city.md
+  - benchmarks/opencity3d-v1/phases/phase-5-finish.md
+
+# What grades the agent stays out of its container (ADR-0079). The map data and
+# the starter stay readable: the agent needs them.
+agent_hidden:
+  - benchmarks/opencity3d-v1/grader/
+  - benchmarks/opencity3d-v1/scoring.md
+  - benchmarks/opencity3d-v1/README.md
+
+validation: objective
+validation_note: >
+  The grader in benchmarks/opencity3d-v1/grader/ is the grade. The first command
+  is the tamper guard; the second builds this run's held-out map (a random,
+  rotated, re-tagged window of the Ciudad Vieja extract, seeded with the run id)
+  and its probes, runs the agent's project twice — the City API headless at a
+  fixed 60 Hz, the scene on a software renderer — and stores the raw answers in
+  <workspace>/.lab-grade/. It fails only when there is no Godot project. Each of
+  the 44 checks after it is its own command, deciding one behaviour against the
+  map file with plain geometry (point in polygon, distance to a centreline), so
+  test_pass_rate and the per-step reward have 44 steps of resolution. A check
+  exits 124 (inconclusive) only when the lab could not measure it.
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/opencity3d-v1/grader && test -z \"$(git -C /app status --porcelain -- benchmarks/opencity3d-v1/grader)\""
+  - "cd {workspace} && timeout 900 python /app/benchmarks/opencity3d-v1/grader/grade.py harvest \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check contract \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check own_code \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check renderer \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check input_actions \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check default_map \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check heldout_loads \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check bad_map \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check building_count \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check building_heights \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check building_info \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check buildings_group \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check footprints_placed \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check roof_raycast \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check street_raycast \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check footprint_shape \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check collision_geometry \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check ground_uses_physics \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check map_argument \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check roofs_from_above \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check city_visible \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check step_ticks \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check spawn \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check teleport \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check walk \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check sprint \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check walls_block \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check scene_loads \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check camera_follows \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check keyboard_walk \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check enter_vehicle \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check drive \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check brake \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check steering \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check drive_blocked \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check exit_vehicle \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check keyboard_drive \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check traffic_spawn \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check traffic_moves \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check traffic_on_roads \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check traffic_not_in_buildings \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check minimap_marker \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check minimap \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check attribution \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/opencity3d-v1/grader/grade.py check frame_time \"$PWD\" {run_id}"
+files_forbidden:
+  - benchmarks/opencity3d-v1/grader/grade.py
+  - benchmarks/opencity3d-v1/grader/harvest.gd
+
+constraints:
+  - A Godot 4.7 project at the workspace root, GDScript only
+  - The city is built at runtime from the map file; any map in the format must load
+  - Only the agent's own code and assets; no addons, plugins, GDExtension, binaries or downloaded models
+  - The Compatibility renderer; a main scene with the city, a third-person camera, a minimap and the OpenStreetMap attribution
+  - Do not edit the shipped grader
+
+success_criteria:
+  level_0: no Godot project, or nothing that loads
+  level_2: the City autoload exists with its contract, own code only, Compatibility renderer, the input actions
+  level_4: any map loads; buildings are built with the right count, ids, heights and placement, and bad maps are refused
+  level_5: the built city is solid where the map says — roofs and streets by physics ray, true footprint shapes, rendered roofs match from above
+  level_6: the player spawns on a street, teleports, walks and sprints, and walls stop them
+  level_7: the main scene follows the player with a third-person camera and the keyboard walks
+  level_8: cars are entered, driven, braked, steered and stopped by walls, by API and by keyboard
+  level_9: ambient traffic drives the roads and never through buildings; the minimap tracks the player
+  level_10: the whole game together — the attribution on screen, the frame budget kept on the full city
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+# `harness` is `_harness_preamble.md` concatenated onto `prompt_default.md`;
+# regenerate with `make prompts`.
+prompts:
+  default: benchmarks/opencity3d-v1/prompt_default.md
+  harness: benchmarks/opencity3d-v1/prompt_harness.md
+
+scoring_rubric: benchmarks/opencity3d-v1/scoring.md

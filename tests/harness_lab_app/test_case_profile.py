@@ -171,10 +171,16 @@ def test_the_shipped_3d_case_declares_its_own_machine() -> None:
     assert profile["runner_image"] == GODOT_RUNNER
     assert profile["sandbox_image"] == GODOT_SANDBOX
     assert profile["play_command"]
-    # Every other case keeps the shared images: the engine is opt-in.
+    # The engine is opt-in: only the 3D game lane names the Godot images, and
+    # every case in that lane does (ADR-0078).
     for task in sorted((REPO_ROOT / "benchmarks").glob("*/task.yaml")):
-        if task.parent.name != "chess3d-v1":
-            other = profile_from_task(yaml.safe_load(task.read_text()))
+        raw = yaml.safe_load(task.read_text())
+        other = profile_from_task(raw)
+        if raw.get("category") == "game-3d":
+            assert other["runner_image"] == GODOT_RUNNER, task
+            assert other["sandbox_image"] == GODOT_SANDBOX, task
+            assert other["play_command"], task
+        else:
             assert "runner_image" not in other, task
             assert "sandbox_image" not in other, task
 

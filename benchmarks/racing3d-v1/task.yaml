@@ -1,0 +1,132 @@
+task_id: racing3d-v1
+version: "1"
+status: active
+category: game-3d
+tags: [godot, 3d, game, racing, physics, frontier, graded, ships-tests, own-image]
+
+description: >
+  Build a playable 3D racing game in Godot 4.7 — a car with real physics on a
+  track loaded from data, lap timing with checkpoints in order, AI rivals that
+  drive any track, and a 3D scene played with the keyboard — graded by a shipped
+  grader that drives the car itself on tracks generated for each run (ADR-0078).
+  The second case of the 3D game lane: hard enough that only a frontier model is
+  expected to reach the top of the ladder, and graded so that every rung below it
+  is still measured.
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+target_level: 10
+complexity: frontier
+
+# The case's own machine (ADR-0078), shared with the chess case. The agent and
+# the grader run in the runner image with Godot; the Play and Desktop sandboxes
+# open in the sandbox image with Godot. Build both with `make images-3d`.
+runner_image: harness-lab-runner-godot:latest
+sandbox_image: harness-lab-sandbox-godot:latest
+play_command: "godot --path /work"
+# Named in the prompt's location header instead of the pygame default main.py.
+entry_point: project.godot
+
+# The work is paced in five phases, one step each (ADR-0079). Phase 1 is the
+# case prompt itself; these drive steps 2-5. Every phase is stored with the
+# prompt's contract appended, and under the `harness` variant with the
+# governance preamble prepended, because each step is a fresh agent session.
+phases:
+  - benchmarks/racing3d-v1/phases/phase-2-race-rules.md
+  - benchmarks/racing3d-v1/phases/phase-3-scene-and-keyboard.md
+  - benchmarks/racing3d-v1/phases/phase-4-ai-rivals.md
+  - benchmarks/racing3d-v1/phases/phase-5-finish.md
+
+# What grades the agent stays out of its container (ADR-0079): the grader, the
+# rubric and the case notes. The validation lane still reads them. The lab's
+# calibration references (data/reference/) are masked for every case.
+agent_hidden:
+  - benchmarks/racing3d-v1/grader/
+  - benchmarks/racing3d-v1/scoring.md
+  - benchmarks/racing3d-v1/README.md
+
+validation: objective
+validation_note: >
+  The grader in benchmarks/racing3d-v1/grader/ is the grade. The first command is
+  the tamper guard; the second generates this run's two tracks (seeded with the run
+  id), runs the agent's project three times — the race API headless, with the
+  lab's own path follower driving the car; the scene on a software renderer,
+  driven through the input actions; a plain launch — and stores the raw answers in
+  <workspace>/.lab-grade/. It fails only when there is no Godot project. Each of
+  the 39 checks after it is its own command, deciding one behaviour with the
+  lab's own geometry (gates, centreline distance, crossings), so test_pass_rate
+  and the per-step reward have 39 steps of resolution. A check exits 124
+  (inconclusive) only when the lab could not measure it. Standard library only:
+  no validation_requirements.
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/racing3d-v1/grader && test -z \"$(git -C /app status --porcelain -- benchmarks/racing3d-v1/grader)\""
+  - "cd {workspace} && timeout 900 python /app/benchmarks/racing3d-v1/grader/grade.py harvest \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check contract \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check own_code \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check renderer \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check load_track \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check track_built \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check accelerates \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check brakes \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check steers_left \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check steers_right \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check reverse_or_stop \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check heading \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check stays_on_ground \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check wall_blocks \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check determinism \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check bad_track \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check checkpoint_order \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check lap_counts \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check lap_time_consistent \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check cut_not_counted \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check wrong_way \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check on_track \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check respawn \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check upside_down \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check input_actions \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check default_track \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check scene_loads \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check default_launch \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check camera_follows \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check car_visible \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check hud \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check keyboard_drive \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check keyboard_reset \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check render \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check frame_time \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check rivals_spawn \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check rivals_drive \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check rivals_no_overlap \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check rivals_avoid_stopped \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing3d-v1/grader/grade.py check rivals_finish_heldout \"$PWD\" {run_id}"
+files_forbidden:
+  - benchmarks/racing3d-v1/grader/grade.py
+  - benchmarks/racing3d-v1/grader/harvest.gd
+
+constraints:
+  - A Godot 4.7 project at the workspace root, GDScript only
+  - Only the agent's own code and assets; no addons, plugins, GDExtension or binaries
+  - The Compatibility renderer, physics at 60 ticks per second, and a main scene
+  - Do not edit the shipped grader
+
+success_criteria:
+  level_0: no Godot project, or nothing that loads
+  level_2: the Race autoload exists with its contract, own code only, Compatibility renderer
+  level_4: a track loads from data and a car with real physics accelerates, brakes and steers on it
+  level_5: barriers hold, the car stays on the ground, the race is deterministic, bad files are refused
+  level_7: checkpoints count in order, laps and lap times are exact, cuts and wrong way are caught
+  level_8: respawn and the on-track and upside-down flags work; the input map and a default track ship
+  level_9: a 3D scene with a chase camera and a HUD, driven by the keyboard actions, within the frame budget
+  level_10: AI rivals drive the run's track, get around a stopped car without shoving it, and finish a lap of an unseen track without passing through any car
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+# `harness` is `_harness_preamble.md` concatenated onto `prompt_default.md`;
+# regenerate with `make prompts`.
+prompts:
+  default: benchmarks/racing3d-v1/prompt_default.md
+  harness: benchmarks/racing3d-v1/prompt_harness.md
+
+scoring_rubric: benchmarks/racing3d-v1/scoring.md

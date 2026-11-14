@@ -342,3 +342,44 @@ def test_the_host_lane_accepts_a_grading_mask_without_failing_the_run(
     )
     handle = executors.SubprocessRunExecutor().start("r", ["true"], hidden=[])
     assert handle.wait() == 0
+
+
+# --- Every 3D game case follows the lane's rules -----------------------------------
+
+
+def _game_cases() -> list[Path]:
+    return [
+        task
+        for task in sorted((REPO_ROOT / "benchmarks").glob("*/task.yaml"))
+        if yaml.safe_load(task.read_text()).get("category") == "game-3d"
+    ]
+
+
+def test_every_3d_game_case_is_phased_hidden_and_named() -> None:
+    """What chess3d-v1 K-001 taught applies to the whole lane (ADR-0079): a
+    frontier game is paced in phases, its agent cannot read its grader, and the
+    prompt names the real entry point."""
+    cases = _game_cases()
+    assert len(cases) >= 1
+    for task in cases:
+        raw = yaml.safe_load(task.read_text())
+        case = task.parent.name
+        assert len(raw.get("phases") or []) >= 3, case
+        hidden = agent_hidden_for(raw)
+        assert f"benchmarks/{case}/grader/" in hidden, case
+        assert f"benchmarks/{case}/scoring.md" in hidden, case
+        assert raw.get("entry_point") == "project.godot", case
+        prompt = (REPO_ROOT / raw["prompts"]["default"]).read_text()
+        assert contract_section(prompt), f"{case}: no contract block for its phases"
+        commands = raw["validation_commands"]
+        assert f"benchmarks/{case}/grader" in commands[0], f"{case}: no tamper guard"
+        assert " harvest " in commands[1], f"{case}: no harvest step"
+
+
+def test_every_3d_game_case_seeds_with_one_step_per_phase() -> None:
+    for task in _game_cases():
+        raw = yaml.safe_load(task.read_text())
+        with Session(make_engine()) as session:
+            case = CaseService(session).import_task_yaml(task)
+        assert case.max_steps == 1 + len(raw["phases"]), task.parent.name
+        assert all("## The API contract (exact)" in p for p in case.step_prompts)
