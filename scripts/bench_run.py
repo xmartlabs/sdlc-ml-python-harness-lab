@@ -717,6 +717,18 @@ def skill_activation_block(invoke_skills: Sequence[str]) -> str:
     )
 
 
+def _entry_point(case_spec: dict | None) -> str:
+    """The workspace-relative entry point a case declares, ``main.py`` by default.
+
+    Refuses anything that is not a plain relative path inside the workspace: it
+    is printed into the prompt as ``{workspace}/<entry_point>``.
+    """
+    value = str((case_spec or {}).get("entry_point") or "").strip()
+    if not value or value.startswith("/") or ".." in value.split("/") or "\n" in value:
+        return "main.py"
+    return value
+
+
 def generate_prompt(
     run_id: str,
     prompt_short: str,
@@ -728,8 +740,14 @@ def generate_prompt(
     repo_note: str | None = None,
     invoke_skills: Sequence[str] = (),
     cwd_note: bool = False,
+    entry_point: str = "main.py",
 ) -> Path:
     """Write the final prompt: metadata header + location constraint + body.
+
+    ``entry_point`` is the case's own (``entry_point`` in its task.yaml):
+    ``main.py`` was right for the pygame cases it was written for and wrong for
+    a web page or a Godot project, whose agents were told to build a file the
+    task never asked for (ADR-0079).
 
     `repo_note` overrides the default build-from-scratch constraint (workspace
     main.py) for repo-task/SWE runs, where the correct wording depends on the
@@ -743,7 +761,7 @@ def generate_prompt(
         f"> path. It is the only directory preserved after the run; anything\n"
         f"> written elsewhere (for example `/workspace/{run_id}/`) is discarded\n"
         f"> when the container exits.\n"
-        f"> Entry point: `{workspace}/main.py`\n"
+        f"> Entry point: `{workspace}/{entry_point}`\n"
         + ("> That directory is your current working directory.\n" if cwd_note else "")
     )
     header = (
@@ -838,6 +856,7 @@ def generate_case_step_prompt(
     steps_dir: Path,
     step_text: str,
     invoke_skills: Sequence[str] = (),
+    phases_left: int = 0,
 ) -> Path:
     """Write step N's prompt from the case's own ``step_prompts`` list.
 
@@ -845,8 +864,21 @@ def generate_case_step_prompt(
     Neither generic continuation prompt fits it: one is Tetris-framed, the
     other SWE-bench-framed. Use the author's text and add only the continuity
     the agent needs (which step it is, and where its work lives).
+
+    ``phases_left`` counts the authored phases after this one (ADR-0079). While
+    any remain, the agent is told to stop at the end of *this* phase: the run
+    continues regardless, so a completion line would only invite it to build
+    ahead of a phase that has not been asked for.
     """
     workspace = agent_workspace_path(run_id)
+    closing = (
+        f"Stop when this phase is done and verified: state what you changed and "
+        f"how you verified it. Do not start the next phase — {phases_left} more "
+        f"will follow, each in its own step.\n"
+        if phases_left > 0
+        else "When this step is done, state what you changed. If the whole task "
+        "is complete, end with: ALL MILESTONES COMPLETE\n"
+    )
     text = (
         f"<!-- Case step {step_n} for RUN_ID={run_id} -->\n\n"
         f"This is step {step_n} of an ongoing task (RUN_ID={run_id}).\n\n"
@@ -854,8 +886,7 @@ def generate_case_step_prompt(
         f"from scratch and do NOT rewrite unrelated code.\n\n"
         f"## Your task for this step\n\n"
         f"{step_text.strip()}\n\n"
-        f"When this step is done, state what you changed. If the whole task is "
-        f"complete, end with: ALL MILESTONES COMPLETE\n"
+        f"{closing}"
     )
     path = steps_dir / f"step-{step_n}-prompt.md"
     path.write_text(skill_activation_block(invoke_skills) + text)
@@ -3300,6 +3331,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_note=repo_note,
         invoke_skills=args.invoke_skill,
         cwd_note=agent_cwd is not None and not provisions_repo,
+        entry_point=_entry_point(case_spec),
     )
     print(f"  Prompt:      {prompt_path.relative_to(REPO_ROOT)}")
     print(
@@ -3453,16 +3485,20 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"  ❌ {error}")
                         stop_reason = "harness_error"
                         break
-                elif step_n - 1 < len(case_step_prompts):
+                elif step_n - 2 < len(case_step_prompts):
                     # The case author wrote this step; neither canned
-                    # continuation prompt (Tetris / SWE-bench) applies. The list
-                    # is 1:1 with steps, and step 1 already used the case prompt.
+                    # continuation prompt (Tetris / SWE-bench) applies. Step 1
+                    # used the case prompt, so `step_prompts[0]` drives step 2 —
+                    # the contract the case form and the drafting prompt state.
+                    # This read `[step_n - 1]` until ADR-0079: the first
+                    # authored step was skipped and the last never ran.
                     step_prompt_path = generate_case_step_prompt(
                         args.run,
                         step_n,
                         steps_dir,
-                        case_step_prompts[step_n - 1],
+                        case_step_prompts[step_n - 2],
                         invoke_skills=args.invoke_skill,
+                        phases_left=len(case_step_prompts) - (step_n - 1),
                     )
                     prompt_kind = "case_step"
                 elif runs_path is not None:
@@ -3609,7 +3645,17 @@ def main(argv: list[str] | None = None) -> int:
                 # own. This used to exclude any run that provisioned a
                 # repository, so a target-paired case could not signal
                 # completion at all and paid for its whole step budget.
-                if not is_swe_bench and detect_stop_signal(step_text):
+                # A phased case is not the agent's to end early: every authored
+                # phase is a measured step, and a run that declared victory in
+                # phase 1 skipped the very milestones the case exists to grade
+                # one at a time (ADR-0079). The signal still ends the run once
+                # the phases are spent.
+                phases_pending = step_n - 1 < len(case_step_prompts)
+                if (
+                    not is_swe_bench
+                    and not phases_pending
+                    and detect_stop_signal(step_text)
+                ):
                     print(f"  Agent signaled completion at step {step_n}.")
                     stop_reason = "completion_signal"
                     break

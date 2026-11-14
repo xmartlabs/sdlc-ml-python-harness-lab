@@ -146,7 +146,9 @@ def test_a_lab_root_run_asks_the_executor_to_mask_nothing():
 
     _execute_run_body("task-mask-none", executor, db_engine=engine)
 
-    assert executor.start_kwargs == {}
+    # No governance mask. `hidden` is the agent container's grading mask
+    # (ADR-0079): the lab's calibration references are hidden in every arm.
+    assert executor.start_kwargs == {"hidden": []}
 
 
 def test_a_bare_run_asks_the_executor_to_mask_everything():
@@ -157,7 +159,7 @@ def test_a_bare_run_asks_the_executor_to_mask_everything():
 
     _execute_run_body("task-mask-all", executor, db_engine=engine)
 
-    assert executor.start_kwargs == {"governance_mask": "all"}
+    assert executor.start_kwargs == {"governance_mask": "all", "hidden": []}
 
 
 def test_execute_run_failure_records_tail():

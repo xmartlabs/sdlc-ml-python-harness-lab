@@ -159,6 +159,8 @@ export type RunContext = {
   validation_commands: string[];
   max_steps: number;
   parent_run_id: string;
+  // The command a case's game starts with (ADR-0078); "" when there is no game.
+  play_command?: string;
 };
 
 export type RunEventRecord = {
@@ -591,7 +593,7 @@ export type RunMetadata = {
 
 export type SandboxRecord = {
   run_id: string;
-  kind: "terminal" | "desktop";
+  kind: "terminal" | "desktop" | "play";
   status: "starting" | "running" | "stopped" | "failed";
   container_name: string;
   host_port: number | null;

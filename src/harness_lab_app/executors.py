@@ -193,8 +193,58 @@ def runner_governance_masks(
     return tmpfs, files
 
 
-def runner_masks(level: str, mount_root: str = "/app") -> tuple[dict[str, str], list]:
-    """Every mask a run gets: the skill mirrors plus its governance level."""
+# What grades the agent, hidden from the agent's own container whatever its
+# harness condition (ADR-0079). Calibration solutions live here: a reference
+# that passes every check is the answer, and it sits on the very disk the agent
+# lane bind-mounts. Git-ignored is not hidden — `cat` does not read .gitignore.
+# The validation lane never gets these masks: it has to read the grader.
+RUNNER_GRADING_DIRS = ("data/reference",)
+
+
+def runner_grading_masks(
+    hidden: list[str] | tuple[str, ...] = (), mount_root: str = "/app"
+) -> tuple[dict[str, str], list[tuple[str, str]]]:
+    """Mounts that keep a case's grade out of the agent's reach.
+
+    ``hidden`` are a case's own paths (``agent_hidden`` in its ``task.yaml``):
+    its grader, its rubric, its notes. A path ending in ``/`` or naming a
+    directory under the repo is a tmpfs; anything else is an empty-file bind.
+    The lab-wide :data:`RUNNER_GRADING_DIRS` are always added.
+
+    Masking the working tree does not hide a *committed* file from
+    ``git show`` — the runner needs the lab's ``.git`` for step snapshots — so
+    this stops reading, not a determined agent; held-out data is generated
+    per run for exactly that reason (ADR-0078).
+    """
+    root = mount_root.rstrip("/")
+    repo = get_settings().repo_root
+    tmpfs: dict[str, str] = {}
+    files: list[tuple[str, str]] = []
+    for relative in (*RUNNER_GRADING_DIRS, *hidden):
+        clean = relative.strip().strip("/")
+        if not clean:
+            continue
+        if (
+            relative.endswith("/")
+            or (repo / clean).is_dir()
+            or clean in RUNNER_GRADING_DIRS
+        ):
+            tmpfs[f"{root}/{clean}"] = ""
+        else:
+            files.append((f"{root}/{clean}", _mask_kind(clean)))
+    return tmpfs, files
+
+
+def runner_masks(
+    level: str,
+    mount_root: str = "/app",
+    hidden: list[str] | tuple[str, ...] | None = None,
+) -> tuple[dict[str, str], list]:
+    """Every mask a run gets: the skill mirrors plus its governance level.
+
+    ``hidden`` adds the grading masks (:func:`runner_grading_masks`). It is
+    ``None`` for every container that is not the agent's.
+    """
     governance, files = runner_governance_masks(level, mount_root)
     tmpfs = dict(governance)
     for path, options in runner_skill_masks(mount_root).items():
@@ -203,6 +253,18 @@ def runner_masks(level: str, mount_root: str = "/app") -> tuple[dict[str, str], 
         if any(path.startswith(f"{masked}/") for masked in governance):
             continue
         tmpfs[path] = options
+    if hidden is not None:
+        grading_dirs, grading_files = runner_grading_masks(hidden, mount_root)
+        masked = tuple(tmpfs)
+        for path, options in grading_dirs.items():
+            if path in tmpfs or any(path.startswith(f"{m}/") for m in masked):
+                continue
+            tmpfs[path] = options
+        known = {target for target, _kind in files}
+        for target, kind in grading_files:
+            if target in known or any(target.startswith(f"{m}/") for m in tmpfs):
+                continue
+            files.append((target, kind))
     return tmpfs, files
 
 
@@ -387,6 +449,8 @@ class RunExecutor(Protocol):
         governance_mask: str = GOVERNANCE_MASK_NONE,
         hardened: bool = False,
         phase: str = "",
+        image: str = "",
+        hidden: list[str] | None = None,
     ) -> RunHandle: ...
 
 
@@ -440,11 +504,26 @@ class SubprocessRunExecutor:
         governance_mask: str = GOVERNANCE_MASK_NONE,
         hardened: bool = False,
         phase: str = "",  # noqa: ARG002
+        image: str = "",
+        hidden: list[str] | None = None,  # noqa: ARG002 - nothing to mount over here
     ) -> RunHandle:
+        # The grading masks are a container's: the host lane is the escape
+        # hatch and the test backend, and it has no mount to hide anything with.
+        # Governance masking refuses loudly because a masked *condition* would
+        # be silently unmasked; a grading mask changes no condition.
         if governance_mask != GOVERNANCE_MASK_NONE:
             raise RuntimeError(
                 "Governance masking needs the docker backend: there is nothing "
                 "to mask the lab's own tree with on the host lane."
+            )
+        # A case's own image is its toolchain (ADR-0078): a Godot case run on
+        # the host would call an engine the host may not have, or grade against
+        # a different one. Refused, never silently run without it.
+        if image:
+            raise RuntimeError(
+                f"This case runs in its own image ({image}), which needs the "
+                "docker backend (HARNESS_LAB_EXECUTION_BACKEND=docker); the host "
+                "lane cannot provide it."
             )
         extra: dict[str, Any] = {}
         if hardened:
@@ -527,6 +606,8 @@ class DockerRunExecutor:
         governance_mask: str = GOVERNANCE_MASK_NONE,
         hardened: bool = False,
         phase: str = "",
+        image: str = "",
+        hidden: list[str] | None = None,
     ) -> RunHandle:
         settings = get_settings()
         host_repo_root = settings.host_repo_root or str(settings.repo_root)
@@ -534,14 +615,19 @@ class DockerRunExecutor:
             raise RuntimeError(
                 "HARNESS_LAB_HOST_REPO_ROOT must be set for the docker backend"
             )
+        # A case may name its own image (ADR-0078); `case_profile` has already
+        # restricted it to the lab's local `harness-lab-*` images.
+        image = image or settings.runner_image
         client = self._client()
-        self._require_local_image(client, settings.runner_image)
+        self._require_local_image(client, image)
         name = container_name_for_run(run_id)
         self._remove_stale_container(client, name)
         # Empty tmpfs over the duplicate skill catalogs (one catalog in the
         # system prompt instead of four, see RUNNER_MASKED_SKILL_DIRS), plus
         # whatever the run's harness condition hides (ADR-0049).
-        tmpfs, mask_files = runner_masks(governance_mask)
+        # And, for the agent's own container only, whatever would grade it for
+        # it (ADR-0079): `hidden` is None for every other container.
+        tmpfs, mask_files = runner_masks(governance_mask, hidden=hidden)
         extra: dict[str, Any] = {}
         if mask_files:
             extra["mounts"] = self._mask_mounts(run_id, host_repo_root, mask_files)
@@ -552,7 +638,7 @@ class DockerRunExecutor:
         if hardened:
             extra.update(hardened_container_options(phase))
         container = client.containers.run(
-            image=settings.runner_image,
+            image=image,
             command=command,
             detach=True,
             name=name,
@@ -612,6 +698,13 @@ class DockerRunExecutor:
         try:
             client.images.get(image)
         except Exception as exc:
+            if image != get_settings().runner_image:
+                # A case's own image is built on demand, not by `make app-up`.
+                raise RuntimeError(
+                    f"Runner image '{image}' was not found locally. This case "
+                    "needs its own image: build it with `make images-3d` "
+                    "(see docs/guide-3d-game-cases.md)."
+                ) from exc
             raise RuntimeError(
                 f"Runner image '{image}' was not found locally. Build it from "
                 "the web UI: Health -> Docker runtime -> 'Build runner image' "

@@ -24,6 +24,7 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from harness_lab_app.case_profile import runner_image_for
 from harness_lab_app.config import get_settings
 from harness_lab_app.models import CaseType
 from harness_lab_app.runner_capabilities import (
@@ -431,6 +432,11 @@ def build_validation_spec(
         "strategy": strategy,
         "setup": setup,
         "commands": commands,
+        # The image the checks run in: the case's own when it names one
+        # (ADR-0078) — its grader drives the engine the agent built for —
+        # and the shared runner otherwise. A target's gates run in the shared
+        # runner whatever the case says: they are the repository's commands.
+        "image": "" if target_commands else runner_image_for(case),
         "workspace": workspace,
         # Where the gate ran. Informational — the `cd` is already in the argv —
         # but a run whose checks all failed should be able to say from where.

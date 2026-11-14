@@ -23,6 +23,13 @@ from sqlmodel import Session, select
 
 from harness_lab_app import llm_transport, run_failures
 from harness_lab_app.audit_service import AuditService
+from harness_lab_app.case_profile import (
+    CaseProfileError,
+    agent_hidden_for,
+    play_command_for,
+    runner_image_for,
+    sandbox_image_for,
+)
 from harness_lab_app.case_service import CaseService, resolve_prompt_variant_text
 from harness_lab_app.celery_app import celery_app
 from harness_lab_app.config import get_settings
@@ -54,7 +61,9 @@ from harness_lab_app.validation import describe_objective_for_judge
 logger = logging.getLogger(__name__)
 
 _AUDIT_TIMEOUT_SECONDS = 300
-_SANDBOX_PORTS = {"terminal": "7681/tcp", "desktop": "6080/tcp"}
+# `play` is a desktop that starts the case's own game on boot (ADR-0078): the
+# same noVNC port, a different first window.
+_SANDBOX_PORTS = {"terminal": "7681/tcp", "desktop": "6080/tcp", "play": "6080/tcp"}
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -159,6 +168,25 @@ def _case_prompt_text(case: Case, prompt_variant: str) -> str:
     if resolved is not None:
         return resolved
     return case.prompt_variants.get(prompt_variant, "")
+
+
+def _phase_prompts_for_variant(case: Case, prompt_variant: str) -> list[str]:
+    """A case's later-step prompts, carrying the harness when the run's variant does.
+
+    Each step is a fresh agent session, so the harness preamble that opens the
+    ``harness`` variant's step 1 would otherwise govern only the first phase of
+    a phased case and leave every later phase to the bare task (ADR-0079). The
+    preamble is the same file ``make prompts`` builds that variant from, so the
+    two cannot drift.
+    """
+    phases = list(case.step_prompts)
+    if not phases or prompt_variant != "harness":
+        return phases
+    preamble_path = get_settings().repo_root / "benchmarks" / "_harness_preamble.md"
+    if not preamble_path.is_file():
+        return phases
+    preamble = preamble_path.read_text()
+    return [f"{preamble}\n{phase}" for phase in phases]
 
 
 def _stage_harness_adapters(
@@ -294,12 +322,14 @@ def _write_case_spec(
             "base_commit": case.base_commit or "",
             "prompt_variant": prompt_variant,
             "prompt": _case_prompt_text(case, prompt_variant),
-            "step_prompts": list(case.step_prompts),
+            "step_prompts": _phase_prompts_for_variant(case, prompt_variant),
             "max_steps": case.max_steps,
             "constraints": list(case.constraints),
             "success_criteria": dict(case.success_criteria),
             # The starter files a bug-fix case begins from (ADR-0068).
             "starter_dir": meta.get("starter_dir", ""),
+            # What the prompt names as the entry point; main.py when unset.
+            "entry_point": meta.get("entry_point", ""),
         }
     if target:
         # An external target repository (ADR-0029). Carried alongside the case
@@ -706,6 +736,26 @@ def _watchdog_failure(outcome: StreamOutcome, settings: Any, tail: str) -> str:
     return f"Run timed out after {settings.run_timeout_seconds}s"
 
 
+def _case_agent_machine(session: Session, case_id: str) -> tuple[str, list[str]]:
+    """The image a case's agent runs in and the grading it must not read.
+
+    The image is the case's own (ADR-0078) or ``""``; the hidden paths are the
+    case's ``agent_hidden`` (ADR-0079), to which the executor adds the lab-wide
+    calibration references. A case naming something the lab refuses fails the
+    run here, before a container starts, with the reason — never a silent fall
+    back, which would grade a Godot case in a runner that has no Godot, or let
+    an agent read the grader it was told was hidden.
+    """
+    try:
+        case = CaseService(session).get_case(case_id)
+    except ValueError:
+        return "", []
+    try:
+        return runner_image_for(case), agent_hidden_for(case)
+    except CaseProfileError as exc:
+        raise RuntimeError(f"Case {case_id}: {exc}") from exc
+
+
 def _execute_run_body(
     run_id: str, executor: RunExecutor, db_engine: Engine | None = None
 ) -> None:
@@ -770,11 +820,19 @@ def _execute_run_body(
             # hides, so the worker — which is not masked — stages them where
             # the runner can still reach them.
             _stage_harness_adapters(run_id, config_payload.harness_source, mask)
-            handle = (
-                executor.start(run_id, command)
-                if mask == GOVERNANCE_MASK_NONE
-                else executor.start(run_id, command, governance_mask=mask)
-            )
+            # The mask and the image are passed only when there is something to
+            # pass; `hidden` always is, because the agent's container is the one
+            # container the calibration references must never reach.
+            options: dict[str, Any] = {}
+            if mask != GOVERNANCE_MASK_NONE:
+                options["governance_mask"] = mask
+            image, hidden = _case_agent_machine(session, config_payload.case_id)
+            if image:
+                options["image"] = image
+            # Always passed for the agent's container — even empty, the lab's
+            # calibration references are masked out of it (ADR-0079).
+            options["hidden"] = hidden
+            handle = executor.start(run_id, command, **options)
             outcome = _stream_run(
                 session,
                 run_id,
@@ -2045,13 +2103,46 @@ def _sandbox_container_name(run_id: str, kind: str) -> str:
     return f"harness-sandbox-{kind}-{safe}"
 
 
-def _launch_sandbox(client: Any, run_id: str, kind: str) -> tuple[str, int, str]:
+def _sandbox_profile(run_id: str) -> tuple[str, str]:
+    """The run's case's sandbox image and play command (ADR-0078).
+
+    Read from the database by the run's config, so the same run always opens
+    in the image its case names now. Empty strings mean the shared image and
+    no game to launch.
+    """
+    with Session(engine) as session:
+        service = RunService(session)
+        try:
+            config = service.get_run_config(service.get_run(run_id).run_config_id)
+            case = CaseService(session).get_case(config.case_id)
+        except ValueError:
+            return "", ""
+        return sandbox_image_for(case), play_command_for(case)
+
+
+def _launch_sandbox(
+    client: Any,
+    run_id: str,
+    kind: str,
+    profile: tuple[str, str] = ("", ""),
+) -> tuple[str, int, str]:
     """Copy the run's workspace and launch a sandbox container (worker-side).
 
     Returns (container_name, host_port, url). The bind mount uses the HOST path
     (docker-out-of-docker), and the port is docker-assigned then read back.
+
+    ``profile`` is the case's ``(sandbox_image, play_command)`` as
+    :func:`_sandbox_profile` resolved it; empty strings mean the shared image
+    and no game. Passed in rather than read here, so this stays a Docker-only
+    function that needs no database (ADR-0078).
     """
     settings = get_settings()
+    image, play_command = profile
+    image = image or settings.sandbox_image
+    if kind == "play" and not play_command:
+        raise RuntimeError(
+            "This case declares no play_command, so there is no game to launch."
+        )
     host_repo_root = settings.host_repo_root or str(settings.repo_root)
     workspace = settings.data_runs_dir / run_id / "workspace"
     if not workspace.exists():
@@ -2070,11 +2161,15 @@ def _launch_sandbox(client: Any, run_id: str, kind: str) -> tuple[str, int, str]
         client.containers.get(name).remove(force=True)
 
     port_key = _SANDBOX_PORTS[kind]
+    environment = {"MODE": "desktop" if kind == "play" else kind}
+    if kind == "play":
+        # Launched by the entrypoint once the desktop is up (sandbox_entrypoint.sh).
+        environment["PLAY_COMMAND"] = play_command
     container = client.containers.run(
-        image=settings.sandbox_image,
+        image=image,
         detach=True,
         name=name,
-        environment={"MODE": kind},
+        environment=environment,
         volumes={host_sandbox: {"bind": "/work", "mode": "rw"}},
         ports={port_key: None},
         labels={"harness-lab.sandbox": run_id, "harness-lab.sandbox-kind": kind},
@@ -2091,7 +2186,9 @@ def _launch_sandbox(client: Any, run_id: str, kind: str) -> tuple[str, int, str]
     if not host_port:
         raise RuntimeError("Sandbox container did not expose a host port")
 
-    path = "/vnc.html?autoconnect=1&resize=remote" if kind == "desktop" else "/"
+    path = (
+        "/vnc.html?autoconnect=1&resize=remote" if kind in ("desktop", "play") else "/"
+    )
     return name, host_port, f"http://localhost:{host_port}{path}"
 
 
@@ -2112,16 +2209,25 @@ def start_sandbox(run_id: str, kind: str) -> None:
     with Session(engine) as session:
         service = SandboxService(session)
         try:
-            client.images.get(settings.sandbox_image)
+            profile = _sandbox_profile(run_id)
+        except CaseProfileError as exc:
+            service.mark_error(run_id, kind, str(exc))
+            return
+        image = profile[0] or settings.sandbox_image
+        try:
+            client.images.get(image)
         except Exception:
+            build = (
+                "`make sandbox-build`"
+                if image == settings.sandbox_image
+                else "`make images-3d` (this case has its own image)"
+            )
             service.mark_error(
-                run_id,
-                kind,
-                "Sandbox image not found. Build it with `make sandbox-build`.",
+                run_id, kind, f"Sandbox image {image} not found. Build it with {build}."
             )
             return
         try:
-            name, port, url = _launch_sandbox(client, run_id, kind)
+            name, port, url = _launch_sandbox(client, run_id, kind, profile)
             service.mark_running(run_id, kind, name, port, url)
         except Exception as exc:
             service.mark_error(run_id, kind, repr(exc)[:800])
@@ -2162,7 +2268,7 @@ def cleanup_run_container(run_id: str) -> None:
     client = docker.from_env()
     _stop_orphan_container(client, run_id)
     # Also tear down any validation sandboxes the run left running.
-    for kind in ("terminal", "desktop"):
+    for kind in ("terminal", "desktop", "play"):
         with contextlib.suppress(Exception):
             container = client.containers.get(_sandbox_container_name(run_id, kind))
             with contextlib.suppress(Exception):

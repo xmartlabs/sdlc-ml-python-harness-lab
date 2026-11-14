@@ -522,6 +522,15 @@ sandbox-build:
 	@echo "🧰 Building sandbox image (ttyd + Xvfb + noVNC)..."
 	@docker compose build sandbox
 
+# Images for 3D game cases (ADR-0078): runner + sandbox with the Godot engine.
+# Only the cases that name them use them; `make app-up` never builds them.
+images-3d:
+	@echo "🎮 Building the 3D game images (runner + sandbox with Godot)..."
+	@docker image inspect harness-lab-runner:latest >/dev/null 2>&1 || docker compose build runner
+	@docker image inspect harness-lab-sandbox:latest >/dev/null 2>&1 || docker compose build sandbox
+	@docker compose build runner-godot sandbox-godot
+	@docker run --rm --network none harness-lab-runner-godot:latest godot --headless --version
+
 # Smoke-test the runner image directly against the host gateway (no Celery):
 # proves opencode-in-container can reach LiteLLM/LM Studio on the host.
 # Usage: make app-runner-smoke RUN=tetris-v2-K-001 [PROMPT=sdlc] [MAX_STEPS=10] \
@@ -1006,4 +1015,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill prune
+.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test images-3d sandbox-build clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill prune

@@ -204,6 +204,16 @@ versions + rolled `harness_hash`), `model_condition` (temp/context/alias),
 
 ## Open threads / next steps
 
+- **3D game lane (ADR-0078, ADR-0079, 2026-11-13).** A case may name its own
+  `runner_image` / `sandbox_image` / `play_command` / `agent_hidden`
+  (`case_profile.py`); `make images-3d` builds the Godot images; the run page has a
+  **Play** tab. `chess3d-v1` is paced in five `phases` (one step each, the run cannot
+  end itself before the last) and its grading material is masked out of the agent's
+  container. First frontier run (K-001, before phases): 41/41 in one step, 59 min,
+  US$10.4, no skills used (variant `default`). Next: `default` vs `harness` on a
+  frontier and a small model; then the racing and open-city cases. Guide:
+  `docs/guide-3d-game-cases.md`.
+
 - **Per-step reward (ADR-0076, 2026-11-12, uncommitted).** RL-inspired: the runner
   snapshots the workspace after every step, the worker regrades each snapshot with the
   case's checks, five `step_reward` scores, per-step credit, and `make prune`

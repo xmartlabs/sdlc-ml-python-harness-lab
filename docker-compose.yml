@@ -143,6 +143,26 @@ services:
     profiles:
       - build-only
 
+  # Build-only images for 3D game cases (ADR-0078): the runner and the sandbox
+  # above plus the Godot engine. Built on demand with `make images-3d`, never by
+  # `make app-up`, so no other case pays for the engine. Build the two bases
+  # first: each FROMs its sibling above.
+  runner-godot:
+    build:
+      context: .
+      dockerfile: Dockerfile.runner-godot
+    image: harness-lab-runner-godot:latest
+    profiles:
+      - build-only
+
+  sandbox-godot:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox-godot
+    image: harness-lab-sandbox-godot:latest
+    profiles:
+      - build-only
+
   # Dev frontend: Vite with hot reload, source mounted from the host.
   frontend:
     <<: [*restart, *logging]

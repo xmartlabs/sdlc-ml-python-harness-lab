@@ -113,6 +113,9 @@ unfixable = []
 "src/harness_lab_app/harness_lifecycle/cli.py" = ["T201"]
 # Bootstrap/maintenance scripts are CLIs: stdout progress is their interface.
 "scripts/*.py" = ["T201"]
+# A case's grader is a CLI too: its PASS/FAIL line is what validation records
+# as the check's detail (ADR-0078).
+"benchmarks/*/grader/*.py" = ["T201"]
 
 [tool.ruff.lint.isort]
 # Black-compatible configuration.

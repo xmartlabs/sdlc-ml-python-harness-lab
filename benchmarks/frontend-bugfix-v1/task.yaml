@@ -21,6 +21,10 @@ starter: benchmarks/frontend-bugfix-v1/starter
 target_level: 6
 complexity: small
 
+# Named in the prompt's location header instead of the pygame default main.py
+# (ADR-0079).
+entry_point: index.html
+
 validation: objective
 validation_note: >
   The tests in benchmarks/frontend-bugfix-v1/tests/test_schedule.py are the grade, one

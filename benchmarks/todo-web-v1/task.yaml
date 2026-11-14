@@ -18,6 +18,10 @@ base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
 target_level: 10
 complexity: small
 
+# Named in the prompt's location header instead of the pygame default main.py
+# (ADR-0079).
+entry_point: index.html
+
 validation: objective
 validation_note: >
   The tests in benchmarks/todo-web-v1/tests/test_todo.py are the grade. One

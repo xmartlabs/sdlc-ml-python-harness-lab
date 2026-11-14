@@ -4,7 +4,7 @@ import contextlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import (
     Depends,
@@ -33,6 +33,7 @@ from harness_lab_app.auth import (
 )
 from harness_lab_app.case_derivation import derive_candidates
 from harness_lab_app.case_draft_service import generate_case_draft
+from harness_lab_app.case_profile import CaseProfileError, play_command_for
 from harness_lab_app.case_service import (
     CaseExistsError,
     CaseService,
@@ -173,6 +174,16 @@ class ScoreRequest(BaseModel):
     interventions: int
     notes: str = ""
     rubric: dict[str, int] = {}
+
+
+def _safe_play_command(case: Any) -> str:
+    """The case's play command, or ``""`` — a bad one only hides the Play tab."""
+    if case is None:
+        return ""
+    try:
+        return play_command_for(case)
+    except CaseProfileError:
+        return ""
 
 
 def _improvements_status(runs_dir: Path, run_id: str) -> str:
@@ -2218,6 +2229,9 @@ def create_app() -> FastAPI:
             ),
             "max_steps": config.max_steps,
             "parent_run_id": run.parent_run_id or "",
+            # A case that ships a game says how to start it (ADR-0078); the run
+            # page then offers a Play tab that opens the game in a desktop.
+            "play_command": _safe_play_command(case),
         }
 
     @app.get("/api/runs/{run_id}/validation")

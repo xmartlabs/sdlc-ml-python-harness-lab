@@ -89,6 +89,11 @@ data/tmp/
 data/target-mirrors/
 # Operator clones of target repositories, made with their own credentials.
 data/checkouts/
+# Calibration solutions for graded cases (ADR-0057, ADR-0071): kept out of the
+# repository so an agent reading the lab's history cannot find the answer.
+# `swebench_official.json` predates this rule and stays tracked.
+data/reference/*
+!data/reference/swebench_official.json
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
