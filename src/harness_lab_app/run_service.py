@@ -203,14 +203,15 @@ def _expand_batch(
 def _preflight_key(config: RunConfigCreate) -> tuple:
     """The fields ``RunService.preflight`` actually reads.
 
-    Deduplication key for batch validation. Two configs with the same key
-    cannot get different preflight answers, so the second check is pure cost —
-    and preflight's cost is network round-trips.
+    Deduplication key for batch and experiment-launch validation. Two configs
+    with the same key cannot get different preflight answers, so the second
+    check is pure cost — and preflight's cost is network round-trips.
 
     Kept next to ``preflight`` on purpose: **if preflight starts reading another
-    field, it must be added here**, or a batch will skip a check it should have
-    made. ``planner_model`` and ``case_id`` are absent because preflight does
-    not consult them; including them would only fragment the cache.
+    field, it must be added here**, or a batch or an experiment arm will skip a
+    check it should have made. ``planner_model`` and ``case_id`` are absent
+    because preflight does not consult them; including them would only
+    fragment the cache.
     """
     return (
         config.dry_run,

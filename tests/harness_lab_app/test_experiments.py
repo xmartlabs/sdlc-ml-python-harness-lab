@@ -1192,6 +1192,33 @@ def test_an_experiment_can_vary_effort_between_arms(session):
     assert by_arm == {"default": "", "max": "max"}
 
 
+def test_an_effort_arm_is_preflighted_even_after_its_default_arm(session):
+    """The default arm passes first; the max arm must still be checked.
+
+    If effort were missing from the launch's preflight de-duplication key, the
+    max arm would reuse the default arm's answer, be persisted, and fail later
+    inside the runner, which reads as an effect of the treatment.
+    """
+    from harness_lab_app.run_service import RunPreflightError
+
+    service = ExperimentService(session)
+    CaseService(session).create_case(
+        CaseCreate(
+            case_id="tetris-v1",
+            name="Tetris",
+            type=CaseType.single_prompt,
+            prompt_variants={"sdlc": "Build Tetris."},
+        )
+    )
+    _effort_design(service, "effortpreflight", ExperimentMode.discovery)
+    with pytest.raises(RunPreflightError, match="no effort control"):
+        service.launch(
+            "effortpreflight",
+            _base_config(harness="claude", executor_model="claude-haiku-4-5-20251001"),
+        )
+    assert service.runs("effortpreflight") == []
+
+
 def test_a_dry_run_rehearsal_neither_locks_nor_is_blocked(session):
     """Dry runs build commands; they measure nothing, so they lock nothing."""
     service = ExperimentService(session)

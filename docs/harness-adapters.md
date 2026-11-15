@@ -66,7 +66,9 @@ longer, more thorough tests, and `low` for cheap smoke passes.
   same model at two levels makes two arms. To compare levels, vary `executor_effort`
   between the conditions of a `subject_validation` or `discovery` experiment. A
   `harness_evaluation` holds it fixed, like the model, so it cannot confound the
-  harness. A batch always runs at the default.
+  harness. A batch always runs at the default, so the batch form hides the select.
+- A launched experiment locks its effort with the rest of its configuration.
+  Relaunching it adds repetitions at the same level, and the locked panel shows it.
 - `metadata.json` records the effort that was **requested**. The CLI does not report
   the level it applied.
 

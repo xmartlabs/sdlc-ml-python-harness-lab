@@ -33,7 +33,7 @@ from harness_lab_app.models import (
     RunState,
     Validation,
 )
-from harness_lab_app.run_service import RunService
+from harness_lab_app.run_service import RunService, _preflight_key
 from harness_lab_app.schemas import RunConfigCreate
 
 if TYPE_CHECKING:
@@ -1414,22 +1414,12 @@ class ExperimentService:
         # intent, exactly as a batch is (ADR-0023).
         seen: set[tuple] = set()
         for _label, config in configs:
-            key = (
-                config.harness,
-                config.executor_model,
-                config.dry_run,
-                config.score_mode,
-                config.target_repo_id,
-                config.harness_source,
-                # The skill axes MUST be part of this key. They are exactly what
-                # a Mode A experiment varies, so without them the treatment arm
-                # dedupes onto its own baseline and its config is never
-                # preflighted — an unknown staged skill then fails at *run*
-                # time, inside one arm, which reads as a treatment effect.
-                tuple(sorted(config.skills_disabled)),
-                tuple(sorted(config.skills_extra)),
-                tuple(sorted(config.skills_invoke)),
-            )
+            # The batch path's key, not a local copy. Every field preflight
+            # reads must be in it (the skill axes, the effort): those are
+            # exactly what an experiment varies, and an arm that dedupes onto
+            # its baseline is never preflighted. It then fails at *run* time,
+            # inside one arm, which reads as a treatment effect.
+            key = _preflight_key(config)
             if key in seen:
                 continue
             seen.add(key)

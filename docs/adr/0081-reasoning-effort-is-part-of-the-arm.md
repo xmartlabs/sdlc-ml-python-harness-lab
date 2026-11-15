@@ -61,13 +61,15 @@ catalog accepts all five levels.
    is fine. Compare levels in `subject_validation` (per-cell pass rates, which warns
    when several of harness/model/effort vary) or `discovery`. The relaunch lock
    includes `executor_effort`, so one experiment cannot file two effort levels under
-   one name.
+   one name. The relaunch from the locked panel sends the stored level back.
+   Experiment launch preflight de-duplicates with the batch's `_preflight_key`,
+   which includes effort, so an arm at another level is always checked on its own.
 8. **The UI offers it only where it applies.** `EffortPicker` renders only for the
    claude harness with a model that accepts effort. It drops back to the default when
    the model changes to one that does not accept the chosen level. It is offered on
    the single-run form, Experiments and New evaluation. It is not offered when the
-   design varies the harness across arms. A batch runs at the default; vary effort
-   through an experiment.
+   design varies the harness across arms. A batch runs at the default, so the
+   batch form hides the select; vary effort through an experiment.
 
 ## Consequences
 

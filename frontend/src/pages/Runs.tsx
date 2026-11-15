@@ -1195,12 +1195,16 @@ export function Runs({
                     : m.fields.loadingModels}
             </small>
           </ModelPicker>
-          <EffortPicker
-            harness={harness}
-            model={executorModel}
-            onChange={setExecutorEffort}
-            value={executorEffort}
-          />
+          {/* A batch runs at the CLI default (handleCreateBatch), so offering a
+              level here would show a choice the batch discards. */}
+          {!batchMode ? (
+            <EffortPicker
+              harness={harness}
+              model={executorModel}
+              onChange={setExecutorEffort}
+              value={executorEffort}
+            />
+          ) : null}
           <label>
             <span>{m.fields.scoreMode}</span>
             <select value={scoreMode} disabled>
