@@ -24,6 +24,8 @@ const MESSAGES = defineMessages({
     pending: "pending",
     lastAction: "Last action",
     quiet: (s: string) => `quiet for ${s}`,
+    runningCommand: (tool: string) => `Waiting on ${tool}`,
+    runningFor: (s: string) => `running for ${s}`,
     cost: "Cost",
     costUnknown: "not reported by this model",
     turns: (n: number) => `${n} turns`,
@@ -50,6 +52,8 @@ const MESSAGES = defineMessages({
     pending: "pendiente",
     lastAction: "Última acción",
     quiet: (s: string) => `sin actividad hace ${s}`,
+    runningCommand: (tool: string) => `Esperando a ${tool}`,
+    runningFor: (s: string) => `corriendo hace ${s}`,
     cost: "Costo",
     costUnknown: "este modelo no lo reporta",
     turns: (n: number) => `${n} turnos`,
@@ -251,7 +255,24 @@ export function RunProgressPanel({ runId, live, onStopped }: Props) {
         ))}
       </ol>
       <div className="run-progress-foot">
-        {live && progress.last_action ? (
+        {live && progress.waiting_on ? (
+          <span className="run-progress-action">
+            <span className="muted">{m.runningCommand(progress.waiting_on.tool)}:</span>{" "}
+            <code>{progress.waiting_on.detail}</code>
+            {progress.waiting_on.seconds !== null ? (
+              <span
+                className={
+                  progress.waiting_on.seconds > 300
+                    ? "run-progress-quiet warn"
+                    : "run-progress-quiet"
+                }
+              >
+                {" "}
+                · {m.runningFor(duration(progress.waiting_on.seconds))}
+              </span>
+            ) : null}
+          </span>
+        ) : live && progress.last_action ? (
           <span className="run-progress-action">
             <span className="muted">{m.lastAction}:</span> <code>{progress.last_action}</code>
             {progress.quiet_seconds !== null ? (

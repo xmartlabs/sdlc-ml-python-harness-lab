@@ -1511,16 +1511,21 @@ def create_app() -> FastAPI:
             from harness_lab_app.health_service import queues_served
 
             served = queues_served()
-            # Refused only when the workers answered and none serves the second
-            # lane; with no answer at all the launch goes ahead, as preflight
-            # does when it cannot decide.
-            if served is not None and PARALLEL_RUN_QUEUE not in served:
+            # Refused unless a worker is known to serve the second lane: an
+            # unknown answer is not a yes, and the runs sent there would wait
+            # with no error anywhere.
+            if served is None or PARALLEL_RUN_QUEUE not in served:
+                detail = (
+                    "Could not ask the workers whether the second run lane is up"
+                    if served is None
+                    else "No worker serves the second run lane"
+                )
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        "No worker serves the second run lane, so half of these "
-                        "runs would wait forever. Restart the stack (make app-up) "
-                        "to start it, or launch one at a time."
+                        f"{detail}, so half of these runs could wait forever. "
+                        "Restart the stack (make app-up) to start it, or launch "
+                        "one at a time."
                     ),
                 )
         try:

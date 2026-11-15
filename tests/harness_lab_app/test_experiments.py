@@ -2600,6 +2600,7 @@ def _models_design(service, experiment_id="two-lanes", repetitions=1):
             case_ids=["tetris-v1"],
             prompt_variants=["sdlc"],
             repetitions=repetitions,
+            family_id="models-tetris-v1",
             conditions=[
                 ExperimentConditionCreate(
                     label="opus",
@@ -2673,9 +2674,36 @@ def test_a_run_that_rewrites_the_skill_catalog_never_runs_alongside(session):
         session, enqueue=lambda _r: None, enqueue_parallel=lambda _r: None
     )
     _skills_design(service, "ablation-two-lanes")
+    # Even filed as a model comparison, an ablating arm keeps the one lane.
+    experiment = service.get_experiment("ablation-two-lanes")
+    experiment.family_id = "models-tetris-v1"
+    session.add(experiment)
+    session.commit()
 
-    with pytest.raises(ExperimentError, match="one at a time"):
+    with pytest.raises(ExperimentError, match="change the skill catalog"):
         service.launch("ablation-two-lanes", _base_config(dry_run=True), parallel=2)
+
+
+def test_only_a_model_comparison_runs_two_at_a_time(session):
+    """Any other design keeps the one lane ADR-0002 guarantees."""
+    service = ExperimentService(
+        session, enqueue=lambda _r: None, enqueue_parallel=lambda _r: None
+    )
+    _skills_design(service, "harness-two-lanes")
+
+    with pytest.raises(ExperimentError, match="Only a model comparison"):
+        service.launch("harness-two-lanes", _base_config(dry_run=True), parallel=2)
+
+
+def test_two_at_a_time_without_the_second_lane_fails_instead_of_running_one(session):
+    """Silently sequential would answer a request nobody made."""
+    published: list[str] = []
+    service = ExperimentService(session, enqueue=published.append)
+    _models_design(service, "no-second-lane")
+
+    with pytest.raises(ExperimentError, match="second run lane"):
+        service.launch("no-second-lane", _base_config(dry_run=True), parallel=2)
+    assert published == []
 
 
 def test_only_one_or_two_lanes_exist(session):
@@ -2715,3 +2743,24 @@ def test_a_parallel_launch_with_no_second_worker_is_refused(monkeypatch):
         launch("x", ExperimentLaunch(config=_base_config(), parallel=2), session=None)
     assert refused.value.status_code == 422
     assert "second run lane" in refused.value.detail
+
+
+def test_a_parallel_launch_is_refused_when_the_lane_cannot_be_confirmed(monkeypatch):
+    """Unknown is not a yes: the runs sent there could wait forever."""
+    from fastapi import HTTPException
+    from fastapi.routing import APIRoute
+
+    from harness_lab_app import health_service
+    from harness_lab_app.api import create_app
+    from harness_lab_app.schemas import ExperimentLaunch
+
+    monkeypatch.setattr(health_service, "queues_served", lambda: None)
+    launch = next(
+        route.endpoint
+        for route in create_app().routes
+        if isinstance(route, APIRoute)
+        and route.path == "/api/experiments/{experiment_id}/launch"
+    )
+    with pytest.raises(HTTPException) as refused:
+        launch("x", ExperimentLaunch(config=_base_config(), parallel=2), session=None)
+    assert "Could not ask the workers" in refused.value.detail

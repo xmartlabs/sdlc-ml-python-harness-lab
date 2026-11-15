@@ -1395,6 +1395,24 @@ class ExperimentService:
         if parallel not in (1, 2):
             raise ExperimentError("Runs execute 1 or 2 at a time.")
         experiment = self.get_experiment(experiment_id)
+        if parallel == 2:
+            from harness_lab_app.model_comparison import is_model_comparison
+
+            # Two at a time is a model comparison's option (ADR-0082): its arms
+            # differ only by harness and model and rewrite nothing shared. Any
+            # other design keeps the one lane ADR-0002 guarantees.
+            if not is_model_comparison(experiment.family_id):
+                raise ExperimentError(
+                    "Only a model comparison (Evaluate → Compare models) runs two "
+                    "at a time; launch this experiment one at a time."
+                )
+            # Asked for two lanes with no way to publish on the second: running
+            # sequentially anyway would answer a request nobody made.
+            if self.enqueue_parallel is None:
+                raise ExperimentError(
+                    "Two at a time needs the second run lane, which this launch "
+                    "cannot reach. Launch it one at a time."
+                )
         conditions = self.conditions(experiment_id)
         if not conditions:
             raise ExperimentError(f"Experiment '{experiment_id}' has no conditions.")

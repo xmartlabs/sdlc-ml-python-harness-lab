@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import json
 import logging
@@ -2585,16 +2586,36 @@ def _stop_orphan_container(client: Any, run_id: str) -> None:
         container.remove(force=True)
 
 
-def runs_in_flight() -> set[str]:
+def _run_id_of(task: dict[str, Any]) -> str | None:
+    """The run id an active ``execute_run`` task carries.
+
+    Celery reports a task's ``args`` as a list on this version, but as their
+    ``repr`` string (``"['chess3d-v1-K-020']"``) on others; both are read.
+    """
+    args = task.get("args")
+    if isinstance(args, str):
+        try:
+            args = ast.literal_eval(args)
+        except (ValueError, SyntaxError):
+            return None
+    if isinstance(args, (list, tuple)) and args:
+        return str(args[0])
+    return None
+
+
+def runs_in_flight() -> set[str] | None:
     """Run ids an ``execute_run`` task is executing on some live worker.
 
-    Empty when no worker answers — at boot of the only worker, that is every
-    `running` row being an orphan, the behaviour this predates.
+    ``None`` when no worker could be asked — unknown, which is not "nothing is
+    running": with two run lanes, reading it as empty would fail every run
+    the other lane is still driving.
     """
     try:
-        replies = celery_app.control.inspect(timeout=2.0).active() or {}
+        replies = celery_app.control.inspect(timeout=2.0).active()
     except Exception:
-        return set()
+        return None
+    if replies is None:
+        return None
     live: set[str] = set()
     for tasks_on_worker in replies.values():
         for task in tasks_on_worker or []:
@@ -2602,9 +2623,9 @@ def runs_in_flight() -> set[str]:
                 continue
             if task.get("name") != "harness_lab_app.tasks.execute_run":
                 continue
-            args = task.get("args") or []
-            if isinstance(args, (list, tuple)) and args:
-                live.add(str(args[0]))
+            run_id = _run_id_of(task)
+            if run_id:
+                live.add(run_id)
     return live
 
 
@@ -2630,6 +2651,15 @@ def reconcile_stale_runs(
 
         client = docker.from_env()
     live = runs_in_flight() if in_flight is None else in_flight
+    if live is None:
+        # Fail closed: with no answer from the workers there is no telling a
+        # run another lane drives from an orphan. The health panel's heal
+        # button reconciles once the workers answer again.
+        logger.warning(
+            "Skipping run reconciliation: no worker answered the active-task "
+            "inspection, so in-flight runs cannot be told from orphans."
+        )
+        return 0
     reconciled = 0
     with Session(db_engine if db_engine is not None else engine) as session:
         service = RunService(session)

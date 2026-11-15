@@ -73,9 +73,12 @@ gateway models run under `opencode`.
    - A skill ablation changes the views for every run, so a launch that asks for two
      at a time refuses any arm with `skills_disabled` or `skills_extra`.
 
-   The launch is refused when no worker serves `runs-parallel`, so half the runs
-   never sit `pending` unseen. `GET /api/runs/lanes` lets the wizard say whether the
-   second lane is up.
+   Two at a time is accepted only for an experiment of a `models-` family, and only
+   when the launch can publish to the second lane. Otherwise it is refused rather
+   than quietly run one at a time. The API also refuses it unless a worker is
+   *known* to serve `runs-parallel`: no answer from the workers counts as no. That
+   way half the runs never sit `pending` unseen. `GET /api/runs/lanes` lets the
+   wizard offer the option only when the lane is confirmed.
 6. **Sandboxes have their own queue.** Terminal, Desktop and Play go to
    `interactive`, served by their own worker. On the run lane they queued behind a
    run of several hours, so a finished game could not be played while another run
@@ -84,7 +87,9 @@ gateway models run under `opencode`.
    reconciles `running` rows on boot. With three workers, a restart of one used to
    fail, and stop the container of, a run another was still executing. Rows that
    some live worker reports as an active `execute_run` (`runs_in_flight`) are now
-   left alone.
+   left alone. The check fails closed: when no worker answers the inspection, the
+   reconciliation touches nothing, because "unknown" is not "nothing running". The
+   health panel's heal button reconciles once the workers answer.
 
 ## Consequences
 

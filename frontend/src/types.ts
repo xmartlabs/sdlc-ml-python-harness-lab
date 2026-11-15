@@ -639,6 +639,8 @@ export type RunProgress = {
   cost_complete: boolean;
   quiet_seconds: number | null;
   last_action: string | null;
+  /** The tool call still running (asked for, no result yet), and for how long. */
+  waiting_on: { tool: string; detail: string; seconds: number | null } | null;
   slow: RunSlowPhase | null;
   extra_wait_seconds: number;
   extend_seconds: number;

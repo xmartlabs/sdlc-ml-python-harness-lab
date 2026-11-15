@@ -655,6 +655,59 @@ def test_reconcile_spares_a_run_another_live_worker_is_executing():
     assert get_run_state(engine, "task-orphan-2")[0] == RunState.failed
 
 
+def test_reconcile_touches_nothing_when_the_workers_cannot_be_asked(monkeypatch):
+    """Unknown is not empty: failing every `running` row would kill the other lane."""
+    from harness_lab_app import tasks
+
+    engine = make_engine()
+    create_pending_run(engine, "task-unknown-1")
+    with Session(engine) as session:
+        RunService(session).mark_running("task-unknown-1")
+    monkeypatch.setattr(tasks, "runs_in_flight", lambda: None)
+
+    assert reconcile_stale_runs(client=FakeReconcileClient(), db_engine=engine) == 0
+    assert get_run_state(engine, "task-unknown-1")[0] == RunState.running
+
+
+def test_active_tasks_are_read_whether_celery_reports_args_as_a_list_or_a_string(
+    monkeypatch,
+):
+    from harness_lab_app import tasks
+
+    class Inspect:
+        def active(self):
+            return {
+                "runs@a": [
+                    {
+                        "name": "harness_lab_app.tasks.execute_run",
+                        "args": ["chess3d-v1-K-020"],
+                    }
+                ],
+                "parallel@b": [
+                    {
+                        "name": "harness_lab_app.tasks.execute_run",
+                        "args": "['chess3d-v1-K-021']",
+                    },
+                    {"name": "harness_lab_app.tasks.start_sandbox", "args": ["x"]},
+                ],
+                "interactive@c": [],
+            }
+
+    monkeypatch.setattr(tasks.celery_app.control, "inspect", lambda **_kw: Inspect())
+    assert tasks.runs_in_flight() == {"chess3d-v1-K-020", "chess3d-v1-K-021"}
+
+
+def test_no_reply_from_any_worker_is_unknown_not_empty(monkeypatch):
+    from harness_lab_app import tasks
+
+    class Silent:
+        def active(self):
+            return None
+
+    monkeypatch.setattr(tasks.celery_app.control, "inspect", lambda **_kw: Silent())
+    assert tasks.runs_in_flight() is None
+
+
 def test_reconcile_ignores_finished_runs():
     engine = make_engine()
     create_pending_run(engine, "task-done-1")

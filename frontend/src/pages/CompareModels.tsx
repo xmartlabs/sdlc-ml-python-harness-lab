@@ -121,7 +121,7 @@ const MESSAGES = defineMessages({
         steps: "Pasos por corrida",
         stepsHint: (n: number) => `El caso declara ${n}.`,
         question: "Pregunta",
-        defaultQuestion: (caseId: string) => `Which model builds ${caseId} best?`,
+        defaultQuestion: (caseId: string) => `¿Qué modelo construye mejor ${caseId}?`,
         summary: (models: number, reps: number, runs: number) =>
             `${models} modelos x ${reps} repetición(es) = ${runs} corridas.`,
         sequential:
@@ -266,7 +266,8 @@ export function CompareModels() {
     if (!selected) problems.push(m.pickCase);
     if (chosen.length < 2) problems.push(m.pickTwoModels);
     if (duplicate) problems.push(m.duplicate);
-    if (pace === 2 && laneUp === false) problems.push(m.laneDown);
+    if (pace === 2 && laneUp !== true)
+        problems.push(laneUp === false ? m.laneDown : m.laneUnknown);
     if (selected && variants.length === 0) problems.push(m.noVariant);
     const blocking = problems.length > 0;
 
@@ -580,7 +581,7 @@ export function CompareModels() {
                     <label className="checkbox">
                         <input
                             checked={pace === 2}
-                            disabled={laneUp === false}
+                            disabled={laneUp !== true}
                             name="compare-pace"
                             onChange={() => setPace(2)}
                             type="radio"

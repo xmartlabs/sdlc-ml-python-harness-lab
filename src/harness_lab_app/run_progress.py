@@ -85,14 +85,51 @@ def _last_action(event: dict[str, Any]) -> str | None:
     return None
 
 
+# Events that are the agent doing something. Everything else in the stream is
+# the CLI talking about itself — above all `tool_progress`, a heartbeat Claude
+# Code sends every 30 s while a tool runs, which made a two-minute wait on one
+# command read as "quiet for 3 s" (chess3d-v1-K-004).
+_AGENT_EVENTS = frozenset({"assistant", "user", "result"})
+
+
+def _tool_uses(event: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """``(id, tool, detail)`` of every tool call an assistant event makes."""
+    calls = []
+    for item in (event.get("message") or {}).get("content") or []:
+        if isinstance(item, dict) and item.get("type") == "tool_use" and item.get("id"):
+            data = item.get("input") or {}
+            detail = data.get("command") or data.get("file_path") or data.get("pattern")
+            calls.append(
+                (
+                    str(item["id"]),
+                    str(item.get("name") or "tool"),
+                    " ".join(str(detail or "").split())[:200],
+                )
+            )
+    return calls
+
+
+def _tool_results(event: dict[str, Any]) -> set[str]:
+    return {
+        str(item.get("tool_use_id"))
+        for item in (event.get("message") or {}).get("content") or []
+        if isinstance(item, dict) and item.get("type") == "tool_result"
+    }
+
+
 def step_activity(path: Path) -> dict[str, Any]:
-    """Turns, output tokens, cost (once known) and the last action of a step."""
+    """Turns, output tokens, cost (once known) and the last action of a step.
+
+    Also ``waiting_on``: the tool call still running — asked for, no result
+    yet — and when it started, so a long command reads as one, not as silence.
+    """
     turns = 0
     output_tokens = 0
     first_ts: float | None = None
     last_ts: float | None = None
     last_action: str | None = None
     result: dict[str, Any] | None = None
+    pending: dict[str, dict[str, Any]] = {}
     try:
         handle = path.open(errors="replace")
     except OSError:
@@ -105,24 +142,33 @@ def step_activity(path: Path) -> dict[str, Any]:
                 continue
             if not isinstance(event, dict):
                 continue
+            kind = event.get("type")
             ts = _parse_ts(event.get("_received_at"))
-            if ts is not None:
+            if ts is not None and kind in _AGENT_EVENTS:
                 first_ts = ts if first_ts is None else first_ts
                 last_ts = ts
-            kind = event.get("type")
             if kind == "assistant":
                 turns += 1
                 usage = (event.get("message") or {}).get("usage") or {}
                 output_tokens += int(usage.get("output_tokens") or 0)
                 last_action = _last_action(event) or last_action
+                for tool_id, tool, detail in _tool_uses(event):
+                    pending[tool_id] = {"tool": tool, "detail": detail, "since": ts}
+            elif kind == "user":
+                for tool_id in _tool_results(event):
+                    pending.pop(tool_id, None)
             elif kind == "result":
                 result = event
+                pending.clear()
+    running = list(pending.values())
     activity: dict[str, Any] = {
         "turns": turns,
         "output_tokens": output_tokens,
         "first_event_at": first_ts,
         "last_event_at": last_ts,
         "last_action": last_action,
+        # The oldest call still open: the one the agent is blocked on.
+        "waiting_on": running[0] if running else None,
     }
     if result is not None:
         activity["finished"] = True
@@ -224,6 +270,16 @@ def fill_final_grades(progress: dict[str, Any], objective: dict[str, Any]) -> No
             step["grade"] = final[step["step"]]
 
 
+def _waiting_on(waiting_on: dict[str, Any] | None, now: float) -> dict[str, Any] | None:
+    """The command the running phase is blocked on, with how long it has run."""
+    if not waiting_on:
+        return None
+    waiting = dict(waiting_on)
+    since = waiting.pop("since", None)
+    waiting["seconds"] = round(now - since, 1) if since is not None else None
+    return waiting
+
+
 def progress_clock(ended_at: datetime | None) -> float | None:
     """The ``now`` to read a run's progress at: its end once it has one.
 
@@ -257,6 +313,7 @@ def read_progress(
     raw_grades = live.get("steps")
     grades: dict[str, Any] = raw_grades if isinstance(raw_grades, dict) else {}
     rows: list[dict[str, Any]] = []
+    waiting_by_step: dict[int, Any] = {}
     total_cost = 0.0
     cost_known = True
     # Whether any step reported a cost at all. A local model reports none, and
@@ -271,6 +328,7 @@ def read_progress(
         )
         title = phase_title(prompt)
         activity = _activity(steps_dir, number)
+        waiting_by_step[number] = activity.get("waiting_on")
         meta = _read_json(steps_dir / f"step-{number}.meta.json")
         done = bool(meta) or bool(activity.get("finished"))
         started = activity.get("first_event_at")
@@ -302,6 +360,9 @@ def read_progress(
             }
         )
     current = next((row for row in reversed(rows) if not row["done"]), None)
+    current_waiting = (
+        waiting_by_step.get(current["step"]) if current is not None else None
+    )
     last_event = max(
         (row["last_event_at"] for row in rows if row["last_event_at"]), default=None
     )
@@ -317,5 +378,6 @@ def read_progress(
         "cost_complete": cost_known,
         "quiet_seconds": round(now - last_event, 1) if last_event else None,
         "last_action": current["last_action"] if current else None,
+        "waiting_on": _waiting_on(current_waiting, now),
         "slow": slow or None,
     }
