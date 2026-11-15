@@ -278,6 +278,9 @@ class Run(SQLModel, table=True):
     exit_code: int | None = None
     failure_reason: str | None = None
     cancel_requested: bool = False
+    # Seconds a person added to a slow phase with "Keep waiting". The phase
+    # watchdog reads it on every tick; a run nobody looked at keeps 0.
+    extra_wait_seconds: int = 0
     score: int | None = None
     interventions: int | None = None
     notes: str = ""

@@ -79,6 +79,17 @@ class Settings(BaseSettings):
     # Five in a row is already conclusive — the endpoint is down, the model id
     # is wrong, or the prompt does not fit its context. Set to 0 to disable.
     run_max_stream_errors: int = 5
+    # A phase that runs past its expected time is not cut blindly: the run is
+    # flagged "slower than expected" and a person can keep waiting or stop it
+    # and grade what it built. The expected time is the case's own
+    # `phase_budget_minutes`, else three times the median of that phase in the
+    # case's earlier runs, never below this floor. 0 disables the check.
+    run_phase_floor_seconds: int = 2700
+    # How long a slow phase waits for that decision before the case's
+    # `on_slow` policy applies (stop, by default: experiment runs have nobody
+    # watching). "Keep waiting" adds `run_phase_extend_seconds` each time.
+    run_slow_grace_seconds: int = 900
+    run_phase_extend_seconds: int = 1800
     # In-platform validation sandboxes (web terminal / noVNC desktop per run).
     sandbox_image: str = "harness-lab-sandbox:latest"
     sandbox_idle_seconds: int = 3600

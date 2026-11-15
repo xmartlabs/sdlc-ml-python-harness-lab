@@ -48,6 +48,17 @@ reading of the numbers, not a new measurement.
 
 ## On a run page
 
+- **Progress** — while a multi-phase run is going, a strip of phases above the log
+  shows:
+  - each phase's name, how long it took and what it cost;
+  - its **live grade** (how many checks its snapshot already passes), as soon as the
+    phase ends;
+  - the agent's last action, and how long it has been quiet.
+
+  When a phase runs past its expected time, the page flags it and offers **Keep
+  waiting** or **Stop and grade**. With no answer, the case decides (`on_slow`).
+  A run cut for time or by you is still graded on what it built, and keeps its
+  reason as the verdict. [ADR-0080](adr/0080-a-long-run-shows-its-progress-and-asks-before-it-is-cut.md).
 - **Validation** — each check the case ran, *passed*, *failed* or *inconclusive*.
   Inconclusive means the check could not measure (a timeout, no network, a missing
   grader dependency); it counts for neither side.

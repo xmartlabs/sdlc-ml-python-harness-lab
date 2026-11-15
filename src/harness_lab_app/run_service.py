@@ -1258,6 +1258,29 @@ class RunService:
         self.session.refresh(run)
         return run
 
+    def keep_waiting(self, run_id: str, seconds: int) -> Run:
+        """Give a running run's slow phase more time ("Keep waiting").
+
+        Adds to ``extra_wait_seconds``, which the phase watchdog reads on every
+        tick: the flag lifts until the new deadline. A run that is not running
+        is returned unchanged — there is no phase left to wait for.
+        """
+        run = self.get_run(run_id)
+        if run.state != RunState.running:
+            return run
+        run.extra_wait_seconds = int(run.extra_wait_seconds or 0) + max(0, int(seconds))
+        self.session.add(run)
+        self.session.add(
+            RunEvent(
+                run_id=run_id,
+                level="info",
+                message=f"Keep waiting: {round(seconds / 60)} more minutes for this phase",
+            )
+        )
+        self.session.commit()
+        self.session.refresh(run)
+        return run
+
     def cancel_run(self, run_id: str) -> Run:
         run = self.get_run(run_id)
         if run.state in {RunState.completed, RunState.failed, RunState.cancelled}:

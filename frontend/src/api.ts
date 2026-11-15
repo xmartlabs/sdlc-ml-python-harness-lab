@@ -76,6 +76,7 @@ import type {
   SessionState,
   RunContext,
   RunEventRecord,
+  RunProgress,
   RunRecord,
   SandboxRecord,
   StagedSkillFileRecord,
@@ -664,6 +665,12 @@ export const api = {
     request<RunEventRecord[]>(`/api/runs/${runId}/logs?ascending=true`),
   cancelRun: (runId: string) =>
     request<RunRecord>(`/api/runs/${runId}/cancel`, { method: "POST" }),
+  getRunProgress: (runId: string) => request<RunProgress>(`/api/runs/${runId}/progress`),
+  keepWaiting: (runId: string) =>
+    request<{ run_id: string; extra_wait_seconds: number }>(
+      `/api/runs/${runId}/keep-waiting`,
+      { method: "POST" }
+    ),
   retryRun: (runId: string) =>
     request<RunRecord>(`/api/runs/${runId}/retry`, { method: "POST" }),
   cloneRun: (runId: string) =>

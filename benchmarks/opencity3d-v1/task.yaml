@@ -26,6 +26,16 @@ sandbox_image: harness-lab-sandbox-godot:latest
 play_command: "godot --path /work"
 entry_point: project.godot
 
+# Each phase is expected to finish within this many minutes (ADR-0080). Past it
+# the run is flagged slow on its page; `on_slow: wait` keeps it running until a
+# person chooses — the racing reference measured phases of 5 to 52 minutes, and
+# a frontier model taking 70 minutes on its AI phase is slow, not stuck.
+phase_budget_minutes: 75
+on_slow: wait
+# The ceiling for the whole run: five phases may take longer than the lab's
+# two-hour default, and the phases above are what is watched closely.
+run_timeout_minutes: 360
+
 # The map the agent builds from, copied into the empty workspace before the
 # agent runs (ADR-0068): {workspace}/data/ciudad-vieja.json. The grader keeps
 # its own canonical copy in data/ and generates the held-out map from it.

@@ -149,6 +149,29 @@ def profile_from_task(raw: dict[str, Any]) -> dict[str, Any]:
     hidden = agent_hidden_for(raw)
     if hidden:
         profile["agent_hidden"] = hidden
+    budget = raw.get("phase_budget_minutes")
+    if budget is not None:
+        try:
+            minutes = int(budget)
+        except (TypeError, ValueError) as exc:
+            raise CaseProfileError("phase_budget_minutes must be an integer.") from exc
+        if not 1 <= minutes <= 24 * 60:
+            raise CaseProfileError("phase_budget_minutes must be between 1 and 1440.")
+        profile["phase_budget_minutes"] = minutes
+    total = raw.get("run_timeout_minutes")
+    if total is not None:
+        try:
+            total_minutes = int(total)
+        except (TypeError, ValueError) as exc:
+            raise CaseProfileError("run_timeout_minutes must be an integer.") from exc
+        if not 10 <= total_minutes <= 24 * 60:
+            raise CaseProfileError("run_timeout_minutes must be between 10 and 1440.")
+        profile["run_timeout_minutes"] = total_minutes
+    on_slow = raw.get("on_slow")
+    if on_slow is not None:
+        if on_slow not in ("stop", "wait"):
+            raise CaseProfileError("on_slow must be 'stop' or 'wait'.")
+        profile["on_slow"] = on_slow
     entry = str(raw.get("entry_point") or "").strip()
     if entry:
         if entry.startswith("/") or ".." in entry.split("/") or "\n" in entry:
@@ -165,4 +188,25 @@ PROFILE_KEYS = (
     "play_command",
     "agent_hidden",
     "entry_point",
+    "phase_budget_minutes",
+    "on_slow",
+    "run_timeout_minutes",
 )
+
+
+def run_timeout_for(case: Any, default_seconds: int) -> int:
+    """The run's total budget in seconds: the case's own, else the lab's default."""
+    minutes = _meta(case).get("run_timeout_minutes")
+    if isinstance(minutes, int) and minutes > 0:
+        return minutes * 60
+    return default_seconds
+
+
+def slow_policy_for(case: Any) -> tuple[int | None, str]:
+    """``(phase_budget_minutes or None, on_slow)`` a case declares; stop by default."""
+    meta = _meta(case)
+    budget = meta.get("phase_budget_minutes")
+    on_slow = str(meta.get("on_slow") or "stop")
+    if on_slow not in ("stop", "wait"):
+        on_slow = "stop"
+    return (int(budget) if isinstance(budget, int) and budget > 0 else None), on_slow

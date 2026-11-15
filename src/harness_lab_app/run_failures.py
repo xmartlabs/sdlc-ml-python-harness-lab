@@ -38,6 +38,10 @@ _KINDS: tuple[tuple[str, str, str], ...] = (
     # `tasks._stall_failure`. That silence is the agent's own doing (a tool call
     # that never returns), so unlike the two above it *is* a result.
     ("stalled", "Run stalled:", "stalled"),
+    # A phase past its expected time that nobody chose to keep waiting for.
+    # Like a timeout it is a result about the agent — too slow — and the work
+    # it left is graded (ADR-0080).
+    ("timeout", "Phase too slow:", "phase too slow"),
     ("timeout", "Run timed out", "timed out"),
 )
 

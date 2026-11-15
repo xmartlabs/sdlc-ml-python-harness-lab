@@ -108,6 +108,15 @@ def _apply_sqlite_compat_migrations() -> None:
             connection.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_run_batch_id ON run (batch_id)")
             )
+        if "extra_wait_seconds" not in columns:
+            # The time a person granted a slow phase with "Keep waiting"
+            # (run_progress, tasks._PhaseWatch). Zero for every run before it.
+            connection.execute(
+                text(
+                    "ALTER TABLE run ADD COLUMN extra_wait_seconds INTEGER "
+                    "NOT NULL DEFAULT 0"
+                )
+            )
         if "parent_run_id" not in columns:
             # Nullable for the same reason as batch_id: a run that predates
             # continuations had no parent, and inventing one would fabricate

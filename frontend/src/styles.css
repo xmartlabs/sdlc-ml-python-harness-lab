@@ -4302,3 +4302,138 @@ button.danger:hover {
 .step-reward-table .chip {
   margin: 0 4px 4px 0;
 }
+
+/* --- Run progress (ADR-0080): phases, time, cost, live grades, slow-phase choice --- */
+.run-progress {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+}
+
+.run-phases {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-phase {
+  display: grid;
+  gap: 4px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  min-width: 0;
+}
+
+.run-phase--running {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+
+.run-phase--pending {
+  background: var(--panel-soft);
+  color: var(--muted);
+}
+
+.run-phase-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 12px;
+}
+
+.run-phase-label {
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+.run-phase-state {
+  color: var(--muted);
+}
+
+.run-phase--running .run-phase-state {
+  color: var(--accent);
+}
+
+.run-phase--done .run-phase-state {
+  color: var(--success);
+}
+
+.run-phase-name {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.run-phase-stats {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-phase-grade {
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.run-phase-bar {
+  display: block;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.run-phase-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--success);
+}
+
+.run-progress-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.run-progress-action {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.run-progress-quiet.warn {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.run-progress-slow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--warning);
+  border-radius: 10px;
+  background: var(--warning-soft);
+  color: var(--text);
+}
+
+.run-progress-slow p {
+  margin: 4px 0 0;
+}

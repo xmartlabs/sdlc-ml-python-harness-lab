@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -27,8 +28,10 @@ from harness_lab_app.case_profile import (
     CaseProfileError,
     agent_hidden_for,
     play_command_for,
+    run_timeout_for,
     runner_image_for,
     sandbox_image_for,
+    slow_policy_for,
 )
 from harness_lab_app.case_service import CaseService, resolve_prompt_variant_text
 from harness_lab_app.celery_app import celery_app
@@ -50,6 +53,12 @@ from harness_lab_app.models import (
     RunEvent,
     RunState,
     utc_now,
+)
+from harness_lab_app.phase_watch import (
+    LivePhaseGrader,
+    PhaseWatch,
+    expected_seconds,
+    phase_history,
 )
 from harness_lab_app.run_service import RunService, continuation_source_dir
 from harness_lab_app.runner_adapter import BenchRunAdapter
@@ -436,9 +445,28 @@ def _provision_pro_workspace(session: Session, run_id: str, case_id: str) -> Non
 
 
 def _cancel_requested(session: Session, run_id: str) -> bool:
+    return _run_controls(session, run_id)[0]
+
+
+def _run_controls(session: Session, run_id: str) -> tuple[bool, int]:
+    """``(cancel_requested, extra_wait_seconds)``: what a person asked of the run."""
     session.expire_all()
     run = session.exec(select(Run).where(Run.run_id == run_id)).first()
-    return bool(run and run.cancel_requested)
+    if run is None:
+        return False, 0
+    return bool(run.cancel_requested), int(run.extra_wait_seconds or 0)
+
+
+# `--- Step 3/5 ---`: bench_run's marker for the start of a step.
+_STEP_MARKER_RE = re.compile(r"---\s*Step\s+(\d+)/(\d+)\s*---")
+
+
+def _wall_clock() -> float:
+    """Seconds since the epoch: the clock every run budget is measured on.
+
+    A function rather than a bare ``time.time`` so tests can drive it.
+    """
+    return time.time()
 
 
 def _drain(handle: RunHandle, lines: Queue[tuple[str, str] | None]) -> None:
@@ -483,8 +511,15 @@ def _stream_run(
     model_wait_seconds: int = 0,
     max_stream_errors: int = 0,
     harness: str = "",
+    phase_watch: PhaseWatch | None = None,
+    live_grader: LivePhaseGrader | None = None,
 ) -> StreamOutcome:
     """Persist run output as RunEvents; watch for the four ways a run goes bad.
+
+    ``phase_watch`` adds a fifth, per phase rather than per run: a phase past
+    its expected time is flagged for a person to decide on, and stopped only
+    when nobody does (``slow_phase``). ``live_grader`` grades each phase as it
+    finishes. Both are optional, so a single-step case is watched as before.
 
     ``stall_seconds`` catches the failure ``timeout_seconds`` structurally
     cannot: a run that is not slow but *stuck*, producing nothing while its
@@ -521,16 +556,29 @@ def _stream_run(
     failed_requests = 0
     awaiting_model = False
     stopped = False
-    started = time.monotonic()
+    step: int | None = None
+    step_started: float | None = None
+    extra_wait = 0
+    # Wall-clock time, not `time.monotonic()`: the worker runs in Docker
+    # Desktop's VM, whose monotonic clock stops while the host sleeps. A run
+    # that spanned three hours of a laptop's sleep was measured at 28% of its
+    # real length and outlived its two-hour budget by three hours
+    # (racing3d-v1-K-001). Sleeping time is time the operator waited too.
+    started = _wall_clock()
     last_output = started
     last_cancel_check = 0.0
     while True:
-        now = time.monotonic()
+        now = _wall_clock()
         if stop_reason is None:
             if now - last_cancel_check >= 1.0:
                 last_cancel_check = now
-                if _cancel_requested(session, run_id):
+                cancelled, extra_wait = _run_controls(session, run_id)
+                if cancelled:
                     stop_reason = "cancelled"
+                elif phase_watch is not None:
+                    stop_reason = phase_watch.tick(step, step_started, extra_wait, now)
+                if live_grader is not None:
+                    live_grader.poll()
             if stop_reason is None and now - started >= timeout_seconds:
                 stop_reason = "timeout"
             if stop_reason is None:
@@ -559,13 +607,16 @@ def _stream_run(
             break
         # Any output at all resets the stall clock, including the blank lines
         # dropped just below — a run that is talking is a run that is alive.
-        last_output = time.monotonic()
+        last_output = _wall_clock()
         level, message = item
         if not message:
             continue
         session.add(RunEvent(run_id=run_id, level=level, message=message))
         session.commit()
         tail.append(message)
+        marker = _STEP_MARKER_RE.search(message)
+        if marker is not None:
+            step, step_started = int(marker.group(1)), last_output
         awaiting_model = run_failures.awaits_model_response(message, harness)
         if run_failures.is_model_request(message, harness):
             model_requests += 1
@@ -733,6 +784,15 @@ def _watchdog_failure(outcome: StreamOutcome, settings: Any, tail: str) -> str:
         )
     if outcome.stop_reason == "endpoint":
         return _endpoint_failure(outcome, tail)
+    if outcome.stop_reason == "slow_phase":
+        return _with_tail(
+            "Phase too slow: it ran past its expected time, nobody chose to keep "
+            "waiting within the grace period, and the case's policy is to stop. "
+            "The work it left was graded. Raise the case's phase_budget_minutes, "
+            "or keep waiting from the run page next time.",
+            tail,
+            "Last output:",
+        )
     return f"Run timed out after {settings.run_timeout_seconds}s"
 
 
@@ -833,19 +893,46 @@ def _execute_run_body(
             # calibration references are masked out of it (ADR-0079).
             options["hidden"] = hidden
             handle = executor.start(run_id, command, **options)
-            outcome = _stream_run(
+            phase_watch, live_grader = _phase_supervision(
                 session,
                 run_id,
-                handle,
-                settings.run_timeout_seconds,
-                getattr(settings, "run_stall_seconds", 0),
-                getattr(settings, "run_model_wait_seconds", 0),
-                getattr(settings, "run_max_stream_errors", 0),
-                harness=str(config_payload.harness or ""),
+                config_payload.case_id,
+                config_payload.max_steps,
+                settings,
             )
-            exit_code = _wait_bounded(handle, settings.run_timeout_seconds + 60)
+            # A paced case may need more than the lab's default total: its
+            # phases are watched one by one, and this is only the ceiling.
+            run_timeout = settings.run_timeout_seconds
+            with contextlib.suppress(ValueError):
+                run_timeout = run_timeout_for(
+                    CaseService(session).get_case(config_payload.case_id), run_timeout
+                )
+            try:
+                outcome = _stream_run(
+                    session,
+                    run_id,
+                    handle,
+                    run_timeout,
+                    getattr(settings, "run_stall_seconds", 0),
+                    getattr(settings, "run_model_wait_seconds", 0),
+                    getattr(settings, "run_max_stream_errors", 0),
+                    harness=str(config_payload.harness or ""),
+                    phase_watch=phase_watch,
+                    live_grader=live_grader,
+                )
+            finally:
+                if phase_watch is not None:
+                    phase_watch.close()
+                if live_grader is not None:
+                    # A grade in flight finishes before the final validation
+                    # reads the same snapshots; bounded, so it never holds the
+                    # run open.
+                    live_grader.join(timeout=300)
+            exit_code = _wait_bounded(handle, run_timeout + 60)
             if outcome.stop_reason == "cancelled":
                 service.mark_cancelled(run_id, exit_code)
+                if _cut_measures_the_agent(outcome.stop_reason):
+                    _grade_what_was_left(session, run_id, "cancelled")
             elif outcome.stop_reason is not None:
                 service.mark_finished(
                     run_id,
@@ -854,6 +941,11 @@ def _execute_run_body(
                         outcome, settings, "\n".join(outcome.tail)[-600:]
                     ),
                 )
+                # A run cut for time still built something, and the work it
+                # left is graded rather than thrown away. A run cut because the
+                # model never answered measured nothing and is not graded.
+                if _cut_measures_the_agent(outcome.stop_reason):
+                    _grade_what_was_left(session, run_id, outcome.stop_reason)
             else:
                 failure = None
                 if _model_never_answered(outcome):
@@ -892,6 +984,127 @@ def _execute_run_body(
             _export_langfuse_traces(session, run_id)
         except Exception as exc:
             service.mark_finished(run_id, -1, f"Executor error: {exc!r}")
+
+
+def _phase_supervision(
+    session: Session, run_id: str, case_id: str, max_steps: int, settings: Any
+) -> tuple[PhaseWatch | None, LivePhaseGrader | None]:
+    """The phase watch and the live grader for a multi-step run, or ``(None, None)``.
+
+    A single-step run has no phases to watch: its total and silence budgets
+    are the whole supervision, as before.
+    """
+    if int(max_steps or 1) <= 1:
+        return None, None
+    run_dir = settings.data_runs_dir / run_id
+    floor = int(getattr(settings, "run_phase_floor_seconds", 0) or 0)
+    budget_minutes: int | None = None
+    on_slow = "stop"
+    with contextlib.suppress(ValueError, CaseProfileError):
+        budget_minutes, on_slow = slow_policy_for(
+            CaseService(session).get_case(case_id)
+        )
+    watch: PhaseWatch | None = None
+    if floor > 0 or budget_minutes:
+        history = phase_history(settings.data_runs_dir, case_id, run_id)
+
+        def budget_for(step: int) -> int:
+            return expected_seconds(
+                step,
+                case_budget_minutes=budget_minutes,
+                history=history,
+                floor_seconds=floor,
+            )
+
+        def flag(message: str) -> None:
+            # Its own session: the watchdog's is mid-loop and must stay clean.
+            with Session(session.get_bind()) as own:
+                own.add(RunEvent(run_id=run_id, level="warning", message=message))
+                own.commit()
+
+        watch = PhaseWatch(
+            run_dir=run_dir,
+            budget_for=budget_for,
+            grace_seconds=int(getattr(settings, "run_slow_grace_seconds", 900) or 0),
+            on_slow=on_slow,
+            on_flag=flag,
+        )
+
+    def grade(step: int, first: bool) -> dict[str, Any] | None:
+        from harness_lab_app.validation_service import ValidationService
+
+        # A thread of its own needs a session of its own.
+        with Session(session.get_bind()) as own:
+            return ValidationService(own).grade_step_live(
+                run_id, step, install_deps=first
+            )
+
+    return watch, LivePhaseGrader(run_dir, grade)
+
+
+# Cuts after which the agent's work is still evidence about the agent: it was
+# working, and was stopped for taking too long or by a person. The other two
+# watchdog verdicts — the model never answered, the endpoint kept refusing —
+# measured nothing, so there is nothing of the agent's to grade.
+_GRADED_CUTS = frozenset({"timeout", "stalled", "slow_phase", "cancelled"})
+
+
+def _cut_measures_the_agent(stop_reason: str | None) -> bool:
+    return stop_reason in _GRADED_CUTS
+
+
+def _archive_cut_workspace(run_id: str) -> bool:
+    """Archive a stopped run's live workspace where validation looks for it.
+
+    ``bench_run`` archives the workspace in its last phase, which a stopped
+    container never reaches: the work stays in ``workspace/<run_id>/``. Copying
+    it to ``data/runs/<run_id>/workspace`` gives the cut run the same archive a
+    finished one has, so its grade, its Play tab and a continuation all find it.
+    The live copy is left in place; the next managed run resets it.
+    """
+    settings = get_settings()
+    live = settings.workspace_dir / run_id
+    archived = settings.data_runs_dir / run_id / "workspace"
+    if archived.exists():
+        return True
+    if not live.is_dir() or not any(live.iterdir()):
+        return False
+    archived.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(live, archived, symlinks=True, ignore_dangling_symlinks=True)
+    return True
+
+
+def _grade_what_was_left(session: Session, run_id: str, reason: str) -> None:
+    """Grade a run that was cut short on the work it had done (best-effort).
+
+    The verdict stays the cut — the run is ``failed`` with its reason — and the
+    grade sits beside it, so a run stopped at phase 4 of 5 shows what phases 1
+    to 3 achieved instead of nothing at all.
+    """
+    try:
+        if not _archive_cut_workspace(run_id):
+            return
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="info",
+                message=f"Run cut ({reason}): grading the work it left.",
+            )
+        )
+        session.commit()
+    except Exception as exc:  # grading a cut run must never fail the run
+        session.rollback()
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="warning",
+                message=f"Could not archive the cut run's workspace: {exc!r}",
+            )
+        )
+        session.commit()
+        return
+    _run_objective_validation(session, run_id)
+    _run_step_validation(session, run_id)
 
 
 def _index_artifacts(session: Session, run_id: str) -> None:

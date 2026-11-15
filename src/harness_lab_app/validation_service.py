@@ -276,6 +276,61 @@ class ValidationService:
         self.session.refresh(validation)
         return validation
 
+    def grade_step_live(
+        self, run_id: str, step: int, *, install_deps: bool = False
+    ) -> dict[str, Any] | None:
+        """Grade one finished step's snapshot while the run is still going.
+
+        The live half of the per-step reward: the operator sees how far each
+        phase got as soon as it ends, instead of a spinner until the whole run
+        is over. Same spec, executor and parser as :meth:`validate_steps`.
+        ``install_deps`` runs the graders' setup once, before the first live
+        grade — the final validation that normally installs them has not
+        happened yet. Returns ``{passed, total, progress}``, or None when the
+        step cannot be graded (no snapshot, or no command names the workspace).
+
+        Recorded nowhere but the return value: the caller keeps it in the run's
+        ``live_steps.json``. The authoritative per-step curve is still the one
+        :meth:`validate_steps` writes after the run.
+        """
+        from harness_lab_app.step_reward import progress_of, snapshot_dirs
+
+        run = RunService(self.session).get_run(run_id)
+        config = RunService(self.session).get_run_config(run.run_config_id)
+        if config.target_repo_id:
+            return None
+        case = CaseService(self.session).get_case(config.case_id)
+        snapshots = dict(snapshot_dirs(self._run_dir(run_id)))
+        if step not in snapshots:
+            return None
+        spec = build_validation_spec(case, run_id)
+        if spec.get("local") or not spec["commands"]:
+            return None
+        snapshot_rel = f"data/runs/{run_id}/steps/{snapshots[step].name}"
+        pointed = [
+            [*argv[:-1], argv[-1].replace(spec["workspace"], snapshot_rel)]
+            for argv in spec["commands"]
+            if argv and spec["workspace"] in argv[-1]
+        ]
+        if not pointed:
+            return None
+        objective = self._run_objective(
+            {
+                **spec,
+                "commands": pointed,
+                "setup": spec["setup"] if install_deps else [],
+            },
+            run_id,
+        )
+        conclusive = [
+            c for c in objective["checks"] if c.get("conclusive") is not False
+        ]
+        return {
+            "passed": sum(1 for c in conclusive if c.get("passed")),
+            "total": len(conclusive),
+            "progress": progress_of(objective),
+        }
+
     def _step_costs(self, run_id: str, steps: list[int]) -> dict[int, dict[str, Any]]:
         """Each step's own cost: claude's per-step ``result`` event when present."""
         from harness_lab_app.step_reward import claude_step_cost, step_record_files

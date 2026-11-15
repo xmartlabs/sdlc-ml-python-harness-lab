@@ -27,6 +27,16 @@ play_command: "godot --path /work -- --ai=black"
 # Named in the prompt's location header instead of the pygame default main.py.
 entry_point: project.godot
 
+# Each phase is expected to finish within this many minutes (ADR-0080). Past it
+# the run is flagged slow on its page; `on_slow: wait` keeps it running until a
+# person chooses — the racing reference measured phases of 5 to 52 minutes, and
+# a frontier model taking 70 minutes on its AI phase is slow, not stuck.
+phase_budget_minutes: 75
+on_slow: wait
+# The ceiling for the whole run: five phases may take longer than the lab's
+# two-hour default, and the phases above are what is watched closely.
+run_timeout_minutes: 360
+
 # The work is paced in five phases, one step each (ADR-0079). Phase 1 is the
 # case prompt itself; these drive steps 2-5. Every phase is stored with the
 # prompt's contract appended, and under the `harness` variant with the

@@ -591,6 +591,53 @@ export type RunMetadata = {
   condition_hash?: string;
 };
 
+// A live run, read from the files it is writing (run_progress.py, ADR-0080).
+export type RunPhaseGrade = {
+  passed?: number;
+  total?: number;
+  progress?: number | null;
+  unmeasured?: boolean;
+  error?: string;
+};
+
+export type RunPhaseProgress = {
+  step: number;
+  phase: number;
+  phase_total: number | null;
+  name: string;
+  done: boolean;
+  seconds: number | null;
+  turns: number;
+  output_tokens: number;
+  cost_usd: number | null;
+  last_action: string | null;
+  last_event_at: number | null;
+  grade: RunPhaseGrade | null;
+};
+
+export type RunSlowPhase = {
+  step: number;
+  expected_seconds: number;
+  extra_seconds: number;
+  slow_since: number;
+  decide_by: number;
+  on_slow: "stop" | "wait";
+};
+
+export type RunProgress = {
+  state: string;
+  steps: RunPhaseProgress[];
+  current_step: number | null;
+  phase_total: number | null;
+  cost_usd: number | null;
+  cost_complete: boolean;
+  quiet_seconds: number | null;
+  last_action: string | null;
+  slow: RunSlowPhase | null;
+  extra_wait_seconds: number;
+  extend_seconds: number;
+};
+
 export type SandboxRecord = {
   run_id: string;
   kind: "terminal" | "desktop" | "play";

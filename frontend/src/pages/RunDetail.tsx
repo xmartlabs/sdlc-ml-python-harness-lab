@@ -9,6 +9,7 @@ import { ScoresPanel } from "../components/ScoresPanel";
 import { StepRewardPanel } from "../components/StepRewardPanel";
 import { LogViewer } from "../components/LogViewer";
 import { Markdown } from "../components/Markdown";
+import { RunProgressPanel } from "../components/RunProgressPanel";
 import { SandboxPanel } from "../components/SandboxPanel";
 import { StateBadge } from "../components/StateBadge";
 import { formatDuration, formatRunDate } from "../dates";
@@ -1311,6 +1312,10 @@ export function RunDetail({
       {tab === "detail" ? (
         <>
       {runContext ? <RunConditionStrip context={runContext} /> : null}
+      <RunProgressPanel
+        live={run.state === "running" || run.state === "pending"}
+        runId={run.run_id}
+      />
       <div className="detail-grid">
         <div>
           <span>{m.summary.score}</span>

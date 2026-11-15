@@ -2538,7 +2538,45 @@ def create_app() -> FastAPI:
 
     @app.post("/api/runs/{run_id}/cancel")
     def cancel_run(run_id: str, session: Session = Depends(get_session)):
+        # A cancelled run is graded on the work it left (ADR-0080), so this is
+        # also the page's "Stop and grade" for a slow phase.
         return RunService(session).cancel_run(run_id)
+
+    @app.post("/api/runs/{run_id}/keep-waiting")
+    def keep_waiting(run_id: str, session: Session = Depends(get_session)):
+        """Give a slow phase more time instead of letting its policy stop it."""
+        seconds = int(getattr(get_settings(), "run_phase_extend_seconds", 1800))
+        try:
+            run = RunService(session).keep_waiting(run_id, seconds)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"run_id": run.run_id, "extra_wait_seconds": run.extra_wait_seconds}
+
+    @app.get("/api/runs/{run_id}/progress")
+    def get_run_progress(run_id: str, session: Session = Depends(get_session)):
+        """What the run is doing now: phase, time, cost, last action, live grades."""
+        from harness_lab_app.run_progress import read_progress
+
+        service = RunService(session)
+        try:
+            run = service.get_run(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        config = service.get_run_config(run.run_config_id)
+        run_dir = get_settings().data_runs_dir / run_id
+        prompt_path = run_dir / "prompt.md"
+        first_prompt = (
+            prompt_path.read_text(errors="replace") if prompt_path.is_file() else ""
+        )
+        progress = read_progress(
+            run_dir, max_steps=int(config.max_steps or 0), first_prompt=first_prompt
+        )
+        progress["state"] = str(run.state)
+        progress["extra_wait_seconds"] = int(run.extra_wait_seconds or 0)
+        progress["extend_seconds"] = int(
+            getattr(get_settings(), "run_phase_extend_seconds", 1800)
+        )
+        return progress
 
     @app.post("/api/runs/{run_id}/retry")
     def retry_run(run_id: str, session: Session = Depends(get_session)):
