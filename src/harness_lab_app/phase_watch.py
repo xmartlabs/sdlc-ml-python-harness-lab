@@ -129,12 +129,23 @@ class PhaseWatch:
     on_flag: Callable[[str], None] = lambda _message: None
     _flagged_step: int | None = field(default=None, init=False)
     _flagged_extra: int = field(default=-1, init=False)
+    _phase_step: int | None = field(default=None, init=False)
+    _extra_base: int = field(default=0, init=False)
 
     def tick(
         self, step: int | None, step_started: float | None, extra: int, now: float
     ) -> str | None:
+        """``extra`` is the run's total granted time; only this phase's share counts.
+
+        ``Run.extra_wait_seconds`` only grows. Time a person granted to phase 1
+        is not time granted to phase 2, so the total seen when a phase starts is
+        its baseline, and the phase is extended only by what was added since.
+        """
         if step is None or step_started is None:
             return None
+        if step != self._phase_step:
+            self._phase_step, self._extra_base = step, max(0, extra)
+        extra = max(0, extra - self._extra_base)
         budget = self.budget_for(step)
         if budget <= 0:
             return None
@@ -257,8 +268,15 @@ class LivePhaseGrader:
             _write_json(self.run_dir / LIVE_STEPS_FILE, {"steps": data})
             self._busy = False
 
-    def join(self, timeout: float) -> None:
-        """Wait for a grade in flight, so the final validation does not race it."""
+    def join(self, timeout: float) -> bool:
+        """Wait for a grade in flight, so the final validation does not race it.
+
+        Returns whether the grader is idle. The final validation reinstalls the
+        graders' dependencies and regrades the same snapshots, so it must not
+        start while a live grade is still using them.
+        """
         thread = self._thread
         if thread is not None:
             thread.join(timeout=timeout)
+            return not thread.is_alive()
+        return True

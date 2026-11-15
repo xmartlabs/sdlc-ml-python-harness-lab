@@ -86,6 +86,24 @@ def command_deadline_seconds(
     return default
 
 
+def spec_deadline_seconds(spec: dict[str, Any]) -> int:
+    """The longest one pass over a spec can take: every command at its deadline.
+
+    The commands run one after another, each under the watchdog of
+    :func:`command_deadline_seconds`, so their sum bounds the whole pass. A
+    caller that must not overlap a pass in flight (the final validation after a
+    live phase grade) waits this long, never a guess shorter than one command.
+    """
+    setup = sum(
+        command_deadline_seconds("validation setup") for _ in spec.get("setup") or []
+    )
+    checks = sum(
+        command_deadline_seconds(argv[-1] if argv else "")
+        for argv in spec.get("commands") or []
+    )
+    return setup + checks
+
+
 # Exit codes that mean "we did not get an answer", not "the answer was wrong":
 # 124 is GNU timeout's own status, 137 and 143 are SIGKILL and SIGTERM (128+n),
 # -1 is this process failing to launch the command at all, and 127 is the shell

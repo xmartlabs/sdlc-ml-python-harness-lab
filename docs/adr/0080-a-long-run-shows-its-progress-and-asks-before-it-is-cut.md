@@ -58,6 +58,10 @@ lab supervised long runs:
    - It runs one grade at a time, newest first.
    - It installs the graders' dependencies once.
    - It never touches the run: a failed grade is recorded as such.
+   - The final validation waits for a grade in flight, for as long as one pass
+     can take (every command at its own deadline). It reinstalls the same
+     dependency folder and regrades the same snapshots, so the two must not
+     overlap.
 5. **A slow phase asks before it is cut.** Each phase has an expected time:
    - the case's `phase_budget_minutes`;
    - else three times the median of that phase in the case's earlier runs;
@@ -67,6 +71,9 @@ lab supervised long runs:
    and the page offers **Keep waiting**, which adds `run_phase_extend_seconds` via
    `POST /api/runs/{id}/keep-waiting` into `Run.extra_wait_seconds`, or **Stop and
    grade**, which is the existing cancel.
+
+   The column is the run's running total. Each phase counts only what was
+   granted while it ran, so time given to one phase is not carried into the next.
 
    With no answer within `run_slow_grace_seconds` (15 min), the case's `on_slow`
    applies: `stop` (the default, for unattended experiment runs) cuts the run as

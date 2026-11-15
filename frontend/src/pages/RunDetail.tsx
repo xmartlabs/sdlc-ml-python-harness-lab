@@ -742,6 +742,10 @@ export function RunDetail({
       ? requestedTab
       : "detail"
   );
+  // `?tab=play` is only honoured once the run is known to ship a game: before
+  // its context loads, or on a run with no play_command, the Play tab does not
+  // exist, and showing its panel would offer a Launch the worker must refuse.
+  const shownTab = tab === "play" && !runContext?.play_command ? "detail" : tab;
   const consoleRef = useRef<HTMLDivElement | null>(null);
   // A claude run with events-based attribution has real tool counts; only fall
   // back to the summary-only explainer when there is nothing to show.
@@ -1300,7 +1304,7 @@ export function RunDetail({
           : (["detail", "terminal", "desktop"] as const)
         ).map((name) => (
           <button
-            className={tab === name ? "run-tab active" : "run-tab"}
+            className={shownTab === name ? "run-tab active" : "run-tab"}
             key={name}
             onClick={() => setTab(name)}
             type="button"
@@ -1309,9 +1313,11 @@ export function RunDetail({
           </button>
         ))}
       </div>
-      {tab === "play" && runContext ? <PlayGuide context={runContext} /> : null}
-      {tab !== "detail" ? <SandboxPanel key={tab} kind={tab} runId={run.run_id} /> : null}
-      {tab === "detail" ? (
+      {shownTab === "play" && runContext ? <PlayGuide context={runContext} /> : null}
+      {shownTab !== "detail" ? (
+        <SandboxPanel key={shownTab} kind={shownTab} runId={run.run_id} />
+      ) : null}
+      {shownTab === "detail" ? (
         <>
       {runContext ? <RunConditionStrip context={runContext} /> : null}
       <RunProgressPanel

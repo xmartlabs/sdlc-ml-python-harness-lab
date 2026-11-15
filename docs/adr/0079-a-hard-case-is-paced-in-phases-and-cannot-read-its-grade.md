@@ -60,6 +60,12 @@ suggests.
    notes), each restricted to `benchmarks/<case>/`. Directories are masked with
    tmpfs and files with empty binds, the same mechanics as ADR-0049. The validation
    lane is never given these masks.
+
+   The mask fails closed. The host lane (`SubprocessRunExecutor`) has no mount to
+   mask with, so it refuses a non-empty `hidden` instead of running with the grader
+   readable. A case whose `task.yaml` names its own image or hidden paths, but has
+   no row in the database, fails before the container starts instead of falling
+   back to the shared, unmasked machine.
 5. **The lab never writes how a case is graded where a run can read it.** `memory/`
    records general lessons; a case's grading details go in its own hidden files or
    in an ADR.

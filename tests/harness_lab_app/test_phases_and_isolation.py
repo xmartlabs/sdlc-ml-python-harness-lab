@@ -365,15 +365,52 @@ def test_the_agent_run_masks_the_grade_and_validation_does_not(
     assert seen["hidden"] == ["benchmarks/chess3d-v1/grader/"]
 
 
-def test_the_host_lane_accepts_a_grading_mask_without_failing_the_run(
+def test_a_case_missing_from_the_db_never_falls_back_to_an_unmasked_machine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No case row, but a task.yaml naming its own machine: fail, never run open."""
+    benchmarks = tmp_path / "benchmarks"
+    (benchmarks / "game-v1").mkdir(parents=True)
+    (benchmarks / "game-v1" / "task.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "runner_image": "harness-lab-runner-godot",
+                "agent_hidden": ["benchmarks/game-v1/grader/"],
+            }
+        )
+    )
+    (benchmarks / "plain-v1").mkdir()
+    (benchmarks / "plain-v1" / "task.yaml").write_text(
+        yaml.safe_dump({"prompt": "build it"})
+    )
+    monkeypatch.setattr(
+        tasks, "get_settings", lambda: SimpleNamespace(benchmarks_dir=benchmarks)
+    )
+    with Session(make_engine()) as session:
+        with pytest.raises(RuntimeError, match="not in the database"):
+            tasks._case_agent_machine(session, "game-v1")
+        # A case that asks for nothing special still runs on the shared machine.
+        assert tasks._case_agent_machine(session, "plain-v1") == ("", [])
+        assert tasks._case_agent_machine(session, "nowhere-v1") == ("", [])
+
+
+def test_the_host_lane_accepts_the_empty_mask_every_run_passes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Subprocess has nothing to mount over; a grading mask changes no condition."""
+    """An empty `hidden` hides nothing case-specific: the host lane still runs."""
     monkeypatch.setattr(
         executors, "get_settings", lambda: SimpleNamespace(repo_root=REPO_ROOT)
     )
     handle = executors.SubprocessRunExecutor().start("r", ["true"], hidden=[])
     assert handle.wait() == 0
+
+
+def test_the_host_lane_refuses_a_hidden_grader_instead_of_leaving_it_readable() -> None:
+    """No mount on the host: running anyway would hand the agent its grader."""
+    with pytest.raises(RuntimeError, match="hides its grading"):
+        executors.SubprocessRunExecutor().start(
+            "r", ["true"], hidden=["benchmarks/chess3d-v1/grader/"]
+        )
 
 
 def test_the_host_lane_refuses_a_case_image_instead_of_ignoring_it() -> None:

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import harness_lab_app.validation as validation
 from harness_lab_app.validation import (
     DEFAULT_VALIDATION_DEADLINE_SECONDS,
+    VALIDATION_DEPS_DIR,
     _portable_timeout,
     build_validation_spec,
     collect_cost,
@@ -690,3 +691,44 @@ def test_the_browser_screens_requirements_with_the_setup_steps_own_rule():
     found = re.search(r"const INSTALLABLE_REQUIREMENT =\s*/(.+)/;", source)
     assert found, "caseLabels.ts must define INSTALLABLE_REQUIREMENT"
     assert found.group(1) == _REQUIREMENT_RE.pattern
+
+
+def test_a_check_that_cds_into_the_workspace_still_imports_the_installed_deps(
+    tmp_path, monkeypatch
+):
+    """The deps path is resolved from the lab root, before the check's own `cd`.
+
+    The 3D graders run `cd {workspace} && python …/grade.py`, and the setup step
+    installs into `data/runs/<id>/validation-deps` relative to the lab root. The
+    check is executed for real here, from the lab root as the runner does, so a
+    PYTHONPATH that resolved inside the workspace would fail the import.
+    """
+    import subprocess
+    import sys
+
+    runs = tmp_path / "data" / "runs"
+    monkeypatch.setattr(
+        "harness_lab_app.validation.get_settings",
+        lambda: SimpleNamespace(data_runs_dir=runs),
+    )
+    run_id = "chess3d-v1-K-001"
+    (runs / run_id / "workspace").mkdir(parents=True)
+    deps = runs / run_id / VALIDATION_DEPS_DIR
+    deps.mkdir()
+    (deps / "lab_marker_dep.py").write_text("VALUE = 41\n")
+    case = _case(
+        validation_commands=[
+            'cd {workspace} && python -c "import lab_marker_dep; print(lab_marker_dep.VALUE)"'
+        ],
+        metadata_json={"validation_requirements": ["lab-marker-dep==1.0"]},
+    )
+    spec = build_validation_spec(case, run_id)
+    # The setup installs into the very directory the check puts on its path.
+    assert f"data/runs/{run_id}/{VALIDATION_DEPS_DIR}" in spec["setup"][0][-1]
+    argv = spec["commands"][0]
+    env = {"PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin"}
+    done = subprocess.run(
+        argv, cwd=tmp_path, env=env, capture_output=True, text=True, check=False
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "41"

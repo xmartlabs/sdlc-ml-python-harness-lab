@@ -65,7 +65,11 @@ from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.sandbox_service import SandboxService
 from harness_lab_app.schemas import RunConfigCreate
 from harness_lab_app.target_service import TargetError, TargetService, clone_source
-from harness_lab_app.validation import describe_objective_for_judge
+from harness_lab_app.validation import (
+    build_validation_spec,
+    describe_objective_for_judge,
+    spec_deadline_seconds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -809,11 +813,41 @@ def _case_agent_machine(session: Session, case_id: str) -> tuple[str, list[str]]
     try:
         case = CaseService(session).get_case(case_id)
     except ValueError:
+        # No case row. The runner can still load the case from its
+        # `task.yaml`, so a case that declares its own machine there must not
+        # fall back to the shared one: that would run a Godot case without
+        # Godot, and leave its grader readable (fail closed, not open).
+        if _task_declares_own_machine(case_id):
+            raise RuntimeError(
+                f"Case {case_id} declares its own image or hidden grading in "
+                "task.yaml but is not in the database; import it (restart the "
+                "API, or POST /api/cases/seed) before running it."
+            ) from None
         return "", []
     try:
         return runner_image_for(case), agent_hidden_for(case)
     except CaseProfileError as exc:
         raise RuntimeError(f"Case {case_id}: {exc}") from exc
+
+
+def _task_declares_own_machine(case_id: str) -> bool:
+    """Whether ``benchmarks/<case_id>/task.yaml`` names an image or hidden paths."""
+    import yaml
+
+    benchmarks = getattr(get_settings(), "benchmarks_dir", None)
+    if benchmarks is None:
+        return False
+    task = Path(benchmarks) / case_id / "task.yaml"
+    if not task.is_file():
+        return False
+    try:
+        raw = yaml.safe_load(task.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        # Unreadable: the runner will not load it either, so nothing leaks.
+        return False
+    return isinstance(raw, dict) and bool(
+        raw.get("runner_image") or raw.get("agent_hidden")
+    )
 
 
 def _execute_run_body(
@@ -924,10 +958,21 @@ def _execute_run_body(
                 if phase_watch is not None:
                     phase_watch.close()
                 if live_grader is not None:
-                    # A grade in flight finishes before the final validation
-                    # reads the same snapshots; bounded, so it never holds the
-                    # run open.
-                    live_grader.join(timeout=300)
+                    # A grade in flight finishes before the final validation,
+                    # which reinstalls the same dependency folder and regrades
+                    # the same snapshots. Bounded by the longest a pass can
+                    # take (every command at its own deadline), so it waits
+                    # out a slow Godot harvest yet never holds the run forever.
+                    deadline = _live_grade_deadline(
+                        session, run_id, config_payload.case_id
+                    )
+                    if not live_grader.join(timeout=deadline):
+                        logger.warning(
+                            "Live grade of %s still running after %ss; final "
+                            "validation starts anyway",
+                            run_id,
+                            deadline,
+                        )
             exit_code = _wait_bounded(handle, run_timeout + 60)
             if outcome.stop_reason == "cancelled":
                 service.mark_cancelled(run_id, exit_code)
@@ -1040,6 +1085,29 @@ def _phase_supervision(
             )
 
     return watch, LivePhaseGrader(run_dir, grade)
+
+
+# What a live grade is waited for when the case cannot be read: the default
+# deadline of one command, the floor below which no grade can finish.
+_LIVE_GRADE_FALLBACK_SECONDS = 900
+
+
+def _live_grade_deadline(session: Session, run_id: str, case_id: str) -> int:
+    """How long the final validation waits for a live grade still in flight.
+
+    A live grade is one pass over the case's validation spec (setup included,
+    the first time), so its longest possible run is the sum of its commands'
+    deadlines. A shorter fixed wait let the final validation start beside a
+    Godot harvest allowed 900 seconds, on the same dependency folder.
+    """
+    try:
+        case = CaseService(session).get_case(case_id)
+        return max(
+            _LIVE_GRADE_FALLBACK_SECONDS,
+            spec_deadline_seconds(build_validation_spec(case, run_id)),
+        )
+    except Exception:  # a wait bound must never fail the run
+        return _LIVE_GRADE_FALLBACK_SECONDS
 
 
 # Cuts after which the agent's work is still evidence about the agent: it was

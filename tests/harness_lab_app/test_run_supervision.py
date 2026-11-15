@@ -286,6 +286,59 @@ def test_a_new_phase_starts_its_own_clock(tmp_path: Path) -> None:
     assert watch.tick(5, 690.0, 0, now=1001.0) is None
 
 
+def test_time_granted_to_one_phase_is_not_carried_into_the_next(
+    tmp_path: Path,
+) -> None:
+    """`extra_wait_seconds` is the run's running total; each phase gets only its own."""
+    watch, flags = _watch(tmp_path)
+    # Phase 1 runs late and a person grants it 30 minutes.
+    watch.tick(1, 0.0, 0, now=700.0)
+    assert watch.tick(1, 0.0, 1800, now=1100.0) is None
+    # Phase 2 starts with the run's total still at 1800: none of it is phase 2's,
+    # so it is flagged at its own 600-second budget, not at 2400.
+    assert watch.tick(2, 2000.0, 1800, now=2500.0) is None
+    assert not flags[1:]
+    assert watch.tick(2, 2000.0, 1800, now=2601.0) is None
+    assert len(flags) == 2 and "Phase 2 is slower than expected" in flags[1]
+    # Time granted now, while phase 2 runs, is phase 2's.
+    assert watch.tick(2, 2000.0, 3600, now=2700.0) is None
+    assert not (tmp_path / SLOW_STATE_FILE).exists()
+
+
+def test_the_final_validation_waits_out_the_longest_live_grade() -> None:
+    """A Godot harvest may take 900 s: a 300 s wait let validation race it."""
+    from harness_lab_app.validation import spec_deadline_seconds
+
+    spec = {
+        "setup": [["sh", "-c", "install"]],
+        "commands": [
+            ["bash", "-c", "cd w && timeout -k 5 900 python grade.py harvest"],
+            ["bash", "-c", "cd w && timeout -k 5 120 python grade.py check a"],
+        ],
+    }
+    # Each command at its own deadline (budget + kill grace + margin), plus the
+    # setup at the default backstop.
+    assert spec_deadline_seconds(spec) == 900 + (900 + 35) + (120 + 35)
+
+
+def test_join_reports_whether_the_live_grade_finished(tmp_path: Path) -> None:
+    import threading
+
+    _write_run(tmp_path)
+    release = threading.Event()
+
+    def grade(_step: int, _first: bool) -> dict[str, Any]:
+        release.wait(5)
+        return {"passed": 1, "total": 1}
+
+    grader = LivePhaseGrader(tmp_path, grade)
+    assert grader.join(0.01) is True  # nothing in flight
+    grader.poll()
+    assert grader.join(0.05) is False  # still grading
+    release.set()
+    assert grader.join(5) is True
+
+
 def test_the_case_declares_its_phase_budget_and_slow_policy() -> None:
     profile = profile_from_task({"phase_budget_minutes": 30, "on_slow": "wait"})
     assert profile["phase_budget_minutes"] == 30 and profile["on_slow"] == "wait"

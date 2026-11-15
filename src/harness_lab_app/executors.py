@@ -505,12 +505,21 @@ class SubprocessRunExecutor:
         hardened: bool = False,
         phase: str = "",  # noqa: ARG002
         image: str = "",
-        hidden: list[str] | None = None,  # noqa: ARG002 - nothing to mount over here
+        hidden: list[str] | None = None,
     ) -> RunHandle:
-        # The grading masks are a container's: the host lane is the escape
-        # hatch and the test backend, and it has no mount to hide anything with.
-        # Governance masking refuses loudly because a masked *condition* would
-        # be silently unmasked; a grading mask changes no condition.
+        # The masks are a container's: the host lane is the escape hatch and
+        # the test backend, and it has no mount to hide anything with. Both
+        # refuse loudly rather than run unmasked: a masked *condition* would be
+        # silently unmasked, and a case's hidden grader would be readable by the
+        # agent it grades (ADR-0079). An empty list is the default every run
+        # passes and hides nothing case-specific, so it is accepted.
+        if hidden:
+            raise RuntimeError(
+                "This case hides its grading from the agent "
+                f"({', '.join(hidden)}), which needs the docker backend "
+                "(HARNESS_LAB_EXECUTION_BACKEND=docker); the host lane cannot "
+                "mask it."
+            )
         if governance_mask != GOVERNANCE_MASK_NONE:
             raise RuntimeError(
                 "Governance masking needs the docker backend: there is nothing "
