@@ -18,6 +18,16 @@ export const HARNESS_OPTIONS = ["opencode", "codex", "claude"] as const;
 // container — they need the host worker (subprocess backend).
 export const HOST_HARNESSES = new Set(["codex", "claude"]);
 
+/**
+ * Reasoning effort levels the claude CLI accepts through `--effort`, lowest
+ * first (ADR-0081). Mirrors `native_models.EFFORT_LEVELS`; the backend catalog
+ * says which of them each model accepts, and this is the offline fallback.
+ */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+/** Native models with no effort control; every other native claude model takes every level. */
+const NO_EFFORT_MODELS = new Set(["claude-haiku-4-5-20251001"]);
+
 // Native model menus for the host-CLI harnesses. Values are passed straight to
 // the CLI's --model, so keep them to ids the CLI accepts. Edit these as new
 // versions ship — this is the systematic-lab knob for host harnesses.
@@ -74,7 +84,26 @@ export type NativeModel = ModelOption & {
   size_rank: number;
   /** True/false when a gateway is configured; null when there is none to ask. */
   on_gateway: boolean | null;
+  /** Reasoning effort levels the model accepts (ADR-0081); empty = none. */
+  effort_levels: string[];
 };
+
+/**
+ * The effort levels a run with this harness and executor model can be given.
+ * Empty means the selector is not offered: effort is a claude CLI flag, and a
+ * gateway-routed or effort-less model has nowhere to send it.
+ */
+export function effortLevelsFor(
+  harness: string,
+  model: string,
+  index: Record<string, NativeModel>
+): string[] {
+  if (harness !== "claude" || !model || model.includes("/")) return [];
+  const known = index[model];
+  if (known) return known.effort_levels;
+  // A hand-typed id the catalog does not know: the CLI decides, so offer all.
+  return [...EFFORT_LEVELS];
+}
 
 /**
  * The native model menus from the backend — the single list a test holds to the
@@ -89,7 +118,9 @@ export function useNativeModels(): Record<string, NativeModel[]> {
         ...model,
         generation: model.label.includes("(previous)") ? "previous" : "current",
         size_rank: index + 1,
-        on_gateway: null
+        on_gateway: null,
+        effort_levels:
+          harness === "claude" && !NO_EFFORT_MODELS.has(model.id) ? [...EFFORT_LEVELS] : []
       }))
     ])
   ) as Record<string, NativeModel[]>;
@@ -107,6 +138,10 @@ export function useNativeModels(): Record<string, NativeModel[]> {
               harness,
               rows.map((row) => ({
                 ...row,
+                // An older API without the field: same rule as the fallback.
+                effort_levels:
+                  row.effort_levels ??
+                  (harness === "claude" && !NO_EFFORT_MODELS.has(row.id) ? [...EFFORT_LEVELS] : []),
                 label:
                   row.label +
                   (row.generation === "previous" ? m.previous : "") +

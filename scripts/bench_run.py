@@ -160,6 +160,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--executor-model", default=None, help="Gateway model alias for executor"
     )
     p.add_argument(
+        "--executor-effort",
+        default="",
+        choices=["", "low", "medium", "high", "xhigh", "max"],
+        help="Reasoning effort for the claude harness, passed as `claude "
+        "--effort` (ADR-0081). Empty (default) leaves the CLI's own default. "
+        "Which levels a model accepts is checked by the web preflight.",
+    )
+    p.add_argument(
         "--harness",
         default=None,
         choices=["opencode", "codex", "claude"],
@@ -1323,6 +1331,8 @@ def write_metadata(
         "prompt_variant": prompt_short,
         "planner_model": args.planner_model,
         "executor_model": args.executor_model,
+        # Requested reasoning effort (ADR-0081); "" = the CLI's own default.
+        "executor_effort": getattr(args, "executor_effort", "") or "",
         "score_mode": args.score_mode,
         "max_steps": args.max_steps,
         # Exclusions are applied to the native views BEFORE metadata is written,
@@ -1383,6 +1393,7 @@ def write_metadata(
             direct_models(args), run_models(args)
         ),
         skills_invoke=tuple(meta["skills_invoke"]),
+        executor_effort=meta["executor_effort"],
     )
     path = out_dir / "metadata.json"
     path.write_text(json.dumps(meta, indent=2))
@@ -1949,7 +1960,10 @@ def build_codex_cmd(executor_model: str | None, message: str) -> list[str]:
 
 
 def build_claude_cmd(
-    executor_model: str | None, message: str, add_dirs: Sequence[Path] = ()
+    executor_model: str | None,
+    message: str,
+    add_dirs: Sequence[Path] = (),
+    effort: str = "",
 ) -> list[str]:
     """Assemble a non-interactive Claude Code CLI command (host, native auth).
 
@@ -1963,6 +1977,9 @@ def build_claude_cmd(
     loads ``.claude/skills`` (and agents) from a directory that is not the cwd
     or one of its parents *inside the same repository*. See
     :func:`harness_add_dirs` for when the lab root has to be one.
+
+    ``effort`` becomes ``--effort`` (ADR-0081) only when set: an empty effort is
+    the CLI default, and omitting the flag keeps that command unchanged.
     """
     cmd = [
         "claude",
@@ -1975,6 +1992,8 @@ def build_claude_cmd(
     native = _native_model(executor_model)
     if native:
         cmd += ["--model", native]
+    if effort:
+        cmd += ["--effort", effort]
     # `--add-dir <directories...>` is variadic: written as two tokens it also
     # swallows the prompt that follows as one more directory, and the CLI dies
     # with "Input must be provided ... when using --print" before any model
@@ -2048,12 +2067,19 @@ def build_harness_cmd(
     agent: str | None,
     message: str,
     add_dirs: Sequence[Path] = (),
+    effort: str = "",
 ) -> list[str]:
-    """Dispatch to the per-harness command builder (opencode | codex | claude)."""
+    """Dispatch to the per-harness command builder (opencode | codex | claude).
+
+    ``effort`` only reaches claude; :func:`main` refuses it for any other
+    harness before a run starts, so it is never silently dropped here.
+    """
     if harness == "codex":
         return build_codex_cmd(executor_model, message)
     if harness == "claude":
-        return build_claude_cmd(executor_model, message, add_dirs=add_dirs)
+        return build_claude_cmd(
+            executor_model, message, add_dirs=add_dirs, effort=effort
+        )
     return build_opencode_cmd(executor_model, agent, message)
 
 
@@ -3096,6 +3122,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     run["harness"] = args.harness or declared or DEFAULT_HARNESS
     args.harness = run["harness"]
+    # Effort is a claude CLI flag (ADR-0081). Any other harness would drop it
+    # while metadata.json and the condition hash still recorded it — a run
+    # filed under a condition it never ran under. Refuse instead.
+    if args.executor_effort and args.harness != "claude":
+        sys.exit(
+            f"--executor-effort is only supported by the claude harness, not "
+            f"'{args.harness}'. Drop the flag or pass --harness claude."
+        )
 
     workspace = WORKSPACE_ROOT / args.run
 
@@ -3139,7 +3173,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    {out_dir.relative_to(REPO_ROOT)}/steps/step-{s}.log{extra}")
         print(f"    workspace/{args.run}/")
         print()
-        preview = build_harness_cmd(args.harness, executor_model, None, "<prompt>")
+        preview = build_harness_cmd(
+            args.harness,
+            executor_model,
+            None,
+            "<prompt>",
+            effort=args.executor_effort,
+        )
         if args.harness != "opencode" or detect_run_subcommand():
             print("  Execution: " + " ".join(preview))
             if args.max_steps > 1:
@@ -3533,10 +3573,17 @@ def main(argv: list[str] | None = None) -> int:
 
             prompt_text = step_prompt_path.read_text()
             cmd = build_harness_cmd(
-                args.harness, executor_model, None, prompt_text, add_dirs=add_dirs
+                args.harness,
+                executor_model,
+                None,
+                prompt_text,
+                add_dirs=add_dirs,
+                effort=args.executor_effort,
             )
             print(f"  Harness:     {args.harness}")
             print(f"  Model:       {executor_model or '(harness default)'}")
+            if args.executor_effort:
+                print(f"  Effort:      {args.executor_effort}")
             print(f"  Log:         {step_log.relative_to(REPO_ROOT)}")
             if agent_cwd is not None:
                 print(

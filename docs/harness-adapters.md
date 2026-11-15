@@ -47,6 +47,29 @@ the ARG and rebuild when a model needs it. **Health** shows the image's version 
 warns when it is too old for a current model, and preflight refuses such a run
 instead of letting it die on the API's `claude_code_version_too_old`.
 
+### Reasoning effort (`--effort`)
+
+A claude run can be given a reasoning effort: `low`, `medium`, `high`, `xhigh` or
+`max` ([ADR-0081](adr/0081-reasoning-effort-is-part-of-the-arm.md)). Pick it in the
+**Reasoning effort** select that appears under the executor model when the harness
+is `claude` and the model accepts effort. Leave it on **Default** to keep the CLI's
+own choice. That is what every run before the selector used. Use `xhigh` / `max` for
+longer, more thorough tests, and `low` for cheap smoke passes.
+
+- The level reaches the CLI as `claude --effort <level>`. On the command line, use
+  `scripts/bench_run.py --harness claude --executor-effort high` or
+  `make bench-run ... EXECUTOR_EFFORT=high`.
+- Which levels a model accepts comes from `effort_levels` in `native_models.py`.
+  Haiku 4.5 has none. Preflight refuses an effort on a non-claude harness, on a
+  gateway-routed model, or at a level the model does not accept.
+- Effort is part of the arm. A non-default level changes `condition_hash`, so the
+  same model at two levels makes two arms. To compare levels, vary `executor_effort`
+  between the conditions of a `subject_validation` or `discovery` experiment. A
+  `harness_evaluation` holds it fixed, like the model, so it cannot confound the
+  harness. A batch always runs at the default.
+- `metadata.json` records the effort that was **requested**. The CLI does not report
+  the level it applied.
+
 In Docker every claude run reaches Anthropic through the gateway
 (`ANTHROPIC_BASE_URL` in `.claude/settings.local.json`), so the gateway must have a
 card for the model too; preflight checks that as well.

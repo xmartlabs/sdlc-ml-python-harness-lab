@@ -9,6 +9,7 @@ import { CapabilityPanel } from "../components/CapabilityPanel";
 import { FactorialPanel } from "../components/FactorialPanel";
 import { HelpPanel } from "../components/HelpPanel";
 import { Markdown } from "../components/Markdown";
+import { EffortPicker } from "../components/EffortPicker";
 import { ModelPicker } from "../components/ModelPicker";
 import { Spinner } from "../components/Spinner";
 import {
@@ -1031,6 +1032,8 @@ function LaunchPanel({
   const [harness, setHarness] = useState("opencode");
   const [plannerModel, setPlannerModel] = useState("");
   const [executorModel, setExecutorModel] = useState("");
+  // Reasoning effort shared by every arm (ADR-0081); "" = the CLI default.
+  const [executorEffort, setExecutorEffort] = useState("");
   const [gatewayDefault, setGatewayDefault] = useState("");
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
   const [directErrors, setDirectErrors] = useState<Record<string, string>>({});
@@ -1131,7 +1134,7 @@ function LaunchPanel({
   // voids it rather than leaving a stale green tick above the Launch button.
   useEffect(() => {
     setCheck(null);
-  }, [promptVariant, harness, plannerModel, executorModel, maxSteps, dryRun]);
+  }, [promptVariant, harness, plannerModel, executorModel, executorEffort, maxSteps, dryRun]);
 
   const nativeIndex = useNativeModelIndex();
   const handleHarnessChange = (next: string) => {
@@ -1146,6 +1149,7 @@ function LaunchPanel({
     harness,
     planner_model: plannerModel || null,
     executor_model: executorModel || null,
+    executor_effort: executorEffort,
     // The one mode the web API accepts. Runs with objective validation score
     // themselves from it; the rest land in awaiting_manual_score.
     score_mode: "manual",
@@ -1376,6 +1380,12 @@ function LaunchPanel({
               : m.heldFixedHint}
           </small>
         </ModelPicker>
+        <EffortPicker
+          harness={harness}
+          model={executorModel}
+          onChange={setExecutorEffort}
+          value={executorEffort}
+        />
         <ModelPicker
           allowNone
           label={m.plannerModel}

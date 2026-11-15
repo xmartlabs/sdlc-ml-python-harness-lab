@@ -20,6 +20,14 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+# Reasoning effort levels the Claude Code CLI accepts through ``--effort``
+# (ADR-0081), lowest first. Effort trades thoroughness against token spend on
+# one model; empty means "the CLI's own default", which is what every run made
+# before the selector existed got. A model's ``effort_levels`` says which of
+# these it accepts: an empty list means the model has no effort control and the
+# selector is not offered for it.
+EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
 # Current generation as of 2026-10 (Claude 5.5 family and Fable 5.1); previous
 # models stay so new runs can be compared with the archive.
 NATIVE_MODELS: dict[str, list[dict[str, Any]]] = {
@@ -29,42 +37,49 @@ NATIVE_MODELS: dict[str, list[dict[str, Any]]] = {
             "label": "Claude Haiku 5.5",
             "generation": "current",
             "size_rank": 1,
+            "effort_levels": list(EFFORT_LEVELS),
         },
         {
             "id": "claude-sonnet-5-5",
             "label": "Claude Sonnet 5.5",
             "generation": "current",
             "size_rank": 2,
+            "effort_levels": list(EFFORT_LEVELS),
         },
         {
             "id": "claude-opus-5-5",
             "label": "Claude Opus 5.5",
             "generation": "current",
             "size_rank": 3,
+            "effort_levels": list(EFFORT_LEVELS),
         },
         {
             "id": "claude-fable-5-1",
             "label": "Claude Fable 5.1",
             "generation": "current",
             "size_rank": 4,
+            "effort_levels": list(EFFORT_LEVELS),
         },
         {
             "id": "claude-haiku-4-5-20251001",
             "label": "Claude Haiku 4.5",
             "generation": "previous",
             "size_rank": 1,
+            "effort_levels": [],
         },
         {
             "id": "claude-sonnet-5",
             "label": "Claude Sonnet 5",
             "generation": "previous",
             "size_rank": 2,
+            "effort_levels": list(EFFORT_LEVELS),
         },
         {
             "id": "claude-opus-4-8",
             "label": "Claude Opus 4.8",
             "generation": "previous",
             "size_rank": 3,
+            "effort_levels": list(EFFORT_LEVELS),
         },
     ],
     # Only the confirmed CLI default is listed — add your codex model ids here.
@@ -74,6 +89,7 @@ NATIVE_MODELS: dict[str, list[dict[str, Any]]] = {
             "label": "Codex Mini (latest)",
             "generation": "current",
             "size_rank": 1,
+            "effort_levels": [],
         },
     ],
 }
@@ -122,6 +138,20 @@ def claude_cli_too_old(model_id: str, cli_version: str) -> str | None:
     if not required or have is None or need is None:
         return None
     return required if have < need else None
+
+
+def effort_levels(harness: str, model_id: str | None) -> list[str] | None:
+    """The effort levels ``model_id`` accepts under ``harness``.
+
+    ``None`` when the model is not in the catalog: an id the catalog does not
+    know (a newer release typed by hand) is not refused, the CLI decides. An
+    empty list means the model is known and has no effort control.
+    """
+    wanted = _canonical(model_id or "")
+    for model in NATIVE_MODELS.get(harness, []):
+        if _canonical(model["id"]) == wanted:
+            return list(model.get("effort_levels") or [])
+    return None
 
 
 def gateway_coverage(

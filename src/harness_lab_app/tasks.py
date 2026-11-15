@@ -111,6 +111,7 @@ def _config_payload(session: Session, run: Run) -> RunConfigCreate:
         harness=config.harness,
         planner_model=config.planner_model,
         executor_model=config.executor_model,
+        executor_effort=config.executor_effort,
         score_mode=config.score_mode,
         max_steps=config.max_steps,
         resume=config.resume,

@@ -210,6 +210,9 @@ bench-close:
 #
 # Dry run (print what would happen, write nothing):
 #   make bench-run ... DRY_RUN=1
+#
+# Reasoning effort for a claude-harness run (ADR-0081; low|medium|high|xhigh|max):
+#   make bench-run ... EXECUTOR_EFFORT=high
 bench-run:
 	@[ -n "$(CASE)" ] || { echo "❌ CASE is required. Example: CASE=tetris-v1"; exit 1; }
 	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-A-003"; exit 1; }
@@ -225,6 +228,7 @@ bench-run:
 		$(if $(PROMPT),--prompt $(PROMPT),) \
 		$(if $(PLANNER_MODEL),--planner-model $(PLANNER_MODEL),) \
 		$(if $(EXECUTOR_MODEL),--executor-model $(EXECUTOR_MODEL),) \
+		$(if $(EXECUTOR_EFFORT),--executor-effort $(EXECUTOR_EFFORT),) \
 		$(if $(SCORE_MODE),--score-mode $(SCORE_MODE),) \
 		$(if $(SCORE),--score $(SCORE),) \
 		$(if $(INTERVENTIONS),--interventions $(INTERVENTIONS),) \

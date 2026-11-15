@@ -150,6 +150,8 @@ export type RunContext = {
   harness: string;
   harness_source: string;
   executor_model: string;
+  /** Requested reasoning effort (ADR-0081); "" = the CLI default. Absent on older APIs. */
+  executor_effort?: string;
   planner_model: string;
   target_repo_id: string;
   target_name: string;
@@ -913,6 +915,7 @@ export type ExperimentRecord = {
 export type LaunchConfigSummary = {
   harness: string;
   executor_model: string | null;
+  executor_effort?: string;
   planner_model: string | null;
   prompt_variant: string;
   max_steps: number;
@@ -1452,6 +1455,8 @@ export type RunConfigPayload = {
   harness: string;
   planner_model: string | null;
   executor_model: string | null;
+  /** Reasoning effort for the claude CLI (ADR-0081); "" or absent = the CLI default. */
+  executor_effort?: string;
   score_mode: string;
   max_steps: number;
   resume: boolean;
@@ -1483,6 +1488,8 @@ export type RunBatchPayload = {
   prompt_variants: string[];
   harnesses: string[];
   executor_models: (string | null)[];
+  /** Reasoning effort axis (ADR-0081); `[""]` or absent = the CLI default. */
+  executor_efforts?: string[];
   planner_models: (string | null)[];
   /** The Mode B axis: one case family, N repositories. `[""]` = no target. */
   target_repo_ids?: string[];
@@ -1591,6 +1598,8 @@ export type NativeModelRecord = {
   size_rank: number;
   /** null when no gateway is configured to ask. */
   on_gateway: boolean | null;
+  /** Reasoning effort levels the model accepts (ADR-0081); empty = no effort control. */
+  effort_levels?: string[];
 };
 
 /** One model as the LM Studio host reports it, with no gateway in between. */

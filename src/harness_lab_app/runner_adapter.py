@@ -36,6 +36,10 @@ class BenchRunAdapter:
             command.extend(["--planner-model", config.planner_model])
         if config.executor_model:
             command.extend(["--executor-model", config.executor_model])
+        # Only when set: an empty effort is the CLI default, and leaving the
+        # flag off keeps every default-arm command byte-identical to before.
+        if config.executor_effort:
+            command.extend(["--executor-effort", config.executor_effort])
         # Sorted → deterministic command for identical configs (stable clone/retry).
         for skill in sorted(set(config.skills_disabled)):
             command.extend(["--disable-skill", skill])

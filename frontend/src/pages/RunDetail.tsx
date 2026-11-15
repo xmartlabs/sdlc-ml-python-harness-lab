@@ -74,6 +74,8 @@ const MESSAGES = defineMessages({
       harness: "Harness",
       governance: "Governance",
       executorModel: "Executor model",
+      executorEffort: "Reasoning effort",
+      effortDefault: "CLI default",
       stepBudget: "Step budget",
       sourceBlurb: {
         native:
@@ -344,6 +346,8 @@ const MESSAGES = defineMessages({
       harness: "Arnés",
       governance: "Gobernanza",
       executorModel: "Modelo ejecutor",
+      executorEffort: "Esfuerzo de razonamiento",
+      effortDefault: "Default del CLI",
       stepBudget: "Presupuesto de pasos",
       sourceBlurb: {
         native:
@@ -667,6 +671,12 @@ function RunConditionStrip({ context }: { context: RunContext }) {
           <span>{m.condition.executorModel}</span>
           <strong>{context.executor_model || "—"}</strong>
         </div>
+        {context.harness === "claude" ? (
+          <div>
+            <span>{m.condition.executorEffort}</span>
+            <strong>{context.executor_effort || m.condition.effortDefault}</strong>
+          </div>
+        ) : null}
         <div>
           <span>{m.condition.stepBudget}</span>
           <strong>{context.max_steps}</strong>

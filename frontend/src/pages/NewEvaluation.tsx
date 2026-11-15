@@ -13,6 +13,7 @@ import {
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
 import { HostGuardModal } from "../components/HostGuardModal";
+import { EffortPicker } from "../components/EffortPicker";
 import { ModelPicker } from "../components/ModelPicker";
 import { PromptPreview } from "../components/PromptPreview";
 import { IconAlert, IconArrowRight } from "../components/icons";
@@ -1036,6 +1037,8 @@ export function NewEvaluation() {
   // the arms override it and the shared value is ignored.
   const [harness, setHarness] = useState("opencode");
   const [executorModel, setExecutorModel] = useState("");
+  // Reasoning effort shared by every arm (ADR-0081); "" = the CLI default.
+  const [executorEffort, setExecutorEffort] = useState("");
   const [plannerModel, setPlannerModel] = useState("");
   const [gatewayDefault, setGatewayDefault] = useState("");
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
@@ -1819,6 +1822,7 @@ export function NewEvaluation() {
     crossRepoIds,
     dryRun,
     enforceSkills,
+    executorEffort,
     executorModel,
     factorKey,
     harness,
@@ -1891,12 +1895,17 @@ export function NewEvaluation() {
     setExecutorModel(defaultNativeModel(next, nativeIndex) ?? gatewayDefault);
   };
 
+  const varyingHarness = mode === "harness_evaluation" && factorKey === "harness";
+
   const buildLaunchConfig = (): RunConfigPayload => ({
     case_id: caseIds[0] ?? "",
     prompt_variant: promptVariant,
     harness,
     planner_model: plannerModel || null,
     executor_model: executorModel || null,
+    // Only when one harness runs every arm: a design that varies the harness
+    // would hand a claude flag to an arm that cannot take it.
+    executor_effort: varyingHarness ? "" : executorEffort,
     // The one mode the web API accepts. Runs with objective validation score
     // themselves from it; the rest land in awaiting_manual_score.
     score_mode: "manual",
@@ -2479,6 +2488,14 @@ export function NewEvaluation() {
           >
             <small className="muted">{m.executorModelHeldFixed}</small>
           </ModelPicker>
+          {varyingHarness ? null : (
+            <EffortPicker
+              harness={harness}
+              model={executorModel}
+              onChange={setExecutorEffort}
+              value={executorEffort}
+            />
+          )}
           <ModelPicker
             allowNone
             label={m.plannerModelLabel}

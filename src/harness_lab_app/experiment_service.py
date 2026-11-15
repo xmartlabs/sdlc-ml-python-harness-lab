@@ -51,6 +51,9 @@ CONDITION_FIELDS = frozenset(
     {
         "harness",
         "executor_model",
+        # Reasoning effort (ADR-0081): the same model at two effort levels is
+        # two arms, so an experiment may vary it like any other axis.
+        "executor_effort",
         "planner_model",
         "target_repo_id",
         "target_ref",
@@ -218,10 +221,11 @@ def validate_design(
                 "Conditions that vary 'skills_disabled' are a harness evaluation "
                 "wearing this mode's label — use mode 'harness_evaluation'."
             )
-        subject_axes = varying & {"harness", "executor_model"}
+        subject_axes = varying & {"harness", "executor_model", "executor_effort"}
         if len(subject_axes) > 1:
             warnings.append(
-                "Both the harness and the executor model vary. That cross product "
+                "More than one of harness, executor model and reasoning effort "
+                "vary. That cross product "
                 "is the point of this mode, but each cell is its own population: "
                 "read one <harness>/<model> arm at a time, never averaged."
             )
@@ -263,6 +267,16 @@ def validate_design(
                 "Mode 'harness_evaluation' holds the model fixed. These conditions "
                 "vary the executor model, so harness and model effects are "
                 "confounded."
+            )
+        if "executor_effort" in varying:
+            # Effort is a setting of the model, not of the harness (ADR-0081):
+            # the same confound as varying the model itself.
+            raise ExperimentDesignError(
+                "Mode 'harness_evaluation' holds the model fixed, and reasoning "
+                "effort is part of the model's setting. These conditions vary "
+                "executor_effort, so harness and effort effects are confounded. "
+                "Hold the effort fixed across arms, or compare effort levels in "
+                "mode 'subject_validation' or 'discovery'."
             )
         harness_axes = varying & {
             "harness_source",
@@ -1250,6 +1264,9 @@ class ExperimentService:
     _LOCKED_FIELDS = (
         "harness",
         "executor_model",
+        # Effort (ADR-0081): two levels under one name are two measurements.
+        # Historical rows hold "", which is what a relaunch without one sends.
+        "executor_effort",
         "planner_model",
         "prompt_variant",
         "max_steps",
@@ -1313,6 +1330,7 @@ class ExperimentService:
             return {
                 "harness": config.harness,
                 "executor_model": config.executor_model,
+                "executor_effort": config.executor_effort,
                 "planner_model": config.planner_model,
                 "prompt_variant": config.prompt_variant,
                 "max_steps": config.max_steps,

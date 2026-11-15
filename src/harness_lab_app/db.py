@@ -252,6 +252,15 @@ def _apply_sqlite_compat_migrations() -> None:
                         f"ALTER TABLE runconfig ADD COLUMN {column} JSON NOT NULL DEFAULT '[]'"
                     )
                 )
+        # Reasoning effort (ADR-0081). Backfills "", the CLI's own default:
+        # that is what every historical run actually ran with, not a gap.
+        if runconfig_columns and "executor_effort" not in runconfig_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE runconfig ADD COLUMN executor_effort "
+                    "VARCHAR NOT NULL DEFAULT ''"
+                )
+            )
         if runconfig_columns and "continuation_prompt" not in runconfig_columns:
             connection.execute(
                 text(

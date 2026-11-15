@@ -6,6 +6,7 @@ import { api } from "../api";
 import { caseOptionLabel } from "../caseLabels";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
+import { EffortPicker } from "../components/EffortPicker";
 import { ModelPicker } from "../components/ModelPicker";
 import { defineMessages, useMessages } from "../i18n";
 import {
@@ -447,6 +448,8 @@ export function Runs({
   const [harness, setHarness] = useState("opencode");
   const [plannerModel, setPlannerModel] = useState("");
   const [executorModel, setExecutorModel] = useState(FALLBACK_EXECUTOR_MODEL);
+  // Reasoning effort (ADR-0081). "" = the claude CLI's own default.
+  const [executorEffort, setExecutorEffort] = useState("");
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
   const [modelSource, setModelSource] = useState<string | null>(null);
   // Why each direct host has no models, keyed by provider id. One may be up
@@ -731,6 +734,9 @@ export function Runs({
     if (plannerModel) {
       parts.push(`PLANNER_MODEL=${plannerModel}`);
     }
+    if (executorEffort) {
+      parts.push(`EXECUTOR_EFFORT=${executorEffort}`);
+    }
     if (dryRun) {
       parts.push("DRY_RUN=1");
     }
@@ -738,7 +744,7 @@ export function Runs({
       parts.push("RESUME=1");
     }
     return parts.join(" \\\n  ");
-  }, [caseId, dryRun, effectiveRunLabel, executorModel, maxSteps, plannerModel, promptVariant, resume]);
+  }, [caseId, dryRun, effectiveRunLabel, executorEffort, executorModel, maxSteps, plannerModel, promptVariant, resume]);
 
   const applySdlcQwenPreset = () => {
     setCaseId("tetris-v1");
@@ -759,6 +765,7 @@ export function Runs({
     harness,
     plannerModel,
     executorModel,
+    executorEffort,
     maxSteps,
     resume,
     dryRun,
@@ -782,6 +789,7 @@ export function Runs({
     harness,
     planner_model: plannerModel || null,
     executor_model: executorModel || null,
+    executor_effort: executorEffort,
     score_mode: scoreMode,
     max_steps: maxSteps,
     resume,
@@ -865,6 +873,10 @@ export function Runs({
           prompt_variants: [...batchPrompts],
           harnesses: [...batchHarnesses],
           executor_models: batchExecutorAxis,
+          // A batch crosses several harnesses and models, and one effort level
+          // would be refused for every arm that cannot take it, so a batch
+          // runs at the CLI default. Vary effort with an experiment instead.
+          executor_efforts: [""],
           planner_models: [plannerModel || null],
           repetitions,
           score_mode: scoreMode,
@@ -1183,6 +1195,12 @@ export function Runs({
                     : m.fields.loadingModels}
             </small>
           </ModelPicker>
+          <EffortPicker
+            harness={harness}
+            model={executorModel}
+            onChange={setExecutorEffort}
+            value={executorEffort}
+          />
           <label>
             <span>{m.fields.scoreMode}</span>
             <select value={scoreMode} disabled>

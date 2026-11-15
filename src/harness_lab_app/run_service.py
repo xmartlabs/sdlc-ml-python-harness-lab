@@ -148,6 +148,7 @@ def _batch_size(data: RunBatchCreate, variants: Mapping[str, Sequence[str]]) -> 
         sum(len(names) for names in variants.values())
         * len(data.harnesses)
         * len(data.executor_models)
+        * len(data.executor_efforts)
         * len(data.planner_models)
         * len(data.target_repo_ids)
         * len(data.harness_sources)
@@ -174,6 +175,7 @@ def _expand_batch(
             prompt_variant=prompt_variant,
             harness=harness,
             executor_model=executor_model,
+            executor_effort=executor_effort,
             planner_model=planner_model,
             score_mode=data.score_mode,
             max_steps=data.max_steps,
@@ -190,6 +192,7 @@ def _expand_batch(
         for prompt_variant in variants[case_id]
         for harness in data.harnesses
         for executor_model in data.executor_models
+        for executor_effort in data.executor_efforts
         for planner_model in data.planner_models
         for target_repo_id in data.target_repo_ids
         for harness_source in data.harness_sources
@@ -214,6 +217,7 @@ def _preflight_key(config: RunConfigCreate) -> tuple:
         config.harness,
         config.score_mode,
         config.executor_model,
+        config.executor_effort,
         tuple(sorted(set(config.skills_disabled))),
         tuple(sorted(set(config.skills_extra))),
         tuple(sorted(set(config.skills_invoke))),
@@ -235,6 +239,7 @@ def _resume_config(config: RunConfig) -> RunConfigCreate:
         harness=config.harness,
         planner_model=config.planner_model,
         executor_model=config.executor_model,
+        executor_effort=config.executor_effort,
         target_repo_id=config.target_repo_id,
         target_ref=config.target_ref,
         harness_source=config.harness_source,
@@ -348,6 +353,7 @@ class RunService:
         answer is the one ``create_run`` would give.
         """
         self._check_target(config)
+        self._check_effort(config)
         if config.dry_run:
             return
         # A bare arm is bare only because the runner masks the lab's governance
@@ -686,6 +692,42 @@ class RunService:
                 "server-wide OLLAMA_CONTEXT_LENGTH, so raise it there (for "
                 f"example OLLAMA_CONTEXT_LENGTH={MIN_CONTEXT_TOKENS}), restart "
                 "Ollama, and retry."
+            )
+
+    def _check_effort(self, config: RunConfigCreate) -> None:
+        """Refuse an effort level the run cannot honour (ADR-0081).
+
+        Checked before every early return, dry runs included: an effort the CLI
+        never receives would still be recorded and hashed as part of the arm,
+        so the run would claim a condition it did not run under.
+        """
+        from harness_lab_app.native_models import effort_levels
+
+        effort = config.executor_effort
+        if not effort:
+            return
+        if config.harness != "claude":
+            raise RunPreflightError(
+                f"Reasoning effort is a Claude Code setting (--effort); the "
+                f"'{config.harness}' harness has no way to pass it. Clear the "
+                "effort or switch the harness to claude."
+            )
+        model = (config.executor_model or "").strip()
+        if not model or model.startswith(("gateway/", "lmstudio/", "ollama/")):
+            raise RunPreflightError(
+                "Reasoning effort needs a native Claude model: without one the "
+                "CLI runs its own default model, and the effort would describe a "
+                "model nobody chose. Pick a Claude model or clear the effort."
+            )
+        levels = effort_levels("claude", model)
+        if levels is not None and effort not in levels:
+            raise RunPreflightError(
+                f"'{model}' does not accept effort '{effort}'"
+                + (
+                    f" (it accepts: {', '.join(levels)})."
+                    if levels
+                    else " — it has no effort control. Clear the effort."
+                )
             )
 
     def _check_claude_cli_version(self, executor_model: str | None) -> None:
@@ -1069,6 +1111,7 @@ class RunService:
             harness=config.harness,
             planner_model=config.planner_model,
             executor_model=config.executor_model,
+            executor_effort=config.executor_effort,
             score_mode=config.score_mode,
             max_steps=config.max_steps,
             resume=False,
@@ -1151,6 +1194,7 @@ class RunService:
             harness=config.harness,
             planner_model=config.planner_model,
             executor_model=config.executor_model,
+            executor_effort=config.executor_effort,
             score_mode=config.score_mode,
             max_steps=max_steps or config.max_steps,
             resume=True,

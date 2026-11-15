@@ -239,6 +239,9 @@ class RunConfig(SQLModel, table=True):
     harness: str = "opencode"
     planner_model: str | None = None
     executor_model: str | None = None
+    # Reasoning effort (ADR-0081). "" is the CLI's own default, which is what
+    # every run before the selector got, so historical rows are accurate as-is.
+    executor_effort: str = ""
     score_mode: str = "manual"
     max_steps: int = 1
     resume: bool = False

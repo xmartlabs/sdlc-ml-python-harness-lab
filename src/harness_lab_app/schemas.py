@@ -198,12 +198,35 @@ class SuiteExperimentCreate(BaseModel):
     notes: str = ""
 
 
+def _normalize_effort(value: str | None) -> str:
+    """Lower-cased effort level, or "" for the CLI default; refuses the rest.
+
+    Which levels a given *model* accepts is a preflight question (it needs the
+    catalog); this only keeps a typo from reaching the CLI as an argument it
+    would reject at launch.
+    """
+    from harness_lab_app.native_models import EFFORT_LEVELS
+
+    normalized = (value or "").strip().lower()
+    if normalized and normalized not in EFFORT_LEVELS:
+        raise ValueError(
+            f"executor_effort must be one of: {', '.join(EFFORT_LEVELS)} "
+            "(or empty for the CLI default)"
+        )
+    return normalized
+
+
 class RunConfigCreate(BaseModel):
     case_id: str
     prompt_variant: str
     harness: str = "opencode"
     planner_model: str | None = None
     executor_model: str | None = None
+    # Reasoning effort for the executor (ADR-0081): one of
+    # ``native_models.EFFORT_LEVELS``, passed to the claude CLI as ``--effort``.
+    # Empty means the CLI's own default — what every run before the selector
+    # got — so it is the historical arm, not a missing value.
+    executor_effort: str = ""
     score_mode: str = "manual"
     max_steps: int = 1
     resume: bool = False
@@ -233,6 +256,11 @@ class RunConfigCreate(BaseModel):
     # Which harness the agent sees (ADR-0031). `native`/`injected` both run the
     # agent inside the target repository and therefore require one.
     harness_source: HarnessSource = HarnessSource.lab_root
+
+    @field_validator("executor_effort")
+    @classmethod
+    def validate_executor_effort(cls, value: str) -> str:
+        return _normalize_effort(value)
 
     @field_validator("score_mode")
     @classmethod
@@ -431,6 +459,9 @@ class RunBatchCreate(BaseModel):
     # the axis passes a single-element list.
     executor_models: list[str | None] = Field(default_factory=_unset_axis)
     planner_models: list[str | None] = Field(default_factory=_unset_axis)
+    # Reasoning effort axis (ADR-0081). The default single "" means "the CLI's
+    # own default", which is what every batch before the selector asked for.
+    executor_efforts: list[str] = Field(default_factory=lambda: [""])
     # Target repositories to run against (ADR-0029) — the Mode B axis: one case
     # family, N repositories, harness held fixed. The default single empty
     # string means "no external target", which is what every batch created
@@ -470,6 +501,13 @@ class RunBatchCreate(BaseModel):
         if not value:
             raise ValueError("must contain at least one entry (use [null] for unset)")
         return value
+
+    @field_validator("executor_efforts")
+    @classmethod
+    def validate_effort_axis(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError('must contain at least one entry (use [""] for default)')
+        return [_normalize_effort(item) for item in value]
 
     @field_validator("repetitions")
     @classmethod

@@ -1121,6 +1121,77 @@ def test_relaunching_with_a_different_model_is_refused(session):
     assert len(service.runs("lockcheck")) == 4
 
 
+def test_relaunching_at_a_different_effort_is_refused(session):
+    """Effort is part of what was measured (ADR-0081), so the lock holds it."""
+    claude = {"harness": "claude", "executor_model": "claude-opus-5-5"}
+    service = ExperimentService(session)
+    _skills_design(service, "effortlock")
+    service.launch("effortlock", _base_config(**claude, executor_effort="high"))
+
+    with pytest.raises(ExperimentError, match="executor_effort"):
+        service.launch("effortlock", _base_config(**claude, executor_effort="low"))
+
+    again = service.launch("effortlock", _base_config(**claude, executor_effort="high"))
+    assert len(again) == 2
+    assert service.launch_config("effortlock")["executor_effort"] == "high"
+
+
+def _effort_design(service, experiment_id, mode):
+    return service.create_experiment(
+        ExperimentCreate(
+            experiment_id=experiment_id,
+            name="Effort",
+            question="Does max effort beat the default on this case?",
+            mode=mode,
+            case_ids=["tetris-v1"],
+            repetitions=1,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="default", role=ConditionRole.control, overrides={}
+                ),
+                ExperimentConditionCreate(
+                    label="max",
+                    role=ConditionRole.treatment,
+                    overrides={"executor_effort": "max"},
+                ),
+            ],
+        )
+    )
+
+
+def test_a_harness_evaluation_refuses_to_vary_effort(session):
+    """Effort is a setting of the model: varying it confounds the harness."""
+    service = ExperimentService(session)
+    with pytest.raises(ExperimentDesignError, match="executor_effort"):
+        _effort_design(service, "effortconfound", ExperimentMode.harness_evaluation)
+
+
+def test_an_experiment_can_vary_effort_between_arms(session):
+    """Same model, two effort levels: two arms, each carrying its own level."""
+    service = ExperimentService(session)
+    CaseService(session).create_case(
+        CaseCreate(
+            case_id="tetris-v1",
+            name="Tetris",
+            type=CaseType.single_prompt,
+            prompt_variants={"sdlc": "Build Tetris."},
+        )
+    )
+    _effort_design(service, "effortaxis", ExperimentMode.discovery)
+    runs = service.launch(
+        "effortaxis",
+        _base_config(harness="claude", executor_model="claude-opus-5-5"),
+    )
+    runs_service = RunService(session)
+    by_arm = {
+        run.condition_label: runs_service.get_run_config(
+            run.run_config_id
+        ).executor_effort
+        for run in runs
+    }
+    assert by_arm == {"default": "", "max": "max"}
+
+
 def test_a_dry_run_rehearsal_neither_locks_nor_is_blocked(session):
     """Dry runs build commands; they measure nothing, so they lock nothing."""
     service = ExperimentService(session)

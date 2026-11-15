@@ -2254,6 +2254,8 @@ def create_app() -> FastAPI:
             # saw the target repository's own setup or the one the lab injected.
             "harness_source": config.harness_source.value,
             "executor_model": config.executor_model or "",
+            # "" is the CLI's own default (ADR-0081), not an unknown.
+            "executor_effort": config.executor_effort,
             "planner_model": config.planner_model or "",
             "target_repo_id": config.target_repo_id,
             "target_name": target.name if target else "",

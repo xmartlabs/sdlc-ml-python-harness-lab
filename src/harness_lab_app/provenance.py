@@ -274,6 +274,7 @@ def compute_condition_hash(
     target: dict[str, Any] | None = None,
     harness_source: str = "",
     skills_invoke: tuple[str, ...] = (),
+    executor_effort: str = "",
 ) -> str:
     """Deterministic id of the experimental arm (excludes provenance-only fields).
 
@@ -306,6 +307,10 @@ def compute_condition_hash(
         # Being told to use a skill is a different arm from having it on the
         # menu (ADR-0041). Same non-empty-only rule as the fields above.
         identity["skills_invoke"] = sorted(set(skills_invoke))
+    if executor_effort:
+        # The same model at another effort level is another arm (ADR-0081).
+        # Non-empty-only: "" is the CLI default every historical run used.
+        identity["executor_effort"] = executor_effort
     if gateway_overlay_hash:
         identity["gateway_overlay"] = gateway_overlay_hash
     if harness_source and harness_source != "lab_root":
@@ -342,6 +347,7 @@ def build_condition(
     harness_root: Path | None = None,
     harness_projection: dict[str, Any] | None = None,
     skills_invoke: tuple[str, ...] = (),
+    executor_effort: str = "",
 ) -> dict[str, Any]:
     """Assemble the full, hashable trial condition manifest.
 
@@ -374,7 +380,11 @@ def build_condition(
             target=target,
             harness_source=harness_source,
             skills_invoke=skills_invoke,
+            executor_effort=executor_effort,
         ),
+        # The effort *requested* (ADR-0081). The CLI's stream does not report
+        # the level it applied, so this is what was asked, recorded as such.
+        "executor_effort_requested": executor_effort,
         "gateway_overlay_hash": gateway_overlay_hash,
         "harness_source": harness_source or "lab_root",
         # What the projection actually placed, and what it displaced. Recorded,
@@ -428,6 +438,7 @@ def enrich_metadata(
     harness_root: Path | None = None,
     harness_projection: dict[str, Any] | None = None,
     skills_invoke: tuple[str, ...] = (),
+    executor_effort: str = "",
 ) -> dict[str, Any]:
     """Add the condition manifest to a metadata dict; never raises."""
     with contextlib.suppress(Exception):
@@ -449,6 +460,7 @@ def enrich_metadata(
                 harness_root=harness_root,
                 harness_projection=harness_projection,
                 skills_invoke=skills_invoke,
+                executor_effort=executor_effort,
             )
         )
     return meta
