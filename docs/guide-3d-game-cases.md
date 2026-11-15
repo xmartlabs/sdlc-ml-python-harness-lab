@@ -158,6 +158,36 @@ its keys in the prompt, and `input_actions` fails a build that left them unbound
 
 A person must be able to play what the agent built without reading its code.
 
+## Comparing models on a case
+
+When a new model ships, open **Evaluate → Compare models**:
+
+1. Pick the case.
+2. Pick two to four models, each with the harness that runs it: `claude` for Claude
+   models, `opencode` for local and gateway models.
+3. Keep the shared settings: the prompt variant, the repetitions, and the steps
+   (one per phase, from the case).
+
+The page creates one experiment with an arm per model, every other setting shared,
+and files it in the family `models-<case>`. That family's list holds every earlier
+comparison on the case, so the new model is read next to the last one.
+
+The experiment page shows, per model and per run, the checks passed after each
+phase, the final grade, the cost and the time. That is the useful reading here:
+almost no run passes all 40 checks, so a pass rate would read 0% for every model.
+
+By default runs execute one at a time, and a phased game run can take an hour or
+more, so three models take an afternoon. **Two at a time** puts one model on each of
+two lanes. A Claude model then finishes, and can be played from its Play tab, while a
+local model on opencode is still running. The trade-offs:
+
+- your token quota is used twice as fast;
+- two game containers need 8 GB together, and they share the CPU;
+- two runs on the same local model take turns on its GPU.
+
+The option is greyed out when the second lane's worker is not running. A local model
+reports no cost; the table says so instead of showing US$0.00. [ADR-0082](adr/0082-models-are-compared-on-one-case-by-checks-not-pass-rate.md).
+
 ## Writing the next case
 
 Every case in the lane follows the same pattern:

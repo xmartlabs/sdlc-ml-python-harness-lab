@@ -37,6 +37,7 @@ import type {
   RuntimeFacts,
   LeaderboardRunRow,
   ModelCatalog,
+  ModelComparison,
   OverviewReport,
   OfficialReferenceRow,
   ReadinessReport,
@@ -412,11 +413,17 @@ export const api = {
     ),
   summarizeExperiment: (id: string) =>
     request<ExperimentSummary>(`/api/experiments/${id}/summary`),
-  launchExperiment: (id: string, config: RunConfigPayload) =>
+  /** Per model: checks, phases, cost and time of each run (a `models-<case>` family). */
+  getModelComparison: (id: string) =>
+    request<ModelComparison>(`/api/experiments/${id}/model-comparison`),
+  /** `parallel` 2 runs two at a time on the second lane (ADR-0082); 1 is the default. */
+  launchExperiment: (id: string, config: RunConfigPayload, parallel: 1 | 2 = 1) =>
     request<{ count: number; run_ids: string[] }>(
       `/api/experiments/${id}/launch`,
-      { method: "POST", body: JSON.stringify({ config }) }
+      { method: "POST", body: JSON.stringify({ config, parallel }) }
     ),
+  /** Whether a worker serves the second run lane (null: no worker answered). */
+  getRunLanes: () => request<{ parallel: boolean | null; queues: string[] }>("/api/runs/lanes"),
   listFindings: () => request<FindingRecord[]>("/api/findings"),
   createFinding: (payload: unknown) =>
     request<FindingRecord>("/api/findings", {

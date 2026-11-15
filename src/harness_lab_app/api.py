@@ -52,6 +52,7 @@ from harness_lab_app.celery_app import (
     enqueue_experiment_audit,
     enqueue_gate_check,
     enqueue_improve,
+    enqueue_parallel_run,
     enqueue_repository_audit,
     enqueue_run,
     enqueue_sandbox_start,
@@ -1383,6 +1384,18 @@ def create_app() -> FastAPI:
         except ExperimentNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.get("/api/experiments/{experiment_id}/model-comparison")
+    def experiment_model_comparison(
+        experiment_id: str, session: Session = Depends(get_session)
+    ):
+        """Per model: checks passed, phase by phase, cost and time of each run."""
+        from harness_lab_app.model_comparison import model_comparison
+
+        try:
+            return model_comparison(ExperimentService(session), experiment_id)
+        except ExperimentNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/api/experiments", status_code=201)
     def create_experiment(
         data: ExperimentCreate, session: Session = Depends(get_session)
@@ -1474,16 +1487,46 @@ def create_app() -> FastAPI:
         except ExperimentError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @app.get("/api/runs/lanes")
+    def run_lanes():
+        """Whether a second run lane is up, for the two-at-a-time option (ADR-0082)."""
+        from harness_lab_app.celery_app import PARALLEL_RUN_QUEUE
+        from harness_lab_app.health_service import queues_served
+
+        served = queues_served()
+        return {
+            # None: no worker could be asked, so the page cannot tell.
+            "parallel": None if served is None else PARALLEL_RUN_QUEUE in served,
+            "queues": sorted(served or []),
+        }
+
     @app.post("/api/experiments/{experiment_id}/launch", status_code=201)
     def launch_experiment(
         experiment_id: str,
         data: ExperimentLaunch,
         session: Session = Depends(get_session),
     ):
+        if data.parallel == 2:
+            from harness_lab_app.celery_app import PARALLEL_RUN_QUEUE
+            from harness_lab_app.health_service import queues_served
+
+            served = queues_served()
+            # Refused only when the workers answered and none serves the second
+            # lane; with no answer at all the launch goes ahead, as preflight
+            # does when it cannot decide.
+            if served is not None and PARALLEL_RUN_QUEUE not in served:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "No worker serves the second run lane, so half of these "
+                        "runs would wait forever. Restart the stack (make app-up) "
+                        "to start it, or launch one at a time."
+                    ),
+                )
         try:
-            runs = ExperimentService(session, enqueue=enqueue_run).launch(
-                experiment_id, data.config
-            )
+            runs = ExperimentService(
+                session, enqueue=enqueue_run, enqueue_parallel=enqueue_parallel_run
+            ).launch(experiment_id, data.config, parallel=data.parallel)
         except ExperimentNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (ExperimentError, RunPreflightError) as exc:
@@ -2603,7 +2646,12 @@ def create_app() -> FastAPI:
     @app.get("/api/runs/{run_id}/progress")
     def get_run_progress(run_id: str, session: Session = Depends(get_session)):
         """What the run is doing now: phase, time, cost, last action, live grades."""
-        from harness_lab_app.run_progress import read_progress
+        from harness_lab_app.models import Validation
+        from harness_lab_app.run_progress import (
+            fill_final_grades,
+            progress_clock,
+            read_progress,
+        )
 
         service = RunService(session)
         try:
@@ -2617,7 +2665,20 @@ def create_app() -> FastAPI:
             prompt_path.read_text(errors="replace") if prompt_path.is_file() else ""
         )
         progress = read_progress(
-            run_dir, max_steps=int(config.max_steps or 0), first_prompt=first_prompt
+            run_dir,
+            max_steps=int(config.max_steps or 0),
+            first_prompt=first_prompt,
+            # A finished run is read at its end, not at the present.
+            now=progress_clock(run.ended_at),
+        )
+        # A phase graded after the run (the per-step reward) shows that grade
+        # where no live one exists: a run that predates live grading, or a
+        # phase that ended as the run did.
+        validation = session.exec(
+            select(Validation).where(Validation.run_id == run_id)
+        ).first()
+        fill_final_grades(
+            progress, ((validation.objective or {}) if validation else {})
         )
         progress["state"] = str(run.state)
         progress["extra_wait_seconds"] = int(run.extra_wait_seconds or 0)

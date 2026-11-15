@@ -202,6 +202,28 @@ def worker_facts(*, refresh: bool = False) -> dict[str, Any]:
     return facts
 
 
+def queues_served(timeout: float = 2.0) -> set[str] | None:
+    """The queues some live worker consumes, or None when nobody could be asked.
+
+    ``harness_facts`` answers from whichever worker replies first, which says
+    nothing about a second lane. A parallel launch (ADR-0082) has to know a
+    worker is listening on ``runs-parallel`` before it sends half its runs
+    there, or those runs sit ``pending`` with no error anywhere.
+    """
+    try:
+        replies = celery_app.control.inspect(timeout=timeout).active_queues()
+    except Exception:
+        return None
+    if replies is None:
+        return set()
+    return {
+        str(queue.get("name"))
+        for queues in replies.values()
+        for queue in queues or []
+        if isinstance(queue, dict) and queue.get("name")
+    }
+
+
 def _check_worker(facts: dict[str, Any]) -> tuple[str, str, list[str]]:
     if not facts:
         return ERROR, "No worker replied — runs will stay pending.", []

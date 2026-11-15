@@ -25,6 +25,8 @@ const MESSAGES = defineMessages({
     lastAction: "Last action",
     quiet: (s: string) => `quiet for ${s}`,
     cost: "Cost",
+    costUnknown: "not reported by this model",
+    turns: (n: number) => `${n} turns`,
     costPartial: "so far (the running phase adds its cost when it ends)",
     grade: (p: number, t: number) => `${p}/${t} checks`,
     grading: "grading…",
@@ -49,6 +51,8 @@ const MESSAGES = defineMessages({
     lastAction: "Última acción",
     quiet: (s: string) => `sin actividad hace ${s}`,
     cost: "Costo",
+    costUnknown: "este modelo no lo reporta",
+    turns: (n: number) => `${n} turnos`,
     costPartial: "hasta ahora (la fase en curso suma su costo al terminar)",
     grade: (p: number, t: number) => `${p}/${t} chequeos`,
     grading: "calificando…",
@@ -106,7 +110,13 @@ function PhaseCell({ row, current }: { row: RunPhaseProgress; current: boolean }
       <div className="run-phase-name">{row.name || " "}</div>
       <div className="run-phase-stats">
         <span>{duration(row.seconds)}</span>
-        <span>{row.cost_usd !== null ? money(row.cost_usd) : `${row.turns} turns`}</span>
+        <span>
+          {row.cost_usd !== null
+            ? money(row.cost_usd)
+            : row.turns > 0
+              ? m.turns(row.turns)
+              : "—"}
+        </span>
       </div>
       {gradeText ? (
         <div className="run-phase-grade">
@@ -259,7 +269,12 @@ export function RunProgressPanel({ runId, live, onStopped }: Props) {
           <span />
         )}
         <span>
-          <span className="muted">{m.cost}:</span> {money(progress.cost_usd)}
+          <span className="muted">{m.cost}:</span>{" "}
+          {progress.cost_usd !== null ? (
+            money(progress.cost_usd)
+          ) : (
+            <span className="muted">{m.costUnknown}</span>
+          )}
           {!progress.cost_complete && live ? (
             <span className="muted small"> {m.costPartial}</span>
           ) : null}

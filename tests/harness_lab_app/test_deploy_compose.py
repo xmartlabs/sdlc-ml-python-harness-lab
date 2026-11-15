@@ -104,15 +104,28 @@ def test_app_up_prod_pins_the_api_to_loopback():
     assert "--profile prod" in target
 
 
-def test_only_the_worker_holds_the_docker_socket(services):
-    """ADR-0002: the API must never be able to launch a container."""
-    holders = [
+def test_only_the_workers_hold_the_docker_socket(services):
+    """ADR-0002: the API must never be able to launch a container.
+
+    The workers are the lanes that do (ADR-0082): the one run lane, the second
+    run lane and the sandbox worker, all built from the same definition.
+    """
+    holders = sorted(
         name
         for name, service in services.items()
         if any("docker.sock" in volume for volume in service.get("volumes", []))
-    ]
+    )
 
-    assert holders == ["worker"]
+    assert holders == ["worker", "worker-interactive", "worker-parallel"]
+    assert "api" not in holders
+
+
+def test_every_run_lane_executes_one_run_at_a_time(services):
+    """Two lanes, never two runs on one lane: the lanes are the parallelism."""
+    for name, queue in (("worker", "runs"), ("worker-parallel", "runs-parallel")):
+        command = services[name]["command"]
+        assert command[command.index("-Q") + 1] == queue, name
+        assert "--concurrency=1" in command, name
 
 
 def test_services_wait_for_their_dependencies_to_be_healthy(services):

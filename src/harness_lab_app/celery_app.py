@@ -19,14 +19,35 @@ celery_app.conf.update(
 )
 
 
-def enqueue_run(run_id: str) -> None:
+# The run lanes (ADR-0082). `runs` is the lab's one lane: everything runs there
+# one at a time, as ADR-0002 requires while a run may rewrite the lab's own
+# tree (a skill ablation regenerates `.claude/skills`). `runs-parallel` is a
+# second worker for runs that rewrite nothing shared — a model comparison
+# launched "two at a time" alternates its runs between the two lanes.
+RUN_QUEUE = "runs"
+PARALLEL_RUN_QUEUE = "runs-parallel"
+# Sandboxes (terminal, desktop, Play) are seconds of work a person is waiting
+# on. On the run lane they queued behind a run of several hours, so the game a
+# finished run built could not be played while another run was still going.
+INTERACTIVE_QUEUE = "interactive"
+RUN_QUEUES = (RUN_QUEUE, PARALLEL_RUN_QUEUE)
+
+
+def enqueue_run(run_id: str, queue: str = RUN_QUEUE) -> None:
     """Publish a run execution task; raises if the broker is unreachable."""
+    if queue not in RUN_QUEUES:
+        raise ValueError(f"Unknown run queue: {queue}")
     celery_app.send_task(
         "harness_lab_app.tasks.execute_run",
         args=[run_id],
-        queue="runs",
+        queue=queue,
         retry=False,
     )
+
+
+def enqueue_parallel_run(run_id: str) -> None:
+    """Publish a run on the second lane (a parallel model comparison)."""
+    enqueue_run(run_id, PARALLEL_RUN_QUEUE)
 
 
 def enqueue_validation(run_id: str) -> None:
@@ -122,7 +143,7 @@ def enqueue_sandbox_start(run_id: str, kind: str) -> None:
     celery_app.send_task(
         "harness_lab_app.tasks.start_sandbox",
         args=[run_id, kind],
-        queue="runs",
+        queue=INTERACTIVE_QUEUE,
         retry=False,
     )
 
@@ -132,7 +153,7 @@ def enqueue_sandbox_stop(run_id: str, kind: str) -> None:
     celery_app.send_task(
         "harness_lab_app.tasks.stop_sandbox",
         args=[run_id, kind],
-        queue="runs",
+        queue=INTERACTIVE_QUEUE,
         retry=False,
     )
 

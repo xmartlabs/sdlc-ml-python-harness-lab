@@ -10,10 +10,13 @@ live:
 - ``steps/step-N-prompt.md`` names the phase (``## Phase N of M — name``);
 - ``steps/step-N.events.jsonl`` grows as the agent works, each line stamped
   with ``_received_at`` on arrival, and ends with a ``result`` event carrying the
-  step's real cost and turns;
+  step's real cost and turns. A harness that writes no event stream (opencode)
+  is read from ``steps/step-N.log`` instead: turns, times and the last action,
+  never a cost;
 - ``steps/step-N.meta.json`` appears when step N is done, with its seconds;
 - ``live_steps.json`` holds the grade of each finished phase, written by the
-  worker while the run goes on (see ``tasks._LivePhaseGrader``).
+  worker while the run goes on (see ``phase_watch.LivePhaseGrader``); a phase
+  with no live grade shows the per-step reward's (``fill_final_grades``).
 
 Pure reads, no database, so the API can serve it on every poll and a test can
 build it from a temporary directory.
@@ -33,7 +36,9 @@ LIVE_STEPS_FILE = "live_steps.json"
 SLOW_STATE_FILE = "slow_phase.json"
 
 _PHASE_RE = re.compile(r"^## Phase (\d+) of (\d+)\s*[—-]\s*(.+?)\s*$", re.MULTILINE)
-_STEP_FILE_RE = re.compile(r"^step-(\d+)\.events\.jsonl$")
+# A step exists once the harness writes either of its streams: the event
+# stream (claude) or the plain log (opencode and any harness without events).
+_STEP_FILE_RE = re.compile(r"^step-(\d+)\.(?:events\.jsonl|log)$")
 
 
 def _parse_ts(value: Any) -> float | None:
@@ -126,6 +131,62 @@ def step_activity(path: Path) -> dict[str, Any]:
     return activity
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_LOG_TS_RE = re.compile(r"^timestamp=(\S+)")
+# One agent turn in opencode's `--print-logs` output.
+_LOG_TURN_RE = re.compile(r"\bmessage=loop\b.*\bstep=\d+")
+# What opencode prints for each tool call: `$ cmd`, `→ Read f`, `← Edit f`,
+# `✱ Glob …`, `✗ Write failed`.
+_LOG_ACTION_RE = re.compile(r"^(?:\$|→|←|✱|✗|⚙)\s+(\S.*)$")
+
+
+def log_activity(path: Path) -> dict[str, Any]:
+    """Turns and the last action of a step, from a harness's plain step log.
+
+    For harnesses that write no ``events.jsonl`` (opencode, the local models'
+    lane). Each ``message=loop … step=N`` line is one agent turn and carries a
+    timestamp; tool calls are the lines opencode marks with ``$``, ``→``, ``←``
+    or ``✱``. Cost is never known here: a local model reports none.
+    """
+    turns = 0
+    first_ts: float | None = None
+    last_ts: float | None = None
+    last_action: str | None = None
+    try:
+        handle = path.open(errors="replace")
+    except OSError:
+        return {}
+    with handle:
+        for raw in handle:
+            match = _LOG_TS_RE.match(raw)
+            if match is not None:
+                ts = _parse_ts(match.group(1))
+                if ts is not None:
+                    first_ts = ts if first_ts is None else first_ts
+                    last_ts = ts
+                if _LOG_TURN_RE.search(raw):
+                    turns += 1
+                continue
+            action = _LOG_ACTION_RE.match(_ANSI_RE.sub("", raw).strip())
+            if action is not None:
+                last_action = " ".join(action.group(0).split())[:160]
+    return {
+        "turns": turns,
+        "output_tokens": 0,
+        "first_event_at": first_ts,
+        "last_event_at": last_ts,
+        "last_action": last_action,
+    }
+
+
+def _activity(steps_dir: Path, number: int) -> dict[str, Any]:
+    """A step's activity from its event stream, or from its plain log without one."""
+    events = steps_dir / f"step-{number}.events.jsonl"
+    if events.is_file():
+        return step_activity(events)
+    return log_activity(steps_dir / f"step-{number}.log")
+
+
 def _step_numbers(steps_dir: Path) -> list[int]:
     if not steps_dir.is_dir():
         return []
@@ -135,6 +196,46 @@ def _step_numbers(steps_dir: Path) -> list[int]:
         if (match := _STEP_FILE_RE.match(entry.name))
     }
     return sorted(numbers)
+
+
+def fill_final_grades(progress: dict[str, Any], objective: dict[str, Any]) -> None:
+    """Give each phase without a live grade the grade the per-step reward gave it.
+
+    ``objective`` is the run's ``Validation.objective``; its ``per_step`` rows
+    carry ``passed``/``total`` per step once the run has been validated. Only
+    rows that measured something are used, and a live grade is never replaced.
+    """
+    per_step = objective.get("per_step") if isinstance(objective, dict) else None
+    rows = per_step.get("steps") if isinstance(per_step, dict) else None
+    if not isinstance(rows, list):
+        return
+    final: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("step"), int):
+            continue
+        if isinstance(row.get("passed"), int) and isinstance(row.get("total"), int):
+            final[row["step"]] = {
+                "passed": row["passed"],
+                "total": row["total"],
+                "progress": row.get("progress"),
+            }
+    for step in progress.get("steps") or []:
+        if step.get("grade") is None and step.get("step") in final:
+            step["grade"] = final[step["step"]]
+
+
+def progress_clock(ended_at: datetime | None) -> float | None:
+    """The ``now`` to read a run's progress at: its end once it has one.
+
+    A finished run's clock stopped when it ended, so an open phase of a cut run
+    is not still counting hours later. SQLite returns naive datetimes, which
+    the lab always stores in UTC.
+    """
+    if ended_at is None:
+        return None
+    if ended_at.tzinfo is None:
+        ended_at = ended_at.replace(tzinfo=UTC)
+    return ended_at.timestamp()
 
 
 def read_progress(
@@ -158,6 +259,9 @@ def read_progress(
     rows: list[dict[str, Any]] = []
     total_cost = 0.0
     cost_known = True
+    # Whether any step reported a cost at all. A local model reports none, and
+    # its total is unknown, not US$0.00.
+    any_cost = False
     for number in _step_numbers(steps_dir):
         prompt_path = steps_dir / f"step-{number}-prompt.md"
         prompt = (
@@ -166,7 +270,7 @@ def read_progress(
             else (first_prompt if number == 1 else "")
         )
         title = phase_title(prompt)
-        activity = step_activity(steps_dir / f"step-{number}.events.jsonl")
+        activity = _activity(steps_dir, number)
         meta = _read_json(steps_dir / f"step-{number}.meta.json")
         done = bool(meta) or bool(activity.get("finished"))
         started = activity.get("first_event_at")
@@ -178,6 +282,7 @@ def read_progress(
             seconds = None
         if activity.get("cost_usd") is not None:
             total_cost += float(activity["cost_usd"])
+            any_cost = True
         else:
             cost_known = False
         rows.append(
@@ -208,7 +313,7 @@ def read_progress(
             (row["phase_total"] for row in rows if row["phase_total"]),
             max_steps or None,
         ),
-        "cost_usd": round(total_cost, 4) if rows else None,
+        "cost_usd": round(total_cost, 4) if any_cost else None,
         "cost_complete": cost_known,
         "quiet_seconds": round(now - last_event, 1) if last_event else None,
         "last_action": current["last_action"] if current else None,

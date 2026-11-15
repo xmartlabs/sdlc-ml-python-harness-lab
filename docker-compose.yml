@@ -85,13 +85,18 @@ services:
       timeout: 5s
       retries: 3
 
-  worker:
+  worker: &worker
     <<: [*restart, *logging]
     build:
       context: .
       dockerfile: Dockerfile.api
-    # Concurrency is deliberately 1: bench_run.py mutates repo-root shared
-    # state (BENCH_CONTEXT.md, benchmarks/*/runs.yaml), same as the CLI flow.
+    # One image for the three workers below: named, so the two that inherit
+    # this definition reuse it instead of each building a copy of their own.
+    image: harness-lab-worker:latest
+    # Concurrency is deliberately 1 per lane: a run may rewrite the lab's own
+    # tree (a skill ablation regenerates `.claude/skills`, ADR-0011). Each run
+    # writes its own BENCH_CONTEXT.md (ADR-0082), so a second lane is safe for
+    # runs that rewrite nothing shared — see `worker-parallel`.
     command:
       [
         "celery",
@@ -102,6 +107,8 @@ services:
         "runs",
         "--loglevel=info",
         "--concurrency=1",
+        "-n",
+        "runs@%h",
       ]
     environment:
       HARNESS_LAB_REPO_ROOT: /app
@@ -122,6 +129,45 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+  # The second run lane (ADR-0082): a model comparison launched "two at a time"
+  # alternates its runs between `runs` and this queue. The launch refuses any
+  # run that rewrites the shared tree, so nothing that needs the one lane ever
+  # lands here.
+  worker-parallel:
+    <<: *worker
+    command:
+      [
+        "celery",
+        "-A",
+        "harness_lab_app.celery_app",
+        "worker",
+        "-Q",
+        "runs-parallel",
+        "--loglevel=info",
+        "--concurrency=1",
+        "-n",
+        "parallel@%h",
+      ]
+
+  # Sandboxes (terminal, desktop, Play) take seconds and a person is waiting.
+  # On the run lane they queued behind runs of several hours, so a finished
+  # game could not be played while another run was still going.
+  worker-interactive:
+    <<: *worker
+    command:
+      [
+        "celery",
+        "-A",
+        "harness_lab_app.celery_app",
+        "worker",
+        "-Q",
+        "interactive",
+        "--loglevel=info",
+        "--concurrency=2",
+        "-n",
+        "interactive@%h",
+      ]
 
   # Build-only entry so `docker compose build runner` produces the image the
   # worker launches per run; it is never started as a service.

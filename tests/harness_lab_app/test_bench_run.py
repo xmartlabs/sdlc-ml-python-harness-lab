@@ -1383,3 +1383,39 @@ def test_write_step_meta_writes_one_file_per_step(tmp_path):
     bench_run.write_step_meta(tmp_path, {"step": 2, "kind": "snapshot", "seconds": 3})
     data = json.loads((tmp_path / "step-2.meta.json").read_text())
     assert data == {"kind": "snapshot", "seconds": 3, "step": 2}
+
+
+def test_two_runs_never_rewrite_the_skill_views_at_once(tmp_path, monkeypatch) -> None:
+    """A parallel model comparison starts two runs over one repo (ADR-0082).
+
+    Both re-sync the lab's native skill views; interleaved, one unlinks a
+    symlink the other just made and fails with FileExistsError. The second
+    process must wait for the first to release the lock.
+    """
+    import multiprocessing
+    import time
+
+    lock = tmp_path / "data" / "app" / "skill-views.lock"
+    monkeypatch.setattr(bench_run, "SKILL_VIEWS_LOCK", lock)
+    held = multiprocessing.Event()
+    release = multiprocessing.Event()
+
+    def holder() -> None:
+        with bench_run._skill_views_lock():
+            held.set()
+            release.wait(5)
+
+    process = multiprocessing.get_context("fork").Process(target=holder)
+    process.start()
+    try:
+        assert held.wait(5)
+        waited = time.monotonic()
+        # Released after 0.3 s from this side: the lock is only ours after that.
+        import threading
+
+        threading.Timer(0.3, release.set).start()
+        with bench_run._skill_views_lock():
+            assert time.monotonic() - waited >= 0.25
+    finally:
+        release.set()
+        process.join(5)

@@ -8,6 +8,7 @@ import {
   IconAlert,
   IconArrowRight,
   IconCheck,
+  IconCompare,
   IconFlask,
   IconInfo,
   IconLayers,
@@ -41,6 +42,7 @@ const MODES = [
   { key: "subject_validation", icon: IconPuzzle, to: "/evaluate/subject" },
   { key: "harness_evaluation", icon: IconFlask, to: "/evaluate/new?mode=harness_evaluation" },
   { key: "harness_by_model", icon: IconLayers, to: "/evaluate/harness-by-model" },
+  { key: "compare_models", icon: IconCompare, to: "/evaluate/compare-models" },
   { key: "discovery", icon: IconSearch, to: "/evaluate/audit" }
 ] as const;
 
@@ -88,6 +90,15 @@ const MESSAGES = defineMessages({
         holds: ["Cases", "Where it runs"],
         varies: "Harness level and model, as a full grid",
         note: "Reports the harness effect per model and how it changes from the first model to the last, with an interval. Below three cases the change is never called established."
+      },
+      compare_models: {
+        title: "Compare models on one case",
+        question:
+          "A new frontier model is out. How does it do on the case the last one did — chess, racing, the open city?",
+        cta: "Start a model comparison",
+        holds: ["The case", "Prompt, steps and repetitions"],
+        varies: "The model, each with its harness",
+        note: "Reports, per model, the checks each run passed, phase by phase, with cost and time. Every comparison on a case is kept in one family, so the next model is read next to the last."
       },
       discovery: {
         title: "Audit a repository",
@@ -169,6 +180,15 @@ const MESSAGES = defineMessages({
         holds: ["Casos", "Dónde corre"],
         varies: "Nivel de arnés y modelo, como grilla completa",
         note: "Reporta el efecto del arnés por modelo y cómo cambia del primer modelo al último, con un intervalo. Por debajo de tres casos, el cambio nunca se llama establecido."
+      },
+      compare_models: {
+        title: "Comparar modelos en un caso",
+        question:
+          "Salió un modelo frontera nuevo. ¿Cómo le va en el caso donde corrió el anterior: ajedrez, carreras, la ciudad abierta?",
+        cta: "Empezar una comparación de modelos",
+        holds: ["El caso", "Prompt, pasos y repeticiones"],
+        varies: "El modelo, cada uno con su harness",
+        note: "Reporta, por modelo, los chequeos que pasó cada corrida, fase por fase, con costo y tiempo. Todas las comparaciones de un caso quedan en una familia, así el próximo modelo se lee al lado del anterior."
       },
       discovery: {
         title: "Auditar un repositorio",

@@ -281,6 +281,8 @@ class ExperimentLaunch(BaseModel):
     """Settings every arm of the launch shares; conditions override on top."""
 
     config: RunConfigCreate
+    # How many runs execute at once: 1, the lab's one lane, or 2 (ADR-0082).
+    parallel: int = Field(default=1, ge=1, le=2)
 
 
 class FindingCreate(BaseModel):

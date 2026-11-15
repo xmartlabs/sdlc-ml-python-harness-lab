@@ -885,6 +885,38 @@ export type FactorialBlock = {
   reading: string;
 };
 
+/** One run of one model in a model comparison (`GET /model-comparison`). */
+export type ModelComparisonRun = {
+  run_id: string;
+  state: string;
+  /** Final checks passed and counted; null until the run is validated. */
+  passed: number | null;
+  total: number | null;
+  pass_rate: number | null;
+  /** Null when the model reports no cost (a local model), never 0. */
+  cost_usd: number | null;
+  minutes: number | null;
+  /** Checks passed after each phase, from the per-step reward. */
+  phases: { step: number; passed: number | null; total: number | null }[];
+};
+
+export type ModelComparisonArm = {
+  label: string;
+  harness: string;
+  executor_model: string;
+  executor_effort: string;
+  runs: ModelComparisonRun[];
+  mean_pass_rate: number | null;
+  best_pass_rate: number | null;
+};
+
+export type ModelComparison = {
+  experiment_id: string;
+  case_id: string;
+  family_id: string;
+  arms: ModelComparisonArm[];
+};
+
 export type ExperimentRecord = {
   experiment_id: string;
   name: string;

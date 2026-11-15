@@ -7,6 +7,7 @@ import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { CapabilityPanel } from "../components/CapabilityPanel";
 import { FactorialPanel } from "../components/FactorialPanel";
+import { ModelComparisonPanel } from "../components/ModelComparisonPanel";
 import { HelpPanel } from "../components/HelpPanel";
 import { Markdown } from "../components/Markdown";
 import { EffortPicker } from "../components/EffortPicker";
@@ -1651,6 +1652,10 @@ function ExperimentDetail({
       </div>
 
       <LaunchPanel experimentId={summary.experiment_id} onLaunched={onLaunched} />
+
+      {String(summary.family_id ?? "").startsWith("models-") ? (
+        <ModelComparisonPanel experimentId={summary.experiment_id} />
+      ) : null}
 
       {summary.mode === "subject_validation" && summary.case_outcomes ? (
         <CaseOutcomeGrid outcomes={summary.case_outcomes} />

@@ -425,7 +425,7 @@ build-fresh:
 app-up:
 	@echo "🚀 Starting local web app stack..."
 	@docker compose build runner sandbox
-	@docker compose --profile dev up -d --build api worker redis frontend
+	@docker compose --profile dev up -d --build api worker worker-parallel worker-interactive redis frontend
 	@if [ "$$HARNESS_LAB_API_BIND_ADDR" = "0.0.0.0" ] \
 		&& ! grep -qs '^HARNESS_LAB_ADMIN_PASSWORD_HASH=.\+' .env; then \
 		echo "⚠️  API published on 0.0.0.0:$${HARNESS_LAB_API_PORT:-8009} with NO authentication —"; \
@@ -455,7 +455,7 @@ app-up-prod:
 		|| echo "⚠️  No admin password set — the UI is open. Run: make set-password"
 	@docker compose build runner sandbox
 	@HARNESS_LAB_API_BIND_ADDR=127.0.0.1 \
-		docker compose --profile prod up -d --build api worker redis frontend-prod
+		docker compose --profile prod up -d --build api worker worker-parallel worker-interactive redis frontend-prod
 	@echo "✅ http://localhost:8080 (set HARNESS_LAB_BIND_ADDR=0.0.0.0 for LAN access)"
 
 app-down-prod:
@@ -497,7 +497,7 @@ app-worker-host:
 		docker run -d --rm --name harness-lab-redis-host -p 6379:6379 redis:7-alpine >/dev/null
 	@echo "🧑‍💻 Celery worker on host (subprocess backend — codex/claude ready)…"
 	@. $(VENV_DIR)/bin/activate && $(_HOST_ENV) \
-		celery -A harness_lab_app.celery_app worker -Q runs --loglevel=info --concurrency=1
+		celery -A harness_lab_app.celery_app worker -Q runs,interactive --loglevel=info --concurrency=1
 
 app-api-host:
 	@if [ ! -d .venv ]; then make install; fi
@@ -514,7 +514,7 @@ app-host:
 		docker run -d --rm --name harness-lab-redis-host -p 6379:6379 redis:7-alpine >/dev/null
 	@echo "🧑‍💻 Host mode (codex/claude ready): worker + API + frontend. Ctrl-C stops all."
 	@. $(VENV_DIR)/bin/activate; \
-		$(_HOST_ENV) celery -A harness_lab_app.celery_app worker -Q runs --loglevel=info --concurrency=1 & \
+		$(_HOST_ENV) celery -A harness_lab_app.celery_app worker -Q runs,interactive --loglevel=info --concurrency=1 & \
 		worker_pid=$$!; \
 		$(_HOST_ENV) uvicorn harness_lab_app.api:app --host 0.0.0.0 --port 8009 & \
 		api_pid=$$!; \

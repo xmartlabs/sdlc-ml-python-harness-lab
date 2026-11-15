@@ -110,6 +110,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0079 — A hard case is paced in phases, and its agent cannot read its grade](0079-a-hard-case-is-paced-in-phases-and-cannot-read-its-grade.md)
 - [0080 — A long run shows its progress, and asks before it is cut](0080-a-long-run-shows-its-progress-and-asks-before-it-is-cut.md)
 - [0081 — Reasoning effort is a selectable part of the arm](0081-reasoning-effort-is-part-of-the-arm.md)
+- [0082 — Models are compared on one case by the checks they pass, not by pass rate](0082-models-are-compared-on-one-case-by-checks-not-pass-rate.md)
 
 ## Why ADRs exist
 

@@ -449,3 +449,69 @@ def test_a_broken_settings_file_never_fails_a_run(
     monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
 
     assert "ANTHROPIC_BASE_URL" not in build_run_environment()
+
+
+def test_each_agent_container_writes_its_own_bench_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two runs at once must not share the file that names "the active run".
+
+    `bench_run.py` writes `BENCH_CONTEXT.md` ("all files go in workspace/<id>/")
+    at the repo root, and opencode reads it on every session. With two runs in
+    parallel the second would overwrite the first's, and the first agent could
+    start writing into the other's workspace. Each agent container binds a copy
+    under its own run directory over that path, writable, so it writes there.
+    """
+    (tmp_path / "BENCH_CONTEXT.md").write_text("placeholder\n")
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+    seen: dict[str, Any] = {}
+    for run_id in ("chess3d-v1-K-020", "chess3d-v1-K-021"):
+        client = FakeDockerClient(FakeContainer([]))
+        DockerRunExecutor(client_factory=lambda c=client: c).start(
+            run_id, ["python", "scripts/bench_run.py"], hidden=[]
+        )
+        mounts = client.containers.run_kwargs["mounts"]
+        context = [m for m in mounts if m["Target"] == "/app/BENCH_CONTEXT.md"]
+        assert len(context) == 1
+        assert context[0]["ReadOnly"] is False
+        seen[run_id] = context[0]["Source"]
+        # The copy exists before the container starts (Docker would otherwise
+        # create a directory at the source and fail the mount).
+        assert (tmp_path / "data" / "runs" / run_id / "bench_context.md").is_file()
+    assert seen["chess3d-v1-K-020"] == (
+        "/host/repo/data/runs/chess3d-v1-K-020/bench_context.md"
+    )
+    assert seen["chess3d-v1-K-020"] != seen["chess3d-v1-K-021"]
+    # The repo's own file is never touched.
+    assert (tmp_path / "BENCH_CONTEXT.md").read_text() == "placeholder\n"
+
+
+def test_a_masked_bench_context_stays_masked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under a governance mask the file is already an empty read-only bind."""
+    (tmp_path / "BENCH_CONTEXT.md").write_text("placeholder\n")
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+    client = FakeDockerClient(FakeContainer([]))
+    DockerRunExecutor(client_factory=lambda: client).start(
+        "tetris-v1-K-101",
+        ["python", "scripts/bench_run.py"],
+        governance_mask=GOVERNANCE_MASK_ALL,
+        hidden=[],
+    )
+    mounts = client.containers.run_kwargs["mounts"]
+    context = [m for m in mounts if m["Target"] == "/app/BENCH_CONTEXT.md"]
+    assert len(context) == 1 and context[0]["ReadOnly"] is True
+
+
+def test_a_container_that_is_not_the_agents_gets_no_private_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Validation containers (`hidden` None) never read the context: no bind."""
+    (tmp_path / "BENCH_CONTEXT.md").write_text("placeholder\n")
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+    client = FakeDockerClient(FakeContainer([]))
+    DockerRunExecutor(client_factory=lambda: client).start(
+        "tetris-v1-K-102-validate", ["true"], phase="validate"
+    )
+    assert "mounts" not in client.containers.run_kwargs

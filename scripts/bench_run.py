@@ -26,6 +26,7 @@ Direct:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import functools
 import json
@@ -437,6 +438,30 @@ def _within(target: Path, root: Path) -> bool:
     return target == resolved or resolved in target.parents
 
 
+# Held while the lab's native skill views are rewritten. Two runs may start at
+# once in a parallel model comparison (ADR-0082), each from its own container
+# over the same repo bind; without it both unlink-and-relink the same symlinks
+# and one fails with FileExistsError half-way. The ablating runs that would
+# change the set never share a lane, so this only serialises identical writes.
+SKILL_VIEWS_LOCK = REPO_ROOT / "data" / "app" / "skill-views.lock"
+
+
+@contextlib.contextmanager
+def _skill_views_lock():
+    try:
+        import fcntl
+    except ImportError:  # not POSIX: nothing runs alongside on such a host
+        yield
+        return
+    SKILL_VIEWS_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with SKILL_VIEWS_LOCK.open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def apply_skill_views(skills: list) -> None:
     """Project `skills` into every tool's native view + adapter files."""
     from ml_python_base.skills_sync.config import DEFAULT_REGISTRY_PATH, load_registry
@@ -445,11 +470,12 @@ def apply_skill_views(skills: list) -> None:
     from ml_python_base.skills_sync.renderer import render_tool
 
     registry = load_registry(REPO_ROOT / DEFAULT_REGISTRY_PATH)
-    for tool in registry.tools:
-        hashes = link_tool(REPO_ROOT, tool, skills)
-        if tool.needs_manifest and tool.manifest_path:
-            write_manifest(REPO_ROOT / tool.manifest_path, hashes)
-        render_tool(REPO_ROOT, registry, tool, skills=skills)
+    with _skill_views_lock():
+        for tool in registry.tools:
+            hashes = link_tool(REPO_ROOT, tool, skills)
+            if tool.needs_manifest and tool.manifest_path:
+                write_manifest(REPO_ROOT / tool.manifest_path, hashes)
+            render_tool(REPO_ROOT, registry, tool, skills=skills)
 
 
 def add_skills_to_native(workspace: Path, skills: list, tool_id: str) -> dict:

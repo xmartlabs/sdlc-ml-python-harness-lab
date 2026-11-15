@@ -80,6 +80,11 @@ reading of the numbers, not a new measurement.
 
 ## Across runs
 
+- **Compare models** (Evaluate → Compare models) runs one case on two to four
+  models with every other setting shared. Its experiment page lists, per model, the
+  checks each run passed after every phase, with cost and time. On a hard case, read
+  the checks and not the pass rate, which is 0% for every model.
+  [ADR-0082](adr/0082-models-are-compared-on-one-case-by-checks-not-pass-rate.md).
 - **Advanced → Compare** puts two to six runs side by side, field by field. It
   explains a difference; it does not establish one — an experiment does.
 - **Advanced → Benchmarks** is the leaderboard by condition across everything the

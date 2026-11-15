@@ -2568,3 +2568,150 @@ def test_a_pruning_family_without_step_scores_removes_nothing(session):
 def test_a_non_pruning_experiment_has_no_pruning_block(lab):
     lab.create_experiment(_payload())
     assert lab.summarize("migration-safety")["pruning"] is None
+
+
+# --------------------------------------------------------------------------
+# Two at a time (ADR-0082): a model comparison may run on two lanes
+# --------------------------------------------------------------------------
+
+
+def _models_design(service, experiment_id="two-lanes", repetitions=1):
+    from sqlmodel import select
+
+    from harness_lab_app.models import Case, CaseType
+
+    session = service.session
+    if not session.exec(select(Case).where(Case.case_id == "tetris-v1")).first():
+        session.add(
+            Case(
+                case_id="tetris-v1",
+                name="Tetris",
+                type=CaseType.single_prompt,
+                prompt_variants={"sdlc": "Build Tetris."},
+            )
+        )
+        session.commit()
+    service.create_experiment(
+        ExperimentCreate(
+            experiment_id=experiment_id,
+            name="Two lanes",
+            question="Which model builds tetris best?",
+            mode=ExperimentMode.discovery,
+            case_ids=["tetris-v1"],
+            prompt_variants=["sdlc"],
+            repetitions=repetitions,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="opus",
+                    role=ConditionRole.treatment,
+                    overrides={
+                        "harness": "claude",
+                        "executor_model": "claude-opus-5-5",
+                    },
+                ),
+                ExperimentConditionCreate(
+                    label="local",
+                    role=ConditionRole.treatment,
+                    overrides={"harness": "opencode", "executor_model": "lmstudio/x"},
+                ),
+            ],
+        )
+    )
+
+
+def test_two_at_a_time_puts_one_model_on_each_lane(session):
+    """Claude on one lane, the slower local model on the other."""
+    main: list[str] = []
+    second: list[str] = []
+    service = ExperimentService(
+        session, enqueue=main.append, enqueue_parallel=second.append
+    )
+    _models_design(service)
+
+    runs = service.launch("two-lanes", _base_config(dry_run=True), parallel=2)
+
+    label = {run.run_id: run.condition_label for run in runs}
+    assert len(main) == 1 and len(second) == 1
+    # One model on each lane, so neither waits for the other.
+    assert {label[main[0]], label[second[0]]} == {"opus", "local"}
+
+
+def test_repetitions_alternate_so_each_lane_gets_every_model(session):
+    """Two models x two repetitions: a lane never runs one model twice in a row."""
+    main: list[str] = []
+    second: list[str] = []
+    service = ExperimentService(
+        session, enqueue=main.append, enqueue_parallel=second.append
+    )
+    _models_design(service, "two-lanes-reps", repetitions=2)
+
+    runs = service.launch("two-lanes-reps", _base_config(dry_run=True), parallel=2)
+
+    label = {run.run_id: run.condition_label for run in runs}
+    assert len(main) == 2 and len(second) == 2
+    assert sorted(label[r] for r in main) == ["local", "opus"]
+    assert sorted(label[r] for r in second) == ["local", "opus"]
+
+
+def test_one_at_a_time_is_the_default_and_uses_one_lane(session):
+    main: list[str] = []
+    second: list[str] = []
+    service = ExperimentService(
+        session, enqueue=main.append, enqueue_parallel=second.append
+    )
+    _models_design(service, "one-lane")
+
+    runs = service.launch("one-lane", _base_config(dry_run=True))
+
+    assert sorted(main) == sorted(run.run_id for run in runs)
+    assert second == []
+
+
+def test_a_run_that_rewrites_the_skill_catalog_never_runs_alongside(session):
+    """An ablation regenerates `.claude/skills` in the shared tree (ADR-0011)."""
+    service = ExperimentService(
+        session, enqueue=lambda _r: None, enqueue_parallel=lambda _r: None
+    )
+    _skills_design(service, "ablation-two-lanes")
+
+    with pytest.raises(ExperimentError, match="one at a time"):
+        service.launch("ablation-two-lanes", _base_config(dry_run=True), parallel=2)
+
+
+def test_only_one_or_two_lanes_exist(session):
+    service = ExperimentService(session, enqueue=lambda _r: None)
+    _models_design(service, "three-lanes")
+    with pytest.raises(ExperimentError, match="1 or 2"):
+        service.launch("three-lanes", _base_config(dry_run=True), parallel=3)
+
+
+def test_the_lanes_route_is_not_read_as_a_run_id():
+    """`/api/runs/lanes` must be matched before `/api/runs/{run_id}`."""
+    from fastapi.routing import APIRoute
+
+    from harness_lab_app.api import create_app
+
+    paths = [route.path for route in create_app().routes if isinstance(route, APIRoute)]
+    assert paths.index("/api/runs/lanes") < paths.index("/api/runs/{run_id}")
+
+
+def test_a_parallel_launch_with_no_second_worker_is_refused(monkeypatch):
+    """Half the runs would sit pending forever on a queue nobody serves."""
+    from fastapi import HTTPException
+    from fastapi.routing import APIRoute
+
+    from harness_lab_app import health_service
+    from harness_lab_app.api import create_app
+    from harness_lab_app.schemas import ExperimentLaunch
+
+    monkeypatch.setattr(health_service, "queues_served", lambda: {"runs"})
+    launch = next(
+        route.endpoint
+        for route in create_app().routes
+        if isinstance(route, APIRoute)
+        and route.path == "/api/experiments/{experiment_id}/launch"
+    )
+    with pytest.raises(HTTPException) as refused:
+        launch("x", ExperimentLaunch(config=_base_config(), parallel=2), session=None)
+    assert refused.value.status_code == 422
+    assert "second run lane" in refused.value.detail

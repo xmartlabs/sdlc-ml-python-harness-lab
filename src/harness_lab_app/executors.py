@@ -145,6 +145,11 @@ RUNNER_GOVERNED_SOURCE_DIRS = (".github",)
 # delta "every catalog model" and drifting `gateway_overlay_hash` on every
 # masked run. `.mcp.json` *is* masked: the MCP servers are lab tooling, so they
 # belong to the treatment.
+# The file `bench_run.py` writes to name the active run (and opencode reads),
+# and the per-run copy each agent container binds over it.
+BENCH_CONTEXT_FILE = "BENCH_CONTEXT.md"
+PRIVATE_CONTEXT_FILE = "bench_context.md"
+
 RUNNER_GOVERNANCE_FILES = (
     "CLAUDE.md",
     "CLAUDE.local.md",
@@ -638,8 +643,20 @@ class DockerRunExecutor:
         # it (ADR-0079): `hidden` is None for every other container.
         tmpfs, mask_files = runner_masks(governance_mask, hidden=hidden)
         extra: dict[str, Any] = {}
+        mounts: list[Any] = []
         if mask_files:
-            extra["mounts"] = self._mask_mounts(run_id, host_repo_root, mask_files)
+            mounts.extend(self._mask_mounts(run_id, host_repo_root, mask_files))
+        # The agent's container (`hidden` is passed for it alone) gets its own
+        # BENCH_CONTEXT.md unless a mask already covers it: two runs at once
+        # would otherwise share the file that names the active run.
+        if hidden is not None and not any(
+            target == f"/app/{BENCH_CONTEXT_FILE}" for target, _kind in mask_files
+        ):
+            context = self._private_context_mount(run_id, host_repo_root)
+            if context is not None:
+                mounts.append(context)
+        if mounts:
+            extra["mounts"] = mounts
         # The agent lane is unchanged: full `.env`, the gateway alias, its
         # network. The hardened lane is the one running code the lab did not
         # write, and it gets neither the secrets nor, on `validate`, the
@@ -694,6 +711,38 @@ class DockerRunExecutor:
             # it against `governance.py` and the adapter registry.
             if (settings.repo_root / target.removeprefix("/app/")).exists()
         ]
+
+    @staticmethod
+    def _private_context_mount(run_id: str, host_repo_root: str) -> Any | None:
+        """A writable, per-run ``BENCH_CONTEXT.md`` bound over the shared one.
+
+        ``bench_run.py`` writes "the active run is <id>, write only in
+        workspace/<id>/" to the repo root, and opencode reads it every session.
+        One file for every run is safe only while one run executes at a time;
+        with two (a parallel model comparison, ADR-0082) the second overwrites
+        the first's and an agent can be pointed at the other's workspace. Each
+        agent container therefore writes and reads a copy under its own run
+        directory, and the repo's file is never touched.
+
+        None when the repo has no such file: a bind whose target is missing
+        would make Docker create it in the operator's checkout.
+        """
+        from docker.types import Mount
+
+        settings = get_settings()
+        shared = settings.repo_root / BENCH_CONTEXT_FILE
+        if not shared.is_file():
+            return None
+        own = settings.data_runs_dir / run_id / PRIVATE_CONTEXT_FILE
+        own.parent.mkdir(parents=True, exist_ok=True)
+        if not own.exists():
+            own.write_text(shared.read_text())
+        return Mount(
+            target=f"/app/{BENCH_CONTEXT_FILE}",
+            source=_host_path(own, settings.repo_root, host_repo_root),
+            type="bind",
+            read_only=False,
+        )
 
     @staticmethod
     def _require_local_image(client: Any, image: str) -> None:

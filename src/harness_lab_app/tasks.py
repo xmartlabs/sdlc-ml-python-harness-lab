@@ -2585,24 +2585,59 @@ def _stop_orphan_container(client: Any, run_id: str) -> None:
         container.remove(force=True)
 
 
+def runs_in_flight() -> set[str]:
+    """Run ids an ``execute_run`` task is executing on some live worker.
+
+    Empty when no worker answers — at boot of the only worker, that is every
+    `running` row being an orphan, the behaviour this predates.
+    """
+    try:
+        replies = celery_app.control.inspect(timeout=2.0).active() or {}
+    except Exception:
+        return set()
+    live: set[str] = set()
+    for tasks_on_worker in replies.values():
+        for task in tasks_on_worker or []:
+            if not isinstance(task, dict):
+                continue
+            if task.get("name") != "harness_lab_app.tasks.execute_run":
+                continue
+            args = task.get("args") or []
+            if isinstance(args, (list, tuple)) and args:
+                live.add(str(args[0]))
+    return live
+
+
 def reconcile_stale_runs(
-    client: Any | None = None, db_engine: Engine | None = None
+    client: Any | None = None,
+    db_engine: Engine | None = None,
+    in_flight: set[str] | None = None,
 ) -> int:
     """Fail `running` runs left over from a worker crash/restart.
 
     After a restart no task is attached to those runs anymore (redelivered
     tasks skip non-pending runs), so any leftover container is stopped and
     the run is failed; retry re-runs it with --resume.
+
+    A run another live worker is executing is spared (``in_flight``, asked of
+    the workers when not given): with a second run lane and an interactive
+    worker (ADR-0082), every worker reconciles on boot, and a restart of one
+    must not fail — or stop the container of — a run the other still drives.
     """
     settings = get_settings()
     if client is None and settings.execution_backend == "docker":
         import docker  # local import: only the worker needs the socket
 
         client = docker.from_env()
+    live = runs_in_flight() if in_flight is None else in_flight
     reconciled = 0
     with Session(db_engine if db_engine is not None else engine) as session:
         service = RunService(session)
-        stale = list(session.exec(select(Run).where(Run.state == RunState.running)))
+        stale = [
+            run
+            for run in session.exec(select(Run).where(Run.state == RunState.running))
+            if run.run_id not in live
+        ]
         for run in stale:
             if client is not None:
                 _stop_orphan_container(client, run.run_id)

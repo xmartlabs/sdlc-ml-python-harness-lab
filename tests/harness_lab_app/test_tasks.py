@@ -621,7 +621,9 @@ def test_reconcile_marks_orphaned_running_runs_failed():
     with Session(engine) as session:
         RunService(session).mark_running("task-orphan-1")
 
-    reconciled = reconcile_stale_runs(client=FakeReconcileClient(), db_engine=engine)
+    reconciled = reconcile_stale_runs(
+        client=FakeReconcileClient(), db_engine=engine, in_flight=set()
+    )
 
     assert reconciled == 1
     state, exit_code, failure = get_run_state(engine, "task-orphan-1")
@@ -629,6 +631,28 @@ def test_reconcile_marks_orphaned_running_runs_failed():
     assert exit_code == -1
     assert failure is not None
     assert "retry to resume" in failure
+
+
+def test_reconcile_spares_a_run_another_live_worker_is_executing():
+    """Three workers now (ADR-0082): one restarting must not kill another's run.
+
+    Every worker reconciles on boot. With one worker any `running` row was an
+    orphan; with a second lane and an interactive worker, a restart of either
+    would fail — and stop the container of — a run the other is still driving.
+    """
+    engine = make_engine()
+    for run_id in ("task-live-1", "task-orphan-2"):
+        create_pending_run(engine, run_id)
+        with Session(engine) as session:
+            RunService(session).mark_running(run_id)
+
+    reconciled = reconcile_stale_runs(
+        client=FakeReconcileClient(), db_engine=engine, in_flight={"task-live-1"}
+    )
+
+    assert reconciled == 1
+    assert get_run_state(engine, "task-live-1")[0] == RunState.running
+    assert get_run_state(engine, "task-orphan-2")[0] == RunState.failed
 
 
 def test_reconcile_ignores_finished_runs():
@@ -639,7 +663,9 @@ def test_reconcile_ignores_finished_runs():
         service.mark_running("task-done-1")
         service.mark_finished("task-done-1", 0)
 
-    reconciled = reconcile_stale_runs(client=FakeReconcileClient(), db_engine=engine)
+    reconciled = reconcile_stale_runs(
+        client=FakeReconcileClient(), db_engine=engine, in_flight=set()
+    )
 
     assert reconciled == 0
     state, _, _ = get_run_state(engine, "task-done-1")

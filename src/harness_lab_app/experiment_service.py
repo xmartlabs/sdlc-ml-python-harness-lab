@@ -544,9 +544,42 @@ def repetition_warning(repetitions: int) -> str | None:
     return None
 
 
+def _interleave_by_arm(runs: list[Run]) -> list[Run]:
+    """Runs reordered round-robin by arm: a1, b1, a2, b2, …
+
+    With two lanes alternating, a design of two arms x two repetitions would
+    otherwise send a1 and a2 to one lane and b1 and b2 to the other. Rotating
+    the starting arm each round also gives every lane every arm.
+    """
+    by_arm: dict[str, list[Run]] = {}
+    for run in runs:
+        by_arm.setdefault(run.condition_label or "", []).append(run)
+    labels = list(by_arm)
+    ordered: list[Run] = []
+    round_index = 0
+    while any(by_arm.values()):
+        rotation = (
+            labels[round_index % len(labels) :] + labels[: round_index % len(labels)]
+        )
+        for label in rotation:
+            if by_arm[label]:
+                ordered.append(by_arm[label].pop(0))
+        round_index += 1
+    return ordered
+
+
 class ExperimentService:
-    def __init__(self, session: Session, enqueue=None, enqueue_cleanup=None):
+    def __init__(
+        self,
+        session: Session,
+        enqueue=None,
+        enqueue_cleanup=None,
+        enqueue_parallel=None,
+    ):
         self.session = session
+        # The second run lane (ADR-0082), used only by a launch that asks for
+        # two runs at a time. None outside the API: every run takes `enqueue`.
+        self.enqueue_parallel = enqueue_parallel
         # Queue publisher, injected by the API layer exactly as RunService gets
         # it. Without this, `launch` persisted its runs and then silently never
         # enqueued them — RunService._publish() no-ops when the callback is
@@ -1344,13 +1377,23 @@ class ExperimentService:
             }
         return None
 
-    def launch(self, experiment_id: str, base: RunConfigCreate) -> list[Run]:
+    def launch(
+        self, experiment_id: str, base: RunConfigCreate, parallel: int = 1
+    ) -> list[Run]:
         """Expand the declared design into runs, tagged with their arm.
 
         ``base`` carries the settings every arm shares (score mode, dry run, the
         model when the design does not vary it). A condition's overrides are
         applied on top, so the arm is exactly what was declared.
+
+        ``parallel`` is how many runs execute at once: 1 (the default, the
+        lab's one lane) or 2, which alternates the runs between the two lanes
+        so each lane gets every model in turn (ADR-0082). Two at a time is
+        refused for a run that rewrites the lab's shared tree — a skill
+        ablation regenerates `.claude/skills` for everyone (ADR-0011).
         """
+        if parallel not in (1, 2):
+            raise ExperimentError("Runs execute 1 or 2 at a time.")
         experiment = self.get_experiment(experiment_id)
         conditions = self.conditions(experiment_id)
         if not conditions:
@@ -1400,6 +1443,20 @@ class ExperimentService:
             raise ExperimentError(_variant_refusal(undefined))
         if not configs:
             raise ExperimentError(f"Experiment '{experiment_id}' expands to no runs.")
+        if parallel == 2:
+            shared = sorted(
+                {
+                    label
+                    for label, config in configs
+                    if config.skills_disabled or config.skills_extra
+                }
+            )
+            if shared:
+                raise ExperimentError(
+                    "These arms change the skill catalog, which every run reads "
+                    f"from the lab's one tree: {', '.join(shared)}. They run one "
+                    "at a time; launch this experiment sequentially."
+                )
 
         # One experiment, one measurement configuration. A second launch with a
         # different shared setup (another model, another budget) would file two
@@ -1448,6 +1505,16 @@ class ExperimentService:
         self.session.add(experiment)
         self.session.commit()
 
-        for run in runs:
+        # Interleaved by arm, so with two lanes each lane runs every model in
+        # turn: [opus-1, local-1, opus-2, local-2] → lane 1 gets opus-1 and
+        # opus-2's partner order flips with the next repetition.
+        order = _interleave_by_arm(runs)
+        second_lane = parallel == 2 and self.enqueue_parallel is not None
+        for index, run in enumerate(order):
+            if second_lane and index % 2 == 1:
+                runs_service.enqueue = self.enqueue_parallel
+            else:
+                runs_service.enqueue = self.enqueue
             runs_service._publish(run.run_id)
+        runs_service.enqueue = self.enqueue
         return runs

@@ -52,6 +52,7 @@ const MESSAGES = defineMessages({
       subject: "Validate your tool",
       audit: "Audit a repository",
       harnessByModel: "Harness x model",
+      compareModels: "Compare models",
       experiments: "Experiments",
       findings: "Findings",
       cases: "Cases",
@@ -87,6 +88,7 @@ const MESSAGES = defineMessages({
       subject: "Validá tu herramienta",
       audit: "Auditar un repositorio",
       harnessByModel: "Arnés x modelo",
+      compareModels: "Comparar modelos",
       experiments: "Experimentos",
       findings: "Hallazgos",
       cases: "Casos",
@@ -143,6 +145,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/evaluate/subject", label: "subject", icon: IconPuzzle },
       { to: "/evaluate/audit", label: "audit", icon: IconSearch },
       { to: "/evaluate/harness-by-model", label: "harnessByModel", icon: IconLayers },
+      { to: "/evaluate/compare-models", label: "compareModels", icon: IconCompare },
       { to: "/evaluate/experiments", label: "experiments", icon: IconFlask }
     ]
   },

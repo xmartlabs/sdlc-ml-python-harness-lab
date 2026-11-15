@@ -4520,3 +4520,53 @@ button.danger:hover {
   color: var(--warning);
   font-weight: 600;
 }
+
+/* Compare models: one row of harness + model per arm. */
+.compare-arms {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.compare-arm {
+  display: grid;
+  grid-template-columns: minmax(110px, 160px) minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+@media (max-width: 720px) {
+  .compare-arm {
+    grid-template-columns: 1fr;
+  }
+}
+
+.model-phases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-phase {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 44px;
+}
+
+.compare-pace {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 12px 0;
+  display: grid;
+  gap: 8px;
+}
+
+.compare-pace legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
