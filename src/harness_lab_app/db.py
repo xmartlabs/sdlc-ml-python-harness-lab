@@ -265,6 +265,15 @@ def _apply_sqlite_compat_migrations() -> None:
                     "VARCHAR NOT NULL DEFAULT ''"
                 )
             )
+        # A retry that continues after the last completed step (ADR-0083). 0 is
+        # every run before it: it ran its steps from the first.
+        if runconfig_columns and "resume_from_step" not in runconfig_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE runconfig ADD COLUMN resume_from_step "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+            )
         if runconfig_columns and "continuation_prompt" not in runconfig_columns:
             connection.execute(
                 text(

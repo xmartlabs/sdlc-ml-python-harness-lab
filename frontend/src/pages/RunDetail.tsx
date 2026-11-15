@@ -24,6 +24,8 @@ import type {
   RunContext,
   RunEventRecord,
   RunMetadata,
+  RetryMode,
+  RetryOptions,
   RunRecord,
   SaveImprovementsResult,
   ValidationRecord
@@ -34,7 +36,7 @@ type RunDetailProps = {
   // Every loaded run, used only to list this one's continuations.
   runs?: RunRecord[];
   onCancelRun: (runId: string) => Promise<RunRecord>;
-  onRetryRun: (runId: string) => Promise<RunRecord>;
+  onRetryRun: (runId: string, mode?: RetryMode) => Promise<RunRecord>;
   onScoreRun: (runId: string, score: number, interventions: number, notes: string) => Promise<RunRecord>;
   onContinueRun?: (runId: string, prompt: string, maxSteps?: number) => Promise<RunRecord>;
 };
@@ -98,6 +100,15 @@ const MESSAGES = defineMessages({
       continuedBy: (children: ReactNode) => <>Continued by {children}</>,
       cancel: "Cancel",
       retry: "Retry",
+      retryScratch: "Retry from scratch",
+      retryScratchHint:
+        "Discards this attempt — workspace, steps, grades — and runs every step again under the same id.",
+      retryScratchConfirm: (runId: string) =>
+        `Discard everything ${runId} produced and run it again from step 1?`,
+      continueFrom: (step: number) => `Continue from step ${step}`,
+      continueFromHint: (kept: number) =>
+        `Keeps steps 1–${kept} as they ran (time, cost, grade) and restores the workspace from step ${kept}'s snapshot. Use it when the run was cut by something that was not the model — a restart, the network.`,
+      cannotContinue: "Continue where it stopped",
       sending: "Sending…",
       sendTraces: "Send traces",
       viewInLangfuse: "View in Langfuse ↗",
@@ -371,6 +382,15 @@ const MESSAGES = defineMessages({
       continuedBy: (children: ReactNode) => <>Continuada por {children}</>,
       cancel: "Cancelar",
       retry: "Reintentar",
+      retryScratch: "Reintentar de cero",
+      retryScratchHint:
+        "Descarta este intento (workspace, pasos, notas) y corre todos los pasos de nuevo con el mismo id.",
+      retryScratchConfirm: (runId: string) =>
+        `¿Descartar todo lo que produjo ${runId} y correrla de nuevo desde el paso 1?`,
+      continueFrom: (step: number) => `Continuar desde el paso ${step}`,
+      continueFromHint: (kept: number) =>
+        `Conserva los pasos 1–${kept} como corrieron (tiempo, costo, nota) y restaura el workspace del snapshot del paso ${kept}. Usalo cuando a la corrida la cortó algo que no fue el modelo: un reinicio, la red.`,
+      cannotContinue: "Continuar donde quedó",
       sending: "Enviando…",
       sendTraces: "Enviar trazas",
       viewInLangfuse: "Ver en Langfuse ↗",
@@ -716,6 +736,7 @@ export function RunDetail({
   const [events, setEvents] = useState<RunEventRecord[]>([]);
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [retryOptions, setRetryOptions] = useState<RetryOptions | null>(null);
   const [continuePrompt, setContinuePrompt] = useState("");
   const [continueSteps, setContinueSteps] = useState(3);
   const [scoreValue, setScoreValue] = useState(0);
@@ -803,6 +824,23 @@ export function RunDetail({
     return () => {
       active = false;
       window.clearInterval(interval);
+    };
+  }, [run?.run_id, run?.state]);
+
+  // Which step a stopped run could continue from (ADR-0083). Asked again when
+  // the state changes: a retried run that stops again has new steps on record.
+  useEffect(() => {
+    setRetryOptions(null);
+    if (!run || !RETRYABLE_STATES.includes(run.state)) {
+      return;
+    }
+    let active = true;
+    api
+      .retryOptions(run.run_id)
+      .then((options) => active && setRetryOptions(options))
+      .catch(() => undefined);
+    return () => {
+      active = false;
     };
   }, [run?.run_id, run?.state]);
 
@@ -969,13 +1007,17 @@ export function RunDetail({
       .finally(() => setActionPending(false));
   };
 
-  const handleRetry = () => {
+  const handleRetry = (mode: RetryMode) => {
+    if (mode === "scratch" && !window.confirm(m.header.retryScratchConfirm(run.run_id))) {
+      return;
+    }
     setActionPending(true);
     setActionError(null);
-    onRetryRun(run.run_id)
+    onRetryRun(run.run_id, mode)
       .catch((error: Error) => setActionError(error.message))
       .finally(() => setActionPending(false));
   };
+  const continueStep = retryOptions?.continue_from_step ?? null;
 
   const canContinue = onContinueRun !== undefined && CONTINUABLE_STATES.includes(run.state);
   const children = runs.filter((item) => item.parent_run_id === run.run_id);
@@ -1273,8 +1315,25 @@ export function RunDetail({
           <button disabled={!canCancel || actionPending} onClick={handleCancel} type="button">
             {m.header.cancel}
           </button>
-          <button disabled={!canRetry || actionPending} onClick={handleRetry} type="button">
-            {m.header.retry}
+          <button
+            disabled={!canRetry || actionPending || continueStep === null}
+            onClick={() => handleRetry("continue")}
+            title={
+              continueStep !== null
+                ? m.header.continueFromHint(continueStep - 1)
+                : (retryOptions?.continue_reason ?? undefined)
+            }
+            type="button"
+          >
+            {continueStep !== null ? m.header.continueFrom(continueStep) : m.header.cannotContinue}
+          </button>
+          <button
+            disabled={!canRetry || actionPending}
+            onClick={() => handleRetry("scratch")}
+            title={m.header.retryScratchHint}
+            type="button"
+          >
+            {m.header.retryScratch}
           </button>
           {/* Only shown when tracing is on: a lab without Langfuse gets no dead buttons. */}
           {langfuse?.enabled ? (

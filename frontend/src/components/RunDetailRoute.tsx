@@ -2,7 +2,7 @@ import { Link, useParams } from "react-router-dom";
 
 import { defineMessages, useMessages } from "../i18n";
 import { RunDetail } from "../pages/RunDetail";
-import type { RunRecord } from "../types";
+import type { RetryMode, RunRecord } from "../types";
 
 const MESSAGES = defineMessages({
   en: {
@@ -24,7 +24,7 @@ const MESSAGES = defineMessages({
 type RunDetailRouteProps = {
   runs: RunRecord[];
   onCancelRun: (runId: string) => Promise<RunRecord>;
-  onRetryRun: (runId: string) => Promise<RunRecord>;
+  onRetryRun: (runId: string, mode?: RetryMode) => Promise<RunRecord>;
   onScoreRun: (runId: string, score: number, interventions: number, notes: string) => Promise<RunRecord>;
   onContinueRun: (runId: string, prompt: string, maxSteps?: number) => Promise<RunRecord>;
 };

@@ -99,6 +99,7 @@ from harness_lab_app.run_service import (
     RunContinueError,
     RunDeleteConflictError,
     RunPreflightError,
+    RunRetryError,
     RunService,
 )
 from harness_lab_app.sandbox_service import VALID_KINDS, SandboxService
@@ -2692,9 +2693,23 @@ def create_app() -> FastAPI:
         )
         return progress
 
+    @app.get("/api/runs/{run_id}/retry-options")
+    def retry_options(run_id: str, session: Session = Depends(get_session)):
+        """Whether the run can continue where it stopped, and from which step."""
+        return RunService(session).retry_options(run_id)
+
     @app.post("/api/runs/{run_id}/retry")
-    def retry_run(run_id: str, session: Session = Depends(get_session)):
-        return RunService(session, enqueue=enqueue_run).retry_run(run_id)
+    def retry_run(
+        run_id: str,
+        mode: str = "resume",
+        session: Session = Depends(get_session),
+    ):
+        """Run it again: ``scratch`` (from nothing), ``continue`` (after the last
+        completed step) or ``resume`` (every step over the workspace left)."""
+        try:
+            return RunService(session, enqueue=enqueue_run).retry_run(run_id, mode)
+        except RunRetryError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/api/runs/{run_id}/continue")
     def continue_run(

@@ -51,6 +51,10 @@ class BenchRunAdapter:
             command.append("--dry-run")
         if config.resume:
             command.append("--resume")
+        # Only on a continuing retry (ADR-0083): every other command stays
+        # byte-identical to the ones the archive was produced with.
+        if config.resume_from_step > 1:
+            command.extend(["--from-step", str(config.resume_from_step)])
         # Web runs are managed: the API owns scoring, so the runner must reset a
         # stale workspace on start and archive+clean it after a manual-scored run
         # (ADR-0006). CLI invocations omit --fresh and keep the interactive guard.

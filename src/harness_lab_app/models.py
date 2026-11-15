@@ -245,6 +245,9 @@ class RunConfig(SQLModel, table=True):
     score_mode: str = "manual"
     max_steps: int = 1
     resume: bool = False
+    # The step a "continue where it stopped" retry starts at (ADR-0083); the
+    # steps before it are kept as they ran. 0 runs every step, as always.
+    resume_from_step: int = 0
     dry_run: bool = False
     # Follow-up instruction for a continuation run (ADR-0026). Empty for every
     # ordinary run: it replaces the case prompt only when the run has a parent.

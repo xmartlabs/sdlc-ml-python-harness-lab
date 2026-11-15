@@ -207,6 +207,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "Use when a previous run was interrupted and you want to continue.",
     )
     p.add_argument(
+        "--from-step",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Start the step loop at step N, keeping steps 1..N-1 as they ran "
+        "(a retry that continues where the run stopped, ADR-0083). The worker "
+        "has already restored the workspace from step N-1's snapshot.",
+    )
+    p.add_argument(
         "--fresh",
         action="store_true",
         help="Managed/automated run (used by the web runner): reset a stale "
@@ -1296,6 +1305,46 @@ def snapshot_step(
         return {"step": step_n, "kind": "too_large"}
     except Exception as exc:  # a snapshot must never stop the run
         return {"step": step_n, "kind": "error", "error": repr(exc)[:200]}
+
+
+def kept_steps_start(args: argparse.Namespace, max_steps: int, steps_dir: Path) -> int:
+    """The step the loop starts at: 1, or where a continuing retry picks up.
+
+    A continuing retry (``--from-step N``, ADR-0083) is honoured only when steps
+    1..N-1 are all on record; otherwise it starts at 1, loudly, rather than
+    filing a run whose early steps cannot be accounted for.
+    """
+    wanted = int(getattr(args, "from_step", 1) or 1)
+    if wanted <= 1:
+        return 1
+    if wanted > max_steps:
+        sys.exit(f"❌ --from-step {wanted} is past the last step ({max_steps}).")
+    missing = [
+        n for n in range(1, wanted) if not (steps_dir / f"step-{n}.meta.json").is_file()
+    ]
+    if missing:
+        print(
+            f"  ⚠️  --from-step {wanted}: no record of step(s) "
+            f"{', '.join(map(str, missing))} — running every step instead."
+        )
+        return 1
+    return wanted
+
+
+def kept_steps_record(steps_dir: Path, first_step: int) -> tuple[float, list[str]]:
+    """The seconds and prompt kinds of the steps a continuing retry keeps."""
+    seconds = 0.0
+    kinds: list[str] = []
+    for n in range(1, first_step):
+        try:
+            meta = json.loads((steps_dir / f"step-{n}.meta.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            meta = {}
+        value = meta.get("seconds")
+        if isinstance(value, int | float):
+            seconds += float(value)
+        kinds.append(str(meta.get("prompt_kind") or "case"))
+    return seconds, kinds
 
 
 def write_step_meta(steps_dir: Path, meta: dict) -> None:
@@ -3606,7 +3655,21 @@ def main(argv: list[str] | None = None) -> int:
 
         last_swe_eval: dict | None = None
         last_workspace_fp: str | None = None
-        for step_n in range(1, max_steps + 1):
+        first_step = kept_steps_start(args, max_steps, steps_dir)
+        if first_step > 1:
+            kept_seconds, kept_kinds = kept_steps_record(steps_dir, first_step)
+            harness_seconds += kept_seconds
+            completed_steps += first_step - 1
+            prompt_kinds.extend(kept_kinds)
+            # The kept step's state is the baseline the no-progress check
+            # compares the next step against, as it would have been.
+            last_workspace_fp = workspace_fingerprint(workspace)
+            print(
+                f"\n  Continuing at step {first_step}/{max_steps}: steps 1-"
+                f"{first_step - 1} are kept as they ran "
+                f"({kept_seconds / 60:.0f} min)."
+            )
+        for step_n in range(first_step, max_steps + 1):
             if max_steps > 1:
                 if step_n == 1:
                     step_prompt_path = prompt_path

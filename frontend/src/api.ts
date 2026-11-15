@@ -77,6 +77,8 @@ import type {
   SessionState,
   RunContext,
   RunEventRecord,
+  RetryMode,
+  RetryOptions,
   RunProgress,
   RunRecord,
   SandboxRecord,
@@ -678,8 +680,15 @@ export const api = {
       `/api/runs/${runId}/keep-waiting`,
       { method: "POST" }
     ),
-  retryRun: (runId: string) =>
-    request<RunRecord>(`/api/runs/${runId}/retry`, { method: "POST" }),
+  // `scratch` reruns the attempt from nothing; `continue` restores the last
+  // completed step and runs the rest (ADR-0083). No mode keeps the old retry.
+  retryRun: (runId: string, mode?: RetryMode) =>
+    request<RunRecord>(
+      `/api/runs/${runId}/retry${mode ? `?mode=${mode}` : ""}`,
+      { method: "POST" }
+    ),
+  retryOptions: (runId: string) =>
+    request<RetryOptions>(`/api/runs/${runId}/retry-options`),
   cloneRun: (runId: string) =>
     request<RunRecord>(`/api/runs/${runId}/clone`, { method: "POST" }),
   // Queues a child run seeded from this run's workspace (ADR-0026).

@@ -31,6 +31,7 @@ import { applyTheme, getStoredTheme } from "./theme";
 import type { ThemeMode } from "./theme";
 import type {
   CaseCreatePayload,
+  RetryMode,
   CaseRecord,
   RunBatchPayload,
   RunCreatePayload,
@@ -257,8 +258,8 @@ export default function App() {
     return updated;
   };
 
-  const retryRun = async (runId: string) => {
-    const updated = await api.retryRun(runId);
+  const retryRun = async (runId: string, mode?: RetryMode) => {
+    const updated = await api.retryRun(runId, mode);
     updateRun(updated);
     return updated;
   };

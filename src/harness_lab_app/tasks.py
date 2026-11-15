@@ -125,6 +125,7 @@ def _config_payload(session: Session, run: Run) -> RunConfigCreate:
         score_mode=config.score_mode,
         max_steps=config.max_steps,
         resume=config.resume,
+        resume_from_step=config.resume_from_step,
         dry_run=config.dry_run,
         continuation_prompt=config.continuation_prompt,
         skills_disabled=list(config.skills_disabled),

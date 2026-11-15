@@ -188,6 +188,24 @@ local model on opencode is still running. The trade-offs:
 The option is greyed out when the second lane's worker is not running. A local model
 reports no cost; the table says so instead of showing US$0.00. [ADR-0082](adr/0082-models-are-compared-on-one-case-by-checks-not-pass-rate.md).
 
+## When a run is cut before it finishes
+
+A phased run takes an hour or more, so it is sometimes cut by something that
+is not the model: a worker restart, a gateway that stops answering. A failed or
+cancelled run offers two retries on its page (ADR-0083):
+
+- **Continue from step N** keeps the phases that finished, with their time, cost
+  and grade. It restores the workspace from the last finished phase's snapshot
+  and runs only the phases after it. The tooltip says which phase it would
+  restore, or why it cannot: no phase finished, every phase was used, or the
+  case works on a cloned repository.
+- **Retry from scratch** discards the attempt and runs every phase again under
+  the same id.
+
+Continue a run that was cut by infrastructure. Retry from scratch, or leave it
+as it is, when the run stopped on its own terms: cut by its time budget, or
+finished with checks failing. Those are the result.
+
 ## Writing the next case
 
 Every case in the lane follows the same pattern:

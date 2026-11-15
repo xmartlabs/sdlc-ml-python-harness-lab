@@ -2336,3 +2336,15 @@ export type LocalModelLoadCheck = {
   size_gb: number | null;
   guard: LocalGuardReport | null;
 };
+
+/** How a stopped run is run again (ADR-0083). */
+export type RetryMode = "scratch" | "continue";
+
+/** Whether a run can continue where it stopped, and from which step. */
+export type RetryOptions = {
+  retryable: boolean;
+  max_steps: number;
+  continue_from_step: number | null;
+  last_completed_step: number | null;
+  continue_reason: string;
+};

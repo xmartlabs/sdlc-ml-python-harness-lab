@@ -1470,3 +1470,66 @@ def test_a_run_writes_its_own_opencode_overlay(tmp_path, monkeypatch) -> None:
     assert written == [
         bench_run.DATA_DIR / "chess3d-v1-K-031" / "opencode-effective.json"
     ]
+
+
+def _kept_step(steps_dir, n: int, seconds: float, kind: str = "case_step") -> None:
+    steps_dir.mkdir(parents=True, exist_ok=True)
+    (steps_dir / f"step-{n}.meta.json").write_text(
+        json.dumps(
+            {"step": n, "kind": "snapshot", "seconds": seconds, "prompt_kind": kind}
+        )
+    )
+
+
+def test_a_continuing_retry_starts_after_the_kept_steps(tmp_path) -> None:
+    """`--from-step 4` runs steps 4..max, steps 1-3 kept as they ran (ADR-0083)."""
+    import argparse
+
+    steps = tmp_path / "steps"
+    for n, seconds in ((1, 611.0), (2, 1333.0), (3, 477.0)):
+        _kept_step(steps, n, seconds, "case" if n == 1 else "case_step")
+    args = argparse.Namespace(from_step=4)
+
+    assert bench_run.kept_steps_start(args, 5, steps) == 4
+    seconds, kinds = bench_run.kept_steps_record(steps, 4)
+    assert seconds == 611.0 + 1333.0 + 477.0
+    assert kinds == ["case", "case_step", "case_step"]
+
+
+def test_a_continuing_retry_with_a_missing_step_runs_every_step(tmp_path, capsys):
+    """A gap means the early steps cannot be accounted for: start at 1, loudly."""
+    import argparse
+
+    steps = tmp_path / "steps"
+    _kept_step(steps, 1, 60.0)
+    _kept_step(steps, 3, 60.0)
+
+    assert bench_run.kept_steps_start(argparse.Namespace(from_step=4), 5, steps) == 1
+    assert "no record of step(s) 2" in capsys.readouterr().out
+
+
+def test_an_ordinary_run_starts_at_step_one(tmp_path) -> None:
+    import argparse
+
+    assert bench_run.kept_steps_start(argparse.Namespace(from_step=1), 5, tmp_path) == 1
+    assert bench_run.kept_steps_start(argparse.Namespace(), 5, tmp_path) == 1
+
+
+def test_from_step_past_the_budget_is_refused(tmp_path) -> None:
+    import argparse
+
+    with pytest.raises(SystemExit):
+        bench_run.kept_steps_start(argparse.Namespace(from_step=6), 5, tmp_path)
+
+
+def test_from_step_reaches_the_command_only_for_a_continuing_retry() -> None:
+    from harness_lab_app.runner_adapter import BenchRunAdapter
+    from harness_lab_app.schemas import RunConfigCreate
+
+    base = {"case_id": "chess3d-v1", "prompt_variant": "harness", "max_steps": 5}
+    plain = BenchRunAdapter().build_command("K-1", RunConfigCreate(**base))
+    assert "--from-step" not in plain
+    cont = BenchRunAdapter().build_command(
+        "K-1", RunConfigCreate(**base, resume=True, resume_from_step=4)
+    )
+    assert cont[cont.index("--from-step") + 1] == "4"
