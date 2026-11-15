@@ -145,3 +145,15 @@ def test_the_overlay_never_dirties_the_tracked_tree():
         check=True,
     ).stdout
     assert after == before
+
+
+def test_a_run_can_put_its_overlay_in_its_own_directory(tmp_path):
+    """A parallel run (ADR-0082) writes its own file; the lab-wide one is untouched."""
+    repo = _repo(tmp_path, {"gpt-5.5": {"name": "GPT-5.5"}, "brand-new": {"name": "B"}})
+    own = repo / "data" / "runs" / "chess3d-v1-K-032" / "opencode-effective.json"
+
+    env, _digest = build_overlay(repo, path=own)
+
+    assert env[ENV_CONFIG_PATH] == str(own)
+    assert json.loads(own.read_text()) == json.loads(env[ENV_CONFIG_CONTENT])
+    assert not (repo / EFFECTIVE_CONFIG_FILE).exists()

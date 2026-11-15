@@ -441,25 +441,47 @@ def _within(target: Path, root: Path) -> bool:
 # Held while the lab's native skill views are rewritten. Two runs may start at
 # once in a parallel model comparison (ADR-0082), each from its own container
 # over the same repo bind; without it both unlink-and-relink the same symlinks
-# and one fails with FileExistsError half-way. The ablating runs that would
-# change the set never share a lane, so this only serialises identical writes.
+# and one fails with FileExistsError half-way. A run that would change the set
+# holds the worker's exclusive shared-tree lease (shared_tree.py), so this only
+# serialises identical writes.
+#
+# A file created with O_EXCL, not flock: on Docker Desktop's bind mount flock and
+# lockf exclude nothing, not even two processes of one container, while O_EXCL
+# creation is refused across containers (probed 2026-11-15).
 SKILL_VIEWS_LOCK = REPO_ROOT / "data" / "app" / "skill-views.lock"
+# A rewrite takes seconds; a lock older than this was left by a killed run.
+SKILL_VIEWS_LOCK_STALE_SECONDS = 300
+SKILL_VIEWS_LOCK_WAIT_SECONDS = 600
 
 
 @contextlib.contextmanager
 def _skill_views_lock():
-    try:
-        import fcntl
-    except ImportError:  # not POSIX: nothing runs alongside on such a host
-        yield
-        return
     SKILL_VIEWS_LOCK.parent.mkdir(parents=True, exist_ok=True)
-    with SKILL_VIEWS_LOCK.open("a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+    deadline = time.monotonic() + SKILL_VIEWS_LOCK_WAIT_SECONDS
+    while True:
         try:
-            yield
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+            fd = os.open(SKILL_VIEWS_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            with contextlib.suppress(OSError):
+                age = time.time() - SKILL_VIEWS_LOCK.stat().st_mtime
+                if age > SKILL_VIEWS_LOCK_STALE_SECONDS:
+                    SKILL_VIEWS_LOCK.unlink()
+                    continue
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"{SKILL_VIEWS_LOCK} is still held after "
+                    f"{SKILL_VIEWS_LOCK_WAIT_SECONDS}s"
+                ) from None
+            time.sleep(0.2)
+            continue
+        os.write(fd, f"{os.getpid()}\n".encode())
+        os.close(fd)
+        break
+    try:
+        yield
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            SKILL_VIEWS_LOCK.unlink()
 
 
 def apply_skill_views(skills: list) -> None:
@@ -596,6 +618,21 @@ def detected_context_windows(models: tuple[str, ...] = ()) -> tuple:
         return ()
 
 
+# Where a run's opencode overlay lives, under its own directory. One lab-wide
+# file was safe while one run executed at a time; two at once (ADR-0082) could
+# each rewrite it while the other's opencode was still loading it, and a run
+# could start on the other arm's provider map.
+RUN_OVERLAY_FILE = "opencode-effective.json"
+
+# Set by main() from --run before the overlay is first written.
+_ACTIVE_RUN: str = ""
+
+
+def _overlay_path() -> Path | None:
+    """This run's overlay file, or None outside a run (the lab-wide default)."""
+    return DATA_DIR / _ACTIVE_RUN / RUN_OVERLAY_FILE if _ACTIVE_RUN else None
+
+
 @functools.cache
 def apply_gateway_overlay(
     direct_models: tuple[str, ...] = (), run_models: tuple[str, ...] = ()
@@ -626,7 +663,9 @@ def apply_gateway_overlay(
     windows = detected_context_windows(run_models)
     for window in windows:
         print(f"  ✓ {describe(window)}")
-    env, digest = build_overlay(REPO_ROOT, direct_models, limits_by_model(windows))
+    env, digest = build_overlay(
+        REPO_ROOT, direct_models, limits_by_model(windows), path=_overlay_path()
+    )
     os.environ.update(env)
     return digest
 
@@ -3034,7 +3073,9 @@ def close_run(
 
 
 def main(argv: list[str] | None = None) -> int:
+    global _ACTIVE_RUN
     args = parse_args(argv)
+    _ACTIVE_RUN = str(args.run or "")
     _load_env()
     # Headless by default for everything this process spawns, in both lanes.
     # The docker image and the run container already set these, but a host-mode

@@ -1396,15 +1396,26 @@ class ExperimentService:
             raise ExperimentError("Runs execute 1 or 2 at a time.")
         experiment = self.get_experiment(experiment_id)
         if parallel == 2:
-            from harness_lab_app.model_comparison import is_model_comparison
+            from harness_lab_app.model_comparison import (
+                model_comparison_shape_errors,
+            )
 
             # Two at a time is a model comparison's option (ADR-0082): its arms
             # differ only by harness and model and rewrite nothing shared. Any
-            # other design keeps the one lane ADR-0002 guarantees.
-            if not is_model_comparison(experiment.family_id):
+            # other design keeps the one lane ADR-0002 guarantees. Checked on
+            # the design itself — the `models-` family is only a name.
+            problems = model_comparison_shape_errors(
+                experiment.mode,
+                [
+                    (c.label, c.role, dict(c.overrides or {}))
+                    for c in self.conditions(experiment_id)
+                ],
+            )
+            if problems:
                 raise ExperimentError(
                     "Only a model comparison (Evaluate → Compare models) runs two "
-                    "at a time; launch this experiment one at a time."
+                    f"at a time, and this experiment is not one: {'; '.join(problems)}. "
+                    "Launch it one at a time."
                 )
             # Asked for two lanes with no way to publish on the second: running
             # sequentially anyway would answer a request nobody made.

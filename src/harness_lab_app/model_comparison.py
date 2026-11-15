@@ -38,7 +38,42 @@ def model_family_id(case_id: str) -> str:
 
 
 def is_model_comparison(family_id: str | None) -> bool:
+    """Whether a family is filed as a model comparison — a reading, not a gate."""
     return str(family_id or "").startswith(MODEL_FAMILY_PREFIX)
+
+
+# What an arm of a model comparison may fix: the model, the harness that drives
+# it, and its reasoning effort. Anything else is another design.
+MODEL_ARM_FIELDS = frozenset({"harness", "executor_model", "executor_effort"})
+
+
+def model_comparison_shape_errors(
+    mode: str, conditions: list[tuple[str, str, dict[str, Any]]]
+) -> list[str]:
+    """Why an experiment is not a model comparison; empty when it is one.
+
+    The ``models-`` family prefix is a name anyone can type, so it decides how
+    the experiment is *read*, never what it may *do*. Two lanes at once
+    (ADR-0082) are safe only for this shape: a ``subject_validation`` design
+    whose arms are peers (no control) that fix a harness and a model and
+    nothing else, so none of them rewrites the lab's shared tree.
+
+    ``conditions`` is ``(label, role, overrides)`` per arm.
+    """
+    errors: list[str] = []
+    if str(mode) != "subject_validation":
+        errors.append(f"its mode is {mode}, not subject_validation")
+    if len(conditions) < 2:
+        errors.append("it has fewer than two arms")
+    for label, role, overrides in conditions:
+        if str(role) != "treatment":
+            errors.append(f"arm '{label}' is a {role}, and model arms are peers")
+        extra = sorted(set(overrides) - MODEL_ARM_FIELDS)
+        if extra:
+            errors.append(f"arm '{label}' also sets {', '.join(extra)}")
+        if not overrides.get("harness") or not overrides.get("executor_model"):
+            errors.append(f"arm '{label}' does not fix a harness and a model")
+    return errors
 
 
 def _number(value: Any) -> float | None:

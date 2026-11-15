@@ -1393,6 +1393,7 @@ def test_two_runs_never_rewrite_the_skill_views_at_once(tmp_path, monkeypatch) -
     process must wait for the first to release the lock.
     """
     import multiprocessing
+    import threading
     import time
 
     lock = tmp_path / "data" / "app" / "skill-views.lock"
@@ -1410,12 +1411,62 @@ def test_two_runs_never_rewrite_the_skill_views_at_once(tmp_path, monkeypatch) -
     try:
         assert held.wait(5)
         waited = time.monotonic()
-        # Released after 0.3 s from this side: the lock is only ours after that.
-        import threading
-
         threading.Timer(0.3, release.set).start()
         with bench_run._skill_views_lock():
             assert time.monotonic() - waited >= 0.25
+        assert not lock.exists()
     finally:
         release.set()
         process.join(5)
+
+
+def test_the_skill_views_lock_is_a_file_created_exclusively(
+    tmp_path, monkeypatch
+) -> None:
+    """Not flock: on Docker Desktop's bind mount it excludes nothing at all.
+
+    A run killed while holding the lock leaves the file behind, so one older
+    than the staleness bound is taken over instead of waited on forever.
+    """
+    import os
+    import time
+
+    lock = tmp_path / "data" / "app" / "skill-views.lock"
+    lock.parent.mkdir(parents=True)
+    monkeypatch.setattr(bench_run, "SKILL_VIEWS_LOCK", lock)
+    lock.write_text("12345\n")
+    old = time.time() - bench_run.SKILL_VIEWS_LOCK_STALE_SECONDS - 5
+    os.utime(lock, (old, old))
+
+    with bench_run._skill_views_lock():
+        assert lock.read_text() == f"{os.getpid()}\n"
+    assert not lock.exists()
+
+
+def test_a_run_writes_its_own_opencode_overlay(tmp_path, monkeypatch) -> None:
+    """Two runs at once must not share the provider map opencode loads.
+
+    With one lab-wide `opencode-effective.json`, a run with another direct
+    model or context window could rewrite it while the other's opencode was
+    loading it, and start on the other arm's providers.
+    """
+    from harness_lab_app import opencode_overlay
+
+    written: list = []
+
+    def build(repo_root, direct, limits, path=None):
+        written.append(path)
+        return {}, None
+
+    monkeypatch.setattr(opencode_overlay, "build_overlay", build)
+    monkeypatch.setattr(bench_run, "detected_context_windows", lambda _m: ())
+    monkeypatch.setattr(bench_run, "_ACTIVE_RUN", "chess3d-v1-K-031")
+    bench_run.apply_gateway_overlay.cache_clear()
+    try:
+        bench_run.apply_gateway_overlay(("lmstudio/x",), ())
+    finally:
+        bench_run.apply_gateway_overlay.cache_clear()
+
+    assert written == [
+        bench_run.DATA_DIR / "chess3d-v1-K-031" / "opencode-effective.json"
+    ]

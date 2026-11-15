@@ -1230,10 +1230,12 @@ class RunService:
         self._publish(run_id)
         return run
 
-    def mark_running(self, run_id: str) -> Run:
+    def mark_running(self, run_id: str, lane: str | None = None) -> Run:
         run = self.get_run(run_id)
         run.state = RunState.running
         run.started_at = utc_now()
+        # The queue of the worker driving it (ADR-0082), for reconciliation.
+        run.lane = lane
         self.session.add(run)
         self.session.add(RunEvent(run_id=run_id, message="Run started"))
         self.session.commit()

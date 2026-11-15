@@ -220,12 +220,18 @@ def build_overlay(
     repo_root: Path,
     direct_models: Iterable[str] = (),
     limits: dict[str, dict[str, int]] | None = None,
+    path: Path | None = None,
 ) -> tuple[dict[str, str], str | None]:
     """Materialize the overlay and return ``(env_vars, overlay_hash)``.
 
     Returns ``({}, None)`` when neither the catalog, a direct model nor a
     detected context window adds anything, so a lab that never touches the
     Models page and serves nothing locally runs byte-identically to before.
+
+    ``path`` is where the file is written; the lab-wide
+    ``EFFECTIVE_CONFIG_FILE`` when omitted. A run passes its own: two runs at
+    once (ADR-0082) with different direct models or context windows would
+    otherwise overwrite one file while the other's opencode is reading it.
     """
     tracked_gateway = read_tracked_gateway(repo_root)
     tracked_models = tracked_gateway.get("models") or {}
@@ -238,7 +244,7 @@ def build_overlay(
     config = build_config(tracked_gateway, delta, direct, limits)
     content = json.dumps(config, sort_keys=True, separators=(",", ":"))
 
-    path = repo_root / EFFECTIVE_CONFIG_FILE
+    path = path or repo_root / EFFECTIVE_CONFIG_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 

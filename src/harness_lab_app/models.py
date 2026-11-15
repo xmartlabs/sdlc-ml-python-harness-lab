@@ -300,6 +300,11 @@ class Run(SQLModel, table=True):
     # for an original run, and for every run that predates continuations — no
     # backfill invents lineage that never existed.
     parent_run_id: str | None = Field(default=None, index=True)
+    # The queue of the worker executing the run (`runs` or `runs-parallel`,
+    # ADR-0082), set when it starts. A restarting worker reconciles a `running`
+    # row only when the lane that owns it answered; null for every run that
+    # predates the second lane, all of which ran on `runs`.
+    lane: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 

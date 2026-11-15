@@ -486,6 +486,30 @@ def test_each_agent_container_writes_its_own_bench_context(
     assert (tmp_path / "BENCH_CONTEXT.md").read_text() == "placeholder\n"
 
 
+def test_a_clean_checkout_still_gives_each_run_its_own_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`BENCH_CONTEXT.md` is gitignored, so a fresh clone has none.
+
+    Skipping the bind then would let `bench_run.py` create the shared file
+    through the `/app` bind, and two runs at once would share it again. The
+    placeholder is written first, so the bind target exists and stays unused.
+    """
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+    client = FakeDockerClient(FakeContainer([]))
+    DockerRunExecutor(client_factory=lambda: client).start(
+        "chess3d-v1-K-030", ["python", "scripts/bench_run.py"], hidden=[]
+    )
+    mounts = client.containers.run_kwargs["mounts"]
+    context = [m for m in mounts if m["Target"] == "/app/BENCH_CONTEXT.md"]
+    assert len(context) == 1 and context[0]["ReadOnly"] is False
+    assert (tmp_path / "BENCH_CONTEXT.md").read_text() == (
+        executors.BENCH_CONTEXT_PLACEHOLDER
+    )
+    own = tmp_path / "data" / "runs" / "chess3d-v1-K-030" / "bench_context.md"
+    assert own.read_text() == executors.BENCH_CONTEXT_PLACEHOLDER
+
+
 def test_a_masked_bench_context_stays_masked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

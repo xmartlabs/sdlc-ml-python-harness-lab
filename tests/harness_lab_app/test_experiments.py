@@ -2581,22 +2581,25 @@ def _models_design(service, experiment_id="two-lanes", repetitions=1):
     from harness_lab_app.models import Case, CaseType
 
     session = service.session
-    if not session.exec(select(Case).where(Case.case_id == "tetris-v1")).first():
-        session.add(
-            Case(
-                case_id="tetris-v1",
-                name="Tetris",
-                type=CaseType.single_prompt,
-                prompt_variants={"sdlc": "Build Tetris."},
-            )
+    case = session.exec(select(Case).where(Case.case_id == "tetris-v1")).first()
+    if case is None:
+        case = Case(
+            case_id="tetris-v1",
+            name="Tetris",
+            type=CaseType.single_prompt,
+            prompt_variants={"sdlc": "Build Tetris."},
         )
-        session.commit()
+    # A model comparison is a subject validation, which grades by command.
+    case.validation_commands = ["test -s {workspace}/main.py"]
+    session.add(case)
+    session.commit()
     service.create_experiment(
         ExperimentCreate(
             experiment_id=experiment_id,
             name="Two lanes",
             question="Which model builds tetris best?",
-            mode=ExperimentMode.discovery,
+            mode=ExperimentMode.subject_validation,
+            subject="model comparison on tetris-v1",
             case_ids=["tetris-v1"],
             prompt_variants=["sdlc"],
             repetitions=repetitions,
@@ -2668,20 +2671,26 @@ def test_one_at_a_time_is_the_default_and_uses_one_lane(session):
     assert second == []
 
 
-def test_a_run_that_rewrites_the_skill_catalog_never_runs_alongside(session):
-    """An ablation regenerates `.claude/skills` in the shared tree (ADR-0011)."""
+def test_a_models_family_name_does_not_make_an_ablation_parallel(session):
+    """The `models-` prefix is a name anyone can type; the design is what counts.
+
+    An ablation regenerates `.claude/skills` in the shared tree (ADR-0011), so
+    filing a harness evaluation under a `models-` family must not open the
+    second lane to it.
+    """
     service = ExperimentService(
         session, enqueue=lambda _r: None, enqueue_parallel=lambda _r: None
     )
     _skills_design(service, "ablation-two-lanes")
-    # Even filed as a model comparison, an ablating arm keeps the one lane.
     experiment = service.get_experiment("ablation-two-lanes")
     experiment.family_id = "models-tetris-v1"
     session.add(experiment)
     session.commit()
 
-    with pytest.raises(ExperimentError, match="change the skill catalog"):
+    with pytest.raises(ExperimentError, match="not subject_validation") as refused:
         service.launch("ablation-two-lanes", _base_config(dry_run=True), parallel=2)
+    assert "also sets skills_disabled" in str(refused.value)
+    assert "is a control" in str(refused.value)
 
 
 def test_only_a_model_comparison_runs_two_at_a_time(session):
@@ -2693,6 +2702,59 @@ def test_only_a_model_comparison_runs_two_at_a_time(session):
 
     with pytest.raises(ExperimentError, match="Only a model comparison"):
         service.launch("harness-two-lanes", _base_config(dry_run=True), parallel=2)
+
+
+def test_a_model_arm_that_also_changes_something_else_runs_one_at_a_time(session):
+    """Same mode, peers, harness and model — plus a staged skill: not a model arm."""
+    from sqlmodel import select
+
+    from harness_lab_app.models import ExperimentCondition
+
+    service = ExperimentService(
+        session, enqueue=lambda _r: None, enqueue_parallel=lambda _r: None
+    )
+    _models_design(service, "models-plus-skill")
+    arm = session.exec(
+        select(ExperimentCondition).where(
+            ExperimentCondition.experiment_id == "models-plus-skill",
+            ExperimentCondition.label == "opus",
+        )
+    ).one()
+    arm.overrides = {**arm.overrides, "skills_extra": ["new-skill"]}
+    session.add(arm)
+    session.commit()
+
+    with pytest.raises(ExperimentError, match="arm 'opus' also sets skills_extra"):
+        service.launch("models-plus-skill", _base_config(dry_run=True), parallel=2)
+
+
+def test_the_model_comparison_shape():
+    from harness_lab_app.model_comparison import model_comparison_shape_errors
+
+    peers = [
+        (
+            "opus",
+            "treatment",
+            {"harness": "claude", "executor_model": "claude-opus-5-5"},
+        ),
+        (
+            "fable",
+            "treatment",
+            {
+                "harness": "claude",
+                "executor_model": "claude-fable-5-2",
+                "executor_effort": "high",
+            },
+        ),
+    ]
+    assert model_comparison_shape_errors("subject_validation", peers) == []
+    assert model_comparison_shape_errors("subject_validation", peers[:1]) == [
+        "it has fewer than two arms"
+    ]
+    no_model = [*peers, ("bare", "treatment", {"harness": "claude"})]
+    assert model_comparison_shape_errors("subject_validation", no_model) == [
+        "arm 'bare' does not fix a harness and a model"
+    ]
 
 
 def test_two_at_a_time_without_the_second_lane_fails_instead_of_running_one(session):
