@@ -4299,8 +4299,18 @@ button.danger:hover {
   color: var(--danger);
 }
 
+/* The harness files a step opened: one chip each, wrapped onto as many lines
+   as the column needs. Inline chips are single unbreakable words, so the table
+   used to widen past its panel to fit them on one line. */
+.step-reward-consulted {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
 .step-reward-table .chip {
-  margin: 0 4px 4px 0;
+  max-width: 100%;
 }
 
 /* --- Run progress (ADR-0080): phases, time, cost, live grades, slow-phase choice --- */

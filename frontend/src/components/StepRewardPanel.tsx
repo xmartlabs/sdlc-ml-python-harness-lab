@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useState } from "react";
 
 import { api } from "../api";
 import { defineMessages, useMessages } from "../i18n";
@@ -112,6 +112,17 @@ function ProgressBar({ step }: { step: StepOutcome }) {
   );
 }
 
+/** A harness path that may wrap only after a `/` or `:`, never mid-name. */
+function breakablePath(path: string): ReactNode {
+  const parts = path.split(/(?<=[/:])/);
+  return parts.map((part, index) => (
+    <Fragment key={index}>
+      {part}
+      {index < parts.length - 1 ? <wbr /> : null}
+    </Fragment>
+  ));
+}
+
 export function StepRewardPanel({ runId }: { runId: string }) {
   const m = useMessages(MESSAGES);
   const [record, setRecord] = useState<StepRewardRecord | null>(null);
@@ -189,6 +200,8 @@ export function StepRewardPanel({ runId }: { runId: string }) {
         </div>
       </div>
 
+      {/* Scrolls inside the panel rather than pushing past it. */}
+      <div className="table-scroll">
       <table className="data-table step-reward-table">
         <thead>
           <tr>
@@ -238,11 +251,13 @@ export function StepRewardPanel({ runId }: { runId: string }) {
                 <td className="mono small">{usd(step.cost_usd)}</td>
                 <td className="small">
                   {step.consulted.length ? (
-                    step.consulted.map((item) => (
-                      <span className="chip mono" key={item}>
-                        {item}
-                      </span>
-                    ))
+                    <div className="step-reward-consulted">
+                      {step.consulted.map((item) => (
+                        <span className="chip mono" key={item}>
+                          {breakablePath(item)}
+                        </span>
+                      ))}
+                    </div>
                   ) : (
                     <span className="muted">—</span>
                   )}
@@ -252,6 +267,7 @@ export function StepRewardPanel({ runId }: { runId: string }) {
           })}
         </tbody>
       </table>
+      </div>
 
       {record.credit.length > 0 && (
         <>
