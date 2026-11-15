@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { api, ApiError } from "../api";
+import { EffortPicker } from "../components/EffortPicker";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
@@ -42,7 +43,9 @@ const STEPS = [
 
 type StepKey = (typeof STEPS)[number]["key"];
 
-type Arm = { harness: string; executorModel: string };
+// `effort` is the claude reasoning effort (ADR-0081); "" is the CLI default.
+// Comparing levels of one model is a subject validation like any other.
+type Arm = { harness: string; executorModel: string; effort: string };
 
 const MAX_STEP_OPTIONS = [5, 10, 20, 40];
 const REPETITION_OPTIONS = [1, 3, 5, 10];
@@ -658,7 +661,10 @@ function formatPercent(value: number | null | undefined): string {
 }
 
 function armLabel(arm: Arm): string {
-  return arm.executorModel ? `${arm.harness}/${arm.executorModel}` : arm.harness;
+  const base = arm.executorModel ? `${arm.harness}/${arm.executorModel}` : arm.harness;
+  // The effort is part of the arm, so it is part of its name: two arms that
+  // differ only in effort must not read as duplicates.
+  return arm.effort ? `${base}@${arm.effort}` : base;
 }
 
 /**
@@ -728,7 +734,9 @@ export function SubjectValidation() {
   const [aiDropped, setAiDropped] = useState<DroppedCommand[]>([]);
 
   // Step 3 — the arms.
-  const [arms, setArms] = useState<Arm[]>([{ harness: "opencode", executorModel: "" }]);
+  const [arms, setArms] = useState<Arm[]>([
+    { harness: "opencode", executorModel: "", effort: "" }
+  ]);
   const [repetitions, setRepetitions] = useState(3);
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
   const [gatewayDefault, setGatewayDefault] = useState("");
@@ -1078,7 +1086,10 @@ export function SubjectValidation() {
               description: `${subject} under ${armLabel(arm)}.`,
               overrides: {
                 harness: arm.harness,
-                executor_model: arm.executorModel || null
+                executor_model: arm.executorModel || null,
+                // Only when set: an arm at the CLI default carries no effort,
+                // exactly like every run before effort existed.
+                ...(arm.effort ? { executor_effort: arm.effort } : {})
               }
             }))
           });
@@ -1733,7 +1744,8 @@ export function SubjectValidation() {
                             position === index
                               ? {
                                   harness,
-                                  executorModel: native ? native[0].id : gatewayDefault
+                                  executorModel: native ? native[0].id : gatewayDefault,
+                                  effort: ""
                                 }
                               : item
                           )
@@ -1771,6 +1783,18 @@ export function SubjectValidation() {
                       value={arm.executorModel}
                     />
                   </div>
+                  <EffortPicker
+                    harness={arm.harness}
+                    model={arm.executorModel}
+                    onChange={(effort) =>
+                      editArms((current) =>
+                        current.map((item, position) =>
+                          position === index ? { ...item, effort } : item
+                        )
+                      )
+                    }
+                    value={arm.effort}
+                  />
                 </div>
                 <div className="panel-actions">
                   <span className="badge neutral">{armLabel(arm)}</span>
@@ -1799,7 +1823,11 @@ export function SubjectValidation() {
               onClick={() =>
                 editArms((current) => [
                   ...current,
-                  { harness: "claude", executorModel: HARNESS_NATIVE_MODELS.claude[0].id }
+                  {
+                    harness: "claude",
+                    executorModel: HARNESS_NATIVE_MODELS.claude[0].id,
+                    effort: ""
+                  }
                 ])
               }
               type="button"

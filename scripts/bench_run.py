@@ -1446,6 +1446,42 @@ def validate_workspace(
         )
 
 
+def resumed_effort(out_dir: Path, requested: str, *, resume: bool) -> str:
+    """The reasoning effort a run continues at (ADR-0081).
+
+    Effort is not in runs.yaml or the case spec, so the model-style fallback
+    does not reach it: ``RESUME=1`` without ``EXECUTOR_EFFORT`` would run the
+    rest of an explicit-effort run at the CLI default and rewrite
+    ``metadata.json`` as the default arm. On a resume, the ``metadata.json``
+    the first attempt wrote is the record of what already ran. An unset flag
+    takes the recorded level. A different level is refused, because part of
+    the run already ran at the recorded one. Without a readable record there
+    is nothing to restore, and the flag stands.
+    """
+    if not resume:
+        return requested
+    try:
+        recorded_meta = json.loads((out_dir / "metadata.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return requested
+    if not isinstance(recorded_meta, dict):
+        return requested
+    # A record from before effort existed ran at the CLI default.
+    recorded = str(recorded_meta.get("executor_effort") or "")
+    if not requested:
+        if recorded:
+            print(f"  Resuming at the recorded effort: {recorded}")
+        return recorded
+    if requested != recorded:
+        ran_at = f"effort '{recorded}'" if recorded else "the CLI default effort"
+        sys.exit(
+            f"Run {out_dir.name} ran at {ran_at}; resuming it at '{requested}' "
+            "would file one run under two conditions. Drop EXECUTOR_EFFORT to "
+            "resume at the recorded level, or start a new run."
+        )
+    return requested
+
+
 def resolve_or_synthesize_run(
     runs_path: Path, run_id: str, args: argparse.Namespace
 ) -> dict:
@@ -3122,6 +3158,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     run["harness"] = args.harness or declared or DEFAULT_HARNESS
     args.harness = run["harness"]
+    # A resume continues at the effort it already ran at, like the models
+    # above; it is restored before the harness check so that check sees it.
+    args.executor_effort = resumed_effort(
+        out_dir, args.executor_effort, resume=args.resume
+    )
     # Effort is a claude CLI flag (ADR-0081). Any other harness would drop it
     # while metadata.json and the condition hash still recorded it — a run
     # filed under a condition it never ran under. Refuse instead.

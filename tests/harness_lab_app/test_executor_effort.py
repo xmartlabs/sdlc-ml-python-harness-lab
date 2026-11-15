@@ -9,6 +9,7 @@ path that reproduces a run, and is an axis a batch or experiment may vary.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -138,6 +139,39 @@ def test_bench_run_accepts_the_flag_and_defaults_to_empty():
     )
     with pytest.raises(SystemExit):
         bench_run.parse_args([*base, "--executor-effort", "turbo"])
+
+
+def _write_metadata(out_dir: Path, **fields) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "metadata.json").write_text(json.dumps({"run_id": "r", **fields}))
+    return out_dir
+
+
+def test_a_cli_resume_continues_at_the_recorded_effort(tmp_path):
+    """`RESUME=1` without the flag must not rewrite the run as the default."""
+    out_dir = _write_metadata(tmp_path / "r", executor_effort="max")
+    assert bench_run.resumed_effort(out_dir, "", resume=True) == "max"
+    assert bench_run.resumed_effort(out_dir, "max", resume=True) == "max"
+
+
+def test_a_resume_refuses_an_effort_other_than_the_one_that_ran(tmp_path):
+    """Part of the run already ran at one level; filing it under another lies."""
+    out_dir = _write_metadata(tmp_path / "r", executor_effort="low")
+    with pytest.raises(SystemExit, match="ran at effort 'low'"):
+        bench_run.resumed_effort(out_dir, "high", resume=True)
+    # A run from before effort existed ran at the CLI default.
+    legacy = _write_metadata(tmp_path / "legacy")
+    with pytest.raises(SystemExit, match="CLI default"):
+        bench_run.resumed_effort(legacy, "high", resume=True)
+    assert bench_run.resumed_effort(legacy, "", resume=True) == ""
+
+
+def test_effort_restoration_only_applies_to_a_resume_with_a_record(tmp_path):
+    out_dir = _write_metadata(tmp_path / "r", executor_effort="max")
+    assert bench_run.resumed_effort(out_dir, "low", resume=False) == "low"
+    assert bench_run.resumed_effort(tmp_path / "missing", "low", resume=True) == "low"
+    (out_dir / "metadata.json").write_text("not json")
+    assert bench_run.resumed_effort(out_dir, "", resume=True) == ""
 
 
 def test_adapter_emits_effort_only_when_set():

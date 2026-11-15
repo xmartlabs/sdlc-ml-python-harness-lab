@@ -67,6 +67,10 @@ longer, more thorough tests, and `low` for cheap smoke passes.
   between the conditions of a `subject_validation` or `discovery` experiment. A
   `harness_evaluation` holds it fixed, like the model, so it cannot confound the
   harness. A batch always runs at the default, so the batch form hides the select.
+- To compare levels from the UI, use **Subject validation**: each arm has its own
+  effort select, and an arm at a level is labelled `<harness>/<model>@<level>`.
+- `RESUME=1` continues at the level the run's `metadata.json` recorded. Passing a
+  different `EXECUTOR_EFFORT` on a resume is refused.
 - A launched experiment locks its effort with the rest of its configuration.
   Relaunching it adds repetitions at the same level, and the locked panel shows it.
 - `metadata.json` records the effort that was **requested**. The CLI does not report

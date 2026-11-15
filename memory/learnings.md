@@ -3411,8 +3411,15 @@ when it is missed:
 - The frontend's locked relaunch payload in `Experiments.tsx`. It is built field by
   field from `launch_config`, so a locked field it does not copy relaunches as the
   default and the lock refuses it.
+- The CLI resume in `bench_run.py`. Models fall back to runs.yaml when the flag is
+  unset, but effort is in neither runs.yaml nor the case spec, so `RESUME=1` ran the
+  rest at the default. A field outside those sources must be restored from the
+  run's own `metadata.json` (`resumed_effort`).
 
-Also: Claude Code's stream-json `init` event does not report the effort it applied
+Also: the arm-comparison UI is Subject validation, not New evaluation. A new
+condition axis that should be compared from the UI belongs on its per-arm editor.
+
+Claude Code's stream-json `init` event does not report the effort it applied
 (only `per_turn_effort_active`), so record effort as *requested* (ADR-0073). The CLI
 accepts `--effort` from 2.1.285. Haiku 4.5 has no effort control.
 

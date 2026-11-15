@@ -38,7 +38,10 @@ catalog accepts all five levels.
 3. **The level reaches the CLI only when set.** `BenchRunAdapter` emits
    `--executor-effort`, and `bench_run.build_claude_cmd` turns it into
    `--effort <level>`. With no effort, every command stays byte-identical to the
-   command before this change.
+   command before this change. A CLI resume (`RESUME=1`) restores the level from
+   the run's own `metadata.json` when the flag is unset, and refuses a different
+   one, because part of the run already ran at the recorded level. A web retry
+   already passes the stored level.
 4. **Preflight refuses what the run cannot honour, dry runs included.** It refuses
    effort on a non-claude harness, without a native Claude model (gateway-routed,
    empty), and at a level the model does not accept. A model id the catalog does not
@@ -67,8 +70,10 @@ catalog accepts all five levels.
 8. **The UI offers it only where it applies.** `EffortPicker` renders only for the
    claude harness with a model that accepts effort. It drops back to the default when
    the model changes to one that does not accept the chosen level. It is offered on
-   the single-run form, Experiments and New evaluation. It is not offered when the
-   design varies the harness across arms. A batch runs at the default, so the
+   the single-run form, Experiments and New evaluation, and per arm in Subject
+   validation, which is where levels are compared from the UI (the arm label gains
+   `@<level>`). New evaluation holds one level across its arms, and does not offer
+   it when the design varies the harness across arms. A batch runs at the default, so the
    batch form hides the select; vary effort through an experiment.
 
 ## Consequences
