@@ -26,6 +26,18 @@ sandbox_image: harness-lab-sandbox-godot:latest
 play_command: "godot --path /work"
 entry_point: project.godot
 
+# Shown on the run's Play tab next to the running game (ADR-0078).
+play_guide:
+  goal: "Explore Montevideo's Ciudad Vieja, built from OpenStreetMap, on foot and by car."
+  controls:
+    - "Walk": "W / A / S / D or the arrow keys"
+    - "Run": "hold Shift"
+    - "Get in / out of a car": "E (next to a car)"
+    - "Drive": "W / S to accelerate and brake, A / D to steer"
+  tips:
+    - "The minimap shows where you are; traffic follows the real streets."
+    - "Rendering is on the CPU, so the full city is smoother from street level."
+
 # Each phase is expected to finish within this many minutes (ADR-0080). Past it
 # the run is flagged slow on its page; `on_slow: wait` keeps it running until a
 # person chooses — the racing reference measured phases of 5 to 52 minutes, and

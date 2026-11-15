@@ -161,6 +161,10 @@ export type RunContext = {
   parent_run_id: string;
   // The command a case's game starts with (ADR-0078); "" when there is no game.
   play_command?: string;
+  // How to play it (ADR-0078): the case's guide, and the keys the game really
+  // bound to each action, read from the grader's harvest of its InputMap.
+  play_guide?: { goal: string; controls: [string, string][]; tips: string[] } | Record<string, never>;
+  bound_keys?: Record<string, string[]>;
 };
 
 export type RunEventRecord = {

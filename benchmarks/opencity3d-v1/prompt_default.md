@@ -132,12 +132,19 @@ Rules the grader holds the game to:
 - **The attribution:** a visible `Label` in the group **`attribution`**, fully on
   screen, whose text contains `OpenStreetMap`, for example the map's `attribution`
   string. The map data is licensed under the ODbL, which requires it.
-- **Input actions, exactly these names**, each bound to at least one key:
-  `move_forward`, `move_back`, `move_left`, `move_right`, `sprint`, `interact`
-  (enter the nearest car within 5 m, or leave the car), `accelerate`, `brake`,
-  `steer_left`, `steer_right`. On foot, the movement actions walk relative to the
-  camera. In a car, the driving actions drive. The keyboard and the API drive the
-  same game.
+- **Input actions, exactly these names and keys** (more keys are fine; these must be
+  there, because a person plays the game with them):
+
+  | Action | Keys |
+  |---|---|
+  | `move_forward` / `move_back` / `move_left` / `move_right` | W / S / A / D and the arrow keys |
+  | `sprint` | Shift |
+  | `interact` — enter the nearest car within 5 m, or leave the car | E |
+  | `accelerate` / `brake` | W / S and Up / Down (Space may also brake) |
+  | `steer_left` / `steer_right` | A / D and Left / Right |
+
+  On foot, the movement actions walk relative to the camera. In a car, the driving
+  actions drive. The keyboard and the API drive the same game.
 
 ## How the work is paced: five phases
 

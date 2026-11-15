@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -33,7 +34,11 @@ from harness_lab_app.auth import (
 )
 from harness_lab_app.case_derivation import derive_candidates
 from harness_lab_app.case_draft_service import generate_case_draft
-from harness_lab_app.case_profile import CaseProfileError, play_command_for
+from harness_lab_app.case_profile import (
+    CaseProfileError,
+    play_command_for,
+    play_guide_for,
+)
 from harness_lab_app.case_service import (
     CaseExistsError,
     CaseService,
@@ -184,6 +189,43 @@ def _safe_play_command(case: Any) -> str:
         return play_command_for(case)
     except CaseProfileError:
         return ""
+
+
+def _safe_play_guide(case: Any) -> dict[str, Any]:
+    """The case's play guide, or ``{}`` — a malformed one only hides the guide."""
+    if case is None:
+        return {}
+    try:
+        return play_guide_for(case)
+    except CaseProfileError:
+        return {}
+
+
+def _bound_keys(run_dir: Path) -> dict[str, list[str]]:
+    """The keys the run's game bound to each action, from its latest harvest.
+
+    The grader reads the game's live ``InputMap`` (an agent may register keys in
+    code rather than in ``project.godot``) into ``logic.json``. The final
+    workspace's harvest is preferred; a run still going, or cut, falls back to
+    its newest graded step snapshot. Empty when nothing was harvested.
+    """
+    candidates = [run_dir / "workspace" / ".lab-grade" / "logic.json"]
+    steps = run_dir / "steps"
+    if steps.is_dir():
+        candidates += sorted(
+            steps.glob("step-*.snapshot/.lab-grade/logic.json"),
+            key=lambda path: int(re.sub(r"\D", "", path.parent.parent.name) or 0),
+            reverse=True,
+        )
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        keys = data.get("action_keys") or data.get("actions")
+        if isinstance(keys, dict) and all(isinstance(v, list) for v in keys.values()):
+            return {str(k): [str(x) for x in v] for k, v in keys.items()}
+    return {}
 
 
 def _improvements_status(runs_dir: Path, run_id: str) -> str:
@@ -2232,6 +2274,10 @@ def create_app() -> FastAPI:
             # A case that ships a game says how to start it (ADR-0078); the run
             # page then offers a Play tab that opens the game in a desktop.
             "play_command": _safe_play_command(case),
+            # What a person needs to play it: the case's guide, and the keys the
+            # game really bound, read from the grader's harvest of its InputMap.
+            "play_guide": _safe_play_guide(case),
+            "bound_keys": _bound_keys(get_settings().data_runs_dir / run.run_id),
         }
 
     @app.get("/api/runs/{run_id}/validation")

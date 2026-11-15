@@ -132,6 +132,44 @@ def agent_hidden_for(case: Any) -> list[str]:
     return [_hidden_path(item, case_id) for item in raw]
 
 
+# A play guide is a few short lines a person reads on the Play tab: the goal,
+# how the game starts, the controls. Kept small and plain, because it is shown
+# as text next to a running game.
+_MAX_GUIDE_LINES = 12
+_MAX_GUIDE_LINE = 200
+
+
+def play_guide_for(case: Any) -> dict[str, Any]:
+    """``{goal, controls: [[action, keys], …], tips: [...]}`` a case declares."""
+    raw = _meta(case).get("play_guide")
+    if not raw:
+        return {}
+    if not isinstance(raw, dict):
+        raise CaseProfileError(
+            "play_guide must be a mapping with goal, controls and tips."
+        )
+    goal = str(raw.get("goal") or "").strip()
+    controls_raw = raw.get("controls") or []
+    tips_raw = raw.get("tips") or []
+    if not isinstance(controls_raw, list) or not isinstance(tips_raw, list):
+        raise CaseProfileError("play_guide controls and tips must be lists.")
+    controls: list[list[str]] = []
+    for item in controls_raw:
+        if not isinstance(item, dict) or len(item) != 1:
+            raise CaseProfileError("each play_guide control is one 'what: keys' pair.")
+        ((what, keys),) = item.items()
+        controls.append([str(what).strip(), str(keys).strip()])
+    tips = [str(tip).strip() for tip in tips_raw]
+    lines = [goal, *(f"{a} {b}" for a, b in controls), *tips]
+    if len(controls) + len(tips) > _MAX_GUIDE_LINES or any(
+        len(line) > _MAX_GUIDE_LINE or "\n" in line for line in lines
+    ):
+        raise CaseProfileError(
+            f"play_guide must be at most {_MAX_GUIDE_LINES} short single lines."
+        )
+    return {"goal": goal, "controls": controls, "tips": tips}
+
+
 def profile_from_task(raw: dict[str, Any]) -> dict[str, Any]:
     """The metadata keys a ``task.yaml`` declares, validated; absent keys omitted.
 
@@ -146,6 +184,10 @@ def profile_from_task(raw: dict[str, Any]) -> dict[str, Any]:
     play = play_command_for(raw)
     if play:
         profile["play_command"] = play
+    guide = play_guide_for(raw)
+    if guide:
+        # Stored as the case wrote it: play_guide_for re-validates on read.
+        profile["play_guide"] = raw["play_guide"]
     hidden = agent_hidden_for(raw)
     if hidden:
         profile["agent_hidden"] = hidden
@@ -191,6 +233,7 @@ PROFILE_KEYS = (
     "phase_budget_minutes",
     "on_slow",
     "run_timeout_minutes",
+    "play_guide",
 )
 
 

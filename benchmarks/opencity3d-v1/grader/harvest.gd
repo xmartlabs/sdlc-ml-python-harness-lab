@@ -60,6 +60,22 @@ var _hung := {}
 var _magenta: StandardMaterial3D
 
 
+
+func _key_names(action: String) -> Array:
+	var names := []
+	if not InputMap.has_action(action):
+		return names
+	for event in InputMap.action_get_events(action):
+		var key := event as InputEventKey
+		if key != null:
+			var code: int = key.keycode if key.keycode != 0 else key.physical_keycode
+			if code == 0:
+				code = key.key_label
+			names.append(OS.get_keycode_string(code))
+		elif event is InputEventMouseButton:
+			names.append("Mouse %d" % (event as InputEventMouseButton).button_index)
+	return names
+
 func _initialize() -> void:
 	physics_frame.connect(_on_physics_frame)
 	_run.call_deferred()
@@ -183,9 +199,15 @@ func _run() -> void:
 				methods.append(method)
 	_out["methods"] = methods
 	var actions := {}
+	var keys := {}
 	for action in ACTIONS:
 		actions[action] = InputMap.action_get_events(action).size() if InputMap.has_action(action) else 0
+		keys[action] = _key_names(action)
 	_out["actions"] = actions
+	# The keys the game really bound, read from its live InputMap (the agent may
+	# register them in code rather than in project.godot): checked against the
+	# contract, and shown to a person on the Play tab.
+	_out["action_keys"] = keys
 	_out["physics_hz"] = Engine.physics_ticks_per_second
 	_save()
 	_magenta = StandardMaterial3D.new()

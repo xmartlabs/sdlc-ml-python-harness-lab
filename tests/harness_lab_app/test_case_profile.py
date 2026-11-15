@@ -527,3 +527,63 @@ def test_the_chess_grader_has_one_command_per_check() -> None:
     assert " harvest " in commands[1]
     assert raw["validation_requirements"] == ["chess==1.11.2"]
     assert json.dumps(commands).count("{run_id}") == len(commands) - 1
+
+
+# --- How to play it --------------------------------------------------------------------
+
+
+def test_every_game_case_tells_a_person_how_to_play_it() -> None:
+    from harness_lab_app.case_profile import play_guide_for
+
+    for task in sorted((REPO_ROOT / "benchmarks").glob("*/task.yaml")):
+        raw = yaml.safe_load(task.read_text())
+        if raw.get("category") != "game-3d":
+            continue
+        guide = play_guide_for(profile_from_task(raw))
+        assert guide["goal"], task
+        assert len(guide["controls"]) >= 3, task
+
+
+def test_a_play_guide_is_short_plain_lines() -> None:
+    from harness_lab_app.case_profile import play_guide_for
+
+    ok = {
+        "play_guide": {
+            "goal": "Win.",
+            "controls": [{"Move": "WASD"}],
+            "tips": ["Have fun."],
+        }
+    }
+    assert play_guide_for(ok) == {
+        "goal": "Win.",
+        "controls": [["Move", "WASD"]],
+        "tips": ["Have fun."],
+    }
+    for bad in (
+        {"play_guide": "just text"},
+        {"play_guide": {"controls": "WASD"}},
+        {"play_guide": {"controls": [{"a": "1", "b": "2"}]}},
+        {"play_guide": {"tips": ["x" * 201]}},
+        {"play_guide": {"tips": ["line one\nline two"]}},
+        {"play_guide": {"tips": ["t"] * 13}},
+    ):
+        with pytest.raises(CaseProfileError):
+            play_guide_for(bad)
+
+
+def test_the_play_tab_shows_the_keys_the_game_really_bound(tmp_path: Path) -> None:
+    """Read from the grader's harvest of the live InputMap, newest snapshot first."""
+    from harness_lab_app.api import _bound_keys
+
+    assert _bound_keys(tmp_path) == {}
+    for step, keys in ((2, ["Up"]), (10, ["W", "Up"])):
+        grade = tmp_path / "steps" / f"step-{step}.snapshot" / ".lab-grade"
+        grade.mkdir(parents=True)
+        (grade / "logic.json").write_text(json.dumps({"actions": {"accelerate": keys}}))
+    assert _bound_keys(tmp_path) == {"accelerate": ["W", "Up"]}
+    final = tmp_path / "workspace" / ".lab-grade"
+    final.mkdir(parents=True)
+    (final / "logic.json").write_text(
+        json.dumps({"actions": {"interact": 1}, "action_keys": {"interact": ["E"]}})
+    )
+    assert _bound_keys(tmp_path) == {"interact": ["E"]}

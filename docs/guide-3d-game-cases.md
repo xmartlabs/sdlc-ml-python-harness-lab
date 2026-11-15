@@ -138,6 +138,26 @@ log and the command to relaunch it from the terminal underneath. The **Desktop**
 The desktop renders on the CPU. A board game or a light scene plays well; a heavy
 scene will be slow. That limit comes from the GPU-less sandbox, not from the game.
 
+**How to play is shown above the desktop.** Two sources sit side by side:
+
+- The case's `play_guide` in `task.yaml`: the goal, the controls the contract asked
+  for, and a couple of tips.
+- **The keys the game really bound.** The grader reads the game's live `InputMap`
+  during its harvest, because an agent may register keys in code rather than in
+  `project.godot` (the racing K-001 build did), and the tab lists them. A build that
+  bound other keys, or none, is shown as it is.
+
+Click once inside the game window before using the keyboard: noVNC only passes keys
+to a focused window.
+
+The controls are part of the contract, not a suggestion. Every keyboard action names
+its keys in the prompt, and `input_actions` fails a build that left them unbound:
+
+- racing: W/S or arrows, A/D or arrows, R;
+- city: WASD or arrows, Shift, E, Space to brake.
+
+A person must be able to play what the agent built without reading its code.
+
 ## Writing the next case
 
 Every case in the lane follows the same pattern:

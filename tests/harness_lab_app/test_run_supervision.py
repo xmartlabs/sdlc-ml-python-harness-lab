@@ -494,3 +494,28 @@ def test_a_paced_case_sets_its_own_ceiling_and_every_game_case_declares_one() ->
             profile = profile_from_task(raw)
             assert profile["phase_budget_minutes"] > 0, task
             assert profile["run_timeout_minutes"] * 60 > 7200, task
+
+
+def test_a_cut_retry_replaces_the_archive_its_first_attempt_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """racing3d-v1-K-001: the retry built five phases on the live workspace while
+    the archive still held the two files of the attempt the network killed."""
+
+    class Settings(RunSettings):
+        data_runs_dir = tmp_path / "data" / "runs"
+        workspace_dir = tmp_path / "workspace"
+
+    monkeypatch.setattr(tasks, "get_settings", lambda: Settings())
+    stale = tmp_path / "data" / "runs" / "r-1" / "workspace"
+    stale.mkdir(parents=True)
+    (stale / "project.godot").write_text("first attempt")
+    live = tmp_path / "workspace" / "r-1"
+    (live / "scripts").mkdir(parents=True)
+    (live / "project.godot").write_text("retry")
+    (live / "scripts" / "race.gd").write_text("extends Node")
+
+    assert tasks._archive_cut_workspace("r-1") is True
+    assert (stale / "project.godot").read_text() == "retry"
+    assert (stale / "scripts" / "race.gd").is_file()
+    assert not (stale.parent / "workspace.cut-tmp").exists()

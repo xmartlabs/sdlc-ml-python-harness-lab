@@ -1072,17 +1072,41 @@ def check_renderer(g: Grade) -> Result:
     )
 
 
+# The keys the contract names for each action: a person opening the Play tab
+# has to know how to walk, enter a car and drive without reading the code.
+# Any one of the set satisfies the action.
+ACTION_KEYS = {
+    "move_forward": {"W", "Up"},
+    "move_back": {"S", "Down"},
+    "move_left": {"A", "Left"},
+    "move_right": {"D", "Right"},
+    "sprint": {"Shift"},
+    "interact": {"E"},
+    "accelerate": {"W", "Up"},
+    "brake": {"S", "Down", "Space"},
+    "steer_left": {"A", "Left"},
+    "steer_right": {"D", "Right"},
+}
+
+
 def check_input_actions(g: Grade) -> Result:
     actions = g.logic.get("actions") or {}
     missing = [
         a for a in ACTIONS if not isinstance(actions.get(a), int) or actions[a] < 1
     ]
-    return (
-        not missing,
-        f"input actions missing or without an event: {missing}"
-        if missing
-        else "all 10 input actions bound",
-    )
+    if missing:
+        return False, f"input actions missing or without an event: {missing}"
+    keys = g.logic.get("action_keys")
+    if not isinstance(keys, dict):
+        raise AssertionError("the bound keys were not harvested")
+    for action, wanted in ACTION_KEYS.items():
+        bound = set(keys.get(action) or [])
+        if not bound & wanted:
+            return (
+                False,
+                f"{action!r} is bound to {sorted(bound)}, expected one of {sorted(wanted)}",
+            )
+    return True, "all 10 input actions bound to the keys the contract names"
 
 
 def check_default_map(g: Grade) -> Result:

@@ -1065,12 +1065,24 @@ def _archive_cut_workspace(run_id: str) -> bool:
     settings = get_settings()
     live = settings.workspace_dir / run_id
     archived = settings.data_runs_dir / run_id / "workspace"
-    if archived.exists():
-        return True
     if not live.is_dir() or not any(live.iterdir()):
-        return False
+        # Nothing live: whatever was archived (a run that finished cleanly)
+        # is the work, and is graded as it is.
+        return archived.is_dir()
+    # The live tree is the run's latest state and replaces any archive. A
+    # retry resumes on the same workspace while the archive still holds the
+    # attempt before it: racing3d-v1-K-001's retry built a full game over
+    # five phases, and its archive was the two files the first attempt left
+    # when the network dropped. Copied to a sibling first, so a failed copy
+    # never leaves the run with no archive at all.
     archived.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(live, archived, symlinks=True, ignore_dangling_symlinks=True)
+    staging = archived.with_name("workspace.cut-tmp")
+    if staging.exists():
+        shutil.rmtree(staging)
+    shutil.copytree(live, staging, symlinks=True, ignore_dangling_symlinks=True)
+    if archived.exists():
+        shutil.rmtree(archived)
+    staging.rename(archived)
     return True
 
 

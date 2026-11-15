@@ -27,6 +27,17 @@ play_command: "godot --path /work -- --ai=black"
 # Named in the prompt's location header instead of the pygame default main.py.
 entry_point: project.godot
 
+# Shown on the run's Play tab next to the running game (ADR-0078).
+play_guide:
+  goal: "Play white against the computer. Checkmate its king."
+  controls:
+    - "Select a piece": "left-click one of your pieces (its legal moves light up)"
+    - "Move": "left-click a highlighted square"
+    - "Promote": "move a pawn to the last rank (it becomes a queen)"
+  tips:
+    - "The computer plays black and answers after each of your moves."
+    - "Check, checkmate and stalemate are named at the top of the screen."
+
 # Each phase is expected to finish within this many minutes (ADR-0080). Past it
 # the run is flagged slow on its page; `on_slow: wait` keeps it running until a
 # person chooses — the racing reference measured phases of 5 to 52 minutes, and

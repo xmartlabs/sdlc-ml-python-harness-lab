@@ -4437,3 +4437,86 @@ button.danger:hover {
 .run-progress-slow p {
   margin: 4px 0 0;
 }
+
+/* --- Play guide (ADR-0078): goal, controls, the keys the game really bound --- */
+.play-guide {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+@media (max-width: 800px) {
+  .play-guide {
+    grid-template-columns: 1fr;
+  }
+}
+
+.play-guide h3,
+.play-guide h4 {
+  margin: 0 0 var(--space-2);
+}
+
+.play-guide h4 {
+  font-size: 13px;
+  margin-top: var(--space-2);
+}
+
+.play-guide-goal {
+  margin: 0 0 var(--space-2);
+  font-weight: 500;
+}
+
+.play-guide-controls,
+.play-guide-bound {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.play-guide-controls > div,
+.play-guide-bound > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 40%) 1fr;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.play-guide-controls dt,
+.play-guide-bound dt {
+  color: var(--text-dim);
+}
+
+.play-guide-controls dd,
+.play-guide-bound dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.play-guide kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--panel-soft);
+}
+
+.play-guide-tips,
+.play-guide-side ol {
+  margin: var(--space-2) 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.play-guide .warn-text {
+  color: var(--warning);
+  font-weight: 600;
+}

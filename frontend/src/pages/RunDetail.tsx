@@ -9,6 +9,7 @@ import { ScoresPanel } from "../components/ScoresPanel";
 import { StepRewardPanel } from "../components/StepRewardPanel";
 import { LogViewer } from "../components/LogViewer";
 import { Markdown } from "../components/Markdown";
+import { PlayGuide } from "../components/PlayGuide";
 import { RunProgressPanel } from "../components/RunProgressPanel";
 import { SandboxPanel } from "../components/SandboxPanel";
 import { StateBadge } from "../components/StateBadge";
@@ -1308,6 +1309,7 @@ export function RunDetail({
           </button>
         ))}
       </div>
+      {tab === "play" && runContext ? <PlayGuide context={runContext} /> : null}
       {tab !== "detail" ? <SandboxPanel key={tab} kind={tab} runId={run.run_id} /> : null}
       {tab === "detail" ? (
         <>
