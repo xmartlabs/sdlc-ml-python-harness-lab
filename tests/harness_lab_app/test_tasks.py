@@ -1207,17 +1207,26 @@ class MemoryLeases:
         self.waiting: str | None = None
         self.calls: list[tuple[str, str, bool]] = []
 
+    def _wait_in_line(self, run_id: str) -> str | None:
+        if self.waiting is None or self.waiting == run_id:
+            self.waiting = run_id
+            return None
+        return self.waiting
+
     def try_acquire(self, run_id: str, exclusive: bool) -> str | None:
         self.calls.append(("acquire", run_id, exclusive))
         if self.writer and self.writer != run_id:
+            if exclusive:
+                self._wait_in_line(run_id)
             return self.writer
         if exclusive:
+            ahead = self._wait_in_line(run_id)
+            if ahead:
+                return ahead
             if self.readers:
-                self.waiting = run_id
                 return sorted(self.readers)[0]
             self.writer = run_id
-            if self.waiting == run_id:
-                self.waiting = None
+            self.waiting = None
             return None
         if self.waiting and self.waiting != run_id and run_id not in self.readers:
             return self.waiting
@@ -1319,23 +1328,94 @@ def test_a_run_cancelled_while_it_waits_never_starts(monkeypatch):
     assert executor.started_with is None
 
 
-def test_a_broken_lease_store_never_keeps_a_run_from_running():
+def test_a_run_cancelled_just_after_it_gets_the_lease_never_starts():
+    """The lease is free, but a cancel lands before the run is marked running.
+
+    `mark_running` used to overwrite whatever state the row had, so the
+    cancelled run came back to life and its container started.
+    """
+    engine = make_engine()
+    create_pending_run(engine, "lease-cancel-race", command=["true"])
+
+    class CancelOnAcquire(MemoryLeases):
+        def try_acquire(self, run_id: str, exclusive: bool) -> str | None:
+            holder = super().try_acquire(run_id, exclusive)
+            with Session(engine) as session:
+                RunService(session).cancel_run(run_id)
+            return holder
+
+    leases = CancelOnAcquire()
+    executor = FakeExecutor(FakeHandle([], 0))
+
+    _execute_run_body("lease-cancel-race", executor, db_engine=engine, leases=leases)
+
+    assert get_run_state(engine, "lease-cancel-race")[0] == RunState.cancelled
+    assert executor.started_with is None
+    # The lease it took is given back.
+    assert leases.readers == set()
+
+
+def test_a_broken_lease_store_holds_the_run_pending(monkeypatch):
+    """No lease store, no shared tree: the run waits rather than risk the tree.
+
+    Running anyway would let an ablation rewrite the skill catalog under a model
+    comparison on the other lane, which corrupts both measurements.
+    """
+    from harness_lab_app import tasks
+
+    engine = make_engine()
+    create_pending_run(engine, "lease-broken", command=["true"])
+    monkeypatch.setattr(tasks, "SHARED_TREE_POLL_SECONDS", 0)
+    outages = iter([True, True, False])
+
+    class Flaky(MemoryLeases):
+        def try_acquire(self, run_id: str, exclusive: bool) -> str | None:
+            if next(outages):
+                raise ConnectionError("redis down")
+            return super().try_acquire(run_id, exclusive)
+
+    polls: list[RunState] = []
+    monkeypatch.setattr(
+        tasks.time,
+        "sleep",
+        lambda _s: polls.append(get_run_state(engine, "lease-broken")[0]),
+    )
+    executor = FakeExecutor(FakeHandle([], 0))
+
+    tasks._execute_run_body("lease-broken", executor, db_engine=engine, leases=Flaky())
+
+    # It waited out the outage `pending`, then ran once the store answered.
+    assert polls == [RunState.pending, RunState.pending]
+    assert executor.started_with is not None
+    with Session(engine) as session:
+        messages = [e.message for e in session.exec(select(RunEvent)).all()]
+    assert sum("lease store unavailable" in m for m in messages) == 1
+
+
+def test_a_run_cancelled_while_the_lease_store_is_down_never_starts(monkeypatch):
+    from harness_lab_app import tasks
+
+    engine = make_engine()
+    create_pending_run(engine, "lease-down-cancel", command=["true"])
+    monkeypatch.setattr(tasks, "SHARED_TREE_POLL_SECONDS", 0)
+
     class Broken(MemoryLeases):
         def try_acquire(self, run_id: str, exclusive: bool) -> str | None:
             raise ConnectionError("redis down")
 
-    engine = make_engine()
-    create_pending_run(engine, "lease-broken", command=["true"])
-    from harness_lab_app.tasks import _execute_run_body
+    def sleep(_seconds: float) -> None:
+        with Session(engine) as session:
+            RunService(session).cancel_run("lease-down-cancel")
 
-    _execute_run_body(
-        "lease-broken",
-        FakeExecutor(FakeHandle([], 0)),
-        db_engine=engine,
-        leases=Broken(),
+    monkeypatch.setattr(tasks.time, "sleep", sleep)
+    executor = FakeExecutor(FakeHandle([], 0))
+
+    tasks._execute_run_body(
+        "lease-down-cancel", executor, db_engine=engine, leases=Broken()
     )
 
-    assert get_run_state(engine, "lease-broken")[0] != RunState.pending
+    assert get_run_state(engine, "lease-down-cancel")[0] == RunState.cancelled
+    assert executor.started_with is None
 
 
 def test_the_lease_is_refreshed_while_the_run_lasts(monkeypatch):
@@ -1352,11 +1432,113 @@ def test_the_lease_is_refreshed_while_the_run_lasts(monkeypatch):
     monkeypatch.setattr(leases, "refresh", refresh)
     monkeypatch.setattr(tasks, "REFRESH_SECONDS", 0.01)
     stop = threading.Event()
+    lost = threading.Event()
     keeper = threading.Thread(
-        target=tasks._keep_lease, args=(leases, "long-run", False, stop)
+        target=tasks._keep_lease, args=(leases, "long-run", False, stop, lost)
     )
     keeper.start()
     assert refreshed.wait(2)
     stop.set()
     keeper.join(2)
     assert not keeper.is_alive()
+    assert not lost.is_set()
+
+
+@pytest.mark.parametrize(
+    "refresh_result",
+    [False, ConnectionError("redis down")],
+    ids=["lease-expired", "store-unreachable"],
+)
+def test_a_lease_that_cannot_be_refreshed_is_reported_lost(monkeypatch, refresh_result):
+    """A refresh that fails or finds no lease means the run is unprotected."""
+    from harness_lab_app import tasks
+
+    def refresh(run_id: str, exclusive: bool) -> bool:
+        if isinstance(refresh_result, Exception):
+            raise refresh_result
+        return refresh_result
+
+    leases = MemoryLeases()
+    monkeypatch.setattr(leases, "refresh", refresh)
+    monkeypatch.setattr(tasks, "REFRESH_SECONDS", 0.01)
+    # One bad refresh is not yet a lost lease: it outlives two missed ones.
+    monkeypatch.setattr(tasks, "LEASE_SECONDS", 0.05)
+    stop = threading.Event()
+    lost = threading.Event()
+    keeper = threading.Thread(
+        target=tasks._keep_lease, args=(leases, "long-run", False, stop, lost)
+    )
+    keeper.start()
+    assert lost.wait(2)
+    keeper.join(2)
+    assert not keeper.is_alive(), "a lost lease is not refreshed any further"
+
+
+def test_a_lease_unreachable_for_one_refresh_is_not_lost(monkeypatch):
+    """Redis blinking once must not kill an hour-long run."""
+    from harness_lab_app import tasks
+
+    answers = iter([ConnectionError("blip"), True, True, True, True, True])
+    calls: list[int] = []
+
+    def refresh(run_id: str, exclusive: bool) -> bool:
+        calls.append(1)
+        answer = next(answers, True)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    leases = MemoryLeases()
+    monkeypatch.setattr(leases, "refresh", refresh)
+    monkeypatch.setattr(tasks, "REFRESH_SECONDS", 0.01)
+    monkeypatch.setattr(tasks, "LEASE_SECONDS", 10)
+    stop = threading.Event()
+    lost = threading.Event()
+    keeper = threading.Thread(
+        target=tasks._keep_lease, args=(leases, "long-run", False, stop, lost)
+    )
+    keeper.start()
+    deadline = time.monotonic() + 2
+    while len(calls) < 4 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    stop.set()
+    keeper.join(2)
+    assert len(calls) >= 4
+    assert not lost.is_set()
+
+
+def test_a_run_whose_lease_is_lost_is_stopped_as_a_lab_failure(monkeypatch):
+    """Past its lease the run no longer owns the tree; it must not go on."""
+    from harness_lab_app import tasks
+
+    monkeypatch.setattr(tasks, "get_settings", lambda: RunSettings())
+    monkeypatch.setattr(tasks, "REFRESH_SECONDS", 0.01)
+    monkeypatch.setattr(tasks, "LEASE_SECONDS", 0.02)
+    engine = make_engine()
+    create_pending_run(engine, "lease-lost", command=["true"])
+
+    class Expiring(MemoryLeases):
+        def refresh(self, run_id: str, exclusive: bool) -> bool:
+            return False
+
+    class Hanging(SubprocessRunExecutor):
+        def start(self, run_id: str, command: list[str], **kwargs):
+            return super().start(
+                run_id,
+                [
+                    "python3",
+                    "-c",
+                    "import time\nwhile True:\n print('working', flush=True)\n"
+                    " time.sleep(0.05)",
+                ],
+            )
+
+    started = time.monotonic()
+    _execute_run_body("lease-lost", Hanging(), db_engine=engine, leases=Expiring())
+
+    state, _, failure = get_run_state(engine, "lease-lost")
+    assert time.monotonic() - started < 30
+    assert state == RunState.failed
+    assert failure is not None and failure.startswith("Shared-tree lease lost:")
+    # The lab lost its own lock; nothing about the model was measured.
+    assert is_unmeasured(failure)

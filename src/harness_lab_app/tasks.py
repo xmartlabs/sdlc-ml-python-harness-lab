@@ -66,6 +66,7 @@ from harness_lab_app.runner_adapter import BenchRunAdapter
 from harness_lab_app.sandbox_service import SandboxService
 from harness_lab_app.schemas import RunConfigCreate
 from harness_lab_app.shared_tree import (
+    LEASE_SECONDS,
     REFRESH_SECONDS,
     TreeLeases,
     redis_leases,
@@ -498,8 +499,8 @@ class StreamOutcome:
     """Why streaming ended, and what the run last said before it did."""
 
     # None when the process ended on its own; otherwise "cancelled", "timeout",
-    # "stalled", "model_silent" or "endpoint". At most one applies — the loop
-    # stops the handle on the first one it sees.
+    # "stalled", "model_silent", "endpoint", "slow_phase" or "lease_lost". At
+    # most one applies — the loop stops the handle on the first one it sees.
     stop_reason: str | None
     tail: deque[str]
     # Seconds of silence when the run was stopped. Only meaningful for the two
@@ -529,8 +530,12 @@ def _stream_run(
     harness: str = "",
     phase_watch: PhaseWatch | None = None,
     live_grader: LivePhaseGrader | None = None,
+    lease_lost: threading.Event | None = None,
 ) -> StreamOutcome:
     """Persist run output as RunEvents; watch for the four ways a run goes bad.
+
+    ``lease_lost`` is set by the shared-tree lease keeper (ADR-0082) when the
+    run no longer holds the tree; the run is then stopped (``lease_lost``).
 
     ``phase_watch`` adds a fifth, per phase rather than per run: a phase past
     its expected time is flagged for a person to decide on, and stopped only
@@ -591,6 +596,8 @@ def _stream_run(
                 cancelled, extra_wait = _run_controls(session, run_id)
                 if cancelled:
                     stop_reason = "cancelled"
+                elif lease_lost is not None and lease_lost.is_set():
+                    stop_reason = "lease_lost"
                 elif phase_watch is not None:
                     stop_reason = phase_watch.tick(step, step_started, extra_wait, now)
                 if live_grader is not None:
@@ -800,6 +807,14 @@ def _watchdog_failure(outcome: StreamOutcome, settings: Any, tail: str) -> str:
         )
     if outcome.stop_reason == "endpoint":
         return _endpoint_failure(outcome, tail)
+    if outcome.stop_reason == "lease_lost":
+        return _with_tail(
+            "Shared-tree lease lost: the lab could not keep its hold on the skill "
+            "catalog (ADR-0082), so another run may have rewritten it under this "
+            "one. Stopped rather than measured; retry it.",
+            tail,
+            "Last output:",
+        )
     if outcome.stop_reason == "slow_phase":
         return _with_tail(
             "Phase too slow: it ran past its expected time, nobody chose to keep "
@@ -891,15 +906,16 @@ def _execute_run_body(
         if not _wait_for_shared_tree(session, run_id, leases, exclusive):
             return
         stop = threading.Event()
+        lost = threading.Event()
         keeper = threading.Thread(
             target=_keep_lease,
-            args=(leases, run_id, exclusive, stop),
+            args=(leases, run_id, exclusive, stop, lost),
             name=f"lease-{run_id}",
             daemon=True,
         )
         keeper.start()
         try:
-            _execute_pending_run(session, run, executor, lane)
+            _execute_pending_run(session, run, executor, lane, lease_lost=lost)
         finally:
             stop.set()
             with contextlib.suppress(Exception):
@@ -907,12 +923,22 @@ def _execute_run_body(
 
 
 def _execute_pending_run(
-    session: Session, run: Run, executor: RunExecutor, lane: str
+    session: Session,
+    run: Run,
+    executor: RunExecutor,
+    lane: str,
+    lease_lost: threading.Event | None = None,
 ) -> None:
     settings = get_settings()
     run_id = run.run_id
     service = RunService(session)
-    service.mark_running(run_id, lane=lane)
+    claimed = service.claim_pending(run_id, lane=lane)
+    if claimed is None:
+        # Cancelled (or taken by another delivery) since the worker read it.
+        # Nothing has started, so there is nothing to stop or to record.
+        session.expire_all()
+        return
+    run = claimed
     try:
         # Rebuild the command at execution time; the stored Run.command is
         # only a preview and may predate config/adapter changes.
@@ -995,6 +1021,7 @@ def _execute_pending_run(
                 harness=str(config_payload.harness or ""),
                 phase_watch=phase_watch,
                 live_grader=live_grader,
+                lease_lost=lease_lost,
             )
         finally:
             if phase_watch is not None:
@@ -1732,25 +1759,33 @@ def _wait_for_shared_tree(
 
     The run stays ``pending`` while it waits, so it reads as queued and can be
     cancelled. False when it was cancelled meanwhile. A lease store that fails
-    is not a reason to never run: the run proceeds and says so.
+    is waited out the same way: running without the lease is exactly what lets
+    an ablation rewrite the catalog under a model comparison on the other lane,
+    and a measurement that may be corrupt is worse than one that starts late.
     """
     announced = False
+    store_down = False
     while True:
         try:
             holder = leases.try_acquire(run_id, exclusive)
         except Exception as exc:
-            session.add(
-                RunEvent(
-                    run_id=run_id,
-                    level="warning",
-                    message=f"Shared-tree lease unavailable, running anyway: {exc!r}",
+            if not store_down:
+                session.add(
+                    RunEvent(
+                        run_id=run_id,
+                        level="warning",
+                        message="Shared-tree lease store unavailable, so the run "
+                        f"waits until it answers: {exc!r}",
+                    )
                 )
-            )
-            session.commit()
-            return True
+                session.commit()
+                store_down = True
+            holder = ""
+        else:
+            store_down = False
         if holder is None:
             return True
-        if not announced:
+        if holder and not announced:
             what = (
                 "This run changes the skill catalog, so it waits for"
                 if exclusive
@@ -1773,12 +1808,32 @@ def _wait_for_shared_tree(
 
 
 def _keep_lease(
-    leases: TreeLeases, run_id: str, exclusive: bool, stop: threading.Event
+    leases: TreeLeases,
+    run_id: str,
+    exclusive: bool,
+    stop: threading.Event,
+    lost: threading.Event,
 ) -> None:
-    """Refresh the run's lease until it ends; a killed worker's lease lapses."""
+    """Refresh the run's lease until it ends; a killed worker's lease lapses.
+
+    Sets ``lost`` when the lease can no longer be vouched for: the store says
+    it is gone, or no refresh has succeeded for a whole lease period, after
+    which Redis has expired it and another run may hold the tree. One missed
+    refresh is not that — the lease outlives two — so a blip does not kill a
+    run. The supervision loop stops a run whose lease is lost.
+    """
+    last_ok = time.monotonic()
     while not stop.wait(REFRESH_SECONDS):
-        with contextlib.suppress(Exception):
-            leases.refresh(run_id, exclusive)
+        try:
+            held = leases.refresh(run_id, exclusive)
+        except Exception:
+            if time.monotonic() - last_ok < LEASE_SECONDS:
+                continue
+            held = False
+        if not held:
+            lost.set()
+            return
+        last_ok = time.monotonic()
 
 
 @celery_app.task(name="harness_lab_app.tasks.validate_run", acks_late=True)

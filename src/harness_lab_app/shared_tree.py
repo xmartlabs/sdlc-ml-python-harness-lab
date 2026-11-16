@@ -12,7 +12,10 @@ So the tree is a readers-writer lease, held by the worker for the whole run:
 - a run that rewrites the tree takes it **exclusively** and runs alone;
 - every other run takes it **shared**, so the two lanes still run side by side;
 - a waiting exclusive run stops new shared ones from starting, or a steady
-  stream of model runs on the second lane would hold it off forever.
+  stream of model runs on the second lane would hold it off forever. There is
+  one waiting place, first come: an exclusive run blocked by anyone — readers
+  or another writer — takes it if it is free, and a later exclusive run queues
+  behind it. It lapses unless re-claimed, so an abandoned wait frees itself.
 
 The lease lives in Redis, the broker every worker already shares, and expires
 unless it is refreshed, so a worker killed mid-run frees it on its own. Not a
@@ -38,16 +41,26 @@ WAITING_SECONDS = 60
 _ACQUIRE = """
 local now = tonumber(redis.call('TIME')[1])
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
-local writer = redis.call('GET', KEYS[1])
-if writer and writer ~= ARGV[1] then return writer end
-if ARGV[2] == '1' then
-  local readers = redis.call('ZRANGE', KEYS[2], 0, 0)
-  if #readers > 0 then
+local function wait_in_line()
+  local waiting = redis.call('GET', KEYS[3])
+  if not waiting or waiting == ARGV[1] then
     redis.call('SET', KEYS[3], ARGV[1], 'EX', tonumber(ARGV[4]))
-    return readers[1]
+    return nil
   end
+  return waiting
+end
+local writer = redis.call('GET', KEYS[1])
+if writer and writer ~= ARGV[1] then
+  if ARGV[2] == '1' then wait_in_line() end
+  return writer
+end
+if ARGV[2] == '1' then
+  local ahead = wait_in_line()
+  if ahead then return ahead end
+  local readers = redis.call('ZRANGE', KEYS[2], 0, 0)
+  if #readers > 0 then return readers[1] end
   redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[3]))
-  if redis.call('GET', KEYS[3]) == ARGV[1] then redis.call('DEL', KEYS[3]) end
+  redis.call('DEL', KEYS[3])
   return false
 end
 local waiting = redis.call('GET', KEYS[3])

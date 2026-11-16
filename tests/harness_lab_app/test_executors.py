@@ -528,6 +528,34 @@ def test_a_masked_bench_context_stays_masked(
     assert len(context) == 1 and context[0]["ReadOnly"] is True
 
 
+def test_a_masked_run_on_a_clean_checkout_still_gets_its_own_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mask lists `BENCH_CONTEXT.md`, but a fresh clone has no such file.
+
+    `_mask_mounts` drops a bind whose target is absent, so the mask never
+    materialised, and the private bind was skipped because the mask *listed*
+    the file. The run then had neither, and `bench_run.py` wrote the shared file
+    through the `/app` bind. What counts is the mounts actually made.
+    """
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+    client = FakeDockerClient(FakeContainer([]))
+    DockerRunExecutor(client_factory=lambda: client).start(
+        "tetris-v1-K-103",
+        ["python", "scripts/bench_run.py"],
+        governance_mask=GOVERNANCE_MASK_ALL,
+        hidden=[],
+    )
+    mounts = client.containers.run_kwargs["mounts"]
+    context = [m for m in mounts if m["Target"] == "/app/BENCH_CONTEXT.md"]
+    assert len(context) == 1
+    own = tmp_path / "data" / "runs" / "tetris-v1-K-103" / "bench_context.md"
+    assert (
+        context[0]["Source"] == "/host/repo/data/runs/tetris-v1-K-103/bench_context.md"
+    )
+    assert own.is_file()
+
+
 def test_a_container_that_is_not_the_agents_gets_no_private_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
-from sqlalchemy import desc
-from sqlmodel import Session, select
+from sqlalchemy import (
+    desc,
+    update as sa_update,
+)
+from sqlmodel import Session, col, select
 
 from harness_lab_app.config import get_settings, read_env_file_value
 from harness_lab_app.constants import EXAMPLE_LMSTUDIO_URL, EXAMPLE_OLLAMA_URL
@@ -41,6 +44,8 @@ from harness_lab_app.target_service import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
+
+    from sqlalchemy import CursorResult
 
 
 # Tokens that mean "no real gateway credential configured yet".
@@ -1252,6 +1257,30 @@ class RunService:
         self.session.add(run)
         self.session.add(RunEvent(run_id=run_id, message="Run started"))
         self.session.commit()
+        self.session.refresh(run)
+        return run
+
+    def claim_pending(self, run_id: str, lane: str | None = None) -> Run | None:
+        """``mark_running``, but only for a run that is still ``pending``.
+
+        One conditional UPDATE, so a cancellation committed after the worker
+        last read the row cannot be overwritten: the worker learns it lost the
+        race (``None``) instead of resurrecting a cancelled run.
+        """
+        claimed = cast(
+            "CursorResult[Any]",
+            self.session.execute(
+                sa_update(Run)
+                .where(col(Run.run_id) == run_id, col(Run.state) == RunState.pending)
+                .values(state=RunState.running, started_at=utc_now(), lane=lane)
+            ),
+        )
+        if claimed.rowcount != 1:
+            self.session.rollback()
+            return None
+        self.session.add(RunEvent(run_id=run_id, message="Run started"))
+        self.session.commit()
+        run = self.get_run(run_id)
         self.session.refresh(run)
         return run
 

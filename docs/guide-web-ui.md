@@ -794,6 +794,7 @@ A failed run also says *why*, in one word, with the full reason on hover:
 |---|---|---|
 | **lab error** | Never started — runner image missing, Docker unreachable, bad config | No |
 | **worker restarted** | Killed mid-flight by a restart; retry resumes it | No |
+| **lease lost** | The lab lost its hold on the shared skill catalog mid-run (no refresh for a whole lease period), so another run may have rewritten it; stopped rather than measured | No |
 | **endpoint down** | `run_max_stream_errors` provider requests failed back-to-back — or the run ended, however cleanly, with every model request it ever made having failed | No |
 | **no response** | The provider accepted the request and answered nothing for `run_model_wait_seconds` | No |
 | **stalled** | Ran, then went quiet for `run_stall_seconds` with no model request in flight | Yes |

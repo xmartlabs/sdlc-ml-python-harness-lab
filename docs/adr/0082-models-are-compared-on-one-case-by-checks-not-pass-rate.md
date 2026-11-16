@@ -84,9 +84,15 @@ gateway models run under `opencode`.
      takes it shared, so the two lanes still run side by side. An ablation launched
      on `runs` while a model comparison is on `runs-parallel` waits, `pending` and
      cancellable, until the tree is free. A waiting ablation keeps new shared runs
-     from starting, so it is never starved. The lease expires two minutes after
-     its last refresh, so a killed worker frees it. If Redis cannot be reached,
-     the run proceeds and logs a warning.
+     from starting, so it is never starved. It takes the one waiting place
+     whether readers or another ablation block it, and a later ablation queues
+     behind it. The lease expires two minutes after its last refresh, so a
+     killed worker frees it. The lab fails closed. If Redis cannot be reached
+     before the run starts, the run stays `pending` and cancellable until Redis
+     answers. If a refresh finds the lease gone, or none succeeds for a whole
+     lease period, the run is stopped as a lab failure (`lease lost`), not
+     measured. A run cancelled after it gets the lease never starts: it is
+     marked running only by a conditional update from `pending`.
 
    Two at a time is accepted only for a model comparison, checked on the design and
    not on its name. The family `models-` is a name anyone can type. The design must

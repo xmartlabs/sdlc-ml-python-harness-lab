@@ -653,9 +653,11 @@ class DockerRunExecutor:
             mounts.extend(self._mask_mounts(run_id, host_repo_root, mask_files))
         # The agent's container (`hidden` is passed for it alone) gets its own
         # BENCH_CONTEXT.md unless a mask already covers it: two runs at once
-        # would otherwise share the file that names the active run.
+        # would otherwise share the file that names the active run. Decided on
+        # the mounts actually made, not on the mask list: `_mask_mounts` drops a
+        # target that does not exist, which on a clean checkout is this file.
         if hidden is not None and not any(
-            target == f"/app/{BENCH_CONTEXT_FILE}" for target, _kind in mask_files
+            mount["Target"] == f"/app/{BENCH_CONTEXT_FILE}" for mount in mounts
         ):
             mounts.append(self._private_context_mount(run_id, host_repo_root))
         if mounts:

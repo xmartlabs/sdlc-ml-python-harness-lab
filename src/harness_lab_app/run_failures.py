@@ -28,6 +28,9 @@ _KINDS: tuple[tuple[str, str, str], ...] = (
     ("lab", "Executor error:", "lab error"),
     # Killed by a restart while in flight; the run itself said nothing about it.
     ("lab", "Worker restarted", "worker restarted"),
+    # The lab lost its own lock on the skill catalog mid-run (ADR-0082) and
+    # stopped the run — see `tasks._keep_lease`.
+    ("lab", "Shared-tree lease lost:", "lease lost"),
     # The provider kept refusing the request — see `tasks._endpoint_failure`.
     ("lab", "Model endpoint failing:", "endpoint down"),
     # The provider accepted the request and never answered — see

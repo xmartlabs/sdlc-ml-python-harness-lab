@@ -155,6 +155,20 @@ def test_delete_run_endpoint_404_when_missing():
         assert exc.value.status_code == 404
 
 
+def test_retry_endpoints_404_when_the_run_is_missing():
+    """A stale run page asks about a run that is gone: not found, never a 500."""
+    app = create_app()
+    options = _route_endpoint(app, "/api/runs/{run_id}/retry-options")
+    retry = _route_endpoint(app, "/api/runs/{run_id}/retry", method="POST")
+    with _session() as session:
+        with pytest.raises(HTTPException) as exc:
+            options("ghost", session)
+        assert exc.value.status_code == 404
+        with pytest.raises(HTTPException) as exc:
+            retry("ghost", "resume", session)
+        assert exc.value.status_code == 404
+
+
 def test_delete_run_endpoint_409_when_running():
     app = create_app()
     delete = _route_endpoint(app, "/api/runs/{run_id}", method="DELETE")
