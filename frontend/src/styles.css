@@ -4580,3 +4580,37 @@ button.danger:hover {
   padding: 0 6px;
   font-weight: 600;
 }
+
+/* Why a run failed: its evidence table and the model's reading. */
+.failure-diagnosis h4 {
+  margin: 12px 0 6px;
+}
+
+.failure-command {
+  display: block;
+  margin-top: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.failure-commands td code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85em;
+}
+
+.failure-commands td:nth-child(2) {
+  white-space: nowrap;
+}
+
+.failure-log-tail {
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85em;
+}
+
+.failure-reading {
+  margin-top: 12px;
+}

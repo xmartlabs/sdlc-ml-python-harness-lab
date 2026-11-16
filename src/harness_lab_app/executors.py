@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from harness_lab_app import governance_paths
 from harness_lab_app.config import get_settings
+from harness_lab_app.run_failures import CLAUDE_BASH_MAX_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -355,6 +356,10 @@ def build_run_environment() -> dict[str, str]:
         "IS_SANDBOX": "1",
         "SDL_VIDEODRIVER": "dummy",
         "SDL_AUDIODRIVER": "dummy",
+        # Claude Code's cap on one Bash call, pinned rather than left to the
+        # CLI's default: the run watchdog's stall clock is set to outlast it
+        # (`run_failures.stall_budget`), and the two must not drift apart.
+        "BASH_MAX_TIMEOUT_MS": str(CLAUDE_BASH_MAX_TIMEOUT_SECONDS * 1000),
     }
     env_file = settings.repo_root / ".env"
     if env_file.exists():

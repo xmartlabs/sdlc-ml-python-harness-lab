@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { ArtifactsPanel } from "../components/ArtifactsPanel";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { FailureDiagnosisPanel } from "../components/FailureDiagnosisPanel";
 import { HarnessCatalog } from "../components/HarnessCatalog";
 import { ScoresPanel } from "../components/ScoresPanel";
 import { StepRewardPanel } from "../components/StepRewardPanel";
@@ -1437,6 +1438,9 @@ export function RunDetail({
           <strong>{run.failure_reason ?? m.summary.none}</strong>
         </div>
       </div>
+      {RETRYABLE_STATES.includes(run.state) ? (
+        <FailureDiagnosisPanel failureKey={`${run.state}:${run.ended_at ?? ""}`} runId={run.run_id} />
+      ) : null}
       {run.state === "awaiting_manual_score" || run.state === "completed" ? (
         <div className="panel subtle">
           <div className="panel-head">

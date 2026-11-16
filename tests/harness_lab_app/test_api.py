@@ -321,3 +321,91 @@ def test_continue_request_rejects_an_empty_prompt():
     with pytest.raises(ValidationError):
         RunContinueRequest(prompt="   ")
     assert RunContinueRequest(prompt="  do X  ").prompt == "do X"
+
+
+# --- failure diagnosis -------------------------------------------------------
+
+
+def _fail_run(session, run_id: str, reason: str) -> RunService:
+    from datetime import datetime
+
+    from harness_lab_app.models import RunState
+
+    service = _seed_run(session, run_id)
+    run = service.get_run(run_id)
+    run.state = RunState.failed
+    run.failure_reason = reason
+    run.started_at = datetime(2026, 11, 16, 14, 46)
+    run.ended_at = datetime(2026, 11, 16, 15, 41)
+    session.add(run)
+    session.commit()
+    return service
+
+
+def test_failure_evidence_endpoint_returns_the_condensed_facts(tmp_path, monkeypatch):
+    from harness_lab_app import config
+
+    monkeypatch.setattr(config.get_settings(), "repo_root", tmp_path)
+    app = create_app()
+    evidence = _route_endpoint(app, "/api/runs/{run_id}/failure-evidence")
+    with _session() as session:
+        _fail_run(session, "api-diag-1", "Run stalled: no output for 10 minutes")
+        body = evidence("api-diag-1", session)
+    assert body["run"]["failure_kind"] == "stalled"
+    assert body["run"]["executor_model"] == "stub-executor"
+    assert body["run"]["limits"]["stall_seconds"] >= 0
+    assert body["steps"] == []
+
+
+def test_failure_evidence_is_only_for_a_failed_run():
+    app = create_app()
+    evidence = _route_endpoint(app, "/api/runs/{run_id}/failure-evidence")
+    with _session() as session:
+        _seed_run(session, "api-diag-pending")
+        with pytest.raises(HTTPException) as exc:
+            evidence("api-diag-pending", session)
+        assert exc.value.status_code == 409
+        with pytest.raises(HTTPException) as exc:
+            evidence("ghost", session)
+        assert exc.value.status_code == 404
+
+
+def test_diagnose_endpoint_reports_a_missing_model_as_503(tmp_path, monkeypatch):
+    from harness_lab_app import config, llm_transport
+
+    def unavailable(*args, **kwargs):
+        raise llm_transport.TransportNotConfigured("no transport configured")
+
+    monkeypatch.setattr(config.get_settings(), "repo_root", tmp_path)
+    monkeypatch.setattr(llm_transport, "chat_reply", unavailable)
+    app = create_app()
+    diagnose = _route_endpoint(app, "/api/runs/{run_id}/diagnose", method="POST")
+    with _session() as session:
+        _fail_run(session, "api-diag-2", "Run timed out")
+        with pytest.raises(HTTPException) as exc:
+            diagnose("api-diag-2", "en", False, session)
+        assert exc.value.status_code == 503
+        assert "no transport" in exc.value.detail
+
+
+def test_diagnose_endpoint_returns_the_reading_and_a_get_reads_it_back(
+    tmp_path, monkeypatch
+):
+    from harness_lab_app import config, llm_transport
+
+    def answer(model, system, user, **kwargs):
+        return llm_transport.ChatReply(
+            "## Cause\nslow", "gateway", model, model, 0.2, 0.2
+        )
+
+    monkeypatch.setattr(config.get_settings(), "repo_root", tmp_path)
+    monkeypatch.setattr(llm_transport, "chat_reply", answer)
+    app = create_app()
+    diagnose = _route_endpoint(app, "/api/runs/{run_id}/diagnose", method="POST")
+    stored = _route_endpoint(app, "/api/runs/{run_id}/diagnosis")
+    with _session() as session:
+        _fail_run(session, "api-diag-3", "Run timed out")
+        assert stored("api-diag-3", "es", session) is None
+        reading = diagnose("api-diag-3", "es", False, session)
+        assert reading["text"].startswith("## Cause")
+        assert stored("api-diag-3", "es", session) == reading

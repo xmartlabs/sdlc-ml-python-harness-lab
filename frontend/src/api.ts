@@ -79,6 +79,8 @@ import type {
   RunEventRecord,
   RetryMode,
   RetryOptions,
+  FailureDiagnosis,
+  FailureEvidence,
   RunProgress,
   RunRecord,
   SandboxRecord,
@@ -689,6 +691,17 @@ export const api = {
     ),
   retryOptions: (runId: string) =>
     request<RetryOptions>(`/api/runs/${runId}/retry-options`),
+  // The facts a failure turns on (no LLM), and an on-demand model reading of
+  // them, cached per failure.
+  failureEvidence: (runId: string) =>
+    request<FailureEvidence>(`/api/runs/${runId}/failure-evidence`),
+  failureDiagnosis: (runId: string, lang: string) =>
+    request<FailureDiagnosis | null>(`/api/runs/${runId}/diagnosis?lang=${lang}`),
+  diagnoseFailure: (runId: string, lang: string, refresh = false) =>
+    request<FailureDiagnosis>(
+      `/api/runs/${runId}/diagnose?lang=${lang}${refresh ? "&refresh=true" : ""}`,
+      { method: "POST" }
+    ),
   cloneRun: (runId: string) =>
     request<RunRecord>(`/api/runs/${runId}/clone`, { method: "POST" }),
   // Queues a child run seeded from this run's workspace (ADR-0026).

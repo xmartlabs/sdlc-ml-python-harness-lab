@@ -1404,6 +1404,48 @@ class RunService:
         self.session.refresh(run)
         return run
 
+    def failure_facts(self, run_id: str) -> dict[str, Any]:
+        """What the database knows about a failed run, for its diagnosis.
+
+        Raises ``ValueError`` for an unknown run and :class:`RunRetryError` for
+        a run that has not failed or been cancelled: there is nothing to
+        diagnose in a run that is still going, or one that finished.
+        """
+        from harness_lab_app import run_failures
+
+        run = self.get_run(run_id)
+        if run.state not in RETRYABLE_STATES:
+            raise RunRetryError(
+                f"Run '{run_id}' is {run.state.value}; only a failed or cancelled "
+                "run has a failure to diagnose."
+            )
+        config = self.get_run_config(run.run_config_id)
+        settings = get_settings()
+        return {
+            "run_id": run.run_id,
+            "state": run.state.value,
+            "failure_reason": run.failure_reason,
+            "exit_code": run.exit_code,
+            "started_at": run.started_at,
+            "ended_at": run.ended_at,
+            "parent_run_id": run.parent_run_id,
+            "case_id": config.case_id,
+            "harness": config.harness,
+            "executor_model": config.executor_model,
+            "executor_effort": config.executor_effort,
+            "prompt_variant": config.prompt_variant,
+            "max_steps": config.max_steps,
+            "limits": {
+                "run_timeout_seconds": settings.run_timeout_seconds,
+                # The budget the watchdog actually applied to this harness.
+                "stall_seconds": run_failures.stall_budget(
+                    settings.run_stall_seconds, config.harness
+                ),
+                "model_wait_seconds": settings.run_model_wait_seconds,
+            },
+            "retry": self.retry_options(run_id),
+        }
+
     def retry_options(self, run_id: str) -> dict[str, Any]:
         """Which retries a run offers, and from which step it would continue."""
         from harness_lab_app.run_resume import resume_point

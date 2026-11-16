@@ -154,6 +154,8 @@ class HarnessSignals:
         stream_error: tuple[str, ...] = (),
         retry_noise: tuple[str, ...] = (),
         silence_awaits_model: bool = False,
+        command_timeout_seconds: int = 0,
+        background: tuple[str, ...] = (),
     ) -> None:
         self.request = request
         self.wait = wait
@@ -164,6 +166,14 @@ class HarnessSignals:
         #: waiting one. The watchdog then treats silence as waiting on the
         #: model — a lab failure — rather than inventing an agent stall.
         self.silence_awaits_model = silence_awaits_model
+        #: The longest this harness lets one shell command run before it
+        #: answers on its own (0 = unknown). A run inside such a command is
+        #: quiet for that long by design, so the stall clock must outlast it.
+        self.command_timeout_seconds = command_timeout_seconds
+        #: Lines the harness prints on its own timers, whatever the session is
+        #: doing. They prove the process is alive but say nothing about whether
+        #: a request is in flight, so they must not change that state.
+        self.background = background
 
 
 # Emitted once per request opencode hands to the provider, retries included.
@@ -173,11 +183,25 @@ class HarnessSignals:
 # measured nothing, whatever its exit code says.
 _MODEL_REQUEST_MARKER = "message=stream "
 
+# opencode's housekeeping timer, about a minute into every session. In
+# chess3d-v1-K-013 it landed while qwen3.8-27b was still prefilling, and
+# reading it as "the request is over" moved the run onto the 10-minute tool
+# budget, which then filed a slow model as an agent hung in a tool call.
+_OPENCODE_CLEANUP_MARKER = "message=cleanup "
+
 #: What `scripts/bench_run.py::render_claude_event` prints the moment a tool
 #: result goes back to the model, i.e. the moment a request is in flight. It
 #: exists so the claude lane can answer the same question opencode's log
 #: already answered; the two must move together.
 CLAUDE_AWAITING_MARKER = "# awaiting model"
+
+#: The most Claude Code lets one Bash call run before it backgrounds it.
+CLAUDE_BASH_MAX_TIMEOUT_SECONDS = 600
+
+#: How much longer than a harness's own command timeout the stall clock waits,
+#: so the harness's answer (a result, or "moved to the background") lands
+#: before the lab gives up on the run.
+STALL_MARGIN_SECONDS = 300
 
 _HARNESS_SIGNALS: dict[str, HarnessSignals] = {
     "opencode": HarnessSignals(
@@ -199,13 +223,19 @@ _HARNESS_SIGNALS: dict[str, HarnessSignals] = {
             "llm runtime selected",
             "message=process ",
             "message=loop ",
+            _OPENCODE_CLEANUP_MARKER,
         ),
+        background=(_OPENCODE_CLEANUP_MARKER,),
     ),
     "claude": HarnessSignals(
         request=(CLAUDE_AWAITING_MARKER,),
         wait=(CLAUDE_AWAITING_MARKER, "# claude session init"),
         stream_error=("# stream error",),
         retry_noise=(CLAUDE_AWAITING_MARKER, "# claude session init"),
+        # Claude Code's Bash tool caps a call at ten minutes, then moves it to
+        # the background and returns. The cap is pinned in the run env
+        # (`executors.CLAUDE_BASH_MAX_TIMEOUT_MS`) so this stays true.
+        command_timeout_seconds=CLAUDE_BASH_MAX_TIMEOUT_SECONDS,
     ),
 }
 
@@ -225,6 +255,23 @@ def known_harnesses() -> tuple[str, ...]:
     return tuple(sorted(_HARNESS_SIGNALS))
 
 
+def stall_budget(configured: int, harness: str | None = None) -> int:
+    """The tool-call silence the watchdog allows, for this harness.
+
+    ``run_stall_seconds`` applies as configured, except that it never drops
+    below the harness's own command timeout plus a margin. Equal clocks fired
+    together in racing3d-v1-K-004-C-001: the lab stopped a run at the very
+    second Claude Code was about to background its long playtest and carry on.
+    Zero still disables the clock.
+    """
+    if configured <= 0:
+        return configured
+    floor = signals_for(harness).command_timeout_seconds
+    if floor <= 0:
+        return configured
+    return max(configured, floor + STALL_MARGIN_SECONDS)
+
+
 def awaits_model_response(line: str, harness: str | None = None) -> bool:
     """True when this line leaves a model request in flight."""
     marks = signals_for(harness)
@@ -234,6 +281,15 @@ def awaits_model_response(line: str, harness: str | None = None) -> bool:
     # and cannot be shown not to be. `silence_awaits_model` is which way that
     # ignorance is resolved.
     return marks.silence_awaits_model and not marks.wait
+
+
+def is_background_noise(line: str, harness: str | None = None) -> bool:
+    """True when this line comes from a harness timer, not from the session.
+
+    The watchdog keeps whatever it believed about a request in flight across
+    such a line: it is neither the model answering nor a tool starting.
+    """
+    return any(marker in line for marker in signals_for(harness).background)
 
 
 def is_model_request(line: str, harness: str | None = None) -> bool:

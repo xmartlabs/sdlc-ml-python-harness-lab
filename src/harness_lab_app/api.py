@@ -2721,6 +2721,52 @@ def create_app() -> FastAPI:
         except RunRetryError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    def _failure_facts(service: RunService, run_id: str) -> dict[str, Any]:
+        try:
+            service.get_run(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            return service.failure_facts(run_id)
+        except RunRetryError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/runs/{run_id}/failure-evidence")
+    def run_failure_evidence(run_id: str, session: Session = Depends(get_session)):
+        """The facts a failure turns on, condensed from the run's files. No LLM."""
+        from harness_lab_app.run_diagnosis import failure_evidence
+
+        facts = _failure_facts(RunService(session), run_id)
+        return failure_evidence(get_settings().data_runs_dir / run_id, facts)
+
+    @app.get("/api/runs/{run_id}/diagnosis")
+    def run_diagnosis_cached(
+        run_id: str, lang: str = "en", session: Session = Depends(get_session)
+    ):
+        """The stored LLM reading of this failure, or null when none was asked."""
+        from harness_lab_app.run_diagnosis import cached_diagnosis
+
+        facts = _failure_facts(RunService(session), run_id)
+        return cached_diagnosis(get_settings().data_runs_dir / run_id, facts, lang)
+
+    @app.post("/api/runs/{run_id}/diagnose")
+    def run_diagnose(
+        run_id: str,
+        lang: str = "en",
+        refresh: bool = False,
+        session: Session = Depends(get_session),
+    ):
+        """Ask a model why the run failed; cached per failure. Advice only."""
+        from harness_lab_app.run_diagnosis import DiagnosisUnavailable, diagnose
+
+        facts = _failure_facts(RunService(session), run_id)
+        try:
+            return diagnose(
+                get_settings().data_runs_dir / run_id, facts, lang=lang, refresh=refresh
+            )
+        except DiagnosisUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @app.post("/api/runs/{run_id}/continue")
     def continue_run(
         run_id: str,

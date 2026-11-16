@@ -585,6 +585,7 @@ def _stream_run(
     # that spanned three hours of a laptop's sleep was measured at 28% of its
     # real length and outlived its two-hour budget by three hours
     # (racing3d-v1-K-001). Sleeping time is time the operator waited too.
+    tool_budget = run_failures.stall_budget(stall_seconds, harness)
     started = _wall_clock()
     last_output = started
     last_cancel_check = 0.0
@@ -611,7 +612,7 @@ def _stream_run(
                 # for 24k tokens on the box that runs qwen3.6-35b — so the two
                 # budgets are orders of magnitude apart, and charging a run the
                 # wrong one is how a healthy model gets recorded as stuck.
-                budget = model_wait_seconds if awaiting_model else stall_seconds
+                budget = model_wait_seconds if awaiting_model else tool_budget
                 quiet = now - last_output
                 if budget > 0 and quiet >= budget:
                     stop_reason = "model_silent" if awaiting_model else "stalled"
@@ -640,7 +641,8 @@ def _stream_run(
         marker = _STEP_MARKER_RE.search(message)
         if marker is not None:
             step, step_started = int(marker.group(1)), last_output
-        awaiting_model = run_failures.awaits_model_response(message, harness)
+        if not run_failures.is_background_noise(message, harness):
+            awaiting_model = run_failures.awaits_model_response(message, harness)
         if run_failures.is_model_request(message, harness):
             model_requests += 1
         if run_failures.is_stream_error(message, harness):
@@ -671,17 +673,21 @@ def _with_tail(message: str, tail: str, heading: str) -> str:
 def _stall_failure(outcome: StreamOutcome, tail: str) -> str:
     """The verdict for a run that went quiet with no model request in flight.
 
-    Which means the agent's own last act is what it is stuck inside, and the
+    Which means the agent's own last act is what it is waiting inside, and the
     tail is that act — the single most useful thing to read next, so it ships
-    with the verdict.
+    with the verdict. The silence alone cannot tell a wedged command from a
+    long one (racing3d-v1-K-004-C-001 was a healthy eight-minute playtest), so
+    the message states what is known and names the setting, not a diagnosis.
     """
     minutes = round(outcome.silent_seconds / 60)
     message = (
         f"Run stalled: no output for {minutes} minutes and no model request was "
         "in flight, so the run was stopped rather than left to burn its "
-        "remaining time budget. The agent is blocked in a tool call that will "
-        "never return (a shell command holding its stdout pipe open, a process "
-        "that ignores SIGTERM). Retry, or run it again with a narrower step."
+        "remaining time budget. The agent was inside the tool call shown below: "
+        "either it hung (a process holding its stdout pipe open, one that "
+        "ignores SIGTERM) or it is a long command, such as a full playtest. If "
+        "it is a long command, raise run_stall_seconds; otherwise retry, or run "
+        "it again with a narrower step."
     )
     return _with_tail(message, tail, "Last output before the stall:")
 

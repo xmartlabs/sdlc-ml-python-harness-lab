@@ -1295,6 +1295,21 @@ re-judges any run the judge scored before; a human score is never overwritten.
 The continuation loop (generic step-N prompts) still drives scope creep and cost —
 native spent a third step editing hooks the task said not to touch. Not fixed.
 
+## 2026-11-16 — A watchdog clock must outlast the harness's own, and an LLM believes the verdict
+
+racing3d-v1-K-004-C-001 was "stalled" after 55 min of healthy work. Claude Code backgrounds a
+Bash call at 600 s (`BASH_MAX_TIMEOUT_MS`), and `run_stall_seconds` was also 600: both fired in the
+same second. Now the claude stall budget is `max(setting, 600 + 300)` (ADR-0084). When the lab's
+clock and the harness's clock measure the same silence, the lab's must be strictly longer.
+
+Building "Analyze with AI" showed two traps when asking a model to diagnose a failure:
+- It repeats the stored verdict as fact. The old stall message said "will never return", and
+  gpt-5.4-mini blamed a hung command. Tell the model the verdict is a claim to check.
+- "The command open at the end" is not "the command it was stuck in". Stopping a container
+  takes ~12 s, and the agent opened a new 4 s command in between. Give it the *longest wait*
+  (what the clock measured), not just the last open call.
+Test a diagnosis prompt against a real failed run before trusting it.
+
 <!-- Add new learnings above this line -->
 
 ## "Audit a third-party repo" fails at provisioning when setup_commands mismatch the language — 2026-08-31
@@ -3459,3 +3474,16 @@ When a fix works in isolation but not in the scene, compare the call graphs (ext
 other actors) before tuning constants.
 
 <!-- Add new learnings above this line -->
+
+## 2026-11-16 — A harness's timer lines are not session state
+
+opencode prints `message=cleanup prune=7.days` on its own housekeeping timer,
+about a minute into every session, whatever the session is doing. The watchdog
+recomputed "is a model request in flight?" from every line, so in
+chess3d-v1-K-013 that one line, landing while qwen3.8-27b was still prefilling
+its first prompt, flipped the run from the 40-minute model budget to the
+10-minute tool budget, and a slow model was filed as an agent hung in a tool
+call. Lines like that now go in `HarnessSignals.background`: they reset the
+silence clock (the process is alive) but leave the in-flight state alone. When
+a stall verdict names no tool call at all, suspect a line like this before
+suspecting the agent.

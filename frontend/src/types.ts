@@ -2348,3 +2348,60 @@ export type RetryOptions = {
   last_completed_step: number | null;
   continue_reason: string;
 };
+
+/** One tool call the agent made, and how long it ran (null = never answered). */
+export type FailureCommand = {
+  step: number;
+  tool: string;
+  command: string;
+  seconds: number | null;
+  result: string | null;
+};
+
+/** The facts a failed run's diagnosis turns on, condensed from its files. */
+export type FailureEvidence = {
+  run: {
+    failure_reason: string;
+    failure_kind: string | null;
+    duration_minutes: number | null;
+    harness: string;
+    executor_model: string | null;
+    max_steps: number;
+    limits: {
+      run_timeout_seconds: number;
+      stall_seconds: number;
+      model_wait_seconds: number;
+    };
+  };
+  steps: {
+    step: number;
+    finished: boolean;
+    seconds: number | null;
+    turns: number | null;
+    output_tokens: number | null;
+    cost_usd: number | null;
+  }[];
+  recent_commands: FailureCommand[];
+  /** The call the run waited on longest: the silence a stall measures. */
+  longest_wait: {
+    step: number;
+    tool: string;
+    command: string;
+    seconds: number;
+    answered: boolean;
+    backgrounded: boolean;
+  } | null;
+  open_command: Omit<FailureCommand, "result"> | null;
+  usage_limit: { status: string; overage: boolean } | null;
+  api_errors: { step: number; status: string | null; message: string }[];
+  log_tail: string;
+};
+
+/** A model's reading of why a run failed. Advice only; never a score. */
+export type FailureDiagnosis = {
+  text: string;
+  model: string;
+  transport: string;
+  lang: string;
+  created_at: string;
+};

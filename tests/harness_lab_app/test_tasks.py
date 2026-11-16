@@ -419,6 +419,43 @@ def test_a_model_still_processing_the_prompt_is_not_a_stall(
     assert failure in (None, "")
 
 
+def test_housekeeping_output_does_not_end_a_model_wait(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Run chess3d-v1-K-013: qwen3.8-27b filed as stalled while still prefilling.
+
+    opencode printed its cleanup line 57 s into the first request. That line
+    flipped the watchdog onto the tool budget, which ran out first.
+    """
+    engine = make_engine()
+    create_pending_run(engine, "task-prefill-3")
+
+    class FakeSettings(RunSettings):
+        run_timeout_seconds = 3600
+        run_stall_seconds = 1
+        run_model_wait_seconds = 3600
+        run_max_stream_errors = 0
+
+    monkeypatch.setattr(tasks, "get_settings", lambda: FakeSettings())
+
+    cleanup = (
+        "timestamp=2026-11-16T22:17:25.391Z level=INFO run=e1e2412e "
+        "message=cleanup prune=7.days"
+    )
+    program = (
+        f"import time\nprint({STREAM_START_LINE!r}, flush=True)\n"
+        f"time.sleep(0.5)\nprint({cleanup!r}, flush=True)\n"
+        "time.sleep(3)\nprint('first token at last', flush=True)\n"
+    )
+
+    _execute_run_body("task-prefill-3", _script_executor(program), db_engine=engine)
+
+    state, exit_code, failure = get_run_state(engine, "task-prefill-3")
+    assert state == RunState.awaiting_manual_score
+    assert exit_code == 0
+    assert failure in (None, "")
+
+
 def test_a_model_that_never_answers_is_stopped_without_blaming_it(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -1132,6 +1169,24 @@ def test_a_quiet_gateway_in_a_claude_run_is_not_the_agent_stalling(
     assert failure is not None
     assert failure.startswith("No model response:"), failure
     assert is_unmeasured(failure) is True
+
+
+def test_a_stall_verdict_names_the_running_command_and_the_knob():
+    """The old verdict claimed the call "will never return" with no evidence.
+
+    In racing3d-v1-K-004-C-001 the command was a playtest at minute ten of a
+    legitimate wait. The verdict now says what is known (how long the run was
+    quiet, the command it was in) and names the setting to raise, instead of
+    asserting a hang.
+    """
+    outcome = tasks.StreamOutcome("stalled", [], 900.0)
+    message = tasks._stall_failure(outcome, "→ Bash(godot --script playtest.gd)")
+
+    assert message.startswith("Run stalled:")
+    assert "15 minutes" in message
+    assert "will never return" not in message
+    assert "run_stall_seconds" in message
+    assert "godot --script playtest.gd" in message
 
 
 def test_a_harness_the_lab_has_never_seen_does_not_get_its_silence_blamed(

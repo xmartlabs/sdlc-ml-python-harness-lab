@@ -15,10 +15,12 @@ from harness_lab_app.run_failures import (
     awaits_model_response,
     classify_failure,
     failure_label,
+    is_background_noise,
     is_model_request,
     is_retry_noise,
     is_stream_error,
     is_unmeasured,
+    stall_budget,
 )
 
 # Verbatim from the runs named in the tests below, because the whole mechanism
@@ -39,6 +41,13 @@ STREAM_ERROR_LINE = (
     'error.error="AI_APICallError: Cannot connect to API: Unable to connect."'
 )
 TOOL_CALL_LINE = "$ ls /app/workspace/tetris-v1-K-050/ 2>/dev/null"
+# opencode's housekeeping timer. It fires about a minute into a session,
+# whatever the session is doing (chess3d-v1-K-013 printed it 57 s into a
+# request a local model was still prefilling).
+CLEANUP_LINE = (
+    "timestamp=2026-11-16T22:17:25.391Z level=INFO run=e1e2412e "
+    "message=cleanup prune=7.days"
+)
 
 
 @pytest.mark.parametrize(
@@ -120,6 +129,21 @@ def test_failed_requests_are_recognized_and_retry_noise_is_not_progress():
     assert is_retry_noise(STREAM_START_LINE, "opencode") is True
     assert is_retry_noise(RUNTIME_SELECTED_LINE, "opencode") is True
     assert is_retry_noise(TOOL_CALL_LINE, "opencode") is False
+
+
+def test_housekeeping_says_nothing_about_whether_a_request_is_in_flight():
+    """Run chess3d-v1-K-013: a cleanup line turned a model wait into a stall.
+
+    qwen3.8-27b was prefilling its first prompt when opencode's housekeeping
+    timer printed one line. The watchdog read it as the request being over,
+    switched from the 40-minute model budget to the 10-minute tool budget, and
+    ten minutes later filed a slow model as the agent hanging in a tool call.
+    """
+    assert is_background_noise(CLEANUP_LINE, "opencode") is True
+    assert is_background_noise(STREAM_START_LINE, "opencode") is False
+    assert is_background_noise(TOOL_CALL_LINE, "opencode") is False
+    # Nor is it progress that would reset a run of failed requests.
+    assert is_retry_noise(CLEANUP_LINE, "opencode") is True
 
 
 # --- Per-harness vocabulary --------------------------------------------------
@@ -229,3 +253,31 @@ def test_server_side_api_errors_are_the_endpoint(status):
 
 def test_a_client_error_is_not_called_an_outage():
     assert failure_label("Cause: API Error: 400 bad request\n") != "endpoint down"
+
+
+# --- The stall budget never undercuts the harness's own command timeout ------
+
+
+def test_a_claude_command_gets_at_least_its_own_timeout_before_a_stall():
+    """racing3d-v1-K-004-C-001: the lab and Claude Code both waited 600 s.
+
+    Claude Code lets one Bash call run for up to ten minutes before it moves
+    the call to the background and answers. The lab's stall clock was also ten
+    minutes, so the two fired together and the lab stopped a healthy run that
+    was waiting on a long playtest (16 fps, ~8 minutes a race).
+    """
+    budget = stall_budget(600, "claude")
+    assert budget > 600
+
+
+def test_a_larger_configured_stall_budget_is_kept():
+    assert stall_budget(3600, "claude") == 3600
+
+
+def test_a_disabled_stall_clock_stays_disabled():
+    assert stall_budget(0, "claude") == 0
+
+
+def test_a_harness_with_no_known_command_timeout_keeps_the_setting():
+    assert stall_budget(600, "opencode") == 600
+    assert stall_budget(600, "some-new-cli") == 600

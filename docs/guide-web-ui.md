@@ -901,6 +901,14 @@ harness ([ADR-0022](adr/0022-watchdog-splits-model-wait-from-agent-stall.md)). A
 model-side failure is never the agent's fault, so **no response** and **endpoint
 down** do not count as attempts, while **stalled** does.
 
+A long command is not a hung one. Claude Code lets one Bash call run for ten
+minutes (`BASH_MAX_TIMEOUT_MS`, pinned in the run environment), then moves it to
+the background and carries on. On the `claude` harness the stall clock therefore
+never fires before that cap plus five minutes, whatever `run_stall_seconds` says:
+in `racing3d-v1-K-004-C-001` both clocks were 600 s, and the lab stopped a healthy
+run at the very second Claude Code was backgrounding an eight-minute playtest.
+For a case whose commands legitimately run longer still, raise `run_stall_seconds`.
+
 The tell, if you want to confirm by hand: `ls -l data/runs/<id>/opencode.log` (has
 it moved?) and `docker top harness-run-<id> -eo pid,etime,stat,pcpu,args` (a child
 whose elapsed time is absurd for what it is — a `timeout 2` alive for 47 minutes).
@@ -914,6 +922,37 @@ timed out after 7200s (exit code 137)` — instead of the bare `Run exited with 
 that read like a crash the lab never had.
 
 Run detail reports **Queued for** and **Execution** separately for the same reason.
+
+#### Why it failed — read the evidence, then ask a model
+
+A failed or cancelled run's detail page shows a **Why it failed** panel under the
+summary ([ADR-0084](adr/0084-a-failed-run-explains-itself.md)). It reads the
+run's event stream, which is otherwise megabytes of JSON, and shows the facts a
+diagnosis turns on:
+
+- **Usage limit**: the provider's last word on your plan's limit (`allowed` or
+  `rejected`, and whether overage was used). `rejected` means you ran out of
+  quota, not that the agent failed.
+- **API errors**: requests the provider refused (429, 5xx, unknown model).
+- **Silence allowed in a command**: the stall budget actually applied to this
+  harness, which may exceed `run_stall_seconds` (see above).
+- **Command in progress when it stopped** and **Recent commands**: each tool call,
+  how long it took (two minutes or more is highlighted) and the end of its output.
+  A ten-minute command followed by "moved to the background" is a long command,
+  not a hung one.
+- **Steps**: which finished. This decides whether a retry can *continue* or must
+  start again.
+
+None of this calls a model. **Analyze with AI** sends those facts, never the raw
+log and with credentials masked, to the diagnosis model. You get back the cause,
+the evidence, whose issue it was (the prompt, the agent, the lab's configuration
+or the provider), whether a retry will work and which kind, and a ready-to-paste
+continuation prompt when one fits. The answer is stored in
+`data/runs/<id>/diagnosis.json`, keyed by the failure, so reopening the page costs
+nothing and a retried run that fails again is diagnosed afresh. It is advice: it
+changes no score and no verdict. The model is `DIAGNOSIS_MODEL`, falling back to
+`AUDITOR_MODEL` and then the transport's default. With no LLM configured, the
+button reports that and the evidence still shows.
 
 #### Continue — push a stopped run further
 

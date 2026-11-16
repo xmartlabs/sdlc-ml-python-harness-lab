@@ -112,6 +112,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0081 — Reasoning effort is a selectable part of the arm](0081-reasoning-effort-is-part-of-the-arm.md)
 - [0082 — Models are compared on one case by the checks they pass, not by pass rate](0082-models-are-compared-on-one-case-by-checks-not-pass-rate.md)
 - [0083 — A stopped run is retried from scratch or from its last completed step](0083-a-stopped-run-retries-from-scratch-or-from-its-last-step.md)
+- [0084 — A failed run explains itself, and the stall clock outlasts the harness's own](0084-a-failed-run-explains-itself.md)
 
 ## Why ADRs exist
 

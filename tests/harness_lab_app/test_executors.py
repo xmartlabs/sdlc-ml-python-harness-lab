@@ -22,6 +22,7 @@ from harness_lab_app.executors import (
     runner_masks,
     runner_skill_masks,
 )
+from harness_lab_app.run_failures import CLAUDE_BASH_MAX_TIMEOUT_SECONDS
 
 
 @pytest.mark.parametrize(
@@ -94,7 +95,23 @@ def test_build_run_environment_without_env_file(
         "IS_SANDBOX": "1",
         "SDL_VIDEODRIVER": "dummy",
         "SDL_AUDIODRIVER": "dummy",
+        "BASH_MAX_TIMEOUT_MS": "600000",
     }
+
+
+def test_the_claude_bash_cap_the_watchdog_relies_on_is_pinned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stall clock outlasts Claude Code's Bash cap; the env sets that cap.
+
+    If the CLI's default ever changed, the watchdog's floor would silently stop
+    matching it. Pinning the value in the run env keeps the two in step.
+    """
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+
+    env = build_run_environment()
+
+    assert int(env["BASH_MAX_TIMEOUT_MS"]) == CLAUDE_BASH_MAX_TIMEOUT_SECONDS * 1000
 
 
 def test_subprocess_executor_streams_and_waits() -> None:
