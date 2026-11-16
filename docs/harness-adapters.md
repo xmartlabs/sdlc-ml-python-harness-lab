@@ -41,11 +41,36 @@ container):
 
 **The CLI version is pinned** (`ARG CLAUDE_CODE_VERSION` in `Dockerfile.runner`) and
 recorded as the image label `claude-code.version`. Newer models need a newer CLI —
-the 5.5 family and Fable 5.1 need 2.1.280 or later (`MIN_CLAUDE_CLI_VERSION` in
-`native_models.py`) — and an unpinned install stays on whatever Docker cached. Bump
-the ARG and rebuild when a model needs it. **Health** shows the image's version and
+the 5.5 family and Fable 5.1 need 2.1.280 or later, Fable 5.2 needs 2.1.321
+(`MIN_CLAUDE_CLI_VERSION` in `native_models.py`) — and an unpinned install stays on
+whatever Docker cached. Bump the ARG and rebuild when a model needs it. **Health** shows the image's version and
 warns when it is too old for a current model, and preflight refuses such a run
 instead of letting it die on the API's `claude_code_version_too_old`.
+
+### Adding a new Claude model
+
+A new model is reachable only when all three of these know it:
+
+1. **The gateway.** Add a LiteLLM card for the bare id (for example
+   `claude-fable-5-2`) and deploy it. The forms mark a catalog model with no card
+   "not on your gateway", and preflight refuses it.
+2. **The CLI in the runner image.** A CLI older than the model refuses the id
+   itself, before any request: 2.1.309 answered `[claude-code:unrecognized_model]`
+   for Fable 5.2. Find the release that adds the model in the Claude Code
+   changelog, bump `ARG CLAUDE_CODE_VERSION` in `Dockerfile.runner`, and rebuild
+   `docker compose build runner`, then `docker compose build runner-godot` for the
+   3D cases (its image is built on top of the runner). A rebuild does not touch a
+   run in flight: its container keeps the image it started with.
+3. **The lab's catalog.** Add the model to `NATIVE_MODELS` in
+   `src/harness_lab_app/native_models.py` with its floor in
+   `MIN_CLAUDE_CLI_VERSION`, and mirror it in `HARNESS_NATIVE_MODELS`
+   (`frontend/src/harnesses.ts`), the offline fallback. When it replaces a model
+   in the same line, move the old one to `generation: "previous"` so it stays
+   selectable for comparisons with the archive. The API reads the catalog at
+   start, so restart it (`docker compose restart api`) between runs.
+
+`test_the_runner_pins_a_claude_cli_new_enough_for_every_current_model` fails
+when the catalog lists a model the pinned CLI is too old for.
 
 ### Reasoning effort (`--effort`)
 
@@ -178,7 +203,7 @@ inside a container.
 The New-run executor menu is **harness-aware**: for `opencode` it's the live
 gateway list; for `codex`/`claude` it swaps to that CLI's **native models**
 (served by `GET /api/models/native`, from `native_models.py`) — the Claude 5.5
-family and Fable 5.1 first, the previous generation after. The selected id is a bare
+family and Fable 5.2 first, the previous generation after. The selected id is a bare
 (non-`gateway/`) name, which
 `bench_run.py` passes straight to the CLI's `--model` / `-m` (`_native_model`
 ignores any `gateway/`-prefixed value and lets the CLI default apply).

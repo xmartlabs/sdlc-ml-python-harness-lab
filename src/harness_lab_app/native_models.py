@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 # selector is not offered for it.
 EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
 
-# Current generation as of 2026-10 (Claude 5.5 family and Fable 5.1); previous
+# Current generation as of 2026-11 (Claude 5.5 family and Fable 5.2); previous
 # models stay so new runs can be compared with the archive.
 NATIVE_MODELS: dict[str, list[dict[str, Any]]] = {
     "claude": [
@@ -54,8 +54,8 @@ NATIVE_MODELS: dict[str, list[dict[str, Any]]] = {
             "effort_levels": list(EFFORT_LEVELS),
         },
         {
-            "id": "claude-fable-5-1",
-            "label": "Claude Fable 5.1",
+            "id": "claude-fable-5-2",
+            "label": "Claude Fable 5.2",
             "generation": "current",
             "size_rank": 4,
             "effort_levels": list(EFFORT_LEVELS),
@@ -81,6 +81,13 @@ NATIVE_MODELS: dict[str, list[dict[str, Any]]] = {
             "size_rank": 3,
             "effort_levels": list(EFFORT_LEVELS),
         },
+        {
+            "id": "claude-fable-5-1",
+            "label": "Claude Fable 5.1",
+            "generation": "previous",
+            "size_rank": 4,
+            "effort_levels": list(EFFORT_LEVELS),
+        },
     ],
     # Only the confirmed CLI default is listed — add your codex model ids here.
     "codex": [
@@ -98,11 +105,15 @@ NATIVE_MODELS: dict[str, list[dict[str, Any]]] = {
 # 2.1.280 is what the API itself answered for claude-opus-5-5 on 2026-10-23
 # ("claude_code_version_too_old", runs walletsystem-concurrent-deposits-K-006/007);
 # the 5.5 family and Fable 5.1 shipped together, so they share it as a floor.
+# Fable 5.2 is refused by the CLI itself, before any request: 2.1.309 answers
+# `unrecognized_model` (probed 2026-11-15). 2.1.321 is the release whose
+# changelog adds it.
 MIN_CLAUDE_CLI_VERSION: dict[str, str] = {
     "claude-haiku-5-5": "2.1.280",
     "claude-sonnet-5-5": "2.1.280",
     "claude-opus-5-5": "2.1.280",
     "claude-fable-5-1": "2.1.280",
+    "claude-fable-5-2": "2.1.321",
 }
 
 _DATE_SUFFIX = re.compile(r"-\d{8}$")

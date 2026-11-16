@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from harness_lab_app.native_models import (
     NATIVE_MODELS,
+    claude_cli_too_old,
     gateway_coverage,
+    min_claude_cli_version,
     native_catalog,
 )
 
@@ -17,6 +19,27 @@ def test_the_current_generation_leads_and_is_ordered_smallest_first():
         "claude-opus-5-5",
     ]
     assert all(m["size_rank"] for m in NATIVE_MODELS["claude"])
+
+
+def test_fable_5_2_is_the_current_fable_and_5_1_stays_for_the_archive():
+    by_id = {m["id"]: m for m in NATIVE_MODELS["claude"]}
+    assert by_id["claude-fable-5-2"]["generation"] == "current"
+    assert by_id["claude-fable-5-1"]["generation"] == "previous"
+    current_fables = [
+        m["id"]
+        for m in NATIVE_MODELS["claude"]
+        if m["generation"] == "current" and "fable" in m["id"]
+    ]
+    assert current_fables == ["claude-fable-5-2"]
+
+
+def test_fable_5_2_needs_a_cli_that_knows_it():
+    """2.1.309 refuses the id itself (`unrecognized_model`) before any request."""
+    assert min_claude_cli_version("claude-fable-5-2") == "2.1.321"
+    assert claude_cli_too_old("claude-fable-5-2", "2.1.309") == "2.1.321"
+    assert claude_cli_too_old("claude-fable-5-2", "2.1.325 (Claude Code)") is None
+    # Fable 5.1 keeps the floor it shipped with.
+    assert claude_cli_too_old("claude-fable-5-1", "2.1.309") is None
 
 
 def test_every_model_declares_what_the_ui_needs():

@@ -32,13 +32,14 @@ const NO_EFFORT_MODELS = new Set(["claude-haiku-4-5-20251001"]);
 // the CLI's --model, so keep them to ids the CLI accepts. Edit these as new
 // versions ship — this is the systematic-lab knob for host harnesses.
 export const HARNESS_NATIVE_MODELS: Record<string, ModelOption[]> = {
-  // Current generation first (cached 2026-10-06); the previous ones stay so new
+  // Current generation first (cached 2026-11-15); the previous ones stay so new
   // runs can be compared with the archive, which is mostly Haiku 4.5.
   claude: [
     { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
     { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
     { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
-    { id: "claude-fable-5-1", label: "Claude Fable 5.1" },
+    { id: "claude-fable-5-2", label: "Claude Fable 5.2" },
+    { id: "claude-fable-5-1", label: "Claude Fable 5.1 (previous)" },
     { id: "claude-sonnet-5", label: "Claude Sonnet 5 (previous)" },
     { id: "claude-opus-4-8", label: "Claude Opus 4.8 (previous)" },
     { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 (previous)" }

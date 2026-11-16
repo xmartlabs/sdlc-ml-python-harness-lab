@@ -43,7 +43,7 @@ Runs → New run** for a single run:
    a good clean probe) or `todo-web-v1` (a page graded in a real browser).
 2. **Harness** — `claude` or `codex`.
 3. **Executor model** — the dropdown shows that CLI's **native models**:
-   - claude → Claude Opus 5.5 / Sonnet 5.5 / Haiku 5.5 / Fable 5.1, then the
+   - claude → Claude Opus 5.5 / Sonnet 5.5 / Haiku 5.5 / Fable 5.2, then the
      previous generation; a model your gateway does not serve is marked
    - codex → `codex-mini-latest` (add your ids in `HARNESS_NATIVE_MODELS`,
      `frontend/src/harnesses.ts`)
@@ -107,7 +107,7 @@ factor ([run and compare](journey-run-and-compare.md)).
 
 | I want to test… | Mode | Harness | Model source |
 |---|---|---|---|
-| Claude Code (your account) | `make app-up` (token in `.env`) or `make app-host` | `claude` | native menu (the Claude 5.5 family and Fable 5.1) |
+| Claude Code (your account) | `make app-up` (token in `.env`) or `make app-host` | `claude` | native menu (the Claude 5.5 family and Fable 5.2) |
 | Codex (your account) | `make app-host` | `codex` | native menu (edit ids in `harnesses.ts`) |
 | opencode + gateway model | `make app-up` | `opencode` | live LiteLLM list |
 | SWE-bench objective | `make app-up` | `opencode` | live LiteLLM list |
