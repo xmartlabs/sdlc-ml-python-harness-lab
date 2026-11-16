@@ -3423,4 +3423,39 @@ Claude Code's stream-json `init` event does not report the effort it applied
 (only `per_turn_effort_active`), so record effort as *requested* (ADR-0073). The CLI
 accepts `--effort` from 2.1.285. Haiku 4.5 has no effort control.
 
+## 2026-11-15 — Probe a gateway Claude model through the CLI, never with curl
+
+Run `chess3d-v1-K-009` (`claude-fable-5-2`) died in 2 s on `Invalid model name`: the
+gateway had no card for it yet. Recreating the lab's containers cannot fix that — the
+card lives in the gateway's LiteLLM config, outside this repo. Minutes later the card
+appeared and the same model answered.
+
+A plain `curl` to `/v1/messages` with only the LiteLLM key is not a valid probe: the
+gateway's Anthropic cards carry no key of their own and forward the CLI's OAuth
+credential, so curl gets `401 x-api-key header is required` for *every* Claude model
+(Opus 5.5 too), and the failures put the deployment on LiteLLM cooldown (`429 No
+deployments available`).
+
+**How to apply:** check `/v1/models` (free) for the card, then run one `claude -p` in
+`harness-lab-runner:latest` with the env from `executors.build_run_environment()`
+(pass `ANTHROPIC_CUSTOM_HEADERS` separately — it is multi-line). Preflight's gateway
+check is point-in-time; a run that starts while the gateway is being edited can
+still hit `Invalid model name`.
+
+## 2026-11-16 — Play the whole game, not the checks: a full race found what unit checks missed
+
+In the final phase of `racing3d-v1-K-004`, a full 3-lap race driven through the Input Map
+actions alone (a keyboard bot pressing keys digitally, under `godot-render`) found three bugs
+that four phases of per-feature checks had missed. A car nose-first into a barrier stuck for
+good: the contract gives the player no reverse, since braking must hold a stopped car still.
+The HUD showed the previous tick, because `_process` ran after the physics step. FINISHED
+replaced the WRONG WAY warning. A fix that worked in an isolated repro did nothing in the scene:
+with rivals present `Race` resolves barriers twice per substep, and the second pass cleared
+the contact flag the first pass set.
+
+**How to apply:** for Godot game cases, end with a scripted full playthrough in the real main
+scene that checks invariants every frame (camera, HUD == API state, never stuck, no overlap).
+When a fix works in isolation but not in the scene, compare the call graphs (extra passes,
+other actors) before tuning constants.
+
 <!-- Add new learnings above this line -->
