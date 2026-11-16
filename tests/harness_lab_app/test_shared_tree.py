@@ -33,6 +33,8 @@ class MemoryLeases:
 
     def try_acquire(self, run_id: str, exclusive: bool) -> str | None:
         self.calls.append(("acquire", run_id, exclusive))
+        if exclusive and self.writer == run_id:
+            return None
         if self.writer and self.writer != run_id:
             if exclusive:
                 self._wait_in_line(run_id)
@@ -170,3 +172,35 @@ def test_the_existing_rules_hold_on_every_store(make_store):
     leases.release("local", exclusive=False)
     assert leases.try_acquire("ablation", exclusive=True) is None
     assert leases.refresh("ablation", exclusive=True) is True
+
+
+@pytest.mark.parametrize("make_store", _stores())
+def test_a_writer_that_holds_the_tree_gets_it_again(make_store):
+    """A lost reply makes the worker ask again; it must not be refused.
+
+    With another writer waiting, the holder used to be told to wait behind it,
+    and both stalled until the holder's unrefreshed key lapsed.
+    """
+    leases = make_store()
+    assert leases.try_acquire("ablation-a", exclusive=True) is None
+    assert leases.try_acquire("ablation-b", exclusive=True) == "ablation-a"
+    assert leases.try_acquire("ablation-a", exclusive=True) is None
+
+
+def test_the_redis_client_never_blocks_forever(monkeypatch):
+    """A half-open connection must time out, or a waiting run cannot be
+    cancelled and a lost lease is never noticed."""
+    import redis
+
+    from harness_lab_app import shared_tree
+
+    seen: dict[str, Any] = {}
+
+    def from_url(url: str, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return SimpleNamespace(register_script=lambda _src: None)
+
+    monkeypatch.setattr(redis.Redis, "from_url", staticmethod(from_url))
+    shared_tree.redis_leases("redis://redis:6379/0")
+    assert 0 < seen["socket_timeout"] <= shared_tree.REFRESH_SECONDS
+    assert 0 < seen["socket_connect_timeout"] <= shared_tree.REFRESH_SECONDS

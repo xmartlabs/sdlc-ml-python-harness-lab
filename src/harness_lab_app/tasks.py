@@ -904,6 +904,10 @@ def _execute_run_body(
             return
         exclusive = rewrites_shared_tree(_config_payload(session, run))
         if not _wait_for_shared_tree(session, run_id, leases, exclusive):
+            # Cancelled while waiting: give back the waiting place, or new
+            # shared runs stay blocked behind a run that will never start.
+            with contextlib.suppress(Exception):
+                leases.release(run_id, exclusive)
             return
         stop = threading.Event()
         lost = threading.Event()
@@ -1746,10 +1750,31 @@ def _run_step_validation(session: Session, run_id: str) -> None:
 def execute_run(self: Any, run_id: str) -> None:
     init_db()
     lane = str((self.request.delivery_info or {}).get("routing_key") or RUN_QUEUE)
-    leases = None
-    with contextlib.suppress(Exception):
+    leases: TreeLeases
+    try:
         leases = redis_leases(get_settings().redis_url)
+    except Exception as exc:
+        # Fail closed (ADR-0082): a store that cannot even be built is an
+        # outage, and the run waits `pending` like it would for a Redis that
+        # does not answer, rather than running with no lease at all.
+        leases = _UnavailableLeases(exc)
     _execute_run_body(run_id, get_executor(), lane=lane, leases=leases)
+
+
+class _UnavailableLeases:
+    """A lease store that could not be built: every call is the outage."""
+
+    def __init__(self, cause: Exception) -> None:
+        self._cause = cause
+
+    def try_acquire(self, run_id: str, exclusive: bool) -> str | None:  # noqa: ARG002
+        raise ConnectionError(f"lease store unavailable: {self._cause!r}")
+
+    def refresh(self, run_id: str, exclusive: bool) -> bool:  # noqa: ARG002
+        raise ConnectionError(f"lease store unavailable: {self._cause!r}")
+
+    def release(self, run_id: str, exclusive: bool) -> None:  # noqa: ARG002
+        return None
 
 
 def _wait_for_shared_tree(
@@ -1817,9 +1842,10 @@ def _keep_lease(
     """Refresh the run's lease until it ends; a killed worker's lease lapses.
 
     Sets ``lost`` when the lease can no longer be vouched for: the store says
-    it is gone, or no refresh has succeeded for a whole lease period, after
-    which Redis has expired it and another run may hold the tree. One missed
-    refresh is not that — the lease outlives two — so a blip does not kill a
+    it is gone, or no refresh has succeeded for a lease period less one refresh
+    period. Redis expires the lease a full period after the last refresh it
+    saw, so giving it up one refresh early stops the run before another can
+    take the tree. One missed refresh is tolerated, so a blip does not kill a
     run. The supervision loop stops a run whose lease is lost.
     """
     last_ok = time.monotonic()
@@ -1827,7 +1853,7 @@ def _keep_lease(
         try:
             held = leases.refresh(run_id, exclusive)
         except Exception:
-            if time.monotonic() - last_ok < LEASE_SECONDS:
+            if time.monotonic() - last_ok < LEASE_SECONDS - REFRESH_SECONDS:
                 continue
             held = False
         if not held:

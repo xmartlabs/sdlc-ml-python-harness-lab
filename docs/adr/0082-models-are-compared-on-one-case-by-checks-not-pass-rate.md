@@ -88,11 +88,14 @@ gateway models run under `opencode`.
      whether readers or another ablation block it, and a later ablation queues
      behind it. The lease expires two minutes after its last refresh, so a
      killed worker frees it. The lab fails closed. If Redis cannot be reached
-     before the run starts, the run stays `pending` and cancellable until Redis
-     answers. If a refresh finds the lease gone, or none succeeds for a whole
-     lease period, the run is stopped as a lab failure (`lease lost`), not
-     measured. A run cancelled after it gets the lease never starts: it is
-     marked running only by a conditional update from `pending`.
+     before the run starts (or the worker cannot even build its client), the
+     run stays `pending` and cancellable until Redis answers. Every Redis call
+     times out after 5 s. If a refresh finds the lease gone, or none succeeds
+     for a lease period less one refresh period (90 s, before Redis could
+     expire it), the run is stopped as a lab failure (`lease lost`), not
+     measured. A run cancelled while it waits gives back its waiting place.
+     Moving a run out of `pending` is a conditional update on both sides, so a
+     cancel and the worker's start cannot both win.
 
    Two at a time is accepted only for a model comparison, checked on the design and
    not on its name. The family `models-` is a name anyone can type. The design must

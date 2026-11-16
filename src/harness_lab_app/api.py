@@ -2696,10 +2696,12 @@ def create_app() -> FastAPI:
     @app.get("/api/runs/{run_id}/retry-options")
     def retry_options(run_id: str, session: Session = Depends(get_session)):
         """Whether the run can continue where it stopped, and from which step."""
+        service = RunService(session)
         try:
-            return RunService(session).retry_options(run_id)
+            service.get_run(run_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return service.retry_options(run_id)
 
     @app.post("/api/runs/{run_id}/retry")
     def retry_run(
@@ -2709,13 +2711,15 @@ def create_app() -> FastAPI:
     ):
         """Run it again: ``scratch`` (from nothing), ``continue`` (after the last
         completed step) or ``resume`` (every step over the workspace left)."""
+        service = RunService(session, enqueue=enqueue_run)
         try:
-            return RunService(session, enqueue=enqueue_run).retry_run(run_id, mode)
+            service.get_run(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            return service.retry_run(run_id, mode)
         except RunRetryError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except ValueError as exc:
-            # Checked after RunRetryError, which is a ValueError too.
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/runs/{run_id}/continue")
     def continue_run(

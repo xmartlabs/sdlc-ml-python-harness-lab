@@ -772,3 +772,29 @@ def test_continued_run_id_avoids_a_stale_workspace_on_disk(monkeypatch, tmp_path
 
         child = service.continue_run(parent.run_id, "keep going")
         assert child.run_id == f"{parent.run_id}-C-002"
+
+
+def test_a_cancel_that_read_pending_cannot_overwrite_a_run_just_claimed():
+    """The worker claims the run between the cancel's read and its write.
+
+    `cancel_run` wrote `cancelled` unconditionally, so the container started
+    with a row that said cancelled and no `cancel_requested` to stop it.
+    """
+    with make_session() as session:
+        service = RunService(session)
+        service.create_run(RunCreate(run_id="cancel-race-1", config=_stub_config()))
+        stale = service.get_run("cancel-race-1")
+        assert stale.state == RunState.pending
+        engine = session.get_bind()
+        with Session(engine) as worker:
+            assert RunService(worker).claim_pending("cancel-race-1") is not None
+
+        original = service.get_run
+        service.get_run = lambda _run_id: stale  # type: ignore[method-assign]
+        service.cancel_run("cancel-race-1")
+        service.get_run = original  # type: ignore[method-assign]
+
+        session.expire_all()
+        run = service.get_run("cancel-race-1")
+        assert run.state == RunState.running
+        assert run.cancel_requested is True

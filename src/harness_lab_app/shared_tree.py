@@ -34,6 +34,8 @@ LEASE_SECONDS = 120
 REFRESH_SECONDS = 30
 # How long a waiting exclusive run keeps new shared runs out without polling.
 WAITING_SECONDS = 60
+# The longest any one lease call may block, well inside one refresh period.
+REDIS_TIMEOUT_SECONDS = 5
 
 # KEYS: writer, readers (sorted set: run id -> expiry), waiting writer.
 # ARGV: run id, "1" exclusive / "0" shared, lease seconds, waiting seconds.
@@ -50,6 +52,10 @@ local function wait_in_line()
   return waiting
 end
 local writer = redis.call('GET', KEYS[1])
+if writer == ARGV[1] and ARGV[2] == '1' then
+  redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[3]))
+  return false
+end
 if writer and writer ~= ARGV[1] then
   if ARGV[2] == '1' then wait_in_line() end
   return writer
@@ -152,4 +158,12 @@ def redis_leases(redis_url: str) -> RedisTreeLeases:
     """The lease store on the broker's Redis."""
     import redis  # the broker's client; only the worker needs it
 
-    return RedisTreeLeases(redis.Redis.from_url(redis_url))
+    # Bounded, or a half-open connection blocks forever: a waiting run could not
+    # be cancelled and a lost lease would never be noticed.
+    return RedisTreeLeases(
+        redis.Redis.from_url(
+            redis_url,
+            socket_timeout=REDIS_TIMEOUT_SECONDS,
+            socket_connect_timeout=REDIS_TIMEOUT_SECONDS,
+        )
+    )

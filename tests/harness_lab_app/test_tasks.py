@@ -1215,6 +1215,8 @@ class MemoryLeases:
 
     def try_acquire(self, run_id: str, exclusive: bool) -> str | None:
         self.calls.append(("acquire", run_id, exclusive))
+        if exclusive and self.writer == run_id:
+            return None
         if self.writer and self.writer != run_id:
             if exclusive:
                 self._wait_in_line(run_id)
@@ -1542,3 +1544,89 @@ def test_a_run_whose_lease_is_lost_is_stopped_as_a_lab_failure(monkeypatch):
     assert failure is not None and failure.startswith("Shared-tree lease lost:")
     # The lab lost its own lock; nothing about the model was measured.
     assert is_unmeasured(failure)
+
+
+def test_a_lease_is_given_up_before_redis_could_expire_it(monkeypatch):
+    """Redis drops the lease LEASE_SECONDS after the last refresh it saw.
+
+    Waiting a full lease period to notice left a window where another run could
+    already hold the tree. One refresh period of margin closes it, and still
+    tolerates a single missed refresh.
+    """
+    from harness_lab_app import tasks
+
+    clock = {"now": 0.0}
+    monkeypatch.setattr(tasks.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(tasks, "REFRESH_SECONDS", 30)
+    monkeypatch.setattr(tasks, "LEASE_SECONDS", 120)
+    failures: list[float] = []
+
+    class Down(MemoryLeases):
+        def refresh(self, run_id: str, exclusive: bool) -> bool:
+            failures.append(clock["now"])
+            raise ConnectionError("redis down")
+
+    class Ticks:
+        """`stop.wait` that advances the fake clock one refresh period."""
+
+        def wait(self, seconds: float) -> bool:
+            clock["now"] += seconds
+            return clock["now"] > 1000
+
+    lost = threading.Event()
+    tasks._keep_lease(Down(), "long-run", False, Ticks(), lost)  # type: ignore[arg-type]
+
+    assert lost.is_set()
+    assert failures[-1] < 120
+    assert len(failures) >= 2, "one missed refresh alone must not lose it"
+
+
+def test_a_cancelled_waiting_run_gives_up_its_waiting_place(monkeypatch):
+    """Or new shared runs stay blocked behind a run that will never start."""
+    from harness_lab_app import tasks
+
+    engine = make_engine()
+    create_pending_run(engine, "lease-cancel-waiting", command=["true"])
+    leases = MemoryLeases()
+    leases.try_acquire("model-1", exclusive=False)
+    monkeypatch.setattr(tasks, "rewrites_shared_tree", lambda _config: True)
+    monkeypatch.setattr(tasks, "SHARED_TREE_POLL_SECONDS", 0)
+
+    def sleep(_seconds: float) -> None:
+        with Session(engine) as session:
+            RunService(session).cancel_run("lease-cancel-waiting")
+
+    monkeypatch.setattr(tasks.time, "sleep", sleep)
+
+    tasks._execute_run_body(
+        "lease-cancel-waiting",
+        FakeExecutor(FakeHandle([], 0)),
+        db_engine=engine,
+        leases=leases,
+    )
+
+    assert leases.waiting is None
+    assert leases.try_acquire("model-2", exclusive=False) is None
+
+
+def test_a_worker_with_no_lease_store_does_not_run_unprotected(monkeypatch):
+    """A Redis URL that cannot even be parsed is an outage, not a free pass."""
+    from harness_lab_app import tasks
+
+    def broken(_url: str) -> Any:
+        raise ValueError("bad redis url")
+
+    monkeypatch.setattr(tasks, "redis_leases", broken)
+    monkeypatch.setattr(tasks, "init_db", lambda: None)
+    monkeypatch.setattr(tasks, "get_executor", lambda: "executor")
+    seen: dict[str, Any] = {}
+
+    def body(run_id: str, executor: Any, **kwargs: Any) -> None:
+        seen.update(kwargs)
+
+    monkeypatch.setattr(tasks, "_execute_run_body", body)
+    tasks.execute_run("lease-no-store")
+
+    assert seen["leases"] is not None
+    with pytest.raises(ConnectionError):
+        seen["leases"].try_acquire("lease-no-store", False)

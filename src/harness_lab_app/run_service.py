@@ -1381,9 +1381,22 @@ class RunService:
                 RunEvent(run_id=run_id, level="info", message="Cancellation requested")
             )
         else:
-            run.state = RunState.cancelled
-            run.ended_at = utc_now()
-            self.session.add(run)
+            # Conditional on the state just read: the worker may claim the run
+            # (`claim_pending`) in between, and an unconditional write would
+            # mark a started run cancelled with nothing asking it to stop.
+            observed = run.state
+            moved = cast(
+                "CursorResult[Any]",
+                self.session.execute(
+                    sa_update(Run)
+                    .where(col(Run.run_id) == run_id, col(Run.state) == observed)
+                    .values(state=RunState.cancelled, ended_at=utc_now())
+                ),
+            )
+            if moved.rowcount != 1:
+                self.session.rollback()
+                self.session.expire_all()
+                return self.cancel_run(run_id)
             self.session.add(
                 RunEvent(run_id=run_id, level="info", message="Run cancelled")
             )
