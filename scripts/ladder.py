@@ -203,7 +203,11 @@ def main(argv: list[str] | None = None) -> int:
             if not args.cases:
                 sys.exit("❌ no active cases — seed them first (POST /api/cases/seed)")
         designs = build(args)
-        service = ExperimentService(session)
+        # The queue publisher, as the API passes it. Without it `launch` writes
+        # the runs and never enqueues them: they sit `pending` with no error.
+        from harness_lab_app.celery_app import enqueue_run
+
+        service = ExperimentService(session, enqueue=enqueue_run)
         for design in designs:
             try:
                 experiment, warnings = service.create_experiment(design)

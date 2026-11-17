@@ -9,7 +9,8 @@ supported AI tool through the same flow.
 
 ```bash
 git clone <your-clone-of-the-template> my_project && cd my_project
-make init NAME=my_project
+make init NAME=my_project              # starts with the `minimal` skill profile
+make init NAME=my_project PROFILE=core # or core / full
 ```
 
 `make init` runs `scripts/init_project.py` and then chains:
@@ -46,6 +47,11 @@ any virtual environment exists. Steps:
   (`git@github.com:...ml-python-base.git`): `TEMPLATE_REPO` in the `Makefile`
   and the example in `docs/template-sync.md` must keep pointing at the
   template or `make template-sync-merge` breaks.
+- Writes `harness.toml` selecting the skill profile (`--profile`, default
+  `minimal`) — see [Skill profiles](skills-management.md#skill-profiles). The
+  profile is validated before anything is renamed; an existing `harness.toml`
+  is kept; a template without `.github/skill-profiles.toml` skips this step and
+  keeps the full catalog.
 - Creates `.env` from `.env.example` if absent. Review it afterwards — model
   endpoints default to localhost and are machine-specific. `.env` is
   gitignored; never commit it.

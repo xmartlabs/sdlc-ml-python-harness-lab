@@ -323,6 +323,25 @@ def test_corpus_credit_lists_never_opened_items_first() -> None:
     assert by_item["skill:verify_changes"]["reward_when_consulted"] == 1.5
 
 
+def test_grouped_credit_keeps_a_skill_that_only_one_model_uses() -> None:
+    used = step_reward.build_trajectory(
+        [{"step": 1, "progress": 1.0, "consulted": ["skill:verify_changes"]}]
+    ).as_dict()
+    unused = step_reward.build_trajectory(
+        [{"step": 1, "progress": 1.0, "consulted": []}]
+    ).as_dict()
+
+    groups = step_reward.grouped_credit(
+        [("small", used), ("large", unused), ("large", unused)],
+        available=["skill:verify_changes"],
+    )
+
+    assert list(groups) == ["large", "small"]
+    assert groups["large"]["runs_measured"] == 2
+    assert groups["large"]["items"][0]["runs"] == 0
+    assert groups["small"]["items"][0]["share_of_runs"] == 1.0
+
+
 # --------------------------------------------------------------------------
 # StepRewardService: reading curves out of the store
 # --------------------------------------------------------------------------
@@ -629,3 +648,63 @@ def test_a_profile_without_the_evaluator_leaves_its_scores_alone(
     ScoreService(session).evaluate_run("run-r", profile="outcome_only")
 
     assert _step_scores(session, "run-r") == before
+
+
+def test_the_census_slices_usage_by_model_and_reports_skill_size(monkeypatch) -> None:
+    from sqlmodel import Session, SQLModel, create_engine
+
+    from harness_lab_app import skills_catalog
+    from harness_lab_app.models import Run, RunConfig, Validation
+    from harness_lab_app.step_reward_service import StepRewardService
+
+    monkeypatch.setattr(
+        skills_catalog,
+        "skill_footprints",
+        lambda: {
+            "verify_changes": {
+                "kind": "internal",
+                "description_chars": 40,
+                "body_bytes": 900,
+            },
+            "unused": {
+                "kind": "external",
+                "description_chars": 300,
+                "body_bytes": 9000,
+            },
+        },
+    )
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+    measured = step_reward.build_trajectory(
+        [{"step": 1, "progress": 1.0, "consulted": ["skill:verify_changes"]}]
+    ).as_dict()
+    with Session(engine) as session:
+        for n, model in enumerate(["haiku", "opus"], start=1):
+            config = RunConfig(
+                case_id="c", prompt_variant="harness", executor_model=model
+            )
+            session.add(config)
+            session.commit()
+            session.add(Run(run_id=f"r{n}", run_config_id=config.id))
+            session.add(Validation(run_id=f"r{n}", objective={"per_step": measured}))
+        session.commit()
+
+        census = StepRewardService(session).census(by="model")
+
+    assert census["by"] == "model"
+    assert sorted(census["groups"]) == ["haiku", "opus"]
+    haiku = {row["item"]: row for row in census["groups"]["haiku"]["items"]}
+    assert haiku["skill:unused"]["runs"] == 0
+    assert haiku["skill:verify_changes"]["runs"] == 1
+    assert census["footprints"]["unused"]["description_chars"] == 300
+
+
+def test_the_census_refuses_an_unknown_dimension() -> None:
+    from sqlmodel import Session, SQLModel, create_engine
+
+    from harness_lab_app.step_reward_service import StepRewardService
+
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session, pytest.raises(ValueError):
+        StepRewardService(session).census(by="planet")

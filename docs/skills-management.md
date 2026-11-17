@@ -171,6 +171,41 @@ Only that block is generated; the surrounding governance prose stays hand-writte
 lock file, or projected agent is stale relative to the governed sources — so the
 lists can never silently drift. Fix drift with `make sync-skills`.
 
+## Skill profiles
+
+Every listed skill costs context on every run: its description sits in each
+adapter file whether or not the agent opens it. A **profile** names the subset a
+project carries ([ADR-0085](adr/0085-a-project-carries-a-skill-profile-not-the-whole-catalog.md)).
+
+| File | Owner | Holds |
+|---|---|---|
+| `.github/skill-profiles.toml` | governed (travels with template syncs) | profile definitions: `minimal`, `core` (`extends` composes; `full` is built in) |
+| `harness.toml` (repo root) | the project (no sync writes it) | the selection: `profile`, plus `include` / `exclude` lists |
+
+```toml
+# harness.toml
+[skills]
+profile = "minimal"
+include = ["research_current_info"]   # add on top of the profile
+exclude = []                          # drop from the profile
+```
+
+```bash
+make skill-profile             # list profiles and what this repo carries
+make skill-profile SET=core    # select one (writes harness.toml, relinks)
+make sync-skills               # after editing harness.toml by hand
+```
+
+**A profile filters, it never deletes.** `.github/skills*/` stays complete, and
+only the native views and adapter listings follow the selection. A template sync
+therefore never fights a bootstrap, and turning a skill back on is one line. No
+`harness.toml` means `full`. `make check-sync` treats a native view whose skill
+set differs from the selection as drift.
+
+New projects get `minimal` from `make init` ([Project init](project-init.md)).
+The profile contents are provisional until the lab's pruning verdicts replace
+them; see [Per-step reward → From census to profile](guide-step-reward.md#from-census-to-profile).
+
 ## Safety behavior
 
 - If no external source exists, command exits successfully (`0`) without failing CI.

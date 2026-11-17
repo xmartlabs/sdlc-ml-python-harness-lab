@@ -31,6 +31,15 @@ from ml_python_base.skills_sync.manifest import (
     write_manifest,
 )
 from ml_python_base.skills_sync.models import LINK_COPY, Registry, Skill, ToolSpec
+from ml_python_base.skills_sync.profiles import (
+    FULL,
+    SELECTION_FILE,
+    load_profiles,
+    load_selection,
+    resolve_skills,
+    selected_skills,
+    write_selection,
+)
 from ml_python_base.skills_sync.renderer import expected_file, render_tool
 
 EXIT_OK = 0
@@ -49,7 +58,7 @@ def _selected_tools(registry: Registry, tool_id: str | None) -> list[ToolSpec]:
 
 
 def _do_link(root: Path, registry: Registry, tool_id: str | None) -> None:
-    skills = discover_skills(root)
+    skills = selected_skills(root)
     for tool in _selected_tools(registry, tool_id):
         hashes = link_tool(root, tool, skills)
         if tool.needs_manifest and tool.manifest_path:
@@ -116,7 +125,7 @@ def check_drift(root: Path, registry: Registry) -> list[str]:
     this directly instead of shelling out and parsing stdout, so drift detection
     has one implementation shared by CI and the API.
     """
-    skills = discover_skills(root)
+    skills = selected_skills(root)
     agents = discover_agents(root)
     stale: list[str] = []
 
@@ -127,6 +136,18 @@ def check_drift(root: Path, registry: Registry) -> list[str]:
             path = root / tool.adapter_file
             if expected is not None and path.read_text(encoding="utf-8") != expected:
                 stale.append(tool.adapter_file)
+        # Native view membership drift: the set of skill dirs must match the
+        # selection (ADR-0085). Without it a symlink-strategy view (Claude)
+        # could keep carrying a skill a profile dropped, unseen by CI.
+        if tool.has_native_view:
+            view = root / tool.native_skills_dir
+            present = (
+                {child.name for child in view.iterdir() if child.is_dir()}
+                if view.is_dir()
+                else set()
+            )
+            if present != {skill.name for skill in skills}:
+                stale.append(tool.native_skills_dir)
         # Manifest drift (copy-strategy tools).
         if tool.needs_manifest and tool.manifest_path:
             desired = link_tool_dry(tool, skills)
@@ -156,6 +177,34 @@ def _do_check(root: Path, registry: Registry) -> int:
         raise DriftError(stale)
     print("✅ no skill-sync drift detected")
     return EXIT_OK
+
+
+def _do_profile(root: Path, registry: Registry, name: str | None) -> None:
+    """Show the profiles and what the current selection carries; or select one."""
+    profiles = load_profiles(root)
+    if name is not None:
+        if name not in profiles:
+            raise SkillsSyncError(
+                f"Unknown profile '{name}'. Defined: {', '.join(sorted(profiles))}."
+            )
+        write_selection(root, name)
+        print(f"🎯 {SELECTION_FILE}: profile = {name}")
+        _do_link(root, registry, None)
+        _do_render(root, registry, None)
+    skills = discover_skills(root)
+    selection = load_selection(root)
+    resolution = resolve_skills(skills, profiles, selection)
+    for profile in profiles.values():
+        size = "all" if profile.skills is None else str(len(profile.skills))
+        mark = "*" if profile.name == selection.profile else " "
+        print(f" {mark} {profile.name:<10} {size:>4}  {profile.description}")
+    source = selection.source or f"no {SELECTION_FILE} — default '{FULL}'"
+    kept = [skill.name for skill in resolution.skills]
+    print(f"\nselection ({source}): {len(kept)} of {len(skills)} skills carried")
+    for skill_name in kept:
+        print(f"  + {skill_name}")
+    if resolution.unknown:
+        print(f"⚠ named but not in the catalog: {', '.join(resolution.unknown)}")
 
 
 def link_tool_dry(tool: ToolSpec, skills: list[Skill]) -> dict[str, str]:
@@ -208,6 +257,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("sync", help="ingest + link + render (the one-shot).")
     sub.add_parser("purge", help="Reset external skills + native views.")
     sub.add_parser("check", help="Fail if generated artifacts are stale.")
+
+    profile = sub.add_parser(
+        "profile", help="List skill profiles; with --set, select one (harness.toml)."
+    )
+    profile.add_argument("--set", dest="set_profile", help="Profile to select.")
     return parser
 
 
@@ -230,6 +284,8 @@ def main(argv: list[str] | None = None) -> int:
             _do_purge(root, registry)
         elif args.command == "check":
             return _do_check(root, registry)
+        elif args.command == "profile":
+            _do_profile(root, registry, args.set_profile)
     except DriftError as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_DRIFT

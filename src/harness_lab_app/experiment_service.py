@@ -475,14 +475,20 @@ def _capability_block(
 # treatment per item, each removing exactly that item. `scripts/prune.py`
 # names the family with this prefix; the summary reads it as leave-one-out.
 PRUNING_FAMILY_PREFIX = "prune-"
+# A treatment that removes several skills at once is judged as one item.
+GROUP_ITEM_PREFIX = "skills:"
 
 
 def removed_item(control: dict[str, Any], treatment: dict[str, Any]) -> str | None:
-    """The single item a treatment removes relative to its control, or None.
+    """The item a treatment removes relative to its control, or None.
 
-    Today an item is a skill (``skills_disabled``). Anything else — two skills
-    at once, a different prompt — is not a leave-one-out arm and gets no
-    pruning verdict, rather than a verdict about the wrong thing.
+    An item is one skill (``skill:<name>``) or, for a group ablation
+    (ADR-0085), a set of skills removed together (``skills:<a>,<b>``) — the
+    cheap first cut through the never-opened set, which also catches two
+    redundant skills that leave-one-out cannot see (removing either alone
+    changes nothing; removing both does). Anything that changes more than the
+    removed skills — a re-added skill, a different prompt — gets no verdict,
+    rather than a verdict about the wrong thing.
     """
     if {k: v for k, v in control.items() if k != "skills_disabled"} != {
         k: v for k, v in treatment.items() if k != "skills_disabled"
@@ -494,9 +500,18 @@ def removed_item(control: dict[str, Any], treatment: dict[str, Any]) -> str | No
     added = set(control.get("skills_disabled") or []) - set(
         treatment.get("skills_disabled") or []
     )
-    if len(removed) != 1 or added:
+    if not removed or added:
         return None
-    return f"skill:{removed.pop()}"
+    if len(removed) == 1:
+        return f"skill:{removed.pop()}"
+    return GROUP_ITEM_PREFIX + ",".join(sorted(removed))
+
+
+def removed_skills(item: str) -> list[str]:
+    """The skill names a pruning item stands for."""
+    if item.startswith(GROUP_ITEM_PREFIX):
+        return item.removeprefix(GROUP_ITEM_PREFIX).split(",")
+    return [item.removeprefix("skill:")]
 
 
 def _pruning_block(
@@ -523,7 +538,13 @@ def _pruning_block(
             control_metrics=case_metrics.get(control_label, {}),
             treatment_metrics=case_metrics.get(condition.label, {}),
         )
-        verdicts.append({"arm": condition.label, **verdict.as_dict()})
+        verdicts.append(
+            {
+                "arm": condition.label,
+                **verdict.as_dict(),
+                "removed": removed_skills(item),
+            }
+        )
     order = {"keep": 0, "inconclusive": 1, "removable": 2}
     return sorted(verdicts, key=lambda v: (order.get(v["decision"], 9), v["item"]))
 

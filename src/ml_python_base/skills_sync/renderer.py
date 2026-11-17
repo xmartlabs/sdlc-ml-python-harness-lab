@@ -12,9 +12,9 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
-from ml_python_base.skills_sync.discovery import discover_skills
 from ml_python_base.skills_sync.errors import SkillsSyncError
 from ml_python_base.skills_sync.models import KIND_INTERNAL, Registry, Skill, ToolSpec
+from ml_python_base.skills_sync.profiles import selected_skills
 
 BEGIN_MARKER = "<!-- BEGIN GENERATED SKILLS (managed by skills_sync; do not edit) -->"
 END_MARKER = "<!-- END GENERATED SKILLS -->"
@@ -50,7 +50,7 @@ def render_region(
     a governed harness is projected into a foreign repository, which owns
     neither ``adapters/templates`` nor ``.github/skills``.
     """
-    skills = skills if skills is not None else discover_skills(root)
+    skills = skills if skills is not None else selected_skills(root)
     env = _environment(template_root or root)
     template_name = tool.adapter_template or DEFAULT_TEMPLATE
     template = env.get_template(template_name)

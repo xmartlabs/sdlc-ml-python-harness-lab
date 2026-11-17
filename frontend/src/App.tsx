@@ -48,6 +48,8 @@ const MESSAGES = defineMessages({
  * text at render time (not stored translated) so a language switch updates it
  * without a refetch. */
 const PREVIEW_MODE = "__preview_mode__";
+// How often the run list is re-read while the tab is visible.
+const RUNS_REFRESH_MS = 15_000;
 
 const previewCase: CaseRecord = {
   case_id: "tetris-v1",
@@ -174,6 +176,30 @@ export default function App() {
 
     return () => {
       active = false;
+    };
+  }, [session]);
+
+  // Runs are also created outside this page — `make prune`, `make ladder`,
+  // another tab — and the list above is read once. Re-read it while the tab is
+  // visible, or a whole CLI-launched experiment stays invisible until a reload.
+  useEffect(() => {
+    if (session === null || !session.authenticated) {
+      return undefined;
+    }
+    const refresh = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      api
+        .listRuns()
+        .then((latest) => setRuns(latest))
+        .catch(() => undefined);
+    };
+    const timer = window.setInterval(refresh, RUNS_REFRESH_MS);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
     };
   }, [session]);
 

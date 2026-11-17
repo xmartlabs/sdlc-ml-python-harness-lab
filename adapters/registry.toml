@@ -18,6 +18,7 @@ protocol = 1
 governance_paths = [
     ".github/skills",
     ".github/skills-external",
+    ".github/skill-profiles.toml",
     ".github/agents",
     ".github/architecture.md",
     ".github/standards.md",

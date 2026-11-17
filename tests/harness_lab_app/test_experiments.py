@@ -2423,8 +2423,20 @@ def test_removed_item_names_the_one_skill_a_treatment_drops():
         removed_item(control, {**control, "skills_disabled": ["verify_changes"]})
         == "skill:verify_changes"
     )
-    # Two at once is not leave-one-out; neither is a different prompt.
-    assert removed_item(control, {**control, "skills_disabled": ["a", "b"]}) is None
+    # Two at once is one group item (ADR-0085), named in a stable order.
+    assert (
+        removed_item(control, {**control, "skills_disabled": ["b", "a"]})
+        == "skills:a,b"
+    )
+    # A treatment that re-adds a skill the control removed is not an ablation.
+    assert (
+        removed_item(
+            {**control, "skills_disabled": ["a"]},
+            {**control, "skills_disabled": ["b"]},
+        )
+        is None
+    )
+    # Neither is a different prompt.
     assert (
         removed_item(
             control,

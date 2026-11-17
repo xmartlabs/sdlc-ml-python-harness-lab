@@ -170,6 +170,34 @@ Each turn of the loop gives the team one sentence it can defend: *"Removing
 `brainstorm_quick` left success and cost-to-resolve within margin on Haiku over
 three cases; we removed it, and the template is 1.8k tokens lighter."*
 
+## From census to profile
+
+Pruning one skill at a time does not scale to a 25-skill catalog, and pooled
+credit hides a skill that one model relies on. The loop that turns evidence into
+a smaller harness ([ADR-0085](adr/0085-a-project-carries-a-skill-profile-not-the-whole-catalog.md)):
+
+1. **Census, per model.** `make skill-census BY=model` (or `BY=case`,
+   `BY=harness`) lists, per group, how many measured runs opened each skill and
+   what it costs: `desc` characters paid by every run, `body` bytes paid when
+   opened. It runs inside the api container while the stack is up. Under opencode a
+   skill is seen only through `SKILL.md` reads, so check `BY=harness` before
+   trusting a zero.
+2. **Group ablation.** `make prune GROUP=1 MODEL=… CASES="…"` removes every
+   never-opened skill in **one** arm, judged as one item (`skills:a,b,…`) by the
+   same margins. If the group is removable, it goes as a whole. If not, split it
+   and run leave-one-out on the halves. A group also catches two redundant skills
+   that leave-one-out cannot see.
+3. **Profile × model grid.** `make skill-profile-experiment MODELS="small large"
+   CASES="…"` crosses `full`, `core` and `minimal` with each model (mode
+   `harness_by_model`). Pick, per model, the smallest profile that is non-inferior
+   to `full`. Update `.github/skill-profiles.toml` from those verdicts.
+4. **Refine the survivors.** Stage a rewrite under its own name, for example
+   `verify_changes-v2`, then run `make refine-skill SKILL=verify_changes
+   CANDIDATE=verify_changes-v2 MODEL=… CASES="…" PROFILE=minimal`. A sharper
+   description shows as a higher `skill_invoked` rate. A shorter body shows as a
+   lower `cost_to_resolve_usd` at equal success. Add `INVOKE=1` to compare the two
+   versions when both are used.
+
 ## Limits, stated
 
 - **Cloned repositories** (SWE-bench, target repos) are snapshotted as diffs. The
@@ -192,6 +220,7 @@ three cases; we removed it, and the template is 1.8k tokens lighter."*
 |---|---|
 | A run's curve | Run detail → **Per-step reward**, or `GET /api/runs/{id}/step-reward` |
 | Pruning shortlist | `GET /api/scores/step-credit` |
+| Skill census per model / case / harness | `make skill-census`, `GET /api/scores/skill-census?by=model` |
 | Pruning verdicts | Experiment summary → `pruning` (`GET /api/experiments/{id}/summary`) |
 | The math | [step_reward.py](../src/harness_lab_app/step_reward.py), [pruning.py](../src/harness_lab_app/pruning.py) |
 | The decision | [ADR-0076](adr/0076-per-step-reward.md) |

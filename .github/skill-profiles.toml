@@ -1,0 +1,44 @@
+# Skill profiles (ADR-0085): named subsets of the governed catalog.
+#
+# Every skill an agent can see costs context on every run: its description is
+# listed in each adapter file whether or not it is ever opened. A profile names
+# the subset a project, or a model tier, actually carries.
+#
+# A project selects one in `harness.toml` at its root (written by
+# `make init PROFILE=...` or `make skill-profile SET=...`). No `harness.toml`
+# means `full` — every skill, which is what every repository carried before
+# profiles. `full` is built in and is not declared here.
+#
+# Profiles FILTER, never delete: `.github/skills*/` stay complete, so a template
+# sync cannot resurrect what a bootstrap removed, and turning a skill back on is
+# one line. Only the generated views follow the profile.
+#
+# The contents below are PROVISIONAL. They come from the first skill census
+# (2026-11-17): across 18 runs measured per step, only plan_and_execute_feature,
+# verify_changes and writing-plans were ever opened. The lab replaces this
+# judgement with evidence — `make prune GROUP=1` per model tier, then
+# `make skill-profile-experiment` — and this file is updated from those verdicts.
+
+[profile.minimal]
+description = "The working loop only: plan, debug, verify. Default for new projects and small models."
+skills = [
+    "plan_and_execute_feature",
+    "systematic_debugging",
+    "verify_changes",
+    "writing-plans",
+]
+
+[profile.core]
+description = "Minimal plus the skills the governed agents bind and the review/TDD loop."
+extends = "minimal"
+skills = [
+    "brainstorm_quick",
+    "create_domain_contract",
+    "generate_e2e_tests",
+    "generate_implementation_docs",
+    "generate_migration_plan",
+    "refactor_to_clean_architecture",
+    "requesting-code-review",
+    "retrospective",
+    "test-driven-development",
+]

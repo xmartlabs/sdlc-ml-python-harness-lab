@@ -52,6 +52,14 @@ REWRITE_GLOBS: tuple[str, ...] = (
     "tests/**/*.py",
 )
 
+# The skill selection a new project starts from (ADR-0085). A fresh project
+# carries the smallest useful harness; it grows by editing harness.toml, never
+# by deleting skills — the governed sources stay complete so template syncs
+# keep applying cleanly.
+DEFAULT_PROFILE = "minimal"
+PROFILES_FILE = ".github/skill-profiles.toml"
+SELECTION_FILE = "harness.toml"
+
 # Never rewritten: these test the init mechanism itself and reference the
 # template's original package name on purpose.
 REWRITE_EXCLUDE_PREFIXES: tuple[str, ...] = ("tests/init_project/",)
@@ -186,7 +194,60 @@ def create_env_file(root: Path, dry_run: bool) -> None:
         shutil.copyfile(example, env_file)
 
 
-def run(name: str, root: Path, dry_run: bool, force: bool) -> None:
+def check_skill_profile(root: Path, profile: str) -> bool:
+    """Whether a selection can be written; raise on an unknown profile.
+
+    Called before anything is touched, so a typo never leaves a half-renamed
+    clone. False when the template predates profiles (no definitions file):
+    there is nothing to select from, and the project keeps the full catalog.
+    Stdlib-only like the rest of this script (tomllib).
+    """
+    import tomllib
+
+    definitions = root / PROFILES_FILE
+    if not definitions.is_file():
+        return False
+    if profile == "full":
+        return True
+    declared = tomllib.loads(definitions.read_text(encoding="utf-8")).get("profile", {})
+    if profile not in declared:
+        known = ", ".join(sorted({"full", *declared}))
+        raise InitError(f"unknown skill profile {profile!r} (defined: {known})")
+    return True
+
+
+def write_skill_selection(root: Path, profile: str, dry_run: bool) -> None:
+    """Write harness.toml selecting ``profile``; never overwrite an existing one.
+
+    The views are rebuilt afterwards by the ``make sync-skills`` that
+    ``make init`` chains.
+    """
+    selection = root / SELECTION_FILE
+    if selection.exists():
+        print(f"  keep existing {SELECTION_FILE}")
+        return
+    print(f"  write {SELECTION_FILE} (skill profile: {profile})")
+    if not dry_run:
+        selection.write_text(
+            "# Which governed skills this project carries (ADR-0085).\n"
+            "# Profiles are defined in .github/skill-profiles.toml. Skills outside the\n"
+            "# selection stay in .github/skills*/ but are not linked or listed for the\n"
+            "# agent. Change this file, then run `make sync-skills`.\n"
+            "[skills]\n"
+            f'profile = "{profile}"\n'
+            "include = []   # add skills on top of the profile\n"
+            "exclude = []   # drop skills the profile carries\n",
+            encoding="utf-8",
+        )
+
+
+def run(
+    name: str,
+    root: Path,
+    dry_run: bool,
+    force: bool,
+    profile: str = DEFAULT_PROFILE,
+) -> None:
     """Execute the full initialization flow."""
     validate_name(name)
     dist_name = name.replace("_", "-")
@@ -196,6 +257,7 @@ def run(name: str, root: Path, dry_run: bool, force: bool) -> None:
         raise InitError(
             f"src/{OLD_PACKAGE} not found — this clone looks already initialized"
         )
+    select_profile = check_skill_profile(root, profile)
 
     mode = "DRY RUN — no files will be written" if dry_run else "applying changes"
     print(f"Initializing project {name!r} (dist: {dist_name!r}) — {mode}")
@@ -203,6 +265,10 @@ def run(name: str, root: Path, dry_run: bool, force: bool) -> None:
     rename_package_dir(root, name, dry_run)
     rewrite_references(root, name, dist_name, dry_run)
     create_env_file(root, dry_run)
+    if select_profile:
+        write_skill_selection(root, profile, dry_run)
+    else:
+        print(f"  skip {SELECTION_FILE} (no {PROFILES_FILE}: full skill catalog)")
     print("Done. Next steps (chained automatically by `make init`):")
     print("  make install && make sync-skills && make template-remote-setup && make ci")
 
@@ -224,13 +290,19 @@ def main(argv: list[str] | None = None) -> int:
         help="print every action without writing anything",
     )
     parser.add_argument(
+        "--profile",
+        default=DEFAULT_PROFILE,
+        help=f"skill profile the project starts with (default: {DEFAULT_PROFILE}; "
+        "'full' carries every skill)",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="proceed even if the git working tree is dirty",
     )
     args = parser.parse_args(argv)
     try:
-        run(args.name, args.root.resolve(), args.dry_run, args.force)
+        run(args.name, args.root.resolve(), args.dry_run, args.force, args.profile)
     except InitError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

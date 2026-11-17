@@ -52,6 +52,7 @@ __all__ = [
     "claude_step_cost",
     "consulted_items",
     "corpus_credit",
+    "grouped_credit",
     "progress_of",
     "read_step_meta",
     "shell_read_items",
@@ -442,6 +443,29 @@ def corpus_credit(
         rows.values(),
         key=lambda row: (row["runs"], row["reward_when_consulted"], row["item"]),
     )
+
+
+def grouped_credit(
+    keyed: Iterable[tuple[str, Mapping[str, Any]]], available: Iterable[str] = ()
+) -> dict[str, dict[str, Any]]:
+    """:func:`corpus_credit` once per group: the census, sliced (ADR-0085).
+
+    ``keyed`` pairs each trajectory with the group it belongs to (a model, a
+    case, a harness CLI). A skill that is dead weight for one model can be the
+    one another model leans on; a single corpus-wide ranking averages that
+    away, which is exactly the signal a per-tier harness profile needs.
+    """
+    buckets: dict[str, list[Mapping[str, Any]]] = {}
+    for key, trajectory in keyed:
+        buckets.setdefault(key, []).append(trajectory)
+    wanted = list(available)
+    return {
+        key: {
+            "runs_measured": sum(1 for t in trajectories if t.get("measured")),
+            "items": corpus_credit(trajectories, available=wanted),
+        }
+        for key, trajectories in sorted(buckets.items())
+    }
 
 
 def build_trajectory(steps: Sequence[Mapping[str, Any]]) -> Trajectory:

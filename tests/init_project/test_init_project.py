@@ -196,3 +196,47 @@ def test_rewrite_text_preserves_upstream_lines() -> None:
     assert "import demo\n" in text
     assert replaced == 1
     assert skipped == 1
+
+
+# --------------------------------------------------------------------------
+# Skill profile selection (ADR-0085)
+# --------------------------------------------------------------------------
+
+
+def _add_profiles(root: Path) -> None:
+    (root / ".github").mkdir(exist_ok=True)
+    (root / ".github/skill-profiles.toml").write_text(
+        '[profile.minimal]\nskills = ["verify_changes"]\n', encoding="utf-8"
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "profiles")
+
+
+def test_init_selects_the_minimal_profile_by_default(mini_repo: Path) -> None:
+    _add_profiles(mini_repo)
+    assert _run(mini_repo) == 0
+    text = (mini_repo / "harness.toml").read_text(encoding="utf-8")
+    assert 'profile = "minimal"' in text
+
+
+def test_init_refuses_an_unknown_profile_before_touching_anything(
+    mini_repo: Path,
+) -> None:
+    _add_profiles(mini_repo)
+    before = _snapshot(mini_repo)
+    assert _run(mini_repo, "--profile", "tiny") == 1
+    assert _snapshot(mini_repo) == before
+
+
+def test_init_keeps_an_existing_selection(mini_repo: Path) -> None:
+    _add_profiles(mini_repo)
+    (mini_repo / "harness.toml").write_text('[skills]\nprofile = "full"\n', "utf-8")
+    _git(mini_repo, "add", "-A")
+    _git(mini_repo, "commit", "-q", "-m", "selection")
+    assert _run(mini_repo) == 0
+    assert 'profile = "full"' in (mini_repo / "harness.toml").read_text("utf-8")
+
+
+def test_a_template_without_profiles_keeps_the_full_catalog(mini_repo: Path) -> None:
+    assert _run(mini_repo) == 0
+    assert not (mini_repo / "harness.toml").exists()

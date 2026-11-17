@@ -1197,6 +1197,16 @@ def create_app() -> FastAPI:
 
         return StepRewardService(session).corpus()
 
+    @app.get("/api/scores/skill-census")
+    def skill_census(by: str = "model", session: Session = Depends(get_session)):
+        """Skill usage per model, case or harness, with each skill's size (ADR-0085)."""
+        from harness_lab_app.step_reward_service import StepRewardService
+
+        try:
+            return StepRewardService(session).census(by=by)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.get("/api/runs/{run_id}/step-reward")
     def get_step_reward(run_id: str, session: Session = Depends(get_session)):
         """The run's per-step reward: progress after each step (ADR-0076)."""

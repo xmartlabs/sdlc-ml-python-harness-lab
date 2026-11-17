@@ -577,14 +577,33 @@ ladder:
 	@[ -n "$(MODEL)" ] || { echo "❌ MODEL is required. Example: MODEL=claude-haiku-4-5-20251001"; exit 1; }
 	@uv run python scripts/ladder.py $(if $(CASES),--cases $(CASES),) --model $(MODEL) --harness $(or $(HARNESS),claude) --reps $(or $(REPS),2) $(if $(LAUNCH),--launch,)
 
+# Lab scripts that open the database run inside the api container while the
+# stack is up: on the Docker Desktop bind mount, SQLite's WAL index is not shared
+# between the host and the containers. With the stack down they run on the host.
+# An explicit HARNESS_LAB_DATABASE_URL (e.g. a scratch copy) always runs on the
+# host: the container would ignore it and write to the live lab database.
+# Usage in a recipe: @$(LAB_PY) scripts/foo.py --flag ...
+LAB_PY = py="uv run python"; [ -z "$$HARNESS_LAB_DATABASE_URL" ] && docker compose ps --services --filter status=running 2>/dev/null | grep -qx api && py="docker compose exec -T api python"; $$py
+
 # Leave-one-out pruning (ADR-0076): full harness vs the same harness minus one
 # skill, per skill. The summary says removable / keep / inconclusive per skill.
 # Without ITEMS, the skills the per-step reward credits least are tried first.
-# Usage: make prune MODEL=claude-haiku-4-5-20251001 CASES="tetris-v2 cli-textstats-v1 clinic-slots-t1" [ITEMS="a b" TOP=4 REPS=3 HARNESS=claude LAUNCH=1]
+# GROUP=1 (ADR-0085) removes the items together in one arm; without ITEMS it
+# takes every skill no measured run ever opened (see `make skill-census`).
+# ALL=1 removes the whole catalog in one arm: does this model need skills at all?
+# Usage: make prune MODEL=claude-haiku-4-5-20251001 CASES="tetris-v2 cli-textstats-v1 clinic-slots-t1" [ITEMS="a b" TOP=4 REPS=3 HARNESS=claude GROUP=1 ALL=1 PROMPT=default LAUNCH=1]
 prune:
 	@[ -n "$(MODEL)" ] || { echo "❌ MODEL is required. Example: MODEL=claude-haiku-4-5-20251001"; exit 1; }
 	@[ -n "$(CASES)" ] || { echo "❌ CASES is required (3+ cases for a verdict)."; exit 1; }
-	@uv run python scripts/prune.py --cases $(CASES) --model $(MODEL) --harness $(or $(HARNESS),claude) --reps $(or $(REPS),3) --top $(or $(TOP),4) $(if $(ITEMS),--items $(ITEMS),) $(if $(LAUNCH),--launch,)
+	@$(LAB_PY) scripts/prune.py --cases $(CASES) --model $(MODEL) --harness $(or $(HARNESS),claude) --reps $(or $(REPS),3) --top $(or $(TOP),4) $(if $(ITEMS),--items $(ITEMS),) $(if $(GROUP),--group,) $(if $(ALL),--group --all,) $(if $(PROMPT),--prompt $(PROMPT),) $(if $(LAUNCH),--launch,)
+
+# Skill census (ADR-0085): which skills each model / case / harness opens, with
+# what each skill costs to carry. Read-only. Runs inside the api container when
+# the stack is up — the lab DB must not be opened from the host across the
+# Docker Desktop bind mount.
+# Usage: make skill-census [BY=model|case|harness] [JSON=1]
+skill-census:
+	@$(LAB_PY) scripts/skill_census.py --by $(or $(BY),model) $(if $(JSON),--json,)
 
 # Read-only readiness checklist before a demo: docker, credential (names only),
 # API and cases. Writes nothing. Usage: make demo-check [API=http://localhost:8009]
@@ -766,12 +785,15 @@ ci:
 # Renames the package, rewrites references (keeping the upstream template URL),
 # creates .env, then chains environment setup and the read-only gates.
 # Usage:
-#   make init NAME=my_project
+#   make init NAME=my_project [PROFILE=minimal|core|full]
+# PROFILE picks the skills the project starts with (ADR-0085; default minimal):
+# it writes harness.toml, and `sync-skills` links and lists only those. The
+# other skills stay in .github/skills*/, one harness.toml line away.
 # Preview without writing:
 #   python3 scripts/init_project.py --name my_project --dry-run
 init:
 	@[ -n "$(NAME)" ] || { echo "❌ Usage: make init NAME=my_project"; exit 1; }
-	@python3 scripts/init_project.py --name "$(NAME)"
+	@python3 scripts/init_project.py --name "$(NAME)" $(if $(PROFILE),--profile "$(PROFILE)",)
 	@$(MAKE) install
 	@$(MAKE) sync-skills
 	@$(MAKE) template-remote-setup
@@ -926,6 +948,26 @@ sync-skills:
 check-sync:
 	@$(SKILLS_SYNC) check
 
+# Skill profiles (ADR-0085): list them and what this repo carries, or select one
+# (writes harness.toml and rebuilds the views). Usage: make skill-profile [SET=minimal]
+skill-profile:
+	@$(SKILLS_SYNC) profile $(if $(SET),--set $(SET),)
+
+# Lab: a profile x model grid (harness_by_model). Usage:
+# make skill-profile-experiment MODELS="claude-haiku-4-5-20251001 claude-opus-5-5" CASES="a b c" [PROFILES="full core minimal" REPS=3 LAUNCH=1]
+skill-profile-experiment:
+	@[ -n "$(MODELS)" ] || { echo "❌ MODELS is required (two or more)."; exit 1; }
+	@[ -n "$(CASES)" ] || { echo "❌ CASES is required (3+ cases for a verdict)."; exit 1; }
+	@$(LAB_PY) scripts/profile_experiment.py --models $(MODELS) --cases $(CASES) $(if $(PROFILES),--profiles $(PROFILES),) --reps $(or $(REPS),3) --harness $(or $(HARNESS),claude) $(if $(LAUNCH),--launch,)
+
+# Lab: A/B a rewritten skill (staged under its own name) against the governed one.
+# Usage: make refine-skill SKILL=verify_changes CANDIDATE=verify_changes-v2 MODEL=... CASES="a b c" [PROFILE=minimal INVOKE=1 REPS=3 LAUNCH=1]
+refine-skill:
+	@[ -n "$(SKILL)" ] && [ -n "$(CANDIDATE)" ] || { echo "❌ SKILL and CANDIDATE are required."; exit 1; }
+	@[ -n "$(MODEL)" ] || { echo "❌ MODEL is required."; exit 1; }
+	@[ -n "$(CASES)" ] || { echo "❌ CASES is required (3+ cases for a verdict)."; exit 1; }
+	@$(LAB_PY) scripts/refine_skill.py --skill $(SKILL) --candidate $(CANDIDATE) --model $(MODEL) --cases $(CASES) $(if $(PROFILE),--profile $(PROFILE),) $(if $(INVOKE),--invoke,) --reps $(or $(REPS),3) --harness $(or $(HARNESS),claude) $(if $(LAUNCH),--launch,)
+
 # Regenerate each case's `harness` prompt from its `default` sibling (ADR-0047).
 prompts:
 	@. $(VENV_DIR)/bin/activate && python scripts/build_prompt_variants.py
@@ -943,7 +985,7 @@ help:
 	@echo "🧰 Agentic Harness Lab - Available Commands:"
 	@echo ""
 	@echo "Development Setup:"
-	@echo "  make init NAME=my_project Bootstrap a fresh clone as a new project (rename + env + gates)"
+	@echo "  make init NAME=my_project Bootstrap a fresh clone as a new project (rename + env + gates; PROFILE=minimal)"
 	@echo "  make install              Set up virtual environment and dependencies"
 	@echo "  make setup-hooks          Set up pre-commit hooks"
 	@echo "  make generate-requirements Generate requirements.txt from current environment"
@@ -999,6 +1041,9 @@ help:
 	@echo "  make render-adapters     Regenerate the managed skill region in every adapter file"
 	@echo "  make sync-skills         Sync external skills to .github/skills-external and refresh native adapters"
 	@echo "  make check-sync          Fail if generated skill artifacts are stale (CI drift gate)"
+	@echo "  make skill-profile [SET=] List skill profiles / select one into harness.toml (ADR-0085)"
+	@echo "  make skill-census        Skill usage per model/case/harness, with each skill's size"
+	@echo "  make skill-profile-experiment / refine-skill   Lab experiments on profiles and rewrites"
 	@echo "  make purge-external-skills Purge all external skills and reset metadata"
 	@echo "  make langfuse-check      Verify the Langfuse host and credentials"
 	@echo "  make langfuse-export     Export one run's traces (RUN=... [DRY=1])"
@@ -1019,4 +1064,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test images-3d sandbox-build clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill prune
+.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test images-3d sandbox-build clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill prune skill-census skill-profile skill-profile-experiment refine-skill
