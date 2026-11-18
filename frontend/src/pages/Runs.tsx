@@ -94,7 +94,6 @@ const MESSAGES = defineMessages({
     newRun: "New run",
     noCaseSelected: "No case selected",
     compareLinkLabel: "Compare",
-    presetFullSdlc: "Preset: Full SDLC + Qwen",
     leaveBatchMode: "Leave batch mode",
     batchMode: "Batch mode",
     batch: {
@@ -283,7 +282,6 @@ const MESSAGES = defineMessages({
     newRun: "Nueva corrida",
     noCaseSelected: "Ningún caso seleccionado",
     compareLinkLabel: "Comparar",
-    presetFullSdlc: "Preset: SDLC completo + Qwen",
     leaveBatchMode: "Salir del modo lote",
     batchMode: "Modo lote",
     batch: {
@@ -456,8 +454,8 @@ export function Runs({
   const navigate = useNavigate();
   const [runId, setRunId] = useState("");
   const [label, setLabel] = useState("");
-  const [caseId, setCaseId] = useState(cases[0]?.case_id ?? "tetris-v1");
-  const [promptVariant, setPromptVariant] = useState("sdlc");
+  const [caseId, setCaseId] = useState(cases[0]?.case_id ?? "");
+  const [promptVariant, setPromptVariant] = useState("harness");
   const [harness, setHarness] = useState("opencode");
   const [plannerModel, setPlannerModel] = useState("");
   const [executorModel, setExecutorModel] = useState(FALLBACK_EXECUTOR_MODEL);
@@ -683,6 +681,17 @@ export function Runs({
     [caseId, cases]
   );
 
+  // The form must send the case it shows. `selectedCase` falls back to the
+  // first case when `caseId` names none of them (the list loaded after the
+  // form, or a case was removed), and the dropdown then displays that one —
+  // while `caseId` kept the stale id and the run went out for a case that does
+  // not exist. Re-point it at what the screen shows.
+  useEffect(() => {
+    if (selectedCase !== null && selectedCase.case_id !== caseId) {
+      setCaseId(selectedCase.case_id);
+    }
+  }, [selectedCase, caseId]);
+
   // The case says how many steps its task takes; the form used to ignore it and
   // queue every run at 10, so a one-step case advertised a ten-step budget it
   // was never going to use.
@@ -725,10 +734,7 @@ export function Runs({
     if (promptVariantNames.includes(promptVariant)) {
       return;
     }
-    const preferred =
-      caseId === "tetris-v1" && promptVariantNames.includes("sdlc")
-        ? "sdlc"
-        : promptVariantNames[0];
+    const preferred = promptVariantNames.includes("sdlc") ? "sdlc" : promptVariantNames[0];
     setPromptVariant(preferred);
   }, [caseId, promptVariant, promptVariantNames]);
 
@@ -778,15 +784,6 @@ export function Runs({
     }
     return parts.join(" \\\n  ");
   }, [caseId, dryRun, effectiveRunLabel, executorEffort, executorModel, maxSteps, plannerModel, promptVariant, resume]);
-
-  const applySdlcQwenPreset = () => {
-    setCaseId("tetris-v1");
-    setPromptVariant("sdlc");
-    setHarness("opencode");
-    setPlannerModel("");
-    setExecutorModel(FALLBACK_EXECUTOR_MODEL);
-    setMaxSteps(10);
-  };
 
   // A verdict only describes the configuration that produced it, so any edit
   // voids it rather than leaving a stale green tick above the Create button.
@@ -977,9 +974,6 @@ export function Runs({
           <span className="muted">{selectedCase ? selectedCase.name : m.noCaseSelected}</span>
         </div>
         <div className="panel-actions run-presets">
-          <button className="primary" onClick={applySdlcQwenPreset} type="button">
-            {m.presetFullSdlc}
-          </button>
           <button
             onClick={() => (batchMode ? setBatchMode(false) : enterBatchMode())}
             type="button"

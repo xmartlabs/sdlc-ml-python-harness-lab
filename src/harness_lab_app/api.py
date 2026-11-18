@@ -2215,6 +2215,30 @@ def create_app() -> FastAPI:
     ):
         return {"command": RunService(session).preview_command(run_id, config)}
 
+    def _unknown_cases(session: Session, case_ids: list[str]) -> list[str]:
+        """Case ids with no ``Case`` row — the runner would refuse them.
+
+        Every runnable case is a row (benchmarks are seeded into the table and
+        the worker stages ``case_spec.json`` from it). Checked at the API, where
+        a form or a script can send a stale id, so the run is refused before it
+        is queued instead of failing in the runner with "Unknown case".
+        """
+        from harness_lab_app.models import Case
+
+        wanted = sorted(set(case_ids))
+        known = set(
+            session.exec(
+                select(Case.case_id).where(Case.case_id.in_(wanted))  # type: ignore[attr-defined]
+            ).all()
+        )
+        return [case_id for case_id in wanted if case_id not in known]
+
+    def _unknown_case_detail(missing: list[str]) -> str:
+        return (
+            f"Unknown case(s): {', '.join(missing)}. Pick one from GET /api/cases "
+            "(seed the checked-in benchmarks from the Cases page if it is empty)."
+        )
+
     @app.post("/api/runs/preflight")
     def preflight_run_config(
         config: RunConfigCreate, session: Session = Depends(get_session)
@@ -2226,6 +2250,9 @@ def create_app() -> FastAPI:
         and measuring its context window) is memoized, so pressing Create right
         after costs nothing extra.
         """
+        missing = _unknown_cases(session, [config.case_id])
+        if missing:
+            return {"ok": False, "detail": _unknown_case_detail(missing)}
         try:
             RunService(session).preflight(config)
         except RunPreflightError as exc:
@@ -2234,6 +2261,9 @@ def create_app() -> FastAPI:
 
     @app.post("/api/runs")
     def create_run(data: RunCreate, session: Session = Depends(get_session)):
+        missing = _unknown_cases(session, [data.config.case_id])
+        if missing:
+            raise HTTPException(status_code=422, detail=_unknown_case_detail(missing))
         try:
             return RunService(session, enqueue=enqueue_run).create_run(data)
         except RunPreflightError as exc:
@@ -2251,6 +2281,9 @@ def create_app() -> FastAPI:
         request with 422 and persists nothing, so the caller never has to unpick
         a partially-created batch.
         """
+        missing = _unknown_cases(session, list(data.case_ids))
+        if missing:
+            raise HTTPException(status_code=422, detail=_unknown_case_detail(missing))
         try:
             batch_id, runs = RunService(session, enqueue=enqueue_run).create_batch(data)
         except RunBatchTooLargeError as exc:
