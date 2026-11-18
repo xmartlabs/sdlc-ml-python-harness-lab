@@ -423,6 +423,13 @@ def create_app() -> FastAPI:
 
         return _list()
 
+    @app.get("/api/harness/profiles")
+    def list_skill_profiles():
+        """Harness levels a run can pick: full, minimal, ... (ADR-0085)."""
+        from harness_lab_app.skills_catalog import skill_profiles
+
+        return skill_profiles()
+
     @app.get("/api/docs")
     def list_docs():
         from harness_lab_app.docs_catalog import list_docs as _list
@@ -1259,6 +1266,11 @@ def create_app() -> FastAPI:
                 }
             )
         return rows
+
+    @app.get("/api/experiments/pruning")
+    def pruning_overview(session: Session = Depends(get_session)):
+        """Every pruning experiment's removal verdicts, newest first (ADR-0085)."""
+        return ExperimentService(session).pruning_overview()
 
     @app.get("/api/experiments/{experiment_id}")
     def get_experiment(experiment_id: str, session: Session = Depends(get_session)):

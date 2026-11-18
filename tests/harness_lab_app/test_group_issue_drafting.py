@@ -160,7 +160,7 @@ def test_synthesize_group_issue_is_sanitized(tmp_path: Path) -> None:
     markdown, form = drafting.synthesize_group_issue(
         _items(),
         run_dirs,
-        repository="xmartlabs/sdlc-ml-python-base",
+        repository="xmartlabs/sdlc-ml-python-template",
         created_at=FIXED,
         gateway=lambda *_args: json.dumps(_DRAFT),
     )
@@ -187,7 +187,7 @@ def test_synthesize_group_issue_prepends_target_surface(tmp_path: Path) -> None:
     markdown, _form = drafting.synthesize_group_issue(
         _items(),
         run_dirs,
-        repository="xmartlabs/sdlc-ml-python-base",
+        repository="xmartlabs/sdlc-ml-python-template",
         created_at=FIXED,
         gateway=lambda *_args: json.dumps(_DRAFT),
     )
@@ -206,7 +206,7 @@ def test_synthesize_group_issue_backstop_rejects_echoed_run_id(tmp_path: Path) -
         drafting.synthesize_group_issue(
             _items()[:1],
             run_dirs,
-            repository="xmartlabs/sdlc-ml-python-base",
+            repository="xmartlabs/sdlc-ml-python-template",
             created_at=FIXED,
             gateway=lambda *_args: json.dumps(leaky),
         )
@@ -219,7 +219,7 @@ def test_synthesize_group_issue_skips_runs_without_metadata(tmp_path: Path) -> N
     markdown, _form = drafting.synthesize_group_issue(
         _items(),
         [complete, bare],
-        repository="xmartlabs/sdlc-ml-python-base",
+        repository="xmartlabs/sdlc-ml-python-template",
         created_at=FIXED,
         gateway=lambda *_args: json.dumps(_DRAFT),
     )

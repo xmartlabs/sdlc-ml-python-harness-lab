@@ -545,7 +545,7 @@ def _pruning_block(
                 "removed": removed_skills(item),
             }
         )
-    order = {"keep": 0, "inconclusive": 1, "removable": 2}
+    order = {"keep": 0, "inconclusive": 1, "no_signal": 2, "removable": 3}
     return sorted(verdicts, key=lambda v: (order.get(v["decision"], 9), v["item"]))
 
 
@@ -1014,6 +1014,53 @@ class ExperimentService:
                 else None
             ),
         }
+
+    def pruning_overview(self) -> list[dict[str, Any]]:
+        """Every pruning experiment's verdicts, with the model and prompt it held.
+
+        The harness-improvement worklist for skills (ADR-0085): what each
+        ablation says can go, for which model and under which prompt. A verdict
+        is only ever about that model on those cases, so both travel with it.
+        Newest first; an experiment with no verdict yet is listed with none.
+        """
+        # Local: experiment_audit_service imports this module.
+        from harness_lab_app.experiment_audit_service import TERMINAL_STATES
+
+        rows: list[dict[str, Any]] = []
+        for experiment in self.list_experiments():
+            if not str(experiment.family_id or "").startswith(PRUNING_FAMILY_PREFIX):
+                continue
+            runs = self.runs(experiment.experiment_id)
+            control = next(
+                (
+                    c
+                    for c in self.conditions(experiment.experiment_id)
+                    if c.role == ConditionRole.control
+                ),
+                None,
+            )
+            config = (
+                self.session.get(RunConfig, runs[0].run_config_id) if runs else None
+            )
+            summary = self.summarize(experiment.experiment_id) if runs else {}
+            rows.append(
+                {
+                    "experiment_id": experiment.experiment_id,
+                    "created_at": experiment.created_at,
+                    "case_ids": list(experiment.case_ids),
+                    "repetitions": experiment.repetitions,
+                    "model": getattr(config, "executor_model", None),
+                    "harness": getattr(config, "harness", None),
+                    "prompt": (control.overrides or {}).get("prompt_variant")
+                    if control is not None
+                    else None,
+                    "runs": len(runs),
+                    "finished": bool(runs)
+                    and all(run.state in TERMINAL_STATES for run in runs),
+                    "verdicts": summary.get("pruning") or [],
+                }
+            )
+        return rows
 
     def try_complete(self, experiment_id: str) -> Experiment | None:
         """Mark a running experiment complete once every run has stopped.

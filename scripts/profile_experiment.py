@@ -15,7 +15,7 @@ Usage:
     uv run python scripts/profile_experiment.py \\
         --models claude-haiku-4-5-20251001 claude-opus-5-5 \\
         --cases tetris-v2 cli-textstats-v1 clinic-slots-t1 \\
-        [--profiles full core minimal] [--reps 3] [--harness claude] [--launch]
+        [--profiles full minimal] [--reps 3] [--harness claude] [--launch]
 
 Cost: profiles x models x cases x reps runs. Three profiles, two models, three
 cases, three repetitions is 54 runs.
@@ -127,8 +127,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--profiles",
         nargs="+",
-        default=[FULL, "core", "minimal"],
-        help="first one is the reference level (default: full core minimal)",
+        default=[FULL, "minimal"],
+        help="first one is the reference level (default: full minimal)",
     )
     parser.add_argument(
         "--harness", default="claude", choices=["claude", "opencode", "codex"]

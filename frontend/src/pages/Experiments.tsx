@@ -8,6 +8,7 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { CapabilityPanel } from "../components/CapabilityPanel";
 import { FactorialPanel } from "../components/FactorialPanel";
 import { ModelComparisonPanel } from "../components/ModelComparisonPanel";
+import { PruningPanel } from "../components/PruningPanel";
 import { HelpPanel } from "../components/HelpPanel";
 import { Markdown } from "../components/Markdown";
 import { EffortPicker } from "../components/EffortPicker";
@@ -1664,6 +1665,10 @@ function ExperimentDetail({
       {summary.factorial ? <FactorialPanel block={summary.factorial} /> : null}
 
       {summary.capability ? <CapabilityPanel block={summary.capability} /> : null}
+
+      {summary.pruning && summary.pruning.length > 0 ? (
+        <PruningPanel verdicts={summary.pruning} />
+      ) : null}
 
       {summary.comparisons.map((comparison) => (
         <div className="card" key={`${comparison.control}-${comparison.treatment}`}>

@@ -32,7 +32,7 @@ def _proposal(
         title="Require a retry budget before re-reading",
         created_at=FIXED,
         source=ProposalSource(
-            repository="xmartlabs/sdlc-ml-python-base",
+            repository="xmartlabs/sdlc-ml-python-template",
             runs=[
                 RunEvidence(
                     run_id="dbg-K-001",
@@ -63,7 +63,7 @@ def _proposal(
 def test_governance_channel_for_docs_only() -> None:
     form = issue_form.build_issue_form(
         _proposal(artifacts=[".github/architecture.md", ".github/standards.md"]),
-        repository="xmartlabs/sdlc-ml-python-base",
+        repository="xmartlabs/sdlc-ml-python-template",
     )
     channel = next(f for f in form.fields if f.id == "channel")
     assert channel.value == "governance"
@@ -73,7 +73,7 @@ def test_governance_channel_for_docs_only() -> None:
 def test_platform_channel_when_machinery_touched() -> None:
     form = issue_form.build_issue_form(
         _proposal(artifacts=[".github/standards.md", "Makefile"]),
-        repository="xmartlabs/sdlc-ml-python-base",
+        repository="xmartlabs/sdlc-ml-python-template",
     )
     channel = next(f for f in form.fields if f.id == "channel")
     assert channel.value == "platform"
@@ -85,7 +85,7 @@ def test_semver_minor_on_additive_wording() -> None:
         _proposal(
             artifacts=[".github/standards.md"], change="Add a new preflight gate."
         ),
-        repository="xmartlabs/sdlc-ml-python-base",
+        repository="xmartlabs/sdlc-ml-python-template",
     )
     assert next(f for f in form.fields if f.id == "semver").value == "semver:minor"
 
@@ -95,7 +95,7 @@ def test_semver_major_on_removal_wording() -> None:
         _proposal(
             artifacts=[".github/standards.md"], change="Remove the legacy retry rule."
         ),
-        repository="xmartlabs/sdlc-ml-python-base",
+        repository="xmartlabs/sdlc-ml-python-template",
     )
     assert next(f for f in form.fields if f.id == "semver").value == "semver:major"
 
@@ -103,10 +103,10 @@ def test_semver_major_on_removal_wording() -> None:
 def test_url_is_prefilled_and_decodes_back() -> None:
     form = issue_form.build_issue_form(
         _proposal(artifacts=[".github/standards.md"]),
-        repository="xmartlabs/sdlc-ml-python-base",
+        repository="xmartlabs/sdlc-ml-python-template",
     )
     parsed = urlparse(form.url)
-    assert parsed.path == "/xmartlabs/sdlc-ml-python-base/issues/new"
+    assert parsed.path == "/xmartlabs/sdlc-ml-python-template/issues/new"
     q = parse_qs(parsed.query)
     assert q["template"] == ["harness-improvement.yml"]
     assert q["title"][0].startswith("[HEP] ")
@@ -121,13 +121,15 @@ def test_leaking_field_is_blocked() -> None:
         change="Read /Users/marcos/secrets every step.",
     )
     with pytest.raises(sanitizer.SanitizationError):
-        issue_form.build_issue_form(leaky, repository="xmartlabs/sdlc-ml-python-base")
+        issue_form.build_issue_form(
+            leaky, repository="xmartlabs/sdlc-ml-python-template"
+        )
 
 
 def test_validation_field_masks_case_ids_and_declares_lab_scope() -> None:
     form = issue_form.build_issue_form(
         _proposal(artifacts=[".github/standards.md"]),
-        repository="xmartlabs/sdlc-ml-python-base",
+        repository="xmartlabs/sdlc-ml-python-template",
     )
     validation = next(f for f in form.fields if f.id == "validation")
     assert "lab-executed" in validation.label

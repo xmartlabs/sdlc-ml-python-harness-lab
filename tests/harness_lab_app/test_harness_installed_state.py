@@ -154,7 +154,7 @@ def test_read_sync_protocol_at_ref(repo: Path) -> None:
 def _installed() -> InstalledManifest:
     return InstalledManifest(
         installed=InstalledRef(
-            repository="xmartlabs/sdlc-ml-python-base",
+            repository="xmartlabs/sdlc-ml-python-template",
             ref="v0.2.0",
             commit="a" * 40,
             channel="governance",

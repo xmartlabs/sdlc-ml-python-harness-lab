@@ -23,7 +23,7 @@ export ENVIRONMENT=localhost
 VENV_DIR ?= .venv
 KERNEL_NAME=ai-kernel
 TEMPLATE_REMOTE ?= template
-TEMPLATE_REPO ?= git@github.com:xmartlabs/sdlc-ml-python-base.git
+TEMPLATE_REPO ?= git@github.com:xmartlabs/sdlc-ml-python-template.git
 TEMPLATE_BRANCH ?= main
 
 # Declarative skills/adapters sync engine (replaces inline bash projection).
@@ -785,7 +785,7 @@ ci:
 # Renames the package, rewrites references (keeping the upstream template URL),
 # creates .env, then chains environment setup and the read-only gates.
 # Usage:
-#   make init NAME=my_project [PROFILE=minimal|core|full]
+#   make init NAME=my_project [PROFILE=minimal|full]
 # PROFILE picks the skills the project starts with (ADR-0085; default minimal):
 # it writes harness.toml, and `sync-skills` links and lists only those. The
 # other skills stay in .github/skills*/, one harness.toml line away.
@@ -954,7 +954,7 @@ skill-profile:
 	@$(SKILLS_SYNC) profile $(if $(SET),--set $(SET),)
 
 # Lab: a profile x model grid (harness_by_model). Usage:
-# make skill-profile-experiment MODELS="claude-haiku-4-5-20251001 claude-opus-5-5" CASES="a b c" [PROFILES="full core minimal" REPS=3 LAUNCH=1]
+# make skill-profile-experiment MODELS="claude-haiku-4-5-20251001 claude-opus-5-5" CASES="a b c" [PROFILES="full minimal" REPS=3 LAUNCH=1]
 skill-profile-experiment:
 	@[ -n "$(MODELS)" ] || { echo "❌ MODELS is required (two or more)."; exit 1; }
 	@[ -n "$(CASES)" ] || { echo "❌ CASES is required (3+ cases for a verdict)."; exit 1; }

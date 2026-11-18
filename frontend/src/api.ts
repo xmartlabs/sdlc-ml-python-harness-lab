@@ -2,6 +2,9 @@ import type {
   ArtifactRecord,
   AttentionFeed,
   AttributionRecord,
+  PruningOverviewRow,
+  SkillCensusRecord,
+  SkillProfileRecord,
   StepRewardRecord,
   AuditRecord,
   CompareAuditRecord,
@@ -220,6 +223,8 @@ export const api = {
     }),
   logout: () => request<{ authenticated: boolean }>("/api/auth/logout", { method: "POST" }),
   listHarnessSkills: () => request<HarnessSkill[]>("/api/harness/skills"),
+  listSkillProfiles: () =>
+    request<Record<string, SkillProfileRecord>>("/api/harness/profiles"),
   // `refresh` drops the gateway and LM Studio caches before rebuilding the
   // list — the two halves of the picker have different cache lifetimes, so a
   // reload has to clear both or it looks like it only half-worked.
@@ -714,6 +719,9 @@ export const api = {
     request<AttributionRecord>(`/api/runs/${runId}/attribution`),
   getStepReward: (runId: string) =>
     request<StepRewardRecord>(`/api/runs/${runId}/step-reward`),
+  listPruning: () => request<PruningOverviewRow[]>("/api/experiments/pruning"),
+  getSkillCensus: (by: SkillCensusRecord["by"] = "model") =>
+    request<SkillCensusRecord>(`/api/scores/skill-census?by=${by}`),
   indexAttribution: (runId: string) =>
     request<AttributionRecord>(`/api/runs/${runId}/attribution/index`, {
       method: "POST"

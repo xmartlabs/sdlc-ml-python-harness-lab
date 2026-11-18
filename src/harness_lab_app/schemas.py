@@ -1,7 +1,7 @@
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from harness_lab_app.models import (
     CaseProvenance,
@@ -216,6 +216,30 @@ def _normalize_effort(value: str | None) -> str:
     return normalized
 
 
+def _apply_skill_profile(model: Any) -> Any:
+    """Expand ``skill_profile`` into ``skills_disabled`` (ADR-0085).
+
+    A profile is a named, reproducible ablation: the run records the exact
+    list it hid, so the condition hash and every comparison keep reading
+    ``skills_disabled`` as before. Combining a profile with a hand-written
+    list would make the arm ambiguous, so it is refused.
+    """
+    profile = (model.skill_profile or "").strip()
+    if not profile or profile == "full":
+        model.skill_profile = profile or ""
+        return model
+    from harness_lab_app.skills_catalog import profile_disabled
+
+    disabled = profile_disabled(profile)
+    if model.skills_disabled and sorted(model.skills_disabled) != disabled:
+        raise ValueError(
+            "skill_profile and skills_disabled are exclusive: pick a profile or "
+            "list the skills to hide, not both"
+        )
+    model.skills_disabled = disabled
+    return model
+
+
 class RunConfigCreate(BaseModel):
     case_id: str
     prompt_variant: str
@@ -240,6 +264,10 @@ class RunConfigCreate(BaseModel):
     # Per-run harness ablation: governed skills to hide from the agent for this
     # run (empty = full harness, the historical default arm).
     skills_disabled: list[str] = Field(default_factory=list)
+    # Harness level (ADR-0085): "full" (default, every skill) or a profile from
+    # .github/skill-profiles.toml such as "minimal". Expanded into
+    # `skills_disabled` on validation, so the run records the exact list.
+    skill_profile: str = ""
     # Staged/experimental skills (data/skills_staging/<name>/) to add for this
     # run only. Unchecked by default in the UI.
     skills_extra: list[str] = Field(default_factory=list)
@@ -249,6 +277,10 @@ class RunConfigCreate(BaseModel):
     # name here must be available in this run — staged via `skills_extra`, or
     # governed and not in `skills_disabled`.
     skills_invoke: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _expand_skill_profile(self) -> "RunConfigCreate":
+        return _apply_skill_profile(self)
 
     # External target repository (ADR-0029). `target_repo_id` is what the run
     # form sends; `target_ref` defaults to the repository's own default_ref.
@@ -488,8 +520,14 @@ class RunBatchCreate(BaseModel):
     max_steps: int = 1
     dry_run: bool = False
     skills_disabled: list[str] = Field(default_factory=list)
+    # Harness level for every run of the batch (ADR-0085); see RunConfigCreate.
+    skill_profile: str = ""
     skills_extra: list[str] = Field(default_factory=list)
     skills_invoke: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _expand_skill_profile(self) -> "RunBatchCreate":
+        return _apply_skill_profile(self)
 
     @field_validator("case_ids", "prompt_variants", "harnesses")
     @classmethod

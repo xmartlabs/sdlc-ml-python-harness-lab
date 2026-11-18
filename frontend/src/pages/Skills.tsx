@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { SkillCensusPanel } from "../components/SkillCensusPanel";
 import { defineMessages, useMessages } from "../i18n";
 import type {
   HarnessSkill,
@@ -936,6 +937,8 @@ export function Skills() {
           </div>
         )}
       </section>
+
+      <SkillCensusPanel />
 
       <section className="panel">
         <div className="panel-head">

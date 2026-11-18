@@ -55,7 +55,7 @@ prints every skill you can export, with its kind. A skill you staged and
 
 A new project is better started from the template itself, which brings the
 governance, the CI gate and the working loop together:
-[`ml-python-base`](https://github.com/xmartlabs/sdlc-ml-python-base) →
+[`ml-python-base`](https://github.com/xmartlabs/sdlc-ml-python-template) →
 *Use this template* → `make init`. To keep a project born from the template up to
 date with its later releases: [updating existing projects](updating-existing-projects.md)
 and [template sync](template-sync.md).

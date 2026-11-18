@@ -5,6 +5,7 @@ import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { formatRunDate } from "../dates";
 import { IssueFormView } from "../components/IssueFormView";
+import { PruningOverview } from "../components/PruningOverview";
 import { defineMessages, useMessages } from "../i18n";
 import type { GroupIssueResult, SavedProposalRecord } from "../types";
 
@@ -305,6 +306,7 @@ export function Improvements() {
         </div>
       </header>
       {loadError ? <ErrorBanner message={loadError} onDismiss={() => setLoadError(null)} /> : null}
+      <PruningOverview />
       {proposals !== null && proposals.length === 0 ? (
         <EmptyState title={m.emptyTitle} description={m.emptyDescription} />
       ) : null}

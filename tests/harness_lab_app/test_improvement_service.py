@@ -46,7 +46,7 @@ def _proposal(title: str, **overrides) -> dict:
         "kind": "skill",
         "target": "systematic_debugging",
         "repo_hint": "template",
-        "repo": "xmartlabs/sdlc-ml-python-base",
+        "repo": "xmartlabs/sdlc-ml-python-template",
         "created_issue_url": None,
     }
     base.update(overrides)
@@ -99,7 +99,7 @@ def test_save_from_run_refreshes_body_but_preserves_status(service, tmp_path):
     row = service.list_proposals()[0]
     service.record_group_issue(
         [row],
-        repository="xmartlabs/sdlc-ml-python-base",
+        repository="xmartlabs/sdlc-ml-python-template",
         title="[HEP] combined",
         markdown="# issue",
         form_json={"title": "[HEP] combined"},
@@ -146,7 +146,7 @@ def test_template_version_prefers_installed_release_ref(service, tmp_path, monke
         tmp_path,
         InstalledManifest(
             installed=InstalledRef(
-                repository="xmartlabs/sdlc-ml-python-base",
+                repository="xmartlabs/sdlc-ml-python-template",
                 ref="v0.3.0",
                 commit="abcdef1234567890",
                 adopted_at=datetime(2026, 7, 1, tzinfo=UTC),
@@ -177,7 +177,7 @@ def test_list_proposals_filters(service, tmp_path):
     )
     service.save_from_run("run-a")
     assert len(service.list_proposals(kind="process")) == 1
-    assert len(service.list_proposals(repo="xmartlabs/sdlc-ml-python-base")) == 1
+    assert len(service.list_proposals(repo="xmartlabs/sdlc-ml-python-template")) == 1
     assert len(service.list_proposals(case="tetris-v1")) == 2
     assert len(service.list_proposals(status="issued")) == 0
 
@@ -190,7 +190,7 @@ def test_record_group_issue_marks_proposals_issued(service, tmp_path):
     rows = service.list_proposals()
     issue = service.record_group_issue(
         rows,
-        repository="xmartlabs/sdlc-ml-python-base",
+        repository="xmartlabs/sdlc-ml-python-template",
         title="[HEP] combined",
         markdown="# issue",
         form_json={"title": "[HEP] combined"},

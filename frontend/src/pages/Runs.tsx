@@ -20,6 +20,7 @@ import { RunTable } from "../components/RunTable";
 import type {
   CaseRecord,
   HarnessSkill,
+  SkillProfileRecord,
   ModelOption,
   RunBatchPayload,
   RunBatchResult,
@@ -203,7 +204,13 @@ const MESSAGES = defineMessages({
       disableAll: "Disable all",
       experimentalTitle: "Experimental (staged, off by default)",
       askAgent: "Ask the agent to use them",
-      askAgentHint: "at the start of every step"
+      askAgentHint: "at the start of every step",
+      profile: "Harness",
+      profileCustom: "custom",
+      profileHint: (name: string, count: number) =>
+        name === "full"
+          ? "Every governed skill."
+          : `${count} skills — the rest stay in the repo, hidden for this run (.github/skill-profiles.toml).`
     },
     actions: {
       validating: "Validating...",
@@ -387,7 +394,13 @@ const MESSAGES = defineMessages({
       disableAll: "Deshabilitar todas",
       experimentalTitle: "Experimentales (staged, desactivadas por defecto)",
       askAgent: "Pedirle al agente que las use",
-      askAgentHint: "al comienzo de cada paso"
+      askAgentHint: "al comienzo de cada paso",
+      profile: "Arnés",
+      profileCustom: "personalizado",
+      profileHint: (name: string, count: number) =>
+        name === "full"
+          ? "Todas las skills gobernadas."
+          : `${count} skills — el resto queda en el repo, oculto para esta corrida (.github/skill-profiles.toml).`
     },
     actions: {
       validating: "Validando...",
@@ -468,6 +481,7 @@ export function Runs({
   const [caseRunIds, setCaseRunIds] = useState<string[]>([]);
   const [harnessSkills, setHarnessSkills] = useState<HarnessSkill[]>([]);
   const [disabledSkills, setDisabledSkills] = useState<Set<string>>(new Set());
+  const [skillProfiles, setSkillProfiles] = useState<Record<string, SkillProfileRecord>>({});
   const [stagedSkills, setStagedSkills] = useState<StagedSkillRecord[]>([]);
   const [extraSkills, setExtraSkills] = useState<Set<string>>(new Set());
   // Off = available only; on = the agent is told to invoke them every step.
@@ -568,6 +582,16 @@ export function Runs({
         // No catalog (API offline) — the section stays hidden.
       });
     api
+      .listSkillProfiles()
+      .then((profiles) => {
+        if (active) {
+          setSkillProfiles(profiles);
+        }
+      })
+      .catch(() => {
+        // No profiles — the selector stays hidden; the checkboxes still work.
+      });
+    api
       .listStagedSkills()
       .then((skills) => {
         if (active) {
@@ -632,6 +656,15 @@ export function Runs({
       return next;
     });
   };
+
+  // The harness level the checkboxes currently spell, or "" when they match
+  // no profile. A profile is a named ablation (ADR-0085), so the run still
+  // carries the exact skills_disabled list either way.
+  const disabledKey = [...disabledSkills].sort().join(",");
+  const activeProfile =
+    Object.entries(skillProfiles).find(
+      ([, profile]) => [...profile.disabled].sort().join(",") === disabledKey
+    )?.[0] ?? "";
 
   const toggleSkill = (name: string) => {
     setDisabledSkills((current) => {
@@ -1328,6 +1361,35 @@ export function Runs({
             </>
           ) : null}
         </div>
+        {harnessSkills.length > 0 && Object.keys(skillProfiles).length > 0 ? (
+          <label>
+            <span>{m.skills.profile}</span>
+            <select
+              onChange={(event) => {
+                const profile = skillProfiles[event.target.value];
+                if (profile) {
+                  setDisabledSkills(new Set(profile.disabled));
+                }
+              }}
+              value={activeProfile}
+            >
+              {Object.keys(skillProfiles).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+              {activeProfile === "" ? <option value="">{m.skills.profileCustom}</option> : null}
+            </select>
+            {activeProfile !== "" ? (
+              <small className="muted">
+                {m.skills.profileHint(
+                  activeProfile,
+                  skillProfiles[activeProfile]?.skills.length ?? 0
+                )}
+              </small>
+            ) : null}
+          </label>
+        ) : null}
         {harnessSkills.length > 0 ? (
           <div className="skills-section">
             <button className="skills-toggle" onClick={() => setSkillsOpen((open) => !open)} type="button">

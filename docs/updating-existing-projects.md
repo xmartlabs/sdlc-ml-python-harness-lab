@@ -116,7 +116,7 @@ git switch -c chore/template-sync-v0.2.0
 # 2. Make sure the 'template' remote points at ml-python-base (idempotent)
 make template-remote-setup
 # (or, if that target doesn't exist yet in this old project:)
-# git remote add template git@github.com:xmartlabs/sdlc-ml-python-base.git
+# git remote add template git@github.com:xmartlabs/sdlc-ml-python-template.git
 
 # 3. Bootstrap the sync script by pulling JUST it from the release tag
 git fetch template --tags

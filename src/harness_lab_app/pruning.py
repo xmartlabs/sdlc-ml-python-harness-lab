@@ -12,9 +12,15 @@ delete the harness one under-powered experiment at a time. The rule here is
 **non-inferiority**: an item is removable only when the *whole* interval for
 "what removing it does" stays inside a margin declared up front:
 
-* success rate: the treatment (item removed) may lose at most
-  ``success_margin`` (default 5 points) — the lower end of the paired,
-  case-clustered 95% interval must stay above ``-success_margin``;
+* success rate, first and strictest (ADR-0086): **any observed loss keeps
+  the item**. The harness exists to add quality on top of the model; a lower
+  pass rate without it is the harness doing its job, however few the runs.
+  With no observed loss the lower end of the paired, case-clustered 95%
+  interval must still stay above ``-success_margin`` (default 5 points);
+* a design that cannot see a difference says nothing: when both arms pass
+  every scored run (ceiling) or fail every one (floor), the verdict is
+  **no_signal**, never removable — the cases are too easy or too hard to
+  show what the item adds. Pick harder cases;
 * every lower-is-better metric given (``cost_to_resolve_usd`` by default): the
   upper end of the paired interval may not exceed ``relative_margin`` (default
   20%) of the control's mean;
@@ -22,7 +28,8 @@ delete the harness one under-powered experiment at a time. The rule here is
   fall below ``-relative_margin`` of the control's mean.
 
 Any interval that sits wholly on the wrong side of a margin is **keep**; any
-that straddles one is **inconclusive** — run more cases. Nothing here says
+that straddles one is **inconclusive** — run more cases. Removing is the
+exception that has to be earned, never the default. Nothing here says
 *significant* (ADR-0053, ADR-0064); it says what the intervals support.
 
 Harness value depends on the model (ADR-0066): run a pruning family per model
@@ -44,6 +51,7 @@ if TYPE_CHECKING:
 REMOVABLE = "removable"
 KEEP = "keep"
 INCONCLUSIVE = "inconclusive"
+NO_SIGNAL = "no_signal"
 
 DEFAULT_SUCCESS_MARGIN = 0.05
 DEFAULT_RELATIVE_MARGIN = 0.20
@@ -124,6 +132,22 @@ def _paired(
     )
 
 
+def _observed_rates(
+    control: Mapping[str, Sequence[bool]], treatment: Mapping[str, Sequence[bool]]
+) -> tuple[float, float] | None:
+    """Pooled pass rates of each arm over the cases both arms scored."""
+    cases = [
+        case
+        for case in set(control) & set(treatment)
+        if control[case] and treatment[case]
+    ]
+    if not cases:
+        return None
+    c_runs = [bool(v) for case in cases for v in control[case]]
+    t_runs = [bool(v) for case in cases for v in treatment[case]]
+    return sum(c_runs) / len(c_runs), sum(t_runs) / len(t_runs)
+
+
 def assess_removal(
     *,
     item: str,
@@ -147,8 +171,18 @@ def assess_removal(
     keep_reasons: list[str] = []
     open_reasons: list[str] = []
 
+    observed = _observed_rates(control_success, treatment_success)
+    if observed is not None and observed[1] < observed[0]:
+        # Quality first (ADR-0086): the harness is there to add on top of the
+        # model, so a pass rate that drops without the item keeps it — the
+        # interval decides how sure we are, not whether a loss is tolerable.
+        keep_reasons.append(
+            f"success falls from {observed[0]:.0%} to {observed[1]:.0%} without it"
+        )
     if success_ci is None:
         open_reasons.append("no case was scored by both arms")
+    elif keep_reasons:
+        pass
     elif success_ci[1] < -success_margin:
         keep_reasons.append(
             f"success rate drops by {-success_ci[1]:.0%} to {-success_ci[0]:.0%} "
@@ -219,6 +253,18 @@ def assess_removal(
 
     if keep_reasons:
         decision, reason = KEEP, "; ".join(keep_reasons)
+    elif observed is not None and observed[0] == observed[1] in (0.0, 1.0):
+        decision = NO_SIGNAL
+        reason = (
+            "both arms "
+            + (
+                "pass every scored run"
+                if observed[0] == 1.0
+                else "fail every scored run"
+            )
+            + " — these cases cannot show what it adds; use harder cases before "
+            "judging it"
+        )
     elif paired < MIN_PAIRED_CASES:
         decision = INCONCLUSIVE
         reason = (

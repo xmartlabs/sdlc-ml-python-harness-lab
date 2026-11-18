@@ -136,11 +136,17 @@ treatment arm per skill, each removing exactly that skill. With no `ITEMS`, it
 tries the four skills the corpus credits least. Its summary carries a `pruning`
 block with one verdict per skill:
 
-- **removable** — every paired interval stays inside the margin: success loses at
-  most 5 points, and `cost_to_resolve_usd` / `progress_auc` move at most 20% of the
-  control.
-- **keep** — an interval sits wholly past a margin: removing the skill made the
-  agent fail more, resolve later, or pay more.
+- **keep** — success drops at all without the skill (any observed loss, however
+  few the runs: the harness exists to add quality on top of the model,
+  [ADR-0086](adr/0086-pruning-never-trades-quality-for-a-smaller-harness.md)), or an
+  interval sits wholly past a margin: removing the skill made the agent resolve
+  later or pay more.
+- **no_signal** — both arms passed every scored run (ceiling) or failed every one
+  (floor). The cases cannot show what the skill adds; pick harder ones. Never
+  read this as removable.
+- **removable** — no observed drop, a signal, and every paired interval inside the
+  margin: success loses at most 5 points, and `cost_to_resolve_usd` /
+  `progress_auc` move at most 20% of the control.
 - **inconclusive** — an interval straddles the margin, fewer than three cases
   were paired, or a required metric was never measured on a paired case (runs
   from before per-step snapshots carry success but no `cost_to_resolve_usd` or
@@ -188,7 +194,7 @@ a smaller harness ([ADR-0085](adr/0085-a-project-carries-a-skill-profile-not-the
    and run leave-one-out on the halves. A group also catches two redundant skills
    that leave-one-out cannot see.
 3. **Profile × model grid.** `make skill-profile-experiment MODELS="small large"
-   CASES="…"` crosses `full`, `core` and `minimal` with each model (mode
+   CASES="…"` crosses `full` and `minimal` with each model (mode
    `harness_by_model`). Pick, per model, the smallest profile that is non-inferior
    to `full`. Update `.github/skill-profiles.toml` from those verdicts.
 4. **Refine the survivors.** Stage a rewrite under its own name, for example
@@ -220,7 +226,8 @@ a smaller harness ([ADR-0085](adr/0085-a-project-carries-a-skill-profile-not-the
 |---|---|
 | A run's curve | Run detail → **Per-step reward**, or `GET /api/runs/{id}/step-reward` |
 | Pruning shortlist | `GET /api/scores/step-credit` |
-| Skill census per model / case / harness | `make skill-census`, `GET /api/scores/skill-census?by=model` |
-| Pruning verdicts | Experiment summary → `pruning` (`GET /api/experiments/{id}/summary`) |
+| Skill census per model / case / harness | Evidence → Skills → **Skill census**; `make skill-census`; `GET /api/scores/skill-census?by=model` |
+| Every pruning verdict, per model and prompt | Advanced → Improvements → **Harness pruning**; `GET /api/experiments/pruning` |
+| Pruning verdicts | Evaluate → Experiments → a `prune-…` experiment → **Pruning verdict**; `GET /api/experiments/{id}/summary` → `pruning` |
 | The math | [step_reward.py](../src/harness_lab_app/step_reward.py), [pruning.py](../src/harness_lab_app/pruning.py) |
 | The decision | [ADR-0076](adr/0076-per-step-reward.md) |

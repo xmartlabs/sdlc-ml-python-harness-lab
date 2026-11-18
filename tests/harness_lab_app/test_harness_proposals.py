@@ -175,7 +175,7 @@ def test_link_issue_sets_state_and_lifecycle() -> None:
     p = _proposal()
     linked = proposals.link_issue(
         p,
-        "https://github.com/xmartlabs/sdlc-ml-python-base/issues/31",
+        "https://github.com/xmartlabs/sdlc-ml-python-template/issues/31",
         at=FIXED,
         actor="human",
     )

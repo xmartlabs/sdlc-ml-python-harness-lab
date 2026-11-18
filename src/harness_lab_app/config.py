@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     # Note these are *runtime* defaults only. Run.repository persists the slug an
     # existing proposal was authored against (models.py), so changing them here
     # never rewrites history.
-    template_repository: str = "xmartlabs/sdlc-ml-python-base"
+    template_repository: str = "xmartlabs/sdlc-ml-python-template"
     lab_repository: str = "xmartlabs/sdlc-ml-python-harness-lab"
     guide_repository: str = "xmartlabs/sdlc-harness-engineering-guide"
 

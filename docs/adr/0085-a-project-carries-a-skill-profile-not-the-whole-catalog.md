@@ -40,7 +40,7 @@ Before this ADR the lab had the tools to act on that, but not the path:
    it takes every skill no measured run ever opened. A removable group goes as a
    whole. A group that is not removable is split and retried one skill at a time.
 3. **A profile is a named subset.** `.github/skill-profiles.toml` defines the
-   profiles (`minimal`, `core`; `extends` composes them; `full` is built in). It is a
+   profiles (`minimal`; `extends` composes them; `full` is built in; a `core` middle level was dropped on 2026-11-18 — two levels, minimal and full). It is a
    governed path, so it travels with template syncs alongside the skills it names.
    `harness.toml` at the repository root selects a profile, plus `include` and
    `exclude` lists. It belongs to the project, and no sync writes it. Without

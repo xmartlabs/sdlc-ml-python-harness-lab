@@ -49,7 +49,7 @@ from create_run import DATA_DIR, _load_env
 TEMPLATE_REPO = (
     os.environ.get("HARNESS_LAB_TEMPLATE_REPOSITORY")
     or os.environ.get("IMPROVE_REPO_TEMPLATE")
-    or "xmartlabs/sdlc-ml-python-base"
+    or "xmartlabs/sdlc-ml-python-template"
 )
 HARNESS_REPO = (
     os.environ.get("HARNESS_LAB_GUIDE_REPOSITORY")

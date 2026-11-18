@@ -2446,6 +2446,12 @@ def test_removed_item_names_the_one_skill_a_treatment_drops():
     )
 
 
+def _case_of(session, run) -> str:
+    from harness_lab_app.models import RunConfig
+
+    return session.get(RunConfig, run.run_config_id).case_id
+
+
 def test_a_pruning_family_reports_a_removal_verdict_per_skill(session):
     """Removing one skill changed nothing on three cases: removable.
 
@@ -2501,7 +2507,9 @@ def test_a_pruning_family_reports_a_removal_verdict_per_skill(session):
         _base_config(case_id=cases[0], prompt_variant="harness"),
     )
     for run in runs:
-        _score(session, run, passed=True)
+        # One case fails in every arm: the set can show a difference, so a
+        # verdict is possible (an all-pass ceiling is no_signal, ADR-0086).
+        _score(session, run, passed=_case_of(session, run) != "prune-c")
         cost = 0.60 if run.condition_label == f"without-{costly}" else 0.30
         for name, value in (("cost_to_resolve_usd", cost), ("progress_auc", 1.0)):
             session.add(Score(run_id=run.run_id, name=name, version=1, value_num=value))
@@ -2568,7 +2576,7 @@ def test_a_pruning_family_without_step_scores_removes_nothing(session):
         _base_config(case_id=cases[0], prompt_variant="harness"),
     )
     for run in runs:
-        _score(session, run, passed=True)
+        _score(session, run, passed=_case_of(session, run) != "prune-c")
     session.commit()
 
     (row,) = service.summarize("prune-claude-haiku-1x")["pruning"]
@@ -2838,3 +2846,49 @@ def test_a_parallel_launch_is_refused_when_the_lane_cannot_be_confirmed(monkeypa
     with pytest.raises(HTTPException) as refused:
         launch("x", ExperimentLaunch(config=_base_config(), parallel=2), session=None)
     assert "Could not ask the workers" in refused.value.detail
+
+
+def test_pruning_overview_lists_only_pruning_families_with_model_and_prompt(lab):
+    lab.create_experiment(_payload())  # an ordinary experiment: not listed
+    control = {"prompt_variant": "default", "skills_disabled": []}
+    lab.create_experiment(
+        _payload(
+            experiment_id="prune-claude-stub-2group",
+            family_id="prune-claude-stub",
+            repetitions=1,
+            conditions=[
+                ExperimentConditionCreate(
+                    label="full-harness", role=ConditionRole.control, overrides=control
+                ),
+                ExperimentConditionCreate(
+                    label="without-group-of-2",
+                    overrides={
+                        **control,
+                        "skills_disabled": ["verify_changes", "writing-plans"],
+                    },
+                ),
+            ],
+        )
+    )
+    lab.launch(
+        "prune-claude-stub-2group",
+        RunConfigCreate(
+            case_id="add-endpoint",
+            prompt_variant="default",
+            executor_model="stub-model",
+        ),
+    )
+
+    rows = lab.pruning_overview()
+
+    assert [row["experiment_id"] for row in rows] == ["prune-claude-stub-2group"]
+    row = rows[0]
+    assert row["model"] == "stub-model"
+    assert row["prompt"] == "default"
+    assert row["runs"] == 2
+    assert row["finished"] is False
+    # No scored run yet: the arm is still judged, and judged inconclusive.
+    assert [v["removed"] for v in row["verdicts"]] == [
+        ["verify_changes", "writing-plans"]
+    ]
+    assert row["verdicts"][0]["decision"] == "inconclusive"

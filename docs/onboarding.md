@@ -194,7 +194,7 @@ stays off.
 
 ## 3. Point the lab at the governance template (once)
 
-The lab benchmarks and improves the [`ml-python-base`](https://github.com/xmartlabs/sdlc-ml-python-base)
+The lab benchmarks and improves the [`ml-python-base`](https://github.com/xmartlabs/sdlc-ml-python-template)
 governance (skills, agents, rules). Add it as a git remote so you can pull and
 compare versions:
 
@@ -213,7 +213,7 @@ repos. If you work from forks, retarget them in `.env` — no code change:
 
 | Variable | Default | What it is |
 |---|---|---|
-| `HARNESS_LAB_TEMPLATE_REPOSITORY` | `xmartlabs/sdlc-ml-python-base` | Where improvement issues are filed |
+| `HARNESS_LAB_TEMPLATE_REPOSITORY` | `xmartlabs/sdlc-ml-python-template` | Where improvement issues are filed |
 | `HARNESS_LAB_LAB_REPOSITORY` | `xmartlabs/sdlc-ml-python-harness-lab` | Recorded as the source of a proposal's evidence |
 | `HARNESS_LAB_GUIDE_REPOSITORY` | `xmartlabs/sdlc-harness-engineering-guide` | Target for harness-methodology findings |
 

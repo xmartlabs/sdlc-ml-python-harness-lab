@@ -13,32 +13,30 @@
 # sync cannot resurrect what a bootstrap removed, and turning a skill back on is
 # one line. Only the generated views follow the profile.
 #
-# The contents below are PROVISIONAL. They come from the first skill census
-# (2026-11-17): across 18 runs measured per step, only plan_and_execute_feature,
-# verify_changes and writing-plans were ever opened. The lab replaces this
-# judgement with evidence — `make prune GROUP=1` per model tier, then
-# `make skill-profile-experiment` — and this file is updated from those verdicts.
+# Two levels, nothing in between: `minimal` (the default for a new project) and
+# the built-in `full`. Every skill outside `minimal` stays in the repo as an
+# optional add-on: not listed in the adapters, not projected into native views,
+# switched on per project with `include = [...]` in harness.toml.
+#
+# `minimal` is the skills real work used (2026-11-18 usage review of three
+# template-derived repos: plan_and_execute_feature 11 sessions,
+# systematic_debugging 5, verify_changes 3, research_current_info 2,
+# requesting-code-review 1+) plus the ones the working loop itself names: the
+# CLAUDE.md playbook and /plan point at writing-plans and brainstorm_quick, and
+# every case's harness prompt drives plan_and_execute_feature,
+# systematic_debugging and verify_changes. Lab pruning showed no skill can be
+# dropped without a quality loss (ADR-0086), so minimal is about what to carry
+# by default, not about what is safe to remove: run `make prune` before
+# shrinking it further.
 
 [profile.minimal]
-description = "The working loop only: plan, debug, verify. Default for new projects and small models."
+description = "The working loop real projects use: plan, debug, verify, research, review. Default for new projects."
 skills = [
+    "brainstorm_quick",
     "plan_and_execute_feature",
+    "requesting-code-review",
+    "research_current_info",
     "systematic_debugging",
     "verify_changes",
     "writing-plans",
-]
-
-[profile.core]
-description = "Minimal plus the skills the governed agents bind and the review/TDD loop."
-extends = "minimal"
-skills = [
-    "brainstorm_quick",
-    "create_domain_contract",
-    "generate_e2e_tests",
-    "generate_implementation_docs",
-    "generate_migration_plan",
-    "refactor_to_clean_architecture",
-    "requesting-code-review",
-    "retrospective",
-    "test-driven-development",
 ]

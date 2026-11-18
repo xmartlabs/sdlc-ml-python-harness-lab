@@ -20,6 +20,15 @@ def _all(value: bool, reps: int = 4) -> dict[str, list[bool]]:
     return {case: [value] * reps for case in FIVE_CASES}
 
 
+def _discriminating(reps: int = 4) -> dict[str, list[bool]]:
+    """A case set that can show a difference: some cases pass, some fail.
+
+    Every case passing in both arms is a ceiling — it says nothing about what
+    an item adds (ADR-0086) — so a removable verdict needs cases like these.
+    """
+    return {case: [index % 2 == 0] * reps for index, case in enumerate(FIVE_CASES)}
+
+
 def _flat(value: float, reps: int = 3) -> dict[str, list[float]]:
     return {case: [value] * reps for case in FIVE_CASES}
 
@@ -34,8 +43,8 @@ def test_an_item_whose_removal_changes_nothing_is_removable() -> None:
     metrics = {"cost_to_resolve_usd": cost, "progress_auc": _flat(1.0)}
     verdict = pruning.assess_removal(
         item="skill:brainstorm_quick",
-        control_success=_all(True),
-        treatment_success=_all(True),
+        control_success=_discriminating(),
+        treatment_success=_discriminating(),
         control_metrics=metrics,
         treatment_metrics=metrics,
     )
@@ -74,14 +83,14 @@ def test_an_item_whose_removal_makes_resolution_dearer_is_kept() -> None:
 def test_too_few_cases_is_inconclusive_however_clean_it_looks() -> None:
     verdict = pruning.assess_removal(
         item="skill:x",
-        control_success={"only": [True] * 5},
-        treatment_success={"only": [True] * 5},
+        control_success={"a": [True] * 5, "b": [False] * 5},
+        treatment_success={"a": [True] * 5, "b": [False] * 5},
     )
     assert verdict.decision == pruning.INCONCLUSIVE
     assert "case" in verdict.reason
 
 
-def test_a_noisy_comparison_is_inconclusive_not_removable() -> None:
+def test_a_noisy_comparison_is_not_removable() -> None:
     # Absence of a difference is not evidence of equivalence: with this much
     # spread the interval reaches past the margin.
     control = {
@@ -95,7 +104,8 @@ def test_a_noisy_comparison_is_inconclusive_not_removable() -> None:
     verdict = pruning.assess_removal(
         item="skill:x", control_success=control, treatment_success=treatment
     )
-    assert verdict.decision == pruning.INCONCLUSIVE
+    # The treatment passes less often: quality first, so it is kept.
+    assert verdict.decision == pruning.KEEP
 
 
 def test_the_margin_is_part_of_the_verdict() -> None:
@@ -121,8 +131,8 @@ def test_relative_cost_margin_is_measured_against_the_control() -> None:
     # +5% on a $0.30 control is within a 20% margin.
     verdict = pruning.assess_removal(
         item="skill:x",
-        control_success=_all(True),
-        treatment_success=_all(True),
+        control_success=_discriminating(),
+        treatment_success=_discriminating(),
         control_metrics=_metrics(cost=0.30),
         treatment_metrics=_metrics(cost=0.315),
     )
@@ -135,8 +145,8 @@ def test_a_free_model_does_not_hold_every_verdict_open() -> None:
     free = _metrics(cost=0.0)
     verdict = pruning.assess_removal(
         item="skill:x",
-        control_success=_all(True),
-        treatment_success=_all(True),
+        control_success=_discriminating(),
+        treatment_success=_discriminating(),
         control_metrics=free,
         treatment_metrics=free,
     )
@@ -155,8 +165,8 @@ def test_success_alone_never_makes_an_item_removable() -> None:
     """Three clean paired cases, no per-step scores: not enough to remove."""
     verdict = pruning.assess_removal(
         item="skill:x",
-        control_success=_all(True),
-        treatment_success=_all(True),
+        control_success=_discriminating(),
+        treatment_success=_discriminating(),
     )
     assert verdict.decision == pruning.INCONCLUSIVE
     assert "cost_to_resolve_usd" in verdict.reason
@@ -170,8 +180,8 @@ def test_success_alone_never_makes_an_item_removable() -> None:
 def test_one_missing_metric_is_enough_to_hold_it_open() -> None:
     verdict = pruning.assess_removal(
         item="skill:x",
-        control_success=_all(True),
-        treatment_success=_all(True),
+        control_success=_discriminating(),
+        treatment_success=_discriminating(),
         control_metrics={"progress_auc": _flat(1.0)},
         treatment_metrics={"progress_auc": _flat(1.0)},
     )
@@ -182,8 +192,8 @@ def test_one_missing_metric_is_enough_to_hold_it_open() -> None:
 def test_a_metric_measured_in_only_one_arm_is_missing() -> None:
     verdict = pruning.assess_removal(
         item="skill:x",
-        control_success=_all(True),
-        treatment_success=_all(True),
+        control_success=_discriminating(),
+        treatment_success=_discriminating(),
         control_metrics=_metrics(),
         treatment_metrics={"progress_auc": _flat(1.0)},
     )
@@ -199,3 +209,45 @@ def test_a_success_drop_is_kept_even_without_metrics() -> None:
         treatment_success=_all(False),
     )
     assert verdict.decision == pruning.KEEP
+
+
+# --------------------------------------------------------------------------
+# Quality first: the harness must add, never lose (ADR-0086)
+# --------------------------------------------------------------------------
+
+
+def test_any_observed_success_drop_keeps_the_item_however_few_the_runs() -> None:
+    # 6/6 with the skills, 4/5 without: the interval alone would only call it
+    # inconclusive. A harness exists to add quality, so a loss keeps it.
+    verdict = pruning.assess_removal(
+        item="skills:a,b",
+        control_success={"c1": [True, True], "c2": [True, True], "c3": [True, True]},
+        treatment_success={"c1": [True, True], "c2": [True, False], "c3": [True]},
+        control_metrics=_metrics(),
+        treatment_metrics=_metrics(),
+    )
+    assert verdict.decision == pruning.KEEP
+    assert "100% to 80%" in verdict.reason
+
+
+def test_both_arms_at_the_ceiling_is_no_signal_not_removable() -> None:
+    verdict = pruning.assess_removal(
+        item="skills:a,b",
+        control_success=_all(True),
+        treatment_success=_all(True),
+        control_metrics=_metrics(),
+        treatment_metrics=_metrics(),
+    )
+    assert verdict.decision == pruning.NO_SIGNAL
+    assert "harder cases" in verdict.reason
+
+
+def test_both_arms_at_the_floor_is_no_signal_too() -> None:
+    verdict = pruning.assess_removal(
+        item="skill:x",
+        control_success=_all(False),
+        treatment_success=_all(False),
+        control_metrics=_metrics(),
+        treatment_metrics=_metrics(),
+    )
+    assert verdict.decision == pruning.NO_SIGNAL

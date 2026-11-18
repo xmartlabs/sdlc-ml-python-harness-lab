@@ -66,7 +66,7 @@ def test_synthesize_issue_markdown_is_sanitized(tmp_path: Path) -> None:
     run_dir = _run_dir(tmp_path)
     markdown = drafting.synthesize_issue_markdown(
         run_dir,
-        repository="xmartlabs/sdlc-ml-python-base",
+        repository="xmartlabs/sdlc-ml-python-template",
         created_at=FIXED,
         gateway=lambda *_args: json.dumps(_DRAFT),
     )

@@ -10,7 +10,7 @@ supported AI tool through the same flow.
 ```bash
 git clone <your-clone-of-the-template> my_project && cd my_project
 make init NAME=my_project              # starts with the `minimal` skill profile
-make init NAME=my_project PROFILE=core # or core / full
+make init NAME=my_project PROFILE=full # or minimal (the default)
 ```
 
 `make init` runs `scripts/init_project.py` and then chains:

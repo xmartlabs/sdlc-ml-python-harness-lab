@@ -52,7 +52,7 @@ def _write_improvements(runs_dir, run_id: str, titles: list[str]) -> None:
                 "kind": "skill",
                 "target": "t",
                 "repo_hint": "template",
-                "repo": "xmartlabs/sdlc-ml-python-base",
+                "repo": "xmartlabs/sdlc-ml-python-template",
                 "created_issue_url": None,
             }
             for title in titles

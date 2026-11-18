@@ -25,7 +25,7 @@ and says how sure it is.
 - **Take home what works.** The whole governance, a few skills, or one skill,
   copied into your project — previewed first: `make harness-export`.
 - **Improve the shared template.** Evidence from runs becomes an issue for
-  [`ml-python-base`](https://github.com/xmartlabs/sdlc-ml-python-base), and the next
+  [`ml-python-base`](https://github.com/xmartlabs/sdlc-ml-python-template), and the next
   release is measured before it is trusted.
 
 ## Start

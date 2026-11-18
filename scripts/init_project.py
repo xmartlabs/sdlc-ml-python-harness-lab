@@ -9,7 +9,8 @@ Stdlib-only on purpose: this script must run on a fresh clone before any
 virtual environment or dev dependency exists (``python3 scripts/init_project.py``).
 
 Lines pointing at the upstream template repository
-(``git@github.com:...ml-python-base.git``) are never rewritten — the
+(``git@github.com:...sdlc-ml-python-template.git`` or the former
+``...ml-python-base.git``) are never rewritten — the
 template-sync workflow (docs/template-sync.md) depends on them.
 """
 
@@ -26,8 +27,11 @@ from pathlib import Path
 OLD_PACKAGE = "ml_python_base"
 OLD_DIST = "ml-python-base"
 
-# Lines that must keep pointing at the upstream template repo.
-UPSTREAM_URL_PATTERN = re.compile(r"git@github\.com:\S*ml-python-base\.git")
+# Lines that must keep pointing at the upstream template repo — under its
+# current name (sdlc-ml-python-template) and its former one (ml-python-base).
+UPSTREAM_URL_PATTERN = re.compile(
+    r"git@github\.com:\S*(?:ml-python-base|sdlc-ml-python-template)\.git"
+)
 
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 RESERVED_NAMES = frozenset({"src", "tests", "scripts", OLD_PACKAGE})

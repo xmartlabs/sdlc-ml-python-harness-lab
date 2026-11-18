@@ -258,6 +258,64 @@ export type StepRewardRecord = {
   sources: string[];
 };
 
+/** One item's corpus credit: co-occurrence, never cause (ADR-0076). */
+export type CorpusCreditRow = {
+  item: string;
+  runs: number;
+  steps: number;
+  reward_when_consulted: number;
+  share_of_runs: number;
+  kind: string;
+};
+
+/** Skill usage sliced by model, case or harness, beside each skill's size (ADR-0085). */
+export type SkillCensusRecord = {
+  by: "model" | "case" | "harness";
+  groups: Record<string, { runs_measured: number; items: CorpusCreditRow[] }>;
+  footprints: Record<
+    string,
+    { kind: string; description_chars: number; body_bytes: number }
+  >;
+  note: string;
+};
+
+/** A leave-one-out (or group) removal verdict for one treatment arm (ADR-0076/0085). */
+export type PruningVerdict = {
+  arm: string;
+  item: string;
+  decision: "removable" | "keep" | "inconclusive" | "no_signal";
+  reason: string;
+  paired_cases: number;
+  success_interval: [number, number] | null;
+  metric_intervals: Record<
+    string,
+    {
+      interval: [number, number] | null;
+      control_mean: number | null;
+      bound: number | null;
+      direction: "lower" | "higher";
+      note?: string;
+    }
+  >;
+  margins: Record<string, number>;
+  missing_metrics: string[];
+  removed: string[];
+};
+
+/** One pruning experiment on the Improvements page (ADR-0085). */
+export type PruningOverviewRow = {
+  experiment_id: string;
+  created_at: string;
+  case_ids: string[];
+  repetitions: number;
+  model: string | null;
+  harness: string | null;
+  prompt: string | null;
+  runs: number;
+  finished: boolean;
+  verdicts: PruningVerdict[];
+};
+
 export type AttributionRecord = {
   run_id: string;
   tools: Record<string, number>;
@@ -1178,6 +1236,8 @@ export type ExperimentSummary = {
   factorial?: FactorialBlock | null;
   /** Present when the cases carry `tier:<name>` tags (ADR-0069). */
   capability?: CapabilityBlock | null;
+  /** Present only for a pruning family (`prune-…`): can each removed item go? */
+  pruning?: PruningVerdict[] | null;
   /** Whether this comparison could have measured what it names (ADR-0046). */
   validity?: ValidityBlock;
   /**
@@ -1502,6 +1562,13 @@ export type RunConfigPayload = {
   target_repo_id?: string;
   target_ref?: string;
   harness_source?: HarnessSource;
+};
+
+/** A harness level (ADR-0085): what it carries and the ablation that makes it. */
+export type SkillProfileRecord = {
+  description: string;
+  skills: string[];
+  disabled: string[];
 };
 
 export type RunCreatePayload = {

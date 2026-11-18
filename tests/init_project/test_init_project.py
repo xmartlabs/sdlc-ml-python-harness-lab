@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts/init_project.py"
 
 TEMPLATE_REPO_LINE = (
-    "TEMPLATE_REPO ?= git@github.com:xmartlabs/sdlc-ml-python-base.git\n"
+    "TEMPLATE_REPO ?= git@github.com:xmartlabs/sdlc-ml-python-template.git\n"
 )
 
 
@@ -186,6 +186,20 @@ def test_init_mechanism_tests_are_never_rewritten(mini_repo: Path) -> None:
     _git(mini_repo, "commit", "-q", "-m", "own test")
     assert _run(mini_repo) == 0
     assert own_test.read_text(encoding="utf-8") == "OLD = 'ml_python_base'\n"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "git@github.com:xmartlabs/sdlc-ml-python-template.git",
+        "git@github.com:xmartlabs/sdlc-ml-python-base.git",  # former name
+    ],
+)
+def test_both_upstream_names_are_preserved(url: str) -> None:
+    line = f"TEMPLATE_REPO ?= {url}  # ml_python_base\n"
+    text, _replaced, skipped = init_project.rewrite_text(line, "demo", "demo")
+    assert text == line
+    assert skipped == 1
 
 
 def test_rewrite_text_preserves_upstream_lines() -> None:

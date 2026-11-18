@@ -29,7 +29,7 @@ several runs that show the same thing.
 **Advanced → Improvements** collects the saved proposals across runs. **Generate
 combined issue** writes one sanitized issue — no paths, keys or private data — with
 the evidence and the files it targets. Copy it into a new issue on
-[`ml-python-base`](https://github.com/xmartlabs/sdlc-ml-python-base); the first line
+[`ml-python-base`](https://github.com/xmartlabs/sdlc-ml-python-template); the first line
 is the title.
 
 From the shell, `make improve RUN=<run-id>` drafts the issues for one run, and

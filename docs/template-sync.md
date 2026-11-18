@@ -23,7 +23,7 @@ make template-remote-setup
 Default values are defined in `Makefile`:
 
 - `TEMPLATE_REMOTE=template`
-- `TEMPLATE_REPO=git@github.com:xmartlabs/sdlc-ml-python-base.git`
+- `TEMPLATE_REPO=git@github.com:xmartlabs/sdlc-ml-python-template.git`
 - `TEMPLATE_BRANCH=main`
 
 Override them when needed:
