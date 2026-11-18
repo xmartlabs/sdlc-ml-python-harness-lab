@@ -1,0 +1,88 @@
+task_id: pr-review-v1
+version: "1"
+status: active
+category: bugfix
+tags: [python, stdlib, code-review, security, concurrency, graded, ships-tests, hidden-grader]
+
+description: >
+  Review a pull request that is already applied to a small stdlib shop backend: decide
+  whether it is safe to merge and report each real defect as a located finding in
+  review.json, without touching the code. Graded against a hidden answer key: recall
+  over seeded defects of distinct classes (one of them in a caller outside the diff),
+  decoys that punish false positives, a precision floor that punishes shotgun reviews,
+  and a canary that fails a run which read the key. The case the candidate skill
+  review_pull_request is trialled on.
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+# The PR under review, already applied, seeds the workspace (ADR-0068).
+starter: benchmarks/pr-review-v1/starter
+
+target_level: 8
+complexity: medium
+
+entry_point: review.json
+
+# The review is the deliverable: one step, measured on what is handed in. Extra
+# steps got a generic "implement one more increment" prompt, and the first two
+# runs used them to fix the code under review (ADR-0087).
+deliverable: report
+max_steps: 1
+
+# The answer key, rubric, notes and the candidate skill stay out of the agent's
+# container (ADR-0079): a control arm that could read the candidate would no
+# longer be a control. The validation lane still reads them.
+agent_hidden:
+  - benchmarks/pr-review-v1/grader/
+  - benchmarks/pr-review-v1/scoring.md
+  - benchmarks/pr-review-v1/README.md
+  - benchmarks/pr-review-v1/candidate-skill/
+
+validation: objective
+validation_note: >
+  The grader in benchmarks/pr-review-v1/grader/ is the grade, one command per check
+  after the tamper guard: the review's format and verdict, that the code under review
+  is unchanged, one check per answer-key entry (opaque names), a precision floor, and a
+  canary over the run's transcripts. Pure stdlib, no network.
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/pr-review-v1/grader benchmarks/pr-review-v1/starter && test -z \"$(git -C /app status --porcelain -- benchmarks/pr-review-v1/grader benchmarks/pr-review-v1/starter)\""
+  - "test -s {workspace}/review.json"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check format \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check verdict \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check untouched \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check k01 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check k02 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check k03 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check k04 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check k05 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check k06 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check k07 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check k08 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check precision \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 60 python /app/benchmarks/pr-review-v1/grader/grade.py check canary \"$PWD\" {run_id}"
+
+files_forbidden:
+  - benchmarks/pr-review-v1/grader/grade.py
+  - benchmarks/pr-review-v1/grader/key.json
+
+constraints:
+  - Do not modify any file of the code under review
+  - Write the review to review.json in the workspace, in the stated format
+  - Report only defects you can justify from the code
+
+success_criteria:
+  level_0: no valid review.json, or the code under review was modified
+  level_2: a valid review, verdict request_changes, at least one real defect
+  level_4: about half the seeded defects found, precision at least 0.6
+  level_6: most seeded defects found, no false positive on a decoy, precision at least 0.6
+  level_8: every seeded defect found, no false positive on a decoy, precision at least 0.6
+  level_10: level 8 with a concrete trace and a correct minimal fix for each finding
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+prompts:
+  default: benchmarks/pr-review-v1/prompt_default.md
+  harness: benchmarks/pr-review-v1/prompt_harness.md
+
+scoring_rubric: benchmarks/pr-review-v1/scoring.md

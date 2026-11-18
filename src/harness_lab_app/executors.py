@@ -461,6 +461,7 @@ class RunExecutor(Protocol):
         phase: str = "",
         image: str = "",
         hidden: list[str] | None = None,
+        case_dir: str = "",
     ) -> RunHandle: ...
 
 
@@ -516,6 +517,7 @@ class SubprocessRunExecutor:
         phase: str = "",  # noqa: ARG002
         image: str = "",
         hidden: list[str] | None = None,
+        case_dir: str = "",  # noqa: ARG002
     ) -> RunHandle:
         # The masks are a container's: the host lane is the escape hatch and
         # the test backend, and it has no mount to hide anything with. Both
@@ -627,6 +629,7 @@ class DockerRunExecutor:
         phase: str = "",
         image: str = "",
         hidden: list[str] | None = None,
+        case_dir: str = "",
     ) -> RunHandle:
         settings = get_settings()
         host_repo_root = settings.host_repo_root or str(settings.repo_root)
@@ -660,6 +663,15 @@ class DockerRunExecutor:
             mount["Target"] == f"/app/{BENCH_CONTEXT_FILE}" for mount in mounts
         ):
             mounts.append(self._private_context_mount(run_id, host_repo_root))
+        # The case's own folder is read-only for its agent (ADR-0087): its
+        # task.yaml, prompts and starter define the measurement. A review run
+        # appended checks to its own task.yaml when it could not find the
+        # (masked) grader. The hidden paths inside it stay tmpfs: Docker mounts
+        # by increasing depth, so they land over this bind.
+        if hidden is not None and case_dir:
+            readonly = self._case_dir_mount(case_dir, host_repo_root)
+            if readonly is not None:
+                mounts.append(readonly)
         if mounts:
             extra["mounts"] = mounts
         # The agent lane is unchanged: full `.env`, the gateway alias, its
@@ -716,6 +728,30 @@ class DockerRunExecutor:
             # it against `governance.py` and the adapter registry.
             if (settings.repo_root / target.removeprefix("/app/")).exists()
         ]
+
+    @staticmethod
+    def _case_dir_mount(case_dir: str, host_repo_root: str) -> Any:
+        """A read-only bind of ``benchmarks/<case>/`` over itself, or None.
+
+        Only a directory directly under ``benchmarks/`` that exists qualifies;
+        anything else is ignored rather than mounted, so a bad value can never
+        widen what the agent sees or create a directory in the checkout.
+        """
+        from docker.types import Mount
+
+        settings = get_settings()
+        parts = [part for part in case_dir.strip().split("/") if part]
+        if len(parts) != 2 or parts[0] != "benchmarks" or parts[1] in (".", ".."):
+            return None
+        local = settings.repo_root / parts[0] / parts[1]
+        if not local.is_dir():
+            return None
+        return Mount(
+            target=f"/app/{parts[0]}/{parts[1]}",
+            source=_host_path(local, settings.repo_root, host_repo_root),
+            type="bind",
+            read_only=True,
+        )
 
     @staticmethod
     def _private_context_mount(run_id: str, host_repo_root: str) -> Any:

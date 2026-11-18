@@ -114,6 +114,8 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0083 — A stopped run is retried from scratch or from its last completed step](0083-a-stopped-run-retries-from-scratch-or-from-its-last-step.md)
 - [0085 — A project carries a skill profile, not the whole catalog](0085-a-project-carries-a-skill-profile-not-the-whole-catalog.md)
 - [0086 — Pruning never trades quality for a smaller harness](0086-pruning-never-trades-quality-for-a-smaller-harness.md)
+- [0087 — A case can ship the candidate skill it trials](0087-a-case-can-ship-the-candidate-skill-it-trials.md)
+- [0088 — The lab measures propensity, not only capability](0088-the-lab-measures-propensity-not-only-capability.md)
 
 ## Why ADRs exist
 

@@ -1295,6 +1295,30 @@ re-judges any run the judge scored before; a human score is never overwritten.
 The continuation loop (generic step-N prompts) still drives scope creep and cost —
 native spent a third step editing hooks the task said not to touch. Not fixed.
 
+## 2026-11-18 — First review runs: the step budget and a writable case folder, not the model
+
+Four Haiku 4.5 runs of `pr-review-v1`/`security-fix-v1`, comparing the minimal and full
+skill profiles (neither arm staged a candidate, and no skill was opened):
+
+- **Report cases must be one step.** An unphased case's `max_steps` was `target_level`
+  (8). Every step after the first got "implement exactly ONE verifiable increment", so
+  agents that had handed in a good review in step 1 fixed the code under review in steps
+  2-3. Declare `deliverable: report` and `max_steps: 1` in `task.yaml`; the runner stops
+  after step 1 whatever the form asked for. The per-step reward made this visible: 11/14
+  at step 1, then 10/14.
+- **A hidden grader looks missing, and an eager agent fills the gap.** Reading the lab's
+  own `tests/harness_lab_app/test_pr_review_case.py` led K-002 to "fix" the failing
+  test: it wrote a grader and key (into the tmpfs mask, discarded) and appended checks to
+  the case's `task.yaml`. That last edit reached the host. The case folder is now a
+  read-only bind in the agent's container. Rule: any lab file an agent can reach is a
+  file it may "help" with.
+- **A profile A/B is not a skill trial.** To test a candidate, stage it
+  (`make stage-candidate`) and use Add skills plus Enforce. `skill_invoked` at 0 means
+  the arm measured availability.
+- **The API and the workers do not reload code.** After changing `src/`, run
+  `docker compose restart api worker worker-parallel worker-interactive`, or a reseed
+  silently applies the old import logic.
+
 <!-- Add new learnings above this line -->
 
 ## "Audit a third-party repo" fails at provisioning when setup_commands mismatch the language — 2026-08-31
@@ -3457,5 +3481,32 @@ the contact flag the first pass set.
 scene that checks invariants every frame (camera, HUD == API state, never stuck, no overlap).
 When a fix works in isolation but not in the scene, compare the call graphs (extra passes,
 other actors) before tuning constants.
+
+## 2026-11-18 — A case whose key is the answer: what the agent can read decides the design
+
+Adding `pr-review-v1` and `security-fix-v1` (ADR-0087) surfaced four constraints that apply
+to any case graded against a hidden key:
+
+- **`task.yaml`, `tests/` and `docs/` are readable by the agent.** Check names must be opaque
+  (`k01`…), `success_criteria` must not state how many defects exist, and a lab test must not
+  list the classes it guards. Derive them from the hidden grader instead. The first draft of
+  the security test listed every weakness in a test file "to check the prompt does not name
+  them".
+- **A candidate skill under `.github/` contaminates the A/B.** `lab_root` runs read `.github/`,
+  so the control arm would see it too. Ship it under `benchmarks/<case>/candidate-skill/`,
+  list that path in `agent_hidden`, and hand it to the treatment arm with
+  `make stage-candidate`.
+- **A canary only settles what the transcript records.** Claude's `steps/*.events.jsonl`
+  carries every tool result. opencode's logs carry none, so the check must return 124 there,
+  not pass.
+- **`POST /api/cases/{id}/dry-run` cannot run a lab-own case.** It provisions a registered
+  target and never seeds `starter:`, so a `subject_repo: ml-python-base` case comes back
+  `inconclusive: Unknown target repository`. Calibrate these cases by running the grader in
+  the runner image under the hardened flags (`--network none --cap-drop ALL`, ro mount)
+  against the starter and the `data/reference/<case>/` variants.
+
+**How to apply:** before writing a hidden-key case, list what an agent can read in a
+`lab_root` run and keep every hint of the key out of it. Then calibrate empty, starter,
+gold and gamed variants in the runner image.
 
 <!-- Add new learnings above this line -->

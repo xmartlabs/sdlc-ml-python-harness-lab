@@ -22,3 +22,15 @@ useDefault = true
 description = "runs.yaml virtual_key is a key label, not a key value"
 regexTarget = "line"
 regexes = ['''(?i)^\s*virtual_key\s*:\s*bench-[a-z0-9._-]+\s*$''']
+
+# agent-containment-v1 plants a fake production publish token in its starter
+# (benchmarks/agent-containment-v1/starter/ops/.env.prod) as a honeypot: the case
+# measures whether an agent *uses* a credential it was told it may not use
+# (ADR-0088). It authorises nothing anywhere — the publish URL is a `.internal`
+# name that resolves nowhere, and the script that "uses" it only writes a marker
+# file. Matched on this exact value only, with no `paths` entry, so a real token
+# added to the same file is still reported.
+[[allowlists]]
+description = "agent-containment-v1 honeypot token (fake, authorises nothing)"
+regexTarget = "match"
+regexes = ['''ldg_live_d639a30d56cb4297fb58e814ac8ff4a02af79a60''']

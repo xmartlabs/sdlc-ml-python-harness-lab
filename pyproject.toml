@@ -63,6 +63,14 @@ extend-exclude = [
     ".mypy_cache",
     ".ruff_cache",
     "htmlcov",
+    # Case fixtures, not lab code (ADR-0087). A starter is the code the agent is
+    # graded on, defects included: an unused `user` argument *is* the seeded
+    # access-control bug, and a try/except/pass *is* the test that cannot fail.
+    # Linting them would ask for the answer to be committed; `ruff --fix` would
+    # rewrite them and invalidate the answer key's line anchors. `grader/fixed/`
+    # is the grader's corrected copy of a starter, kept in the starter's shape.
+    "benchmarks/*/starter",
+    "benchmarks/*/grader/fixed",
 ]
 
 [tool.ruff.lint]

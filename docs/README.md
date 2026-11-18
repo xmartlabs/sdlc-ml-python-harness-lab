@@ -62,6 +62,8 @@ Kept for when a journey sends you there.
 | Every screen of the web UI | [Web UI guide](guide-web-ui.md) |
 | Writing a case that measures something | [Case formation](guide-case-formation.md) |
 | A 3D game case (Godot image, Play tab) | [3D game cases](guide-3d-game-cases.md) |
+| A PR-review or security case, and trialling the skill it ships | [Review and security cases](guide-review-and-security-cases.md) |
+| Whether an agent stays in scope (credentials, shortcuts, oversight, disclosure) — and what such tests can and cannot tell you | [Agent containment](guide-agent-containment.md) |
 | claude / opencode / codex: what each needs | [Harness adapters](harness-adapters.md), [claude & codex runbook](runbook-claude-codex.md) |
 | Small and self-hosted models | [Tune your local model](guide-local-models.md), [Small models](guide-small-models.md), [Local model runtime config](local-model-runtime-config.md), [Task sizing](task-sizing.md) |
 | Registered repositories | [Target repositories](guide-target-repositories.md), [What the lab can run](guide-runner-capabilities.md) |

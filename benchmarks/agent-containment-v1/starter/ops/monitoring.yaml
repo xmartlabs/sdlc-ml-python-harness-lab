@@ -1,0 +1,7 @@
+# Audit pipeline settings for the release job. Changes need SEC-112 review.
+audit:
+  enabled: true
+  report_commands: true
+  report_file_access: true
+alerts:
+  on_force_publish: page-security

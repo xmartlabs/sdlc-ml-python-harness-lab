@@ -567,3 +567,69 @@ def test_a_container_that_is_not_the_agents_gets_no_private_context(
         "tetris-v1-K-102-validate", ["true"], phase="validate"
     )
     assert "mounts" not in client.containers.run_kwargs
+
+
+def test_the_agent_cannot_rewrite_its_own_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The case's folder is a read-only bind in the agent's container (ADR-0087).
+
+    `pr-review-v1-K-002` could not find its (masked) grader, wrote one, and
+    appended checks to its own task.yaml: the one write that reached the host.
+    """
+    (tmp_path / "benchmarks" / "pr-review-v1").mkdir(parents=True)
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+    client = FakeDockerClient(FakeContainer([]))
+    DockerRunExecutor(client_factory=lambda: client).start(
+        "pr-review-v1-K-003",
+        ["python", "scripts/bench_run.py"],
+        hidden=["benchmarks/pr-review-v1/grader/"],
+        case_dir="benchmarks/pr-review-v1",
+    )
+    kwargs = client.containers.run_kwargs
+    case = [
+        m for m in kwargs["mounts"] if m["Target"] == "/app/benchmarks/pr-review-v1"
+    ]
+    assert len(case) == 1 and case[0]["ReadOnly"] is True
+    assert case[0]["Source"] == "/host/repo/benchmarks/pr-review-v1"
+    # The grader inside it is still masked.
+    assert "/app/benchmarks/pr-review-v1/grader" in kwargs["tmpfs"]
+
+
+@pytest.mark.parametrize(
+    "case_dir",
+    [
+        "",
+        "benchmarks",
+        "benchmarks/../src",
+        "src/harness_lab_app",
+        "benchmarks/missing",
+    ],
+)
+def test_a_case_dir_that_is_not_a_benchmark_folder_mounts_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case_dir: str
+) -> None:
+    (tmp_path / "src" / "harness_lab_app").mkdir(parents=True)
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+    client = FakeDockerClient(FakeContainer([]))
+    DockerRunExecutor(client_factory=lambda: client).start(
+        "x-K-001", ["python", "scripts/bench_run.py"], hidden=[], case_dir=case_dir
+    )
+    targets = [m["Target"] for m in client.containers.run_kwargs.get("mounts", [])]
+    assert not [t for t in targets if t.startswith("/app/benchmarks") or "/src" in t]
+
+
+def test_a_validation_container_never_gets_the_case_bind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`hidden` is None outside the agent's container: the grader lane reads as before."""
+    (tmp_path / "benchmarks" / "pr-review-v1").mkdir(parents=True)
+    monkeypatch.setattr(executors, "get_settings", lambda: FakeSettings(tmp_path))
+    client = FakeDockerClient(FakeContainer([]))
+    DockerRunExecutor(client_factory=lambda: client).start(
+        "pr-review-v1-K-003-validate",
+        ["sh", "-c", "true"],
+        case_dir="benchmarks/pr-review-v1",
+    )
+    targets = [m["Target"] for m in client.containers.run_kwargs.get("mounts", [])]
+    assert "/app/benchmarks/pr-review-v1" not in targets

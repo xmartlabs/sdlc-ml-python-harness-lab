@@ -163,6 +163,28 @@ def contract_section(prompt_text: str) -> str:
     return prompt_text[start:end].strip()
 
 
+def step_budget_from_task(raw: dict, phases: list) -> int:
+    """How many agent steps a case runs by default.
+
+    One per phase when the case is phased (ADR-0079). Otherwise an explicit
+    ``max_steps`` in ``task.yaml`` wins over the historical ``target_level``
+    proxy: a case whose deliverable is a single report (a review, an audit)
+    must stop after it, because every extra step gets a generic "implement one
+    more increment" prompt that pushes the agent to change code it was told to
+    leave alone — `pr-review-v1-K-001/002` fixed the code under review in steps
+    2-4 (ADR-0087).
+    """
+    if phases:
+        return 1 + len(phases)
+    explicit = raw.get("max_steps")
+    if explicit is not None:
+        steps = int(explicit)
+        if steps < 1:
+            raise ValueError("max_steps must be at least 1.")
+        return steps
+    return int(raw.get("target_level", 1))
+
+
 def phase_prompts_from_task(raw: dict[str, Any], task_path: Path) -> list[str]:
     """The text of each later phase a ``task.yaml`` declares, in order (ADR-0079).
 
@@ -404,14 +426,12 @@ class CaseService:
             # Phases are authored like the prompts, and so is the step budget
             # they imply: one step per phase (ADR-0079).
             phases = phase_prompts_from_task(raw, task_path)
-            if phases or existing.step_prompts:
+            if phases or existing.step_prompts or raw.get("max_steps") is not None:
                 existing.step_prompts = phases
                 # A case that drops its phases goes back to the budget an
                 # unphased case is imported with, rather than keeping 1 + N
                 # steps for phases it no longer has.
-                existing.max_steps = (
-                    1 + len(phases) if phases else int(raw.get("target_level", 1))
-                )
+                existing.max_steps = step_budget_from_task(raw, phases)
             if raw.get("validation_commands"):
                 existing.validation_commands = [
                     str(cmd) for cmd in raw["validation_commands"]
@@ -476,7 +496,7 @@ class CaseService:
                 )
             ),
             step_prompts=phases,
-            max_steps=1 + len(phases) if phases else int(raw.get("target_level", 1)),
+            max_steps=step_budget_from_task(raw, phases),
             metadata_json={
                 "source_path": str(task_path),
                 # Files the workspace starts from (ADR-0068); the runner copies

@@ -1,0 +1,87 @@
+task_id: security-fix-v1
+version: "1"
+status: active
+category: bugfix
+tags: [python, stdlib, security, bugfix, graded, ships-tests]
+
+description: >
+  A small multi-user notes service (stdlib Python, sqlite3) that an external
+  pentest found several security issues in. The workspace starts from the
+  service (ADR-0068); the prompt does not say what the issues are. A hidden
+  grader attacks the agent's fixed code with payloads drawn per run from the run
+  id (ADR-0078), so a blocklist fitted to one payload does not pass, and checks
+  that every feature still works, so deleting a feature does not pass either.
+  The case the candidate skill `remediate_vulnerabilities` is trialled on.
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+# The workspace is seeded from these files before the agent runs (ADR-0068).
+starter: benchmarks/security-fix-v1/starter
+
+target_level: 8
+complexity: medium
+
+# Named in the prompt's location header instead of the pygame default main.py
+# (ADR-0079).
+entry_point: notes_service/service.py
+
+# What grades the agent stays out of its container (ADR-0079): the grader, the
+# rubric, the case notes and the candidate skill under trial (the treatment arm
+# receives it through staging, never by reading this folder). The validation
+# lane still reads them.
+agent_hidden:
+  - benchmarks/security-fix-v1/grader/
+  - benchmarks/security-fix-v1/scoring.md
+  - benchmarks/security-fix-v1/README.md
+  - benchmarks/security-fix-v1/candidate-skill/
+
+validation: objective
+validation_note: >
+  The grader in benchmarks/security-fix-v1/grader/ is the grade, one command per
+  behaviour. The first command is the tamper guard; the second confirms the entry
+  point survived. Six regression checks prove the service's features still work
+  (the untouched starter passes them, a deleted feature fails them); six security
+  checks each attack one weakness with payloads seeded by the run id and also
+  require the attacked feature to keep working; the report check requires
+  SECURITY.md to name a CWE for every weakness actually fixed. Each check runs the
+  agent's code in a child process; pure Python, no network. A check exits 124
+  (inconclusive) only when the lab could not measure it.
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/security-fix-v1/grader && test -z \"$(git -C /app status --porcelain -- benchmarks/security-fix-v1/grader)\""
+  - "test -f {workspace}/notes_service/service.py"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check regression_accounts \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check regression_notes \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check regression_search \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check regression_attachments \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check regression_export \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check regression_preferences \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check security_1 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check security_2 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check security_3 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check security_4 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check security_5 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check security_6 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-fix-v1/grader/grade.py check report \"$PWD\" {run_id}"
+files_forbidden:
+  - benchmarks/security-fix-v1/grader/grade.py
+
+constraints:
+  - Fix the existing service; keep its public API and every feature it offers
+  - Standard library only; no new dependencies, no network
+  - Write SECURITY.md in the workspace listing each fix with its CWE
+
+success_criteria:
+  level_0: a feature was broken or removed (a regression check fails)
+  level_2: every feature still works, but no reported weakness is fixed
+  level_5: every feature works and at least half of the security checks pass
+  level_8: every security check passes with every feature intact
+  level_10: level 8 and SECURITY.md names the right CWE for every fix (report)
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+prompts:
+  default: benchmarks/security-fix-v1/prompt_default.md
+  harness: benchmarks/security-fix-v1/prompt_harness.md
+
+scoring_rubric: benchmarks/security-fix-v1/scoring.md

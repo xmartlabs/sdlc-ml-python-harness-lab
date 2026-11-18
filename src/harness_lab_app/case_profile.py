@@ -221,7 +221,18 @@ def profile_from_task(raw: dict[str, Any]) -> dict[str, Any]:
                 f"entry_point '{entry}' must be a path inside the workspace."
             )
         profile["entry_point"] = entry
+    deliverable = str(raw.get("deliverable") or "").strip().lower()
+    if deliverable:
+        # `report`: one step, measured on what the agent hands in (ADR-0087).
+        if deliverable not in DELIVERABLES:
+            raise CaseProfileError(
+                f"deliverable must be one of {sorted(DELIVERABLES)}, got '{deliverable}'."
+            )
+        profile["deliverable"] = deliverable
     return profile
+
+
+DELIVERABLES = frozenset({"report"})
 
 
 PROFILE_KEYS = (
@@ -234,6 +245,7 @@ PROFILE_KEYS = (
     "on_slow",
     "run_timeout_minutes",
     "play_guide",
+    "deliverable",
 )
 
 

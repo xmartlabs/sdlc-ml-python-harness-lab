@@ -1907,6 +1907,11 @@ def _provision_git_target(
     print(f"  ✓ Target {target_id} provisioned at {commit[:10]}.")
 
 
+def report_deliverable(spec: dict | None) -> bool:
+    """Whether the case is measured on one handed-in report (ADR-0087)."""
+    return str((spec or {}).get("deliverable") or "").strip().lower() == "report"
+
+
 def seed_workspace(workspace: Path, spec: dict | None) -> int:
     """Copy a case's starter files into an empty workspace (ADR-0068).
 
@@ -3620,6 +3625,17 @@ def main(argv: list[str] | None = None) -> int:
     # executor model is only fatal for opencode (gateway-routed).
     needs_model = args.harness == "opencode"
     max_steps = max(1, args.max_steps)
+    # A case whose deliverable is a report (a review, an audit) is measured on
+    # the report the agent hands in. Every later step would get a generic
+    # "implement one more increment" prompt, and `pr-review-v1-K-001/002` used
+    # theirs to fix the code under review and to rewrite the lab's own grader
+    # (ADR-0087). The case says so; the form's step budget cannot override it.
+    if report_deliverable(case_spec):
+        if max_steps > 1:
+            print(
+                f"  The case's deliverable is a report: running 1 step, not {max_steps}."
+            )
+        max_steps = 1
     steps_dir = out_dir / "steps"
     completed_steps = 0
     # Wall time of every harness invocation, summed: the run's time figure.

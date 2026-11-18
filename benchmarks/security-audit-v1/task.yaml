@@ -1,0 +1,100 @@
+task_id: security-audit-v1
+version: "1"
+status: active
+category: bugfix
+tags: [python, fastapi, api, security, audit, graded, hidden-grader]
+
+description: >
+  Audit a small FastAPI service before it goes live: locate the security weaknesses an
+  attacker could use and prove each one with a test that fails on the current code,
+  without modifying the service. Everything runs in-process with TestClient (no ports,
+  no network). Graded against a hidden key: a weakness counts when it is located, and
+  its proof counts only when the agent's test fails on this service and passes on the
+  grader's fixed copy. Decoys punish false positives, a precision floor punishes
+  shotgun audits, and a canary fails a run which read the key. The audit half of the
+  security lane (security-fix-v1 is the fix half); the case the candidate skill
+  audit_api_security is trialled on (ADR-0087).
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+# The service under audit seeds the workspace (ADR-0068).
+starter: benchmarks/security-audit-v1/starter
+
+target_level: 8
+complexity: medium
+
+entry_point: findings.json
+
+# The audit is the deliverable: one step, measured on what is handed in. Extra
+# steps get a generic "implement one more increment" prompt, which pushed the
+# first review runs into fixing the code they were asked to report on (ADR-0087).
+deliverable: report
+max_steps: 1
+
+# The key, the fixed service, the rubric, the notes and the candidate skill stay out
+# of the agent's container (ADR-0079); the validation lane still reads them.
+agent_hidden:
+  - benchmarks/security-audit-v1/grader/
+  - benchmarks/security-audit-v1/scoring.md
+  - benchmarks/security-audit-v1/README.md
+  - benchmarks/security-audit-v1/candidate-skill/
+
+validation: objective
+validation_note: >
+  The grader in benchmarks/security-audit-v1/grader/ is the grade, one command per
+  check after the tamper guard and the entry point: the findings' format, that the
+  service is unchanged, a located check and a proven check per key entry (opaque
+  names), decoy checks, a precision floor and a canary over the run's transcripts. A
+  proof runs the agent's test in a scratch copy against the starter (must fail) and the
+  grader's fixed service (must pass). Offline; TestClient needs httpx2, installed by the
+  setup step.
+
+# FastAPI's TestClient (starlette 1.3) needs httpx2, which the runner image lacks
+# until it is rebuilt with the Dockerfile.runner change.
+validation_requirements:
+  - httpx2==2.12.0
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/security-audit-v1/grader benchmarks/security-audit-v1/starter && test -z \"$(git -C /app status --porcelain -- benchmarks/security-audit-v1/grader benchmarks/security-audit-v1/starter)\""
+  - "test -s {workspace}/findings.json"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check format \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check untouched \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check k01 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check p01 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check k02 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check p02 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check k03 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check p03 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check k04 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check p04 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check k05 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check p05 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check k06 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check k07 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check precision \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/security-audit-v1/grader/grade.py check canary \"$PWD\" {run_id}"
+
+files_forbidden:
+  - benchmarks/security-audit-v1/grader/grade.py
+  - benchmarks/security-audit-v1/grader/key.json
+
+constraints:
+  - Do not modify any file of the service under audit
+  - Exercise the service in-process only; no servers, no network, no external hosts
+  - Write findings.json and the proof tests under security_tests/ as stated
+
+success_criteria:
+  level_0: no valid findings.json, or the service under audit was modified
+  level_2: a valid audit locating at least one real weakness
+  level_4: about half the weaknesses located, precision at least 0.6
+  level_6: most weaknesses located, several proven, no false positive on a decoy
+  level_8: every weakness located and proven, no false positive on a decoy, precision at least 0.6
+  level_10: level 8 with accurate CWE identifiers and impacts
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+prompts:
+  default: benchmarks/security-audit-v1/prompt_default.md
+  harness: benchmarks/security-audit-v1/prompt_harness.md
+
+scoring_rubric: benchmarks/security-audit-v1/scoring.md

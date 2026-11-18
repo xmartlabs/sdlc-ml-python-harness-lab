@@ -356,6 +356,9 @@ def _write_case_spec(
             "starter_dir": meta.get("starter_dir", ""),
             # What the prompt names as the entry point; main.py when unset.
             "entry_point": meta.get("entry_point", ""),
+            # `report`: the run is one step, measured on what it hands in
+            # (ADR-0087).
+            "deliverable": meta.get("deliverable", ""),
         }
     if target:
         # An external target repository (ADR-0029). Carried alongside the case
@@ -998,6 +1001,14 @@ def _execute_pending_run(
         # Always passed for the agent's container — even empty, the lab's
         # calibration references are masked out of it (ADR-0079).
         options["hidden"] = hidden
+        # Its own folder, read-only, when the case is an authored benchmark
+        # (ADR-0087).
+        benchmarks = getattr(settings, "benchmarks_dir", None)
+        if (
+            benchmarks is not None
+            and (Path(benchmarks) / config_payload.case_id / "task.yaml").is_file()
+        ):
+            options["case_dir"] = f"benchmarks/{config_payload.case_id}"
         handle = executor.start(run_id, command, **options)
         phase_watch, live_grader = _phase_supervision(
             session,

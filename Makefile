@@ -968,6 +968,12 @@ refine-skill:
 	@[ -n "$(CASES)" ] || { echo "❌ CASES is required (3+ cases for a verdict)."; exit 1; }
 	@$(LAB_PY) scripts/refine_skill.py --skill $(SKILL) --candidate $(CANDIDATE) --model $(MODEL) --cases $(CASES) $(if $(PROFILE),--profile $(PROFILE),) $(if $(INVOKE),--invoke,) --reps $(or $(REPS),3) --harness $(or $(HARNESS),claude) $(if $(LAUNCH),--launch,)
 
+# Lab: stage a case's candidate skill (benchmarks/<case>/candidate-skill/<name>/) so an
+# "Add skills" experiment can trial it (ADR-0087). Usage: make stage-candidate SKILL=review_pull_request [REPLACE=1]
+# Without SKILL it lists the candidates.
+stage-candidate:
+	@$(LAB_PY) scripts/stage_candidate_skill.py $(if $(SKILL),--skill $(SKILL),--list) $(if $(REPLACE),--replace,)
+
 # Regenerate each case's `harness` prompt from its `default` sibling (ADR-0047).
 prompts:
 	@. $(VENV_DIR)/bin/activate && python scripts/build_prompt_variants.py
@@ -1044,6 +1050,7 @@ help:
 	@echo "  make skill-profile [SET=] List skill profiles / select one into harness.toml (ADR-0085)"
 	@echo "  make skill-census        Skill usage per model/case/harness, with each skill's size"
 	@echo "  make skill-profile-experiment / refine-skill   Lab experiments on profiles and rewrites"
+	@echo "  make stage-candidate SKILL=<name>   Stage a case's candidate skill for a trial (lists them without SKILL)"
 	@echo "  make purge-external-skills Purge all external skills and reset metadata"
 	@echo "  make langfuse-check      Verify the Langfuse host and credentials"
 	@echo "  make langfuse-export     Export one run's traces (RUN=... [DRY=1])"
@@ -1064,4 +1071,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test images-3d sandbox-build clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill prune skill-census skill-profile skill-profile-experiment refine-skill
+.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test images-3d sandbox-build clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill prune skill-census skill-profile skill-profile-experiment refine-skill stage-candidate

@@ -1,0 +1,72 @@
+{
+  "canary": "LABCANARY-d03ff85bc0284d6f373b840d6d99d4f8",
+  "line_window": 3,
+  "precision_floor": 0.6,
+  "verdict": "request_changes",
+  "defects": [
+    {
+      "check": "k01",
+      "id": "invoice-tuple-total",
+      "file": "shop/invoice.py",
+      "lines": [14, 15],
+      "category": "contract",
+      "why": "calculate_total now returns (total, discount); render_invoice still divides the result by 100 -> TypeError on every invoice. Caller outside the diff."
+    },
+    {
+      "check": "k02",
+      "id": "promo-threshold-exclusive",
+      "file": "shop/promotions.py",
+      "lines": [36],
+      "category": "edge-case",
+      "why": "BIG50 is for orders of 50.00 or more; `not total > min` rejects exactly 5000."
+    },
+    {
+      "check": "k03",
+      "id": "cart-partial-stock",
+      "file": "shop/orders.py",
+      "lines": [41, 42, 43],
+      "category": "correctness",
+      "why": "Promised all-or-nothing, but items taken before the one that raises OutOfStock are never put back."
+    },
+    {
+      "check": "k04",
+      "id": "cancel-race",
+      "file": "shop/orders.py",
+      "lines": [53, 54, 56, 57, 58],
+      "category": "concurrency",
+      "why": "Check-then-act without the inventory lock: two concurrent cancels both see 'placed' and both return the stock (double restock); put_back is also called without holding the lock it documents."
+    },
+    {
+      "check": "k05",
+      "id": "search-sql-injection",
+      "file": "shop/store.py",
+      "lines": [69, 70],
+      "category": "security",
+      "why": "customer_prefix is interpolated into the SQL string."
+    },
+    {
+      "check": "k06",
+      "id": "test-swallows-failure",
+      "file": "tests/test_cart.py",
+      "lines": [39, 40, 41, 42],
+      "category": "tests",
+      "why": "try/except/pass passes whether or not InvalidPromo is raised; needs pytest.raises."
+    }
+  ],
+  "decoys": [
+    {
+      "check": "k07",
+      "id": "orders-columns-fstring",
+      "file": "shop/store.py",
+      "lines": [54],
+      "why": "f-string only interpolates the module constant ORDER_COLUMNS; the id is a bound parameter. Not injection."
+    },
+    {
+      "check": "k08",
+      "id": "check-same-thread",
+      "file": "shop/store.py",
+      "lines": [30],
+      "why": "check_same_thread=False is required for the threaded service and pre-dates the PR; writes go through `with self.db` transactions."
+    }
+  ]
+}

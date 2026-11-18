@@ -66,7 +66,11 @@ RUN uv sync --no-dev --frozen || uv sync --no-dev
 # renderer inside the container for per-run skill ablation (ADR-0011).
 # pytest: graded cases ship their own test suite (ADR-0050, tetris-v2) and the
 # validation container runs it against the agent's workspace.
-RUN uv pip install --python /opt/venv/bin/python --no-cache pygame jinja2 pytest pytest-cov
+# httpx2: FastAPI's TestClient (starlette 1.3) needs it, so an agent can exercise
+# an API in-process without a server or network (security-audit-v1, ADR-0087).
+# Pinned to the lab's own lock (uv.lock) so the agent and the grader agree.
+RUN uv pip install --python /opt/venv/bin/python --no-cache pygame jinja2 pytest pytest-cov \
+        "httpx2==2.12.0"
 
 # A real browser for frontend cases (ADR-0067, todo-web-v1): the graded suite
 # drives the agent's page in headless Chromium through its accessible contract.
