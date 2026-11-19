@@ -116,6 +116,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0086 — Pruning never trades quality for a smaller harness](0086-pruning-never-trades-quality-for-a-smaller-harness.md)
 - [0087 — A case can ship the candidate skill it trials](0087-a-case-can-ship-the-candidate-skill-it-trials.md)
 - [0088 — The lab measures propensity, not only capability](0088-the-lab-measures-propensity-not-only-capability.md)
+- [0089 — A profile grows one trialled skill at a time](0089-a-profile-grows-one-trialled-skill-at-a-time.md)
 
 ## Why ADRs exist
 

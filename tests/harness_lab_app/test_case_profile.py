@@ -516,7 +516,7 @@ def test_calibration_references_are_never_tracked() -> None:
         text=True,
         check=True,
     ).stdout.split()
-    assert tracked == ["data/reference/swebench_official.json"]
+    assert tracked == []
 
 
 def test_the_chess_grader_has_one_command_per_check() -> None:

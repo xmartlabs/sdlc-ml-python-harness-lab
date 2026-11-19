@@ -3526,4 +3526,15 @@ graders locally against the stored workspaces (`grade.py check <c> <ws> <run>`) 
 re-validating through the API: the tamper guard fails every run until the grader change
 is committed.
 
+## 2026-11-19 — For Haiku, most lab cases sit at the ceiling: pick cases with room
+
+Before trialling a skill, read the model's past pass rate per case. Haiku 4.5 solves
+every scored run of the clinic ladder, `cli-textstats-v1`, `eda-iris-pipeline-v2` and
+`tetris-v2`, and the 2026-11-18 group prune of all 25 skills on those cases came back
+`no_signal`: removing every skill changed nothing measurable. The cases with room for
+Haiku are the review and security ones (`pr-review-v1` ~0.77 of checks, `security-fix-v1`
+~0.90, `security-audit-v1` ~0.94) and SWE-bench instances, where the same all-skills
+removal dropped success from 100% to 80%. Keep one ceiling case as the "no loss
+elsewhere" guard, never as the target.
+
 <!-- Add new learnings above this line -->

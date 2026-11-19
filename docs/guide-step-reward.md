@@ -203,6 +203,16 @@ a smaller harness ([ADR-0085](adr/0085-a-project-carries-a-skill-profile-not-the
    description shows as a higher `skill_invoked` rate. A shorter body shows as a
    lower `cost_to_resolve_usd` at equal success. Add `INVOKE=1` to compare the two
    versions when both are used.
+5. **Grow the profile one skill at a time.** `make add-skill-trial SKILL=<name>
+   MODEL=… CASES="…"` runs `minimal` against `minimal` plus that skill, asked for
+   ([ADR-0089](adr/0089-a-profile-grows-one-trialled-skill-at-a-time.md)). List the
+   cases the skill targets plus one general case. The skill joins `minimal` only on
+   a win on its target cases with no loss on the general one, and replaces a skill
+   only through step 4.
+
+**Pick cases with room.** A case every arm passes cannot show what a skill adds:
+the verdict is `no_signal`. Check the model's past pass rate per case before
+choosing (the experiments page, or `/api/experiments/<id>/summary`).
 
 ## Limits, stated
 

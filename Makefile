@@ -971,6 +971,14 @@ refine-skill:
 	@[ -n "$(CASES)" ] || { echo "❌ CASES is required (3+ cases for a verdict)."; exit 1; }
 	@$(LAB_PY) scripts/refine_skill.py --skill $(SKILL) --candidate $(CANDIDATE) --model $(MODEL) --cases $(CASES) $(if $(PROFILE),--profile $(PROFILE),) $(if $(INVOKE),--invoke,) --reps $(or $(REPS),3) --harness $(or $(HARNESS),claude) $(if $(LAUNCH),--launch,)
 
+# Lab: trial one governed skill on top of a profile, asked for (ADR-0089).
+# Usage: make add-skill-trial SKILL=sensible_testing MODEL=... CASES="a b c" [PROFILE=minimal REPS=3 LAUNCH=1]
+add-skill-trial:
+	@[ -n "$(SKILL)" ] || { echo "❌ SKILL is required."; exit 1; }
+	@[ -n "$(MODEL)" ] || { echo "❌ MODEL is required."; exit 1; }
+	@[ -n "$(CASES)" ] || { echo "❌ CASES is required (target cases plus one general case)."; exit 1; }
+	@$(LAB_PY) scripts/add_skill_trial.py --skill $(SKILL) --model $(MODEL) --cases $(CASES) $(if $(PROFILE),--profile $(PROFILE),) --reps $(or $(REPS),3) --harness $(or $(HARNESS),claude) $(if $(LAUNCH),--launch,)
+
 # Lab: stage a case's candidate skill (benchmarks/<case>/candidate-skill/<name>/) so an
 # "Add skills" experiment can trial it (ADR-0087). Usage: make stage-candidate SKILL=review_pull_request [REPLACE=1]
 # Without SKILL it lists the candidates.
@@ -1054,6 +1062,7 @@ help:
 	@echo "  make skill-profile [SET=] List skill profiles / select one into harness.toml (ADR-0085)"
 	@echo "  make skill-census        Skill usage per model/case/harness, with each skill's size"
 	@echo "  make skill-profile-experiment / refine-skill   Lab experiments on profiles and rewrites"
+	@echo "  make add-skill-trial SKILL=<name>   Trial one skill on top of a profile (default minimal)"
 	@echo "  make stage-candidate SKILL=<name>   Stage a case's candidate skill for a trial (lists them without SKILL)"
 	@echo "  make purge-external-skills Purge all external skills and reset metadata"
 	@echo "  make langfuse-check      Verify the Langfuse host and credentials"
@@ -1075,4 +1084,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test images-3d sandbox-build clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill prune skill-census skill-profile skill-profile-experiment refine-skill stage-candidate
+.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test images-3d sandbox-build clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill prune skill-census skill-profile skill-profile-experiment refine-skill add-skill-trial stage-candidate
