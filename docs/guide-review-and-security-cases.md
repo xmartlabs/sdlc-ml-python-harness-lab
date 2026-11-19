@@ -19,7 +19,8 @@ ships the skill it is built to test. The decision is in
 **`pr-review-v1`** grades the review against a hidden answer key, one check per entry:
 
 - **Recall.** Each seeded defect is a check. A finding counts when it names the
-  defect's file and lands within a few lines of it.
+  defect's file and lands within a few lines of it, or inside the short function that
+  holds it. Decoys keep the strict window.
 - **Decoys.** Some code looks wrong and is correct. Flagging it at `medium` or above
   fails its check.
 - **Precision.** Most blocking findings must be real defects, so a review that lists

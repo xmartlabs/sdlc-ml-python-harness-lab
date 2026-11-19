@@ -332,3 +332,80 @@ def test_the_canary_reads_a_one_step_runs_root_transcript(tmp_path):
     assert _check("canary", workspace, tmp_path)[0] == grade.PASS
     (run / "opencode.events.jsonl").write_text(json.dumps({"content": json.dumps(KEY)}))
     assert _check("canary", workspace, tmp_path)[0] == grade.FAIL
+
+
+# --- More than one right fix ----------------------------------------------------------
+
+
+def test_every_alternative_fix_applies_once_to_the_fixed_copy(tmp_path):
+    for entry in KEY["vulns"]:
+        for fix in entry.get("alternative_fixes", []):
+            root = tmp_path / fix["name"]
+            shutil.copytree(CASE / "grader" / "fixed", root)
+            grade.apply_fix(root, fix, KEY["app_package"])
+            assert (root / fix["file"]).read_text() != (
+                CASE / "grader" / "fixed" / fix["file"]
+            ).read_text()
+
+
+def test_an_alternative_fix_that_does_not_match_is_a_lab_error(tmp_path):
+    shutil.copytree(CASE / "grader" / "fixed", tmp_path / "f")
+    bad = {
+        "name": "x",
+        "file": f"{KEY['app_package']}/app.py",
+        "old": "nope",
+        "new": "",
+    }
+    with pytest.raises(grade.KeyError_):
+        grade.apply_fix(tmp_path / "f", bad, KEY["app_package"])
+    outside = dict(bad, file="../escape.py")
+    with pytest.raises(grade.KeyError_):
+        grade.apply_fix(tmp_path / "f", outside, KEY["app_package"])
+
+
+PROBES = CASE / "grader" / "calibration" / "remedy_probes.py"
+
+
+@needs_testclient
+@pytest.mark.skipif(
+    not (REFERENCE / "gold").is_dir(), reason="no local calibration reference"
+)
+@pytest.mark.parametrize("probe", ["test_ignored", "test_refused", "test_rejected"])
+def test_a_proof_written_for_any_correct_remedy_passes(tmp_path, probe):
+    """A test committed to one right remedy proves the flaw; the reference fix is
+    only one of them (security-audit-v1-K-002..006). The probes live in the hidden
+    grader: this file is agent-readable and must not say which weakness it is."""
+    entry = next(e for e in KEY["vulns"] if e.get("alternative_fixes"))
+    workspace = _workspace(tmp_path, None)
+    tests = workspace / "security_tests"
+    tests.mkdir()
+    shutil.copy(REFERENCE / "gold" / "security_tests" / "conftest.py", tests)
+    shutil.copy(PROBES, tests / "test_probe.py")
+    finding = _finding(entry, test=f"security_tests/test_probe.py::{probe}")
+    (workspace / "findings.json").write_text(json.dumps({"findings": [finding]}))
+    code, message = _check(entry["proof"], workspace, tmp_path)
+    assert code == grade.PASS, message
+
+
+def test_a_finding_at_the_handlers_def_locates_a_weakness(tmp_path):
+    entry = next(
+        e
+        for e in KEY["vulns"]
+        if any(
+            span[0] < min(loc["lines"]) - KEY["line_window"]
+            for loc in e["locations"]
+            for span in loc["spans"]
+        )
+    )
+    location = next(loc for loc in entry["locations"] if loc["spans"])
+    finding = dict(_finding(entry), file=location["file"], line=location["spans"][0][0])
+    workspace = _workspace(tmp_path, {"findings": [finding]})
+    assert _check(entry["check"], workspace, tmp_path)[0] == grade.PASS
+
+
+def test_decoys_keep_the_strict_window():
+    assert all(
+        "spans" not in location
+        for entry in KEY["decoys"]
+        for location in entry["locations"]
+    )

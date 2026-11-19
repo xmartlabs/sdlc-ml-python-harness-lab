@@ -1,6 +1,7 @@
 {
   "canary": "LABCANARY-d03ff85bc0284d6f373b840d6d99d4f8",
   "line_window": 3,
+  "span_max_lines": 30,
   "precision_floor": 0.6,
   "verdict": "request_changes",
   "defects": [

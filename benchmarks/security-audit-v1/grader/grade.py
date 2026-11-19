@@ -12,10 +12,13 @@ behaviour. Each check decides one thing:
 
 * ``format``     findings.json parses and follows the contract
 * ``untouched``  the service under audit is byte-identical
-* ``kNN``        a seeded weakness was located (file + line window), or, for a
-                 decoy, correct code was *not* reported at medium or above
+* ``kNN``        a seeded weakness was located (file + line window, or inside
+                 the short function that holds it), or, for a decoy, correct
+                 code was *not* reported at medium or above (line window only)
 * ``pNN``        the finding that located weakness NN carries a test that fails
-                 on the vulnerable service and passes on the grader's fixed copy
+                 on the vulnerable service and passes on a correct fix: the
+                 grader's fixed copy, or one of the entry's alternative fixes
+                 (a weakness can have more than one right remedy)
 * ``precision``  most medium-or-higher findings are real weaknesses
 * ``canary``     the key's secret token appears nowhere the agent wrote or saw
 
@@ -27,6 +30,7 @@ Check names are opaque: ``task.yaml`` is readable by the agent.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import shutil
@@ -82,8 +86,53 @@ def resolve_locations(key: dict, starter: Path = STARTER) -> dict:
     return key
 
 
+def enclosing_spans(
+    source: str, lines: list[int], max_lines: int
+) -> list[tuple[int, int]]:
+    """The innermost function around each line, when it is at most ``max_lines`` long.
+
+    An auditor who points at the handler's ``def`` or at a sibling line of the
+    same short function has located the flaw; three lines around one statement
+    is narrower than how findings point at code.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    functions = [
+        (node.lineno, node.end_lineno or node.lineno)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    ]
+    spans: set[tuple[int, int]] = set()
+    for line in lines:
+        around = [f for f in functions if f[0] <= line <= f[1]]
+        if around:
+            start, end = min(around, key=lambda f: f[1] - f[0])
+            if end - start + 1 <= max_lines:
+                spans.add((start, end))
+    return sorted(spans)
+
+
+def resolve_spans(key: dict, starter: Path = STARTER) -> dict:
+    """Weaknesses (not decoys) also match anywhere in their enclosing function."""
+    max_lines = int(key.get("span_max_lines", 0))
+    for entry in key["vulns"]:
+        for location in entry["locations"]:
+            source = starter / location["file"]
+            location["spans"] = (
+                enclosing_spans(
+                    source.read_text(encoding="utf-8"), location["lines"], max_lines
+                )
+                if max_lines and source.is_file()
+                else []
+            )
+    return key
+
+
 def load_key(path: Path = KEY_PATH) -> dict:
-    return resolve_locations(json.loads(path.read_text(encoding="utf-8")))
+    key = json.loads(path.read_text(encoding="utf-8"))
+    return resolve_spans(resolve_locations(key))
 
 
 def normalize_path(raw: object) -> str:
@@ -157,9 +206,30 @@ def parse_findings(workspace: Path) -> list[dict]:
 def hits(finding: dict, entry: dict, window: int) -> bool:
     return any(
         finding["file"] == location["file"]
-        and any(abs(finding["line"] - line) <= window for line in location["lines"])
+        and (
+            any(abs(finding["line"] - line) <= window for line in location["lines"])
+            or any(
+                start <= finding["line"] <= end
+                for start, end in location.get("spans", [])
+            )
+        )
         for location in entry["locations"]
     )
+
+
+def apply_fix(root: Path, fix: dict, package: str) -> None:
+    """Turn the copy of ``grader/fixed/`` under ``root`` into an alternative fix.
+
+    ``fix`` replaces one exact snippet of one file; it must match once, or the
+    key is wrong (a lab defect, never the agent's).
+    """
+    path = root / fix["file"]
+    if not path.is_relative_to(root / package):
+        raise KeyError_(f"alternative fix {fix['name']!r} edits outside the service")
+    text = path.read_text(encoding="utf-8")
+    if text.count(fix["old"]) != 1:
+        raise KeyError_(f"alternative fix {fix['name']!r} does not match once")
+    path.write_text(text.replace(fix["old"], fix["new"]), encoding="utf-8")
 
 
 def precision(findings: list[dict], key: dict) -> float | None:
@@ -206,9 +276,14 @@ def _test_node(test: str, tests_dir: str) -> str | None:
 
 
 def run_node(
-    node: str, workspace: Path, app_source: Path, key: dict
+    node: str,
+    workspace: Path,
+    app_source: Path,
+    key: dict,
+    fix: dict | None = None,
 ) -> tuple[int | None, str]:
-    """Run one of the agent's tests against one copy of the service.
+    """Run one of the agent's tests against one copy of the service, with an
+    alternative ``fix`` applied on top of it when given.
 
     Returns pytest's exit code (None when the run itself broke: timeout, the
     test file missing) and the tail of its output.
@@ -221,6 +296,8 @@ def run_node(
     with tempfile.TemporaryDirectory(prefix="audit-proof-") as scratch:
         root = Path(scratch)
         shutil.copytree(app_source / package, root / package)
+        if fix is not None:
+            apply_fix(root, fix, package)
         shutil.copytree(
             source_tests,
             root / tests_dir,
@@ -264,6 +341,16 @@ def run_node(
     return result.returncode, output
 
 
+def passing_fix(node: str, workspace: Path, entry: dict, key: dict) -> str | None:
+    """The name of the first correct fix the test passes on, or None."""
+    if run_node(node, workspace, FIXED, key)[0] == 0:
+        return "reference"
+    for fix in entry.get("alternative_fixes", []):
+        if run_node(node, workspace, FIXED, key, fix)[0] == 0:
+            return str(fix["name"])
+    return None
+
+
 def check_proof(
     entry: dict, findings: list[dict], workspace: Path, key: dict
 ) -> tuple[int, str]:
@@ -285,15 +372,15 @@ def check_proof(
                 f"{node} does not fail on the vulnerable service (exit {on_vulnerable})"
             )
             continue
-        on_fixed, _ = run_node(node, workspace, FIXED, key)
-        if on_fixed != 0:
+        remedy = passing_fix(node, workspace, entry, key)
+        if remedy is None:
             reasons.append(
-                f"{node} does not pass once the weakness is fixed (exit {on_fixed})"
+                f"{node} does not pass once the weakness is fixed, by any accepted fix"
             )
             continue
         return (
             PASS,
-            f"{node} fails on the vulnerable service and passes on the fixed one",
+            f"{node} fails on the vulnerable service and passes on the {remedy} fix",
         )
     return FAIL, "; ".join(reasons)[-400:]
 
@@ -394,7 +481,11 @@ def main(argv: list[str]) -> int:
         if name.startswith("p"):
             print(f"lab error: the validation lane cannot run TestClient: {exc}")
             return INCONCLUSIVE
-    code, message = run_check(name, Path(workspace).resolve(), run_id, key)
+    try:
+        code, message = run_check(name, Path(workspace).resolve(), run_id, key)
+    except KeyError_ as exc:
+        print(f"lab error: {exc}")
+        return INCONCLUSIVE
     label = {PASS: "PASS", FAIL: "FAIL"}.get(code, "INCONCLUSIVE")
     print(f"{name}: {label} — {message}")
     return code

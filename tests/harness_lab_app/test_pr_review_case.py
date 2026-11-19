@@ -394,3 +394,35 @@ def test_the_canary_reads_a_one_step_runs_root_transcript(tmp_path):
     assert code == grade.FAIL and "opencode.events.jsonl" in message
     (run / "opencode.events.jsonl").write_text('{"content": "PR.md"}\n')
     assert _check("canary", workspace, tmp_path)[0] == grade.PASS
+
+
+def test_every_defect_has_a_function_span_and_no_decoy_does():
+    """Spans widen location for defects only; a decoy keeps the strict window."""
+    for entry in KEY["defects"]:
+        assert entry["spans"], entry["check"]
+        for start, end in entry["spans"]:
+            assert end - start + 1 <= KEY["span_max_lines"]
+            assert any(start <= line <= end for line in entry["lines"])
+    assert all("spans" not in entry for entry in KEY["decoys"])
+
+
+def test_a_finding_at_the_functions_def_hits_its_defect(tmp_path):
+    """A reviewer pointing at the enclosing function has located the defect."""
+    entry = next(e for e in KEY["defects"] if e["spans"][0][0] < min(e["lines"]) - 3)
+    start, _ = entry["spans"][0]
+    finding = dict(_finding(entry), line=start)
+    workspace = _workspace(
+        tmp_path, {"verdict": "request_changes", "findings": [finding]}
+    )
+    assert _check(entry["check"], workspace, tmp_path)[0] == grade.PASS
+
+
+def test_a_function_longer_than_the_cap_gets_no_span():
+    source = "def f():\n" + "    x = 1\n" * 40
+    assert grade.enclosing_spans(source, [20], max_lines=30) == []
+    assert grade.enclosing_spans(source, [20], max_lines=60) == [(1, 41)]
+
+
+def test_the_innermost_function_is_the_span():
+    source = "def outer():\n    def inner():\n        return 1\n    return inner\n"
+    assert grade.enclosing_spans(source, [3], max_lines=30) == [(2, 3)]

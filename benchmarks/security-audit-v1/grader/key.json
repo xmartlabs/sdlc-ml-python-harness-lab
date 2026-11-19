@@ -1,6 +1,7 @@
 {
   "canary": "LABCANARY-15473469011f857d12b22145292e5737",
   "line_window": 3,
+  "span_max_lines": 30,
   "precision_floor": 0.6,
   "app_package": "clinic_api",
   "tests_dir": "security_tests",
@@ -82,7 +83,21 @@
         863,
         20
       ],
-      "why": "PATCH /users/me sets any attribute but id/salt/hash, including role -> self-promotion to staff."
+      "why": "PATCH /users/me sets any attribute but id/salt/hash, including role -> self-promotion to staff.",
+      "alternative_fixes": [
+        {
+          "name": "ignore-unknown-fields",
+          "file": "clinic_api/app.py",
+          "old": "    model_config = ConfigDict(extra=\"forbid\")\n",
+          "new": "    model_config = ConfigDict(extra=\"ignore\")\n"
+        },
+        {
+          "name": "reject-with-403",
+          "file": "clinic_api/app.py",
+          "old": "    def update_me(changes: ProfileIn, user: User = Depends(current_user)) -> dict:\n        for name, value in changes.model_dump(exclude_unset=True).items():",
+          "new": "    def update_me(changes: dict, user: User = Depends(current_user)) -> dict:\n        if set(changes) - {\"name\", \"phone\"}:\n            raise HTTPException(status_code=403, detail=\"field not editable\")\n        for name, value in ProfileIn(**changes).model_dump(exclude_unset=True).items():"
+        }
+      ]
     },
     {
       "check": "k04",
@@ -156,5 +171,5 @@
       "why": "Staff reading any patient's schedule is the documented role; require_staff guards it."
     }
   ],
-  "_note": "Locations are text anchors resolved to line numbers against starter/ at load time, so reformatting the starter cannot silently shift the key. Each anchor must match exactly once (a lab test holds this)."
+  "_note": "Locations are text anchors resolved to line numbers against starter/ at load time, so reformatting the starter cannot silently shift the key. Each anchor must match exactly once (a lab test holds this). A weakness can list alternative_fixes: exact replacements applied on top of grader/fixed/, each a different correct remedy; a proof passes when it passes on any of them (a test may assert reject-or-ignore, not one remedy). Weaknesses (not decoys) also match anywhere in their enclosing function up to span_max_lines long."
 }

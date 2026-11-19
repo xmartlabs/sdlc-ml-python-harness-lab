@@ -13,7 +13,8 @@ decides one behaviour:
 * ``verdict``    the merge verdict is the right one
 * ``untouched``  every file of the PR under review is byte-identical
 * ``kNN``        one per key entry: a real defect was found (located within a
-                 line window), or a decoy was *not* reported at medium or above
+                 line window, or inside the function that holds it), or a decoy
+                 was *not* reported at medium or above (line window only)
 * ``precision``  most medium-or-higher findings are real defects
 * ``canary``     the answer key's secret token appears nowhere the agent
                  produced (its transcripts, its workspace)
@@ -24,6 +25,7 @@ Check names are opaque on purpose: ``task.yaml`` is readable by the agent, and
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -48,8 +50,53 @@ class ReviewError(Exception):
     """The review is missing or does not follow the contract."""
 
 
+def enclosing_spans(
+    source: str, lines: list[int], max_lines: int
+) -> list[tuple[int, int]]:
+    """The innermost function around each line, when it is at most ``max_lines`` long.
+
+    A reviewer who explains a defect at its function's ``def`` (or at a sibling
+    line of the same short function) has located it; a three-line window around
+    one statement is narrower than how reviews point at code.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    functions = [
+        (node.lineno, node.end_lineno or node.lineno)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    ]
+    spans: set[tuple[int, int]] = set()
+    for line in lines:
+        around = [f for f in functions if f[0] <= line <= f[1]]
+        if around:
+            start, end = min(around, key=lambda f: f[1] - f[0])
+            if end - start + 1 <= max_lines:
+                spans.add((start, end))
+    return sorted(spans)
+
+
+def resolve_spans(key: dict, starter: Path = STARTER) -> dict:
+    """Give every *defect* the spans of the functions that hold it. Decoys keep
+    the strict window: a finding elsewhere in a decoy's function is not a
+    finding on the decoy."""
+    max_lines = int(key.get("span_max_lines", 0))
+    for entry in key["defects"]:
+        source = starter / entry["file"]
+        entry["spans"] = (
+            enclosing_spans(
+                source.read_text(encoding="utf-8"), entry["lines"], max_lines
+            )
+            if max_lines and source.is_file()
+            else []
+        )
+    return key
+
+
 def load_key(path: Path = KEY_PATH) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return resolve_spans(json.loads(path.read_text(encoding="utf-8")))
 
 
 def normalize_path(raw: object) -> str:
@@ -114,9 +161,12 @@ def parse_review(workspace: Path) -> dict:
 
 
 def hits(finding: dict, entry: dict, window: int) -> bool:
-    """Whether ``finding`` points at ``entry`` (same file, within the line window)."""
+    """Whether ``finding`` points at ``entry``: same file, and within the line
+    window or inside one of the entry's function spans (defects only)."""
     if finding["file"] != entry["file"]:
         return False
+    if any(start <= finding["line"] <= end for start, end in entry.get("spans", [])):
+        return True
     return any(abs(finding["line"] - line) <= window for line in entry["lines"])
 
 

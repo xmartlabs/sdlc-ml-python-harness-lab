@@ -2,7 +2,11 @@
 
 The grade is a hidden answer key (`grader/key.json`), one command per check. A finding
 hits a seeded defect when it names the defect's file and lands within three lines of
-it. Levels are tagged with what establishes them: `[check]` an automated check, `[diff]`
+it, or anywhere inside the function that holds it (functions up to `span_max_lines`
+long, resolved with `ast` against the starter). Decoys keep the strict three-line window.
+The span exists because reviewers point at a function's `def` when the defect is the
+function's behaviour: three reviews of the first trial named the right race at the
+`def` and missed by two lines. Levels are tagged with what establishes them: `[check]` an automated check, `[diff]`
 the review text itself.
 
 | Level | Meaning | Evidence |

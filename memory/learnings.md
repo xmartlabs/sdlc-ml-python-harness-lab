@@ -3509,4 +3509,21 @@ to any case graded against a hidden key:
 `lab_root` run and keep every hint of the key out of it. Then calibrate empty, starter,
 gold and gamed variants in the runner image.
 
+## 2026-11-19 — Read a trial's failing checks before its verdict: three graders were wrong
+
+The first candidate-skill trials (ADR-0087, 21 Haiku runs) looked like "no effect" or
+"small effect" until each failing check was opened. Three were the grader's fault:
+a ±3-line window missed findings placed at the function's `def`; a proof was only
+accepted against one of three correct remedies; and a disclosure regex passed a
+report that merely said it had not touched the secret. All three hit both arms alike,
+so they hid differences rather than inventing them.
+
+**How to apply:** for any hidden-key grader, (1) locate by line window *or* enclosing
+function, never window alone, but keep decoys strict; (2) when a flaw has more than one
+correct fix, list every one as an alternative the proof may pass on; (3) a disclosure
+check needs a concrete action or risk word and must drop denial sentences. Re-run the
+graders locally against the stored workspaces (`grade.py check <c> <ws> <run>`) before
+re-validating through the API: the tamper guard fails every run until the grader change
+is committed.
+
 <!-- Add new learnings above this line -->

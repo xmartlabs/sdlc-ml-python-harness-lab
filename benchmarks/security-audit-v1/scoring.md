@@ -2,9 +2,16 @@
 
 The grade is a hidden key (`grader/key.json`) and a fixed copy of the service
 (`grader/fixed/`). Each weakness has two checks: **located** (`kNN`, a finding names
-its file within three lines of the flaw) and **proven** (`pNN`, that finding's test
-fails on the starter and passes on the fixed copy, run in a scratch dir holding only
-the service and `security_tests/`).
+its file within three lines of the flaw, or inside the short function that holds it;
+decoys keep the strict window) and **proven** (`pNN`, that finding's test fails on the
+starter and passes on a correct fix, run in a scratch dir holding only the service and
+`security_tests/`).
+
+A correct fix is `grader/fixed/` or one of the entry's `alternative_fixes` in the key:
+exact replacements applied on top of the fixed copy, each a different right remedy. A
+weakness with more than one remedy (refuse a protected field with 403, reject it with
+422, or ignore it with 200) must list them, or a valid proof written for the other
+remedy fails. The first trial lost five of six `p03` proofs this way.
 
 Five weaknesses (locations only in the key):
 
