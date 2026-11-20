@@ -135,6 +135,27 @@ def _hashable(value: Any) -> Any:
     return value
 
 
+def _one_staged_skill_swapped(conditions: list[dict[str, Any]]) -> bool:
+    """Is this a version swap of one skill — v1 in one arm, v2 in the other?
+
+    Every arm adds exactly one staged skill and asks for that same skill, and
+    the skill differs between arms. That is one intervention (which version of
+    the skill under test), the design ADR-0092's v1-vs-v2 builds; reading it as
+    "skills_extra and skills_invoke both vary" would warn on the right design.
+    Narrow on purpose: any arm adding more than one skill, or not asking for
+    the one it adds, is not a swap and is judged by the other rules.
+    """
+    seen: set[str] = set()
+    for condition in conditions:
+        overrides = condition.get("overrides", {}) or {}
+        extra = [str(item) for item in overrides.get("skills_extra") or []]
+        invoke = [str(item) for item in overrides.get("skills_invoke") or []]
+        if len(extra) != 1 or extra != invoke:
+            return False
+        seen.add(extra[0])
+    return len(seen) == len(conditions) > 1
+
+
 def _skills_move_together(conditions: list[dict[str, Any]]) -> bool:
     """Is "stage the skill" and "ask for it" one intervention here, or two?
 
@@ -336,8 +357,8 @@ def validate_design(
                 "These conditions are identical on every harness axis, so there is "
                 "nothing to attribute a difference to."
             )
-        if {"skills_extra", "skills_invoke"} <= harness_axes and _skills_move_together(
-            conditions
+        if {"skills_extra", "skills_invoke"} <= harness_axes and (
+            _skills_move_together(conditions) or _one_staged_skill_swapped(conditions)
         ):
             # One intervention wearing two field names (see above).
             harness_axes = (harness_axes - {"skills_extra", "skills_invoke"}) | {

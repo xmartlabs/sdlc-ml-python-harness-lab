@@ -278,3 +278,116 @@ def test_the_criteria_are_the_constants_the_lab_uses():
     assert criteria["repetitions"]["validation_from"] == statistics.STRONGER_EVIDENCE
     assert criteria["pruning"]["success_margin"] == pruning.DEFAULT_SUCCESS_MARGIN
     assert criteria["pruning"]["relative_margin"] == pruning.DEFAULT_RELATIVE_MARGIN
+
+
+def test_auditing_an_unknown_skill_is_a_404(session, staging):
+    _experiment_with_skill_runs(session, "review_pull_request")
+    from harness_lab_app.schemas import SkillAuditRequest
+
+    with pytest.raises(HTTPException) as exc:
+        _endpoint("/api/skills/{name}/audit", "POST")(
+            name="no_such_skill",
+            data=SkillAuditRequest(experiment_id="trial-x"),
+            session=session,
+        )
+    # The experiment carried review_pull_request, not this one: the arm check
+    # fires first and says so — still a client error, never a 5xx.
+    assert exc.value.status_code in (404, 422)
+
+
+def test_a_gateway_refusal_is_a_400_not_unavailable(session, staging, monkeypatch):
+    from harness_lab_app import skill_audit
+    from harness_lab_app.llm_transport import GatewayHTTPError
+    from harness_lab_app.schemas import SkillAuditRequest
+
+    _stage(session, "review_pull_request")
+    _experiment_with_skill_runs(session, "review_pull_request")
+
+    def refuse(*_args, **_kwargs):
+        raise GatewayHTTPError(400, "unknown model 'nope'")
+
+    monkeypatch.setattr(skill_audit, "audit_skill", refuse)
+    monkeypatch.setattr("harness_lab_app.skill_audit.audit_skill", refuse)
+    with pytest.raises(HTTPException) as exc:
+        _endpoint("/api/skills/{name}/audit", "POST")(
+            name="review_pull_request",
+            data=SkillAuditRequest(experiment_id="trial-x", auditor_model="nope"),
+            session=session,
+        )
+    assert exc.value.status_code == 400
+
+
+def _warnings(conditions):
+    from harness_lab_app.experiment_service import validate_design
+    from harness_lab_app.models import ExperimentMode
+
+    return validate_design(
+        ExperimentMode.harness_evaluation, conditions, in_family=True
+    )
+
+
+def test_a_version_swap_of_one_staged_skill_is_one_factor():
+    """v1 vs v2, each added and asked for, is one intervention: the version."""
+    base = {"skills_disabled": []}
+    conditions = [
+        {
+            "label": "v1",
+            "role": "control",
+            "overrides": {
+                **base,
+                "skills_extra": ["review"],
+                "skills_invoke": ["review"],
+            },
+        },
+        {
+            "label": "v2",
+            "role": "treatment",
+            "overrides": {
+                **base,
+                "skills_extra": ["review-v2"],
+                "skills_invoke": ["review-v2"],
+            },
+        },
+    ]
+    assert not any("More than one harness factor" in w for w in _warnings(conditions))
+
+
+def test_a_swap_that_also_changes_the_base_still_warns():
+    """The rule is narrow: change the base too and it is two factors again."""
+    conditions = [
+        {
+            "label": "v1",
+            "role": "control",
+            "overrides": {
+                "skills_disabled": [],
+                "skills_extra": ["a"],
+                "skills_invoke": ["a"],
+            },
+        },
+        {
+            "label": "v2",
+            "role": "treatment",
+            "overrides": {
+                "skills_disabled": ["x"],
+                "skills_extra": ["b"],
+                "skills_invoke": ["b"],
+            },
+        },
+    ]
+    assert any("More than one harness factor" in w for w in _warnings(conditions))
+
+
+def test_a_swap_where_one_arm_is_not_asked_for_still_warns():
+    conditions = [
+        {
+            "label": "v1",
+            "role": "control",
+            "overrides": {"skills_extra": ["a"], "skills_invoke": ["a"]},
+        },
+        {
+            "label": "v2",
+            "role": "treatment",
+            "overrides": {"skills_extra": ["b"], "skills_invoke": []},
+        },
+    ]
+    assert any("More than one harness factor" in w for w in _warnings(conditions))

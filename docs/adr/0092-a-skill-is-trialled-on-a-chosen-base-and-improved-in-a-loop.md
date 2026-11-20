@@ -35,9 +35,17 @@ never per skill, and v1 vs v2 existed only as `make refine-skill`.
   for it, with the reason.
 - `both` creates the two A/Bs in one family (`skill-<skill>-<model>`) so they are read
   side by side.
-- With `reuse_measured` (the default), an identical A/B that already exists is reused,
-  not re-run. Identical means the same family, the same cases, and the same arms down to
-  the overrides.
+- With `both` and `reuse_measured` (the default), a base that was **already measured** is
+  reused, not re-run. Measured means all of the following:
+  - the same family, cases and arms, down to the overrides;
+  - the same skill content: the staged skill's `content_hash` is recorded in the
+    experiment's notes;
+  - at least as many finished runs per arm as requested.
+
+  A draft that never ran, a shorter measurement, or an edited skill is never reused. A
+  single base always creates. `dry_run` reports which bases would be reused or created
+  and writes nothing; the guided flow uses it to show the real run count before
+  creating.
 - Without `base`, the endpoint behaves exactly as before.
 
 **A skill is improved in an audited loop.**
@@ -67,9 +75,11 @@ never per skill, and v1 vs v2 existed only as `make refine-skill`.
 
 ## Consequences
 
-- "Minimal or full?" is one choice in the Skills flow. For `review_pull_request` on
-  Haiku, the full A/B is already measured (`trial-review-pull-request`), so `both` runs
-  only the minimal row.
+- "Minimal or full?" is one choice in the Skills flow. The earlier
+  `trial-review-pull-request` experiments sit in family `candidate-skill-trials` and
+  record no `skills_disabled`, so they are not reused. They stay readable on their own,
+  and the first `both` request runs both bases. Once a base is measured through the
+  flow, later `both` requests reuse it.
 - No metric, score, hash or launch path changes. Every new endpoint creates an
   experiment the CLI or New evaluation could already create, or reads what exists.
 - The skill audit calls the configured LLM transport (gateway first, then Claude CLI),

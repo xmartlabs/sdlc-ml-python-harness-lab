@@ -433,11 +433,13 @@ export const api = {
     repetitions: number;
     harness?: "claude" | "opencode" | "codex";
     reuse_measured?: boolean;
+    /** Preview only: which bases would be reused or created. Writes nothing. */
+    dry_run?: boolean;
   }) =>
     request<{
       family_id: string;
-      experiments: (ExperimentRecord & { warnings?: string[] })[];
-      reused: ExperimentRecord[];
+      experiments: (ExperimentRecord & { base: string; warnings?: string[] })[];
+      reused: (ExperimentRecord & { base: string })[];
     }>("/api/experiments/skill-trial", { method: "POST", body: JSON.stringify(payload) }),
   /** None / minimal / full on one case and model, as a ladder of A/Bs (ADR-0093). */
   createHarnessLevels: (payload: {

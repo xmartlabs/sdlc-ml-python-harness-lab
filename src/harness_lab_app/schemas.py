@@ -204,8 +204,12 @@ class SkillTrialCreate(BaseModel):
     # original single design for `source`. "both" creates the minimal and the
     # full A/B in one family, never a four-arm design.
     base: str | None = Field(default=None, pattern="^(minimal|full|both)$")
-    # With "both": an identical A/B already in the lab is reused, not re-run.
+    # With "both": an A/B already measured with this exact design, skill
+    # content and at least this many runs per arm is reused, not re-run.
     reuse_measured: bool = True
+    # Preview only: report which bases would be reused or created, write nothing.
+    # The guided flow shows the real run count with it before creating.
+    dry_run: bool = False
 
 
 class HarnessLevelsCreate(BaseModel):

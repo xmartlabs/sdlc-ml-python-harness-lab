@@ -146,7 +146,49 @@ def test_both_bases_create_two_clean_ab_in_one_family(session, staging):
     assert session.exec(select(Run)).all() == []
 
 
-def test_both_reuses_a_measured_full_trial_and_creates_only_minimal(session, staging):
+def _finish_runs(session, experiment_id: str, per_arm: int) -> None:
+    """Record ``per_arm`` completed runs on each arm of ``experiment_id``."""
+    from harness_lab_app.models import RunConfig, RunState
+
+    config = RunConfig(case_id="pr-review-v1", prompt_variant="harness")
+    session.add(config)
+    session.commit()
+    session.refresh(config)
+    arms = session.exec(
+        select(ExperimentCondition).where(
+            ExperimentCondition.experiment_id == experiment_id
+        )
+    ).all()
+    for arm in arms:
+        for index in range(per_arm):
+            session.add(
+                Run(
+                    run_id=f"{experiment_id}-{arm.label}-{index}"[:120],
+                    run_config_id=config.id,
+                    state=RunState.completed,
+                    experiment_id=experiment_id,
+                    condition_label=arm.label,
+                )
+            )
+    session.commit()
+
+
+def _trial(session, base: str, reps: int = 3):
+    return _endpoint("/api/experiments/skill-trial", "POST")(
+        data=SkillTrialCreate(
+            skill="review_pull_request",
+            model="claude-haiku-4-5",
+            case_ids=["pr-review-v1"],
+            source="staged",
+            base=base,
+            repetitions=reps,
+        ),
+        session=session,
+    )
+
+
+@pytest.fixture
+def staged_review(session, staging):
     _seed(session)
     _endpoint("/api/cases/{case_id}/candidate-skills/{name}/stage", "POST")(
         case_id="pr-review-v1",
@@ -154,32 +196,59 @@ def test_both_reuses_a_measured_full_trial_and_creates_only_minimal(session, sta
         replace=False,
         session=session,
     )
-    trial = _endpoint("/api/experiments/skill-trial", "POST")
-    first = trial(
-        data=SkillTrialCreate(
-            skill="review_pull_request",
-            model="claude-haiku-4-5",
-            case_ids=["pr-review-v1"],
-            source="staged",
-            base="full",
-        ),
-        session=session,
-    )
-    full_id = first["experiments"][0]["experiment_id"]
-    second = trial(
-        data=SkillTrialCreate(
-            skill="review_pull_request",
-            model="claude-haiku-4-5",
-            case_ids=["pr-review-v1"],
-            source="staged",
-            base="both",
-        ),
-        session=session,
-    )
+
+
+def test_both_reuses_a_measured_full_trial_and_creates_only_minimal(
+    session, staged_review
+):
+    full_id = _trial(session, "full", reps=3)["experiments"][0]["experiment_id"]
+    _finish_runs(session, full_id, per_arm=3)
+    second = _trial(session, "both", reps=3)
     assert [row["experiment_id"] for row in second["reused"]] == [full_id]
     assert len(second["experiments"]) == 1
     arms = _arms(session, second["experiments"][0]["experiment_id"])
     assert arms["control"]["skills_disabled"] == profile_disabled("minimal")
+
+
+def test_a_draft_that_never_ran_is_not_reused(session, staged_review):
+    """Reused means measured: an experiment with no finished run is not data."""
+    _trial(session, "full", reps=3)
+    second = _trial(session, "both", reps=3)
+    assert second["reused"] == []
+    assert len(second["experiments"]) == 2
+
+
+def test_fewer_measured_repetitions_than_asked_are_not_reused(session, staged_review):
+    full_id = _trial(session, "full", reps=1)["experiments"][0]["experiment_id"]
+    _finish_runs(session, full_id, per_arm=1)
+    second = _trial(session, "both", reps=5)
+    assert second["reused"] == []
+
+
+def test_an_edited_staged_skill_is_not_reused(session, staged_review):
+    """Same name, new content: the old measurement is of the old skill."""
+    from harness_lab_app.staged_skill_service import StagedSkillService
+
+    full_id = _trial(session, "full", reps=3)["experiments"][0]["experiment_id"]
+    _finish_runs(session, full_id, per_arm=3)
+    service = StagedSkillService(session)
+    skill = service.get_skill("review_pull_request")
+    service.update_skill(
+        "review_pull_request",
+        description=skill.description,
+        content=skill.content + "\nDemand a trace per finding.\n",
+    )
+    second = _trial(session, "both", reps=3)
+    assert second["reused"] == []
+
+
+def test_a_single_base_never_reuses_silently(session, staged_review):
+    """The UI offers reuse only for 'both'; a single base always creates."""
+    full_id = _trial(session, "full", reps=3)["experiments"][0]["experiment_id"]
+    _finish_runs(session, full_id, per_arm=3)
+    again = _trial(session, "full", reps=3)
+    assert again["reused"] == []
+    assert len(again["experiments"]) == 1
 
 
 def test_the_catalog_default_still_builds_the_add_skill_trial(session):
@@ -213,3 +282,26 @@ def test_both_with_a_catalog_skill_is_refused_with_a_reason(session):
         )
     assert exc.value.status_code == 422
     assert "full" in exc.value.detail
+
+
+def test_a_dry_run_reports_what_would_run_and_writes_nothing(session, staged_review):
+    from harness_lab_app.models import Experiment
+
+    full_id = _trial(session, "full", reps=3)["experiments"][0]["experiment_id"]
+    _finish_runs(session, full_id, per_arm=3)
+    before = {e.experiment_id for e in session.exec(select(Experiment)).all()}
+    preview = _endpoint("/api/experiments/skill-trial", "POST")(
+        data=SkillTrialCreate(
+            skill="review_pull_request",
+            model="claude-haiku-4-5",
+            case_ids=["pr-review-v1"],
+            source="staged",
+            base="both",
+            repetitions=3,
+            dry_run=True,
+        ),
+        session=session,
+    )
+    assert [row["base"] for row in preview["reused"]] == ["full"]
+    assert [row["base"] for row in preview["experiments"]] == ["minimal"]
+    assert {e.experiment_id for e in session.exec(select(Experiment)).all()} == before

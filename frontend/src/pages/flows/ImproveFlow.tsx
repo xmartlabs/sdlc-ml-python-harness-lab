@@ -172,7 +172,10 @@ export function ImproveFlow() {
   const [audit, setAudit] = useState<SkillAuditResult | null>(null);
   const [draftText, setDraftText] = useState("");
   const [draftName, setDraftName] = useState("");
-  const [stagedOk, setStagedOk] = useState<string | null>(null);
+  // The staged v2 and the skill it is a v2 *of*. Phase C only ever compares a
+  // skill with a v2 staged from its own audit (review finding 2026-11-19).
+  const [stagedOk, setStagedOk] = useState<{ skill: string; name: string } | null>(null);
+  const v2For = stagedOk && stagedOk.skill === skill ? stagedOk.name : null;
 
   useEffect(() => {
     loadCases().then(setCases);
@@ -204,6 +207,7 @@ export function ImproveFlow() {
     api
       .auditSkill(skill, experimentId, auditorModel.trim())
       .then((result) => {
+        setStagedOk(null);
         setAudit(result);
         setDraftText(result.v2);
         setDraftName(result.v2_name);
@@ -219,7 +223,7 @@ export function ImproveFlow() {
     api
       .stageSkillDraft(draftName, draftText)
       .then(() => {
-        setStagedOk(draftName);
+        setStagedOk({ skill, name: draftName });
         api
           .listStagedSkills()
           .then((rows) => setStaged(rows.filter((row) => row.status !== "archived")))
@@ -229,7 +233,7 @@ export function ImproveFlow() {
       .finally(() => setBusy(false));
   };
 
-  if (phase === "c" && audit) {
+  if (phase === "c" && audit && v2For) {
     const defaultCase = experiments.find((row) => row.experiment_id === experimentId)?.case_ids[0] ?? "";
     const steps: GuideStep[] = [
       { key: "case", node: m.nodes.case, question: m.caseQ, kind: "one", options: () => caseOptions(cases) },
@@ -283,7 +287,7 @@ export function ImproveFlow() {
             const arm = armFor(modelId);
             const created = await api.createSkillRefine({
               skill,
-              candidate: stagedOk ?? draftName,
+              candidate: v2For,
               model: arm.model,
               harness: arm.harness,
               case_ids: [caseId],
@@ -294,7 +298,7 @@ export function ImproveFlow() {
           }}
           outcome={m.outcome}
           cli={(values) =>
-            `make refine-skill SKILL=${skill} CANDIDATE=${stagedOk ?? draftName} MODEL=${String(values.model)} CASES="${String(values.case)}"`
+            `make refine-skill SKILL=${skill} CANDIDATE=${v2For} MODEL=${String(values.model)} CASES="${String(values.case)}"`
           }
           steps={steps}
           title={m.title}
@@ -331,6 +335,8 @@ export function ImproveFlow() {
                       key={row.name}
                       onClick={() => {
                         setSkill(row.name);
+                        setAudit(null);
+                        setStagedOk(null);
                         setExperimentId("");
                         setAudit(null);
                       }}
@@ -445,7 +451,13 @@ export function ImproveFlow() {
               {error ? <p className="guide-error">{error}</p> : null}
 
               <div className="guide-actions">
-                <button className="secondary" disabled={busy} onClick={() => setPhase("a")} type="button">
+                <button className="secondary" disabled={busy} onClick={() => {
+                    setPhase("a");
+                    setAudit(null);
+                    setStagedOk(null);
+                  }}
+                  type="button"
+                >
                   {m.back}
                 </button>
                 <button className="primary" disabled={busy || !draftName.trim()} onClick={stage} type="button">
@@ -453,9 +465,9 @@ export function ImproveFlow() {
                 </button>
               </div>
 
-              {stagedOk ? (
+              {v2For ? (
                 <div className="callout callout--ok">
-                  <p>{m.stagedOk(stagedOk)}</p>
+                  <p>{m.stagedOk(v2For)}</p>
                   <button className="primary" onClick={() => setPhase("c")} type="button">
                     {m.continueToAb}
                   </button>

@@ -63,7 +63,10 @@ export async function perRun(
   modelId: string
 ): Promise<{ cost: number | null; minutes: number | null; n: number }> {
   try {
-    const row = await api.estimateRun(caseId, runModelId(modelId));
+    // The id a run records is the one `armFor` creates it with: bare for
+    // Claude models, the full `gateway/...` id otherwise. Strip nothing else,
+    // or a gateway model never matches its own history.
+    const row = await api.estimateRun(caseId, armFor(modelId).model);
     return { cost: row.cost_usd ?? null, minutes: row.minutes ?? null, n: row.n };
   } catch {
     return { cost: null, minutes: null, n: 0 };

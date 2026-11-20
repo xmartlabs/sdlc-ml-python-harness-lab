@@ -344,14 +344,53 @@ def _unique_experiment_id(session: Session, base_id: str) -> str:
     return experiment_id
 
 
+def _measured_match(
+    session: Session,
+    service: ExperimentService,
+    wanted: Any,
+    repetitions: int,
+    skill_hash: str,
+) -> Any:
+    """An existing experiment that already measured exactly ``wanted``, or None."""
+    from collections import Counter
+
+    from harness_lab_app.models import Experiment, RunState
+    from harness_lab_app.skill_trial import same_design
+
+    for row in session.exec(
+        select(Experiment).where(Experiment.family_id == wanted.family_id)
+    ).all():
+        if sorted(row.case_ids or []) != sorted(wanted.case_ids):
+            continue
+        if skill_hash and f"skill_hash={skill_hash}" not in (row.notes or ""):
+            continue
+        conditions = service.conditions(row.experiment_id)
+        stored = [
+            {
+                "role": c.role.value if hasattr(c.role, "value") else c.role,
+                "overrides": dict(c.overrides or {}),
+            }
+            for c in conditions
+        ]
+        if not same_design(stored, wanted):
+            continue
+        finished = Counter(
+            run.condition_label
+            for run in service.runs(row.experiment_id)
+            if run.state in (RunState.completed, RunState.awaiting_manual_score)
+        )
+        needed = repetitions * max(1, len(row.case_ids or []))
+        if all(finished[c.label] >= needed for c in conditions):
+            return row
+    return None
+
+
 def _create_base_trials(data: Any, pin: dict[str, str], session: Session) -> dict:
     """One clean A/B per base, in one family; reuse an identical one (ADR-0092)."""
-    from harness_lab_app.models import Experiment
     from harness_lab_app.skill_trial import (
         base_design,
         base_experiment_id,
         base_family,
-        same_design,
     )
     from harness_lab_app.skills_catalog import known_skill_names
     from harness_lab_app.staged_skill_service import StagedSkillService
@@ -382,6 +421,9 @@ def _create_base_trials(data: Any, pin: dict[str, str], session: Session) -> dic
     service = ExperimentService(session)
     created: list[dict] = []
     reused: list[dict] = []
+    skill_hash = ""
+    if staged:
+        skill_hash = StagedSkillService(session).get_skill(data.skill).content_hash
     for base in bases:
         try:
             wanted = base_design(
@@ -395,26 +437,23 @@ def _create_base_trials(data: Any, pin: dict[str, str], session: Session) -> dic
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if data.reuse_measured:
-            match = None
-            for row in session.exec(
-                select(Experiment).where(Experiment.family_id == wanted.family_id)
-            ).all():
-                if sorted(row.case_ids or []) != sorted(wanted.case_ids):
-                    continue
-                stored = [
-                    {
-                        "role": c.role.value if hasattr(c.role, "value") else c.role,
-                        "overrides": dict(c.overrides or {}),
-                    }
-                    for c in service.conditions(row.experiment_id)
-                ]
-                if same_design(stored, wanted):
-                    match = row
-                    break
+        # Reuse only in a two-base request, and only what was really measured:
+        # the same arms, the same skill content, and at least as many finished
+        # runs per arm as asked. A draft, a shorter run, or an edited skill is
+        # not the measurement this request is about (review finding 2026-11-19).
+        if data.base == "both" and data.reuse_measured:
+            match = _measured_match(
+                session, service, wanted, data.repetitions, skill_hash
+            )
             if match is not None:
-                reused.append(match.model_dump())
+                reused.append({**match.model_dump(), "base": base})
                 continue
+        if data.dry_run:
+            created.append({"experiment_id": "", "base": base, "warnings": []})
+            continue
+        wanted.notes = (
+            f"{wanted.notes} skill_hash={skill_hash}" if skill_hash else wanted.notes
+        )
         wanted.experiment_id = _unique_experiment_id(
             session, base_experiment_id(data.skill, base, data.model)
         )
@@ -422,7 +461,7 @@ def _create_base_trials(data: Any, pin: dict[str, str], session: Session) -> dic
             experiment, warnings = service.create_experiment(wanted)
         except ExperimentError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        created.append({**experiment.model_dump(), "warnings": warnings})
+        created.append({**experiment.model_dump(), "base": base, "warnings": warnings})
     return {
         "family_id": base_family(data.skill, data.model),
         "experiments": created,
@@ -1747,17 +1786,28 @@ def create_app() -> FastAPI:
         Reads the experiment's evidence for the arms that carried the skill.
         Writes nothing: staging the draft is ``POST /api/skills/drafts``.
         """
-        from harness_lab_app.llm_transport import TransportError
-        from harness_lab_app.skill_audit import SkillAuditError, audit_skill
+        from harness_lab_app.llm_transport import GatewayHTTPError, TransportError
+        from harness_lab_app.skill_audit import (
+            SkillAuditError,
+            SkillNotFoundError,
+            audit_skill,
+        )
 
         try:
             result = audit_skill(
                 session, name, data.experiment_id, model=data.auditor_model
             )
-        except ExperimentNotFoundError as exc:
+        except (ExperimentNotFoundError, SkillNotFoundError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except SkillAuditError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except GatewayHTTPError as exc:
+            # A 4xx is a request the gateway refused (an unknown auditor model):
+            # retrying will not help, and "unavailable" would mislead.
+            status = 400 if 400 <= exc.code < 500 else 503
+            raise HTTPException(
+                status_code=status, detail=f"The auditor call failed: {exc}"
+            ) from exc
         except TransportError as exc:
             raise HTTPException(
                 status_code=503,

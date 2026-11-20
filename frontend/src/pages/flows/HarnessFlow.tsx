@@ -18,9 +18,11 @@ import type { CaseRecord, ModelOption, SkillProfileRecord } from "../../types";
 
 /**
  * Harness flow (ADR-0093): one case, one model, two or more harness levels —
- * no harness, minimal, full — and the same repetitions on each. Creates
- * exactly what `harness_by_model` creates, one condition per level, so its
- * results land next to every other harness ladder on that model.
+ * no harness, minimal, full. Creates a ladder: one clean `harness_evaluation`
+ * A/B per adjacent pair of the chosen levels, in one family
+ * (`POST /api/experiments/harness-levels`). One experiment holding all three
+ * levels would move two harness factors at once; Harness × model, which needs
+ * two or more models, keeps its own screen.
  */
 
 type Level = "bare" | "minimal" | "full";
@@ -150,7 +152,15 @@ export function HarnessFlow() {
         };
       }}
       cli={(values) =>
-        `make skill-profile-experiment MODELS="${String(values.model)}" CASES="${String(values.case)}"`
+        // No make target builds this ladder (`make ladder` climbs governance,
+        // skills and prompt instead), so show the call that does.
+        `curl -X POST localhost:8008/api/experiments/harness-levels \\\n  -H 'content-type: application/json' \\\n  -d '${JSON.stringify({
+          case_id: String(values.case),
+          model: armFor(String(values.model)).model,
+          harness: armFor(String(values.model)).harness,
+          levels: values.levels,
+          repetitions: Number(values.reps)
+        })}'`
       }
       outcome={m.outcome}
       steps={steps}

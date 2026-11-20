@@ -51,6 +51,7 @@ const MESSAGES = defineMessages({
     reuseLabel: "Reuse an identical A/B already measured",
     reuseHint:
       "Skips re-running a base already measured with the same skill, case and model.",
+    noteReused: (base: string, id: string) => `${base}: already measured in ${id}, reused — only the other base runs.`,
     noteReuse:
       "If an identical A/B was already measured, it is reused and only the other base runs.",
     outcome: "One verdict per base: read skill_invoked first, then the case's checks, then the delta.",
@@ -89,6 +90,7 @@ const MESSAGES = defineMessages({
     reuseLabel: "Reusar un A/B idéntico ya medido",
     reuseHint:
       "Evita re-correr una base ya medida con la misma skill, caso y modelo.",
+    noteReused: (base: string, id: string) => `${base}: ya medido en ${id}, se reusa: solo corre la otra base.`,
     noteReuse:
       "Si ya hay un A/B idéntico medido, se reusa y solo corre la otra base.",
     outcome: "Un veredicto por base: leé primero skill_invoked, después los chequeos del caso, después el delta.",
@@ -196,15 +198,37 @@ export function SkillsFlow() {
 
   return (
     <GuideFlow
-      estimate={(values) => {
+      estimate={async (values) => {
         const caseId = String(values.case);
         const modelId = String(values.model);
-        const base = String(values.base ?? "minimal");
+        const base = String(values.base ?? "minimal") as "minimal" | "full" | "both";
         const reps = Number(values.reps ?? 0);
-        const arms = base === "both" ? 4 : 2;
-        const runs = arms * reps;
-        const notes = base === "both" ? [m.noteReuse] : [];
-        return estimateCells([{ caseId, modelId, runs }], arms, notes);
+        // Ask the lab which bases it would really run: with "both", a base
+        // already measured (same design, same skill content, enough runs) is
+        // reused, and the count must say so before anything is created.
+        let bases = base === "both" ? 2 : 1;
+        const notes: string[] = [];
+        if (base === "both" && values.reuse !== "0") {
+          try {
+            const arm = armFor(modelId);
+            const preview = await api.createSkillTrialOnBase({
+              skill: String(values.skill),
+              model: arm.model,
+              harness: arm.harness,
+              case_ids: [caseId],
+              source: String(values.source) === "catalog" ? "catalog" : "staged",
+              base,
+              repetitions: reps,
+              reuse_measured: true,
+              dry_run: true
+            });
+            bases = preview.experiments.length;
+            for (const row of preview.reused) notes.push(m.noteReused(row.base, row.experiment_id));
+          } catch {
+            // A preview that cannot run (skill not staged yet) counts both bases.
+          }
+        }
+        return estimateCells([{ caseId, modelId, runs: 2 * bases * reps }], 2 * bases, notes);
       }}
       initial={initial}
       onCreate={async (values) => {
@@ -252,11 +276,22 @@ export function SkillsFlow() {
           </label>
         ) : null
       }
-      cli={(values) =>
-        String(values.source) === "catalog"
-          ? `make add-skill-trial SKILL="${String(values.skill)}" MODEL="${String(values.model)}" CASES="${String(values.case)}"`
-          : `make stage-candidate SKILL="${String(values.skill)}"`
-      }
+      cli={(values) => {
+        const arm = armFor(String(values.model));
+        const body = JSON.stringify({
+          skill: String(values.skill),
+          model: arm.model,
+          harness: arm.harness,
+          case_ids: [String(values.case)],
+          source: String(values.source) === "catalog" ? "catalog" : "staged",
+          base: String(values.base),
+          repetitions: Number(values.reps)
+        });
+        // The case's candidate has to be staged first; the trial is one call.
+        const stage =
+          String(values.source) === "case" ? `make stage-candidate SKILL=${String(values.skill)}\n` : "";
+        return `${stage}curl -X POST localhost:8008/api/experiments/skill-trial \\\n  -H 'content-type: application/json' \\\n  -d '${body}'`;
+      }}
       outcome={m.outcome}
       steps={steps}
       title={m.title}

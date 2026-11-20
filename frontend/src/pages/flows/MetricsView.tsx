@@ -74,8 +74,8 @@ const MESSAGES = defineMessages({
       howToRead: "How to read it",
       exploratory: (n: number) =>
         `Exploratory: at least one arm has fewer than ${n} scored runs. Read this as a first look, not a result.`,
-      judgement: (n: number) =>
-        `A judgement, not a validation: every arm has at least ${n} scored runs, but fewer than ${n + 1}. Enough to form an opinion, not to validate it.`,
+      judgement: (from: number, to: number) =>
+        `A judgement, not a validation: every arm has at least ${from} scored runs, but fewer than ${to}. Enough to form an opinion, not to validate it.`,
       validation: (n: number) => `Validation: every arm has ${n} or more scored runs.`,
       missing: "—"
     },
@@ -95,7 +95,7 @@ const MESSAGES = defineMessages({
       source: "Source",
       version: "Version",
       range: "Range",
-      provenance: { fact: "hecho", observation: "observación", judgement: "juicio" },
+      provenance: { fact: "fact", observation: "observation", judgement: "judgement" },
       direction: { higher_is_better: "↑ better", lower_is_better: "↓ better", neutral: "neutral" },
       criteriaHeading: "Criteria for a verdict",
       repetitionsLabel: "Repetitions",
@@ -137,8 +137,8 @@ const MESSAGES = defineMessages({
       howToRead: "Cómo leerlo",
       exploratory: (n: number) =>
         `Exploratorio: al menos un brazo tiene menos de ${n} corridas puntuadas. Leé esto como una primera mirada, no como un resultado.`,
-      judgement: (n: number) =>
-        `Un juicio, no una validación: cada brazo tiene al menos ${n} corridas puntuadas, pero menos de ${n + 1}. Alcanza para una opinión, no para validarla.`,
+      judgement: (from: number, to: number) =>
+        `Un juicio, no una validación: cada brazo tiene al menos ${from} corridas puntuadas, pero menos de ${to}. Alcanza para opinar, no para validar.`,
       validation: (n: number) => `Validación: cada brazo tiene ${n} o más corridas puntuadas.`,
       missing: "—"
     },
@@ -256,7 +256,7 @@ function CompareTab({
     if (!criteria || conditions.length === 0) return null;
     const { exploratory_below, judgement_from, validation_from } = criteria.repetitions;
     if (minN < exploratory_below) return m.compare.exploratory(exploratory_below);
-    if (minN < validation_from) return m.compare.judgement(judgement_from);
+    if (minN < validation_from) return m.compare.judgement(judgement_from, validation_from);
     return m.compare.validation(validation_from);
   }, [criteria, conditions.length, minN, m]);
 
@@ -558,7 +558,10 @@ function DefsTab({
             <li>
               <strong>{m.defs.pruningLabel}</strong>
               <p className="muted">
-                {m.defs.pruning(criteria.pruning.success_margin, criteria.pruning.relative_margin)}
+                {m.defs.pruning(
+                  Math.round(criteria.pruning.success_margin * 100),
+                  Math.round(criteria.pruning.relative_margin * 100)
+                )}
               </p>
               <code>{criteria.pruning.where}</code>
             </li>

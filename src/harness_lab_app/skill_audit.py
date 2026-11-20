@@ -47,6 +47,10 @@ class SkillAuditError(ValueError):
     """The skill or its evidence cannot be audited as asked."""
 
 
+class SkillNotFoundError(SkillAuditError):
+    """No staged or governed skill has this name."""
+
+
 @dataclass(frozen=True)
 class SkillAudit:
     skill: str
@@ -98,7 +102,7 @@ def skill_text(session: Session, name: str) -> str:
         file = path / "SKILL.md" if path.is_dir() else path
         if file.is_file():
             return file.read_text(encoding="utf-8")
-    raise SkillAuditError(f"No staged or governed skill named '{name}'.")
+    raise SkillNotFoundError(f"No staged or governed skill named '{name}'.")
 
 
 def _parse(raw: str) -> dict[str, Any]:
