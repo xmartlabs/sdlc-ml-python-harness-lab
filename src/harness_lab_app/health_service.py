@@ -485,7 +485,7 @@ def _connect_fields(harness: str) -> dict[str, Any]:
         "testable": harness in {"codex", "gemini"},
     }
     if harness in {"codex", "gemini"}:
-        fields["login"] = native_connect.read_state(harness, "login")
+        fields["login"] = native_connect.read_login(harness)
         fields["last_test"] = native_connect.read_state(harness, "test")
     return fields
 

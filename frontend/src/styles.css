@@ -5918,6 +5918,22 @@ button.danger:hover {
   color: var(--accent);
 }
 
+/* mm:ss that ticks every second: fixed-width digits so the line does not jump. */
+.native-cli-card__countdown {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* "Generate new code" sits under the steps, not numbered as one of them. */
+.native-cli-card__regen {
+  list-style: none;
+  margin-left: -18px;
+}
+
+.native-cli-card__guide .error p {
+  margin: 0 0 4px;
+}
+
 /* Harness → model chooser of the guided flows (ADR-0093, amended 2026-11-20):
    one tab per agent CLI with its readiness, then only that agent's models. */
 .hm-chooser { display: grid; gap: var(--space-3); }

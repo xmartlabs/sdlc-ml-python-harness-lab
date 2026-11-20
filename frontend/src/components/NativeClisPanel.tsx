@@ -65,10 +65,27 @@ const MESSAGES = defineMessages({
     copy: "Copy",
     copied: "Copied",
     waitingApproval: "Waiting for you to approve it in the browser…",
-    expiresIn: (minutes: number) => `The code expires in ${minutes} min.`,
+    expiresIn: (clock: string) => `The code expires in ${clock}.`,
+    expiringSoon: "Less than a minute left — if it runs out, generate a new one.",
+    regenerate: "Generate new code",
+    regenerateHint: "Invalidates this code and asks for a new one.",
     connected: "Connected. Testing the connection…",
     loginFailed: "The login did not complete:",
-    retry: "Try again",
+    expired: "The code expired before it was approved. Generate a new one and enter it within its lifetime.",
+    settling: "Checking whether an approval arrived in the last seconds…",
+    failure: {
+      rejected: "OpenAI refused the authorization.",
+      timeout: "The lab ran out of time waiting for the login.",
+      connection: "The runner could not reach OpenAI.",
+      error: "The login did not complete."
+    } as Record<string, string>,
+    failureHint: {
+      rejected:
+        "Check that you signed in with the account that has the plan, that device code login is enabled for its workspace, and that you entered this code (not an older one).",
+      timeout: "Check that the interactive worker is running (Health), then generate a new code.",
+      connection: "Check the network of the runner containers, then generate a new code.",
+      error: "Generate a new code; if it fails again, `make auth-codex` is the terminal fallback."
+    } as Record<string, string>,
     notInstalled: "The runner image has no CLI for it — rebuild the image (Health)."
   },
   es: {
@@ -120,10 +137,27 @@ const MESSAGES = defineMessages({
     copy: "Copiar",
     copied: "Copiado",
     waitingApproval: "Esperando que lo apruebes en el navegador…",
-    expiresIn: (minutes: number) => `El código vence en ${minutes} min.`,
+    expiresIn: (clock: string) => `El código vence en ${clock}.`,
+    expiringSoon: "Queda menos de un minuto — si vence, generá uno nuevo.",
+    regenerate: "Generar nuevo código",
+    regenerateHint: "Invalida este código y pide uno nuevo.",
     connected: "Conectado. Probando la conexión…",
     loginFailed: "El login no se completó:",
-    retry: "Reintentar",
+    expired: "El código venció antes de aprobarse. Generá uno nuevo e ingresalo antes de que venza.",
+    settling: "Verificando si llegó una aprobación en los últimos segundos…",
+    failure: {
+      rejected: "OpenAI rechazó la autorización.",
+      timeout: "El Lab se quedó sin tiempo esperando el login.",
+      connection: "El runner no pudo conectarse con OpenAI.",
+      error: "El login no se completó."
+    } as Record<string, string>,
+    failureHint: {
+      rejected:
+        "Verificá que iniciaste sesión con la cuenta que tiene el plan, que el login por código de dispositivo está habilitado en su workspace y que ingresaste este código (no uno anterior).",
+      timeout: "Verificá que el worker interactivo esté corriendo (Estado) y generá un código nuevo.",
+      connection: "Verificá la red de los contenedores runner y generá un código nuevo.",
+      error: "Generá un código nuevo; si vuelve a fallar, `make auth-codex` es la alternativa por terminal."
+    } as Record<string, string>,
     notInstalled: "La imagen del runner no tiene este CLI — reconstruila (Estado)."
   }
 });
@@ -131,6 +165,43 @@ const MESSAGES = defineMessages({
 const POLL_MS = 2000;
 const BUSY_LOGIN = new Set(["queued", "starting", "waiting"]);
 const BUSY_TEST = new Set(["queued", "running"]);
+
+/** "14:59" — minutes and seconds, never rounded up past the real deadline. */
+function formatClock(totalSeconds: number): string {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Where the code's deadline falls on this browser's clock.
+ *
+ * The server sends `expires_at` and its own `server_time`; the gap between
+ * them is the time left when the response left the server. Anchoring that gap
+ * to `Date.now()` at arrival makes the countdown immune to a skewed browser
+ * clock (an absolute epoch compared with `Date.now()` is not), at the cost of
+ * the request latency — the countdown can only end early, never late.
+ */
+function localDeadline(login: NativeConnectState, receivedAt: number): number | null {
+  if (login.expires_at === undefined) {
+    return null;
+  }
+  const reference = login.server_time ?? receivedAt / 1000;
+  return receivedAt + (login.expires_at - reference) * 1000;
+}
+
+/** Re-render once a second while `active`, and return the current time. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  return now;
+}
 
 function isEnabled(cli: NativeCliStatus): boolean {
   return cli.session === "connected" && !cli.unavailable;
@@ -206,15 +277,24 @@ export function NativeClisPanel() {
 function CliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () => Promise<void> }) {
   const m = useMessages(MESSAGES);
   const enabled = isEnabled(cli);
-  const [login, setLogin] = useState<NativeConnectState>(cli.login ?? { state: "idle" });
+  const [login, setLoginState] = useState<NativeConnectState>(cli.login ?? { state: "idle" });
+  const [loginReceivedAt, setLoginReceivedAt] = useState(() => Date.now());
+  const setLogin = useCallback((next: NativeConnectState) => {
+    setLoginState(next);
+    setLoginReceivedAt(Date.now());
+  }, []);
   const [test, setTest] = useState<NativeConnectState>(cli.last_test ?? { state: "idle" });
   const [actionError, setActionError] = useState("");
   const [copied, setCopied] = useState(false);
   const autoTested = useRef(false);
 
-  // Poll while a login or a test is in flight; refresh the card list when one ends.
+  // Poll while a login is in flight — or just expired while the worker may
+  // still settle an approval from its last seconds — and refresh the card
+  // list once it ends.
+  const loginPending =
+    BUSY_LOGIN.has(login.state) || (login.state === "expired" && Boolean(login.settling));
   useEffect(() => {
-    if (!BUSY_LOGIN.has(login.state)) {
+    if (!loginPending) {
       return;
     }
     const timer = window.setInterval(() => {
@@ -226,7 +306,7 @@ function CliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () => Prom
             autoTested.current = true;
             void runTest();
           }
-          if (!BUSY_LOGIN.has(next.state)) {
+          if (!BUSY_LOGIN.has(next.state) && !next.settling) {
             void onChange();
           }
         })
@@ -235,7 +315,7 @@ function CliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () => Prom
     return () => window.clearInterval(timer);
     // runTest is stable enough for this effect; it only reads cli.harness.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [login.state, cli.harness, onChange]);
+  }, [loginPending, cli.harness, onChange, setLogin]);
 
   useEffect(() => {
     if (!BUSY_TEST.has(test.state)) {
@@ -262,12 +342,15 @@ function CliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () => Prom
       });
   };
 
-  const startLogin = () => {
+  // `regenerate` supersedes the attempt in flight: the worker stops its
+  // container and a new code is requested. One attempt at a time.
+  const startLogin = (regenerate = false) => {
     setActionError("");
+    setCopied(false);
     autoTested.current = false;
     setLogin({ state: "queued" });
     api
-      .connectNativeCli(cli.harness)
+      .connectNativeCli(cli.harness, regenerate)
       .then(setLogin)
       .catch((exc: Error) => {
         setLogin({ state: "idle" });
@@ -295,9 +378,14 @@ function CliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () => Prom
   };
 
   const tone = cli.unavailable ? "off" : enabled ? "on" : "idle";
-  const minutesLeft = login.expires_at
-    ? Math.max(0, Math.round((login.expires_at * 1000 - Date.now()) / 60000))
-    : null;
+  const showingCode = login.state === "waiting" && Boolean(login.url && login.code);
+  const now = useNow(showingCode);
+  const deadline = showingCode ? localDeadline(login, loginReceivedAt) : null;
+  const secondsLeft = deadline === null ? null : (deadline - now) / 1000;
+  // The server judges expiry too (a code past its lifetime reads "expired"),
+  // but the card must not show a dead code until the next poll says so.
+  const codeExpired = secondsLeft !== null && secondsLeft <= 0;
+  const ended = login.state === "failed" || login.state === "expired";
 
   return (
     <article className={`native-cli-card native-cli-card--${tone}`}>
@@ -346,20 +434,34 @@ function CliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () => Prom
       {/* Not enabled yet: a guided step. */}
       {!enabled && !cli.unavailable && cli.connectable ? (
         <div className="native-cli-card__guide">
-          {login.state === "idle" || login.state === "failed" ? (
-            <button className="primary" onClick={startLogin} type="button">
-              {login.state === "failed" ? m.retry : m.enable}
+          {login.state === "idle" ? (
+            <button className="primary" onClick={() => startLogin()} type="button">
+              {m.enable}
             </button>
           ) : null}
-          {login.state === "failed" && login.error ? (
-            <p className="error small">
-              {m.loginFailed} {login.error}
+          {login.state === "expired" || codeExpired ? (
+            <p className="error small" role="status">
+              {login.settling ? m.settling : m.expired}
             </p>
+          ) : null}
+          {login.state === "failed" ? (
+            <div className="error small" role="status">
+              <p>
+                <strong>{m.failure[login.reason ?? "error"] ?? m.loginFailed}</strong>
+                {login.error ? ` ${login.error}` : ""}
+              </p>
+              <p className="muted">{m.failureHint[login.reason ?? "error"] ?? ""}</p>
+            </div>
+          ) : null}
+          {ended || codeExpired ? (
+            <button className="primary" onClick={() => startLogin(true)} type="button">
+              {m.regenerate}
+            </button>
           ) : null}
           {login.state === "queued" || login.state === "starting" ? (
             <p className="muted small">{m.starting}</p>
           ) : null}
-          {login.state === "waiting" && login.url && login.code ? (
+          {showingCode && !codeExpired ? (
             <ol className="native-cli-card__steps">
               <li>
                 {m.step1}{" "}
@@ -375,7 +477,17 @@ function CliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () => Prom
               </li>
               <li className="muted small">
                 {m.waitingApproval}{" "}
-                {minutesLeft !== null ? m.expiresIn(minutesLeft) : ""}
+                {secondsLeft !== null ? (
+                  <span aria-live="off" className="native-cli-card__countdown">
+                    {m.expiresIn(formatClock(secondsLeft))}
+                  </span>
+                ) : null}
+                {secondsLeft !== null && secondsLeft < 60 ? ` ${m.expiringSoon}` : ""}
+              </li>
+              <li className="native-cli-card__regen">
+                <button onClick={() => startLogin(true)} title={m.regenerateHint} type="button">
+                  {m.regenerate}
+                </button>
               </li>
             </ol>
           ) : null}

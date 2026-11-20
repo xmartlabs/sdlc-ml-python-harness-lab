@@ -675,9 +675,14 @@ def create_app() -> FastAPI:
         return harness
 
     @app.post("/api/harness/clis/{harness}/connect")
-    def connect_native_cli(harness: str):
+    def connect_native_cli(harness: str, regenerate: bool = False):
         """Start the CLI's own device login on the worker (ADR-0094). Poll
-        ``GET …/connect`` for the URL and code to show the operator."""
+        ``GET …/connect`` for the URL and code to show the operator.
+
+        A login in flight is returned, not restarted — unless ``regenerate``:
+        the operator asked for a new code, so the running attempt is
+        superseded (its worker stops its container within a second) and a new
+        one starts. One attempt at a time either way."""
         from harness_lab_app import native_connect
         from harness_lab_app.celery_app import enqueue_native_cli
 
@@ -688,24 +693,36 @@ def create_app() -> FastAPI:
             )
         if harness not in native_connect.CONNECTABLE:
             raise HTTPException(status_code=409, detail="not connectable from the UI")
-        current = native_connect.read_state(harness, "login")
-        # A login already in flight is returned, not restarted: a second
-        # container would print a second code and invalidate the first.
-        if native_connect.login_in_flight(current):
+        current = native_connect.read_login(harness)
+        if not regenerate and native_connect.login_in_flight(current):
             return current
+        record = native_connect.begin_login(harness)
         try:
-            enqueue_native_cli("connect_native_cli", harness)
+            enqueue_native_cli(
+                "connect_native_cli", harness, attempt=str(record["attempt"])
+            )
         except Exception as exc:
+            native_connect.write_state(
+                harness,
+                "login",
+                {
+                    "state": "failed",
+                    "reason": "error",
+                    "error": "The worker queue is unreachable (Health).",
+                },
+            )
             raise HTTPException(
                 status_code=503, detail=f"Worker queue unreachable: {exc}"
             ) from exc
-        return native_connect.write_state(harness, "login", {"state": "queued"})
+        return native_connect.login_view(record)
 
     @app.get("/api/harness/clis/{harness}/connect")
     def connect_native_cli_state(harness: str):
+        """The current login, judged on the server's clock: a code past its
+        lifetime reads ``expired`` and ``server_time`` anchors the countdown."""
         from harness_lab_app import native_connect
 
-        return native_connect.read_state(_native_cli_or_404(harness), "login")
+        return native_connect.read_login(_native_cli_or_404(harness))
 
     @app.post("/api/harness/clis/{harness}/test")
     def test_native_cli(harness: str, model: str = ""):

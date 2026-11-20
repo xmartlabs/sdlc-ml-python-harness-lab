@@ -3573,4 +3573,27 @@ input or skill list from the lab root and from a bare dir, and run one step with
 credentials to capture the failure shape. Then pin the version in `Dockerfile.runner`
 and in `native_models.MIN_NATIVE_CLI_VERSION` together.
 
+## 2026-11-20 — A wait on a silent subprocess must not ride on its output
+
+**What happened.** The UI's codex device login (`connect_native_cli`) checked its
+deadline inside `for line in handle.iter_lines()`. Once the CLI prints its code,
+it is silent until approval. With no approval, the deadline never ran: the task
+blocked on the log stream, and when the worker was recreated, the record stayed
+`waiting` with a dead code for six hours. The card rendered it as "expires in
+0 min" and offered no way out.
+
+**Diagnosis that ruled out the obvious.** Clock skew was the first suspect. Comparing
+`time.time()` on the host, API and worker took one command, and they agreed within
+0.3 s. `$CODEX_HOME/log/codex-login.log` in the staged copy timestamps the start
+of the flow. Against the record's `updated_at`, publication took 0.35 s. The staged
+copy still on disk proved `handle.wait()` never ran.
+
+**How to apply:** any task waiting on a container that can go quiet reads its
+lines through a thread and a `Queue` (`_drain`). It wakes on a short `get()` timeout
+to check wall-clock deadlines and cancellation. A record a worker publishes for
+the UI must be judged on read as well (expiry on the API's clock), never trusted
+to be closed by the worker. Give each attempt its own container name and staging
+dir: a fixed `run_id` lets a superseded attempt's cleanup delete the next one's
+session copy.
+
 <!-- Add new learnings above this line -->

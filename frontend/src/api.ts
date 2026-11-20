@@ -898,10 +898,11 @@ export const api = {
   readHealth: () => request<HealthReport>("/api/health/detail"),
   listNativeClis: () =>
     request<{ clis: NativeCliStatus[] }>("/api/harness/clis"),
-  connectNativeCli: (harness: string) =>
-    request<NativeConnectState>(`/api/harness/clis/${harness}/connect`, {
-      method: "POST"
-    }),
+  connectNativeCli: (harness: string, regenerate = false) =>
+    request<NativeConnectState>(
+      `/api/harness/clis/${harness}/connect${regenerate ? "?regenerate=true" : ""}`,
+      { method: "POST" }
+    ),
   readNativeCliLogin: (harness: string) =>
     request<NativeConnectState>(`/api/harness/clis/${harness}/connect`),
   disconnectNativeCli: (harness: string) =>

@@ -120,6 +120,28 @@ turns green and runs **Test connection**: one real request, with exactly the
 credential and environment a run gets, reporting the model that answered or the
 provider's own error. *Disconnect* forgets the login (never `~/.codex`).
 
+**The code's lifetime.** The code lives 15 minutes, set by OpenAI. The lab
+cannot extend it. The card counts it down in minutes and seconds, measured on the
+API server's clock, so a skewed browser clock does not shift it. The countdown
+starts a moment before the CLI asks for the code, so it ends early rather than
+late. **Generate new code** is always there while a code is showing: it
+invalidates that code, stops its CLI and asks for a fresh one. Only one login
+runs at a time. When a login does not complete, the card says why and offers a
+new code:
+
+| Card says | Meaning | What to do |
+| --- | --- | --- |
+| *The code expired* | The 15 minutes ran out before approval | Generate a new code and enter it promptly |
+| *OpenAI refused the authorization* | Denied, wrong account, or device code login disabled for the workspace | Check the account and workspace settings, then use a new code |
+| *The lab ran out of time* | No worker picked the login up, or the CLI printed no code | Check the interactive worker on **Health** |
+| *The runner could not reach OpenAI* | Network or TLS error from the runner container | Check the runner's network |
+
+The worker waits 5 minutes past the code's lifetime, so an approval made in the
+last seconds can still complete. That extra time is never shown as time left on
+the code. A login whose worker died mid-wait (a restart, a laptop sleep) reads
+*expired* once its code's time has passed. It never stays "waiting" with a dead
+code.
+
 The terminal equivalent, when you prefer it (needs the CLI on your host):
 
 ```bash

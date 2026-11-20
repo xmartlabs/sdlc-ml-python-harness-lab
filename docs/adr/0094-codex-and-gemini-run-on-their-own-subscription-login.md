@@ -149,3 +149,55 @@ under the same cases, containers, conditions, scoring and provenance as claude.
   and keeps the raw stream as provenance.
 - **Record subscription cost as 0.** Rejected for the same reason as ADR-0073:
   a request is not a measurement, and an unknown figure is not a free one.
+
+## Amendment (2026-11-20): one login attempt at a time, and a code is never shown past its lifetime
+
+**Observed.** A UI login showed "the code expires in 0 min", and OpenAI refused
+the code. The record on disk had been `waiting` for six hours. Its code was long
+expired, and its worker had been recreated mid-wait. Host, API and worker clocks
+agreed within 0.3 s, and the code was published 0.35 s after the CLI requested
+it. Neither clock skew nor latency caused it. Three defects did:
+
+1. The worker checked its deadline only when the CLI printed a line. After
+   printing the code the CLI is silent, so the deadline was never checked. It
+   was also measured on `time.monotonic()`, which stops in the Docker Desktop
+   VM while the host sleeps.
+2. No path wrote a final state when the task died (worker restart, broken log
+   stream). The record stayed `waiting` forever.
+3. The card rounded the time left to whole minutes and clamped it at 0. It kept
+   showing the dead code and hid every button, so the only way out was
+   *Disconnect* or a lab restart.
+
+**Decision.**
+
+- **The code's lifetime is the provider's and is never extended.** The UI counts
+  down `code_lifetime_seconds` (15 min, or what the CLI prints). The worker gets
+  a separate `grace_seconds` (5 min) to settle a last-second approval and clean
+  up. The grace is never shown as time left on the code. The countdown is
+  anchored on a clock read *before* the container starts, so it can only end
+  early.
+- **The API judges expiry on its own clock** (`login_view`). A `waiting` record
+  past `expires_at` reads `expired` and loses its code, whatever became of the
+  worker. A `queued`/`starting` record nobody moved on reads `failed/timeout`.
+  Every response carries `server_time`, and the browser counts down
+  `expires_at − server_time` from when the response arrived. A skewed browser
+  clock does not shift it.
+- **One attempt at a time, each fully isolated.** `POST …/connect` mints an
+  attempt id and points `<harness>.login.json` at it. Only the API (and a
+  disconnect) writes that pointer. Each worker writes `<harness>.login.<attempt>.json`
+  and has its own container and session copy (`connect-<harness>-login-<attempt>`).
+  `?regenerate=true` supersedes the running attempt. Its worker sees that within
+  a second, stops its CLI, discards its copy and writes nothing. File locks
+  would not have helped: they exclude nothing on the Docker Desktop bind
+  (`memory/learnings.md`). A new attempt also stops leftover login containers
+  and removes their copies from a worker that died.
+- **Every exit writes a final state:** `connected`, `expired`, or `failed` with
+  a `reason`. The reasons are `rejected` (the provider refused it), `timeout`
+  (the lab's own budget), `connection` (the runner could not reach the
+  provider) and `error`. They are read from what codex 0.171.0 prints (strings
+  taken from its binary). The one-time code is masked in any message kept.
+
+**Unchanged.** It is still the CLI's own `codex login --device-auth`. The lab
+never reads or edits a token, only moves the file the CLI wrote, through the
+same allow-listed copy-back. The session store, the per-run private copies and
+the masks are unchanged.

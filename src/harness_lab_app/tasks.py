@@ -2976,14 +2976,71 @@ def _run_cli_container(harness: str, label: str, command: list[str]) -> Any:
     )
 
 
+#: How often a device login re-checks its deadline and whether a newer attempt
+#: superseded it, while the CLI prints nothing (it is silent once the code is
+#: shown, until the operator approves it).
+_LOGIN_POLL_SECONDS = 1.0
+
+
+def _sweep_login_leftovers(harness: str, keep: str, older_than: float) -> None:
+    """Remove login containers and session copies a dead worker left behind.
+
+    A live attempt cleans up after itself, including a superseded one (it
+    stops within a second and may still be copying back a credential approved
+    just before the new code was asked for), so only what is older than any
+    live attempt can be is touched: ``older_than`` seconds, the longest an
+    attempt runs. That is what a worker restarted mid-login leaves: a CLI
+    still waiting on a code no one sees, and its copy under ``data/runs``.
+    Best-effort; ``keep`` is the run id of the attempt that is starting.
+    """
+    import datetime as dt
+
+    prefix = f"connect-{harness}-login"
+    cutoff = _wall_clock() - older_than
+    with contextlib.suppress(Exception):
+        import docker  # local import: only the worker needs the socket
+
+        client = docker.from_env()
+        name_prefix = container_name_for_run(prefix)
+        listed = client.containers.list(all=True, filters={"name": name_prefix})
+        for container in listed:
+            name = str(container.name)
+            if name == container_name_for_run(keep) or not name.startswith(name_prefix):
+                continue
+            created = str(container.attrs.get("Created", ""))[:26].rstrip("Z")
+            with contextlib.suppress(ValueError):
+                born = dt.datetime.fromisoformat(created).replace(tzinfo=dt.UTC)
+                if born.timestamp() > cutoff:
+                    continue  # a live attempt's: it stops itself
+                with contextlib.suppress(Exception):
+                    container.stop(timeout=5)
+                with contextlib.suppress(Exception):
+                    container.remove(force=True)
+    with contextlib.suppress(OSError):
+        for leftover in get_settings().data_runs_dir.glob(f"{prefix}*"):
+            if (
+                leftover.name != keep
+                and leftover.is_dir()
+                and leftover.stat().st_mtime < cutoff
+            ):
+                shutil.rmtree(leftover, ignore_errors=True)
+
+
 @celery_app.task(name="harness_lab_app.tasks.connect_native_cli", acks_late=False)
-def connect_native_cli(harness: str) -> dict[str, Any]:
+def connect_native_cli(harness: str, attempt: str = "") -> dict[str, Any]:
     """Drive a CLI's device login for the UI (System → Agent CLIs, ADR-0094).
 
     Publishes the URL and the one-time code the CLI prints, then waits for the
     operator to approve it in their browser. The CLI writes its own credential;
     the executor moves it into the store on exit. Runs on the interactive lane:
     the wait can last the code's whole lifetime and must not hold a run lane.
+
+    ``attempt`` is the id the API gave this login. The task writes only its
+    own attempt's record, re-checks once a second that it is still the current
+    attempt, and stops its container the moment a newer one replaced it.
+    Deadlines are wall-clock (the Docker Desktop VM's monotonic clock stops
+    while the host sleeps), checked even while the CLI prints nothing, and
+    every way out writes a final state: the record never stays ``waiting``.
     """
     from harness_lab_app import native_connect
     from harness_lab_app.native_auth import ensure_session_dir, session_status
@@ -2991,48 +3048,129 @@ def connect_native_cli(harness: str) -> dict[str, Any]:
     spec = native_connect.CONNECTABLE.get(harness)
     if spec is None:
         return native_connect.write_state(
-            harness, "login", {"state": "failed", "error": "not connectable"}
-        )
-    ensure_session_dir(harness)
-    native_connect.write_state(harness, "login", {"state": "starting"})
-    try:
-        handle = _run_cli_container(harness, "login", list(spec["login"]))
-    except Exception as exc:  # docker down, image missing: the UI says so
-        return native_connect.write_state(
             harness,
             "login",
-            {"state": "failed", "error": f"{type(exc).__name__}: {exc}"},
+            {"state": "failed", "reason": "error", "error": "not connectable"},
         )
+    if not attempt:  # a message queued before attempts existed
+        attempt = str(native_connect.begin_login(harness)["attempt"])
+    if not native_connect.is_current(harness, attempt):
+        return {"harness": harness, "attempt": attempt, "state": "superseded"}
+
+    def finish(state: dict[str, Any]) -> dict[str, Any]:
+        if not native_connect.is_current(harness, attempt):
+            return {**state, "harness": harness, "state": "superseded"}
+        return native_connect.write_login(harness, attempt, state)
+
+    label = native_connect.login_label(attempt)
+    run_id = f"connect-{harness}-{label}"
+    code_wait = int(spec["code_wait_seconds"])
+    ensure_session_dir(harness)
+    _sweep_login_leftovers(
+        harness,
+        keep=run_id,
+        older_than=code_wait
+        + int(spec["code_lifetime_seconds"])
+        + int(spec["grace_seconds"])
+        + 5 * 60,
+    )
+    # Taken before the container starts, so before the CLI asks for its code:
+    # a countdown from here can only end early, never after the provider's.
+    anchor = _wall_clock()
+    native_connect.write_login(
+        harness,
+        attempt,
+        {"state": "starting", "worker_deadline": anchor + code_wait + 60},
+    )
+    try:
+        handle = _run_cli_container(harness, label, list(spec["login"]))
+    except Exception as exc:  # docker down, image missing: the UI says so
+        return finish(
+            {
+                "state": "failed",
+                "reason": "error",
+                "error": f"{type(exc).__name__}: {exc}"[:400],
+            }
+        )
+
+    lines: Queue[tuple[str, str] | None] = Queue()
+    threading.Thread(target=_drain, args=(handle, lines), daemon=True).start()
     output: list[str] = []
     published = False
-    deadline = time.monotonic() + int(spec["timeout_seconds"]) + 60
-    for _level, line in handle.iter_lines():
-        output.append(line)
-        if not published:
-            prompt = native_connect.parse_device_prompt("\n".join(output))
-            if prompt:
-                native_connect.write_state(
-                    harness,
-                    "login",
-                    {
-                        "state": "waiting",
-                        **prompt,
-                        "expires_at": time.time() + int(spec["timeout_seconds"]),
-                    },
-                )
-                published = True
-        if time.monotonic() > deadline:
+    superseded = False
+    stop_reason: str | None = None
+    failure: dict[str, Any] | None = None
+    deadline = anchor + code_wait
+    try:
+        while True:
+            try:
+                item = lines.get(timeout=_LOGIN_POLL_SECONDS)
+            except Empty:
+                item = ("", "")
+            if item is None:  # the CLI exited (or its log stream ended)
+                break
+            if item[1]:
+                output.append(item[1])
+            if item[1] and not published:
+                text = "\n".join(output)
+                prompt = native_connect.parse_device_prompt(text)
+                if prompt:
+                    lifetime = native_connect.printed_lifetime(text) or int(
+                        spec["code_lifetime_seconds"]
+                    )
+                    deadline = anchor + lifetime + int(spec["grace_seconds"])
+                    native_connect.write_login(
+                        harness,
+                        attempt,
+                        {
+                            "state": "waiting",
+                            **prompt,
+                            "issued_at": anchor,
+                            "expires_at": anchor + lifetime,
+                            "worker_deadline": deadline,
+                        },
+                    )
+                    published = True
+            # Once per line or per second of silence (the `get` above): a
+            # tiny JSON read, and the CLI prints a handful of lines in all.
+            if not native_connect.is_current(harness, attempt):
+                superseded = True
+                break
+            if _wall_clock() >= deadline:
+                stop_reason = "deadline" if published else "no_code"
+                break
+    except Exception as exc:  # never leave the record on "waiting"
+        failure = {
+            "state": "failed",
+            "reason": "error",
+            "error": f"{type(exc).__name__}: {exc}"[:400],
+        }
+    finally:
+        # Always stop: a no-op for a CLI that exited (docker keeps its exit
+        # code), and the only way out for one still running — the deadline
+        # passed, a newer attempt took over, or the log stream broke while
+        # the CLI kept waiting on its code.
+        with contextlib.suppress(Exception):
             handle.stop()
-            break
-    exit_code = handle.wait()  # copies a fresh credential back into the store
-    status = session_status(harness)
-    if exit_code == 0 and status["state"] == "connected":
-        return native_connect.write_state(harness, "login", {"state": "connected"})
-    tail = "\n".join(output[-6:])
-    return native_connect.write_state(
-        harness,
-        "login",
-        {"state": "failed", "error": f"login exited {exit_code}: {tail[-400:]}"},
+        try:
+            exit_code = handle.wait()  # copies a fresh credential to the store
+        except Exception:
+            exit_code = -1
+        shutil.rmtree(get_settings().data_runs_dir / run_id, ignore_errors=True)
+
+    if superseded:
+        return {"harness": harness, "attempt": attempt, "state": "superseded"}
+    if failure is not None:
+        return finish(failure)
+    connected = session_status(harness)["state"] == "connected"
+    return finish(
+        native_connect.login_outcome(
+            "\n".join(output),
+            exit_code,
+            connected=connected,
+            published=published,
+            stop_reason=stop_reason,
+        )
     )
 
 
@@ -3078,7 +3216,8 @@ def disconnect_native_cli(harness: str) -> dict[str, Any]:
     if harness in NATIVE_SESSION_HARNESSES:
         credential_file(harness).unlink(missing_ok=True)
     native_connect.write_state(harness, "test", {"state": "idle"})
-    return native_connect.write_state(harness, "login", {"state": "idle"})
+    # Drops every attempt too: a login still running stops itself.
+    return native_connect.clear_login(harness)
 
 
 @control_command()
