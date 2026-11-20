@@ -11,12 +11,17 @@ import type { ModelOption } from "./types";
  * batch form, the experiment wizard); a fourth in the experiment launch panel
  * was the point at which one source of truth became cheaper than the drift.
  */
-// bench_run.py accepts opencode | codex | claude; antigravity is the manual `make bench-antigravity` flow.
-export const HARNESS_OPTIONS = ["opencode", "codex", "claude"] as const;
+// bench_run.py accepts opencode | codex | claude | gemini; antigravity is the manual `make bench-antigravity` flow.
+export const HARNESS_OPTIONS = ["opencode", "codex", "claude", "gemini"] as const;
 
-// Harnesses that run via the host CLI (native auth) instead of the runner
-// container — they need the host worker (subprocess backend).
-export const HOST_HARNESSES = new Set(["codex", "claude"]);
+// Harnesses that drive their own CLI with native auth instead of a gateway
+// model. They run in the runner container (Docker) or on the host worker
+// (subprocess backend); the model menu is the CLI's own.
+export const HOST_HARNESSES = new Set(["codex", "claude", "gemini"]);
+
+// Native CLIs signed in with a subscription kept per provider in the lab's
+// session store (ADR-0094): `make auth-codex` / `make auth-gemini`.
+export const SUBSCRIPTION_HARNESSES = new Set(["codex", "gemini"]);
 
 /**
  * Reasoning effort levels the claude CLI accepts through `--effort`, lowest
@@ -44,8 +49,26 @@ export const HARNESS_NATIVE_MODELS: Record<string, ModelOption[]> = {
     { id: "claude-opus-4-8", label: "Claude Opus 4.8 (previous)" },
     { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 (previous)" }
   ],
-  // Only the confirmed CLI default is listed — add your codex model ids here.
-  codex: [{ id: "codex-mini-latest", label: "Codex Mini (latest)" }]
+  // Offline fallback of native_models.NATIVE_MODELS (the API serves the live
+  // list). codex ids: `codex debug models --bundled` on codex-cli 0.171.0;
+  // gemini ids: `gemini --list-models` on gemini-cli 0.70.0. Leaving the model
+  // empty keeps the CLI's own default.
+  codex: [
+    { id: "gpt-6.2-sol", label: "GPT-6.2-Sol" },
+    { id: "gpt-6.2-astra", label: "GPT-6.2-Astra" },
+    { id: "gpt-6.1-terra", label: "GPT-6.1 Terra" },
+    { id: "gpt-6.1-sol", label: "GPT-6.1-Sol (previous)" },
+    { id: "gpt-6-sol", label: "GPT-6-Sol (previous)" },
+    { id: "gpt-6-astra", label: "GPT-6-Astra (previous)" },
+    { id: "gpt-6-luna", label: "GPT-6-Luna (previous)" },
+    { id: "gpt-5.5", label: "GPT-5.5 (previous)" }
+  ],
+  gemini: [
+    { id: "auto", label: "Auto (CLI routes Pro/Flash)" },
+    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+    { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
+    { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite" }
+  ]
 };
 
 const MESSAGES = defineMessages({

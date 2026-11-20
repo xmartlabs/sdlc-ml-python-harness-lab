@@ -1,0 +1,1 @@
+../../../.github/skills-external/subagent-driven-development/spec-reviewer-prompt.md

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../api";
+import { NativeClisPanel } from "../components/NativeClisPanel";
 import { defineMessages, pickMessages, useMessages } from "../i18n";
 import type { HealthCheck, HealthReport } from "../types";
 
@@ -166,6 +167,8 @@ export function Health() {
           ))}
         </ul>
       )}
+
+      <NativeClisPanel />
     </section>
   );
 }

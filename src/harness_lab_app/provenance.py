@@ -51,11 +51,13 @@ NATIVE_SKILL_DIRS = (
     ".opencode/skills",
     ".codex/skills",
     ".agents/skills",
+    ".gemini/skills",
 )
 ADAPTER_FILES = (
     "CLAUDE.md",
     "AGENTS.md",
     "OPENCODE.md",
+    "GEMINI.md",
     ".github/copilot-instructions.md",
 )
 
@@ -263,6 +265,11 @@ def _harness_git_dirty(root: Path, exclude: tuple[str, ...] = ()) -> bool | None
     return bool(out.strip())
 
 
+# Harnesses whose name enters the condition hash (ADR-0094). Additive only:
+# adding a harness here re-bins nothing that was recorded before it existed.
+_HASHED_HARNESSES = frozenset({"codex", "gemini"})
+
+
 def compute_condition_hash(
     harness_hash: str,
     model_condition: dict[str, Any],
@@ -275,6 +282,7 @@ def compute_condition_hash(
     harness_source: str = "",
     skills_invoke: tuple[str, ...] = (),
     executor_effort: str = "",
+    harness: str = "",
 ) -> str:
     """Deterministic id of the experimental arm (excludes provenance-only fields).
 
@@ -313,6 +321,13 @@ def compute_condition_hash(
         identity["executor_effort"] = executor_effort
     if gateway_overlay_hash:
         identity["gateway_overlay"] = gateway_overlay_hash
+    if harness in _HASHED_HARNESSES:
+        # codex and gemini run their CLI's default model when none is chosen,
+        # so two such runs can share every other field with a claude run. The
+        # harness names the arm for them. Only for these two: every historical
+        # run (opencode, claude, and the codex runs the old CLI could not
+        # execute) keeps its hash (ADR-0094).
+        identity["harness"] = harness
     if harness_source and harness_source != "lab_root":
         # Same non-default-only rule as the fields above: `lab_root` is what
         # every historical run did, so including it would re-bin all of them.
@@ -381,6 +396,7 @@ def build_condition(
             harness_source=harness_source,
             skills_invoke=skills_invoke,
             executor_effort=executor_effort,
+            harness=str(run.get("harness") or ""),
         ),
         # The effort *requested* (ADR-0081). The CLI's stream does not report
         # the level it applied, so this is what was asked, recorded as such.

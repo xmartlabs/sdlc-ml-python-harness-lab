@@ -321,6 +321,10 @@ def collect_cost(run_dir: Path) -> dict[str, Any]:
         "usage_source": usage.get("usage_source"),
         "time_source": usage.get("time_source"),
         "cost_source": usage.get("cost_source"),
+        # How the run was paid for (ADR-0094): "subscription" means the cost is
+        # a plan's quota with no per-token price — unknown, never $0.
+        "billing_mode": usage.get("billing_mode"),
+        "detected_model": usage.get("detected_model"),
     }
 
 

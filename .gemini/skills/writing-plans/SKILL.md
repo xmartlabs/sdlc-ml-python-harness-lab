@@ -1,0 +1,1 @@
+../../../.github/skills-external/writing-plans/SKILL.md

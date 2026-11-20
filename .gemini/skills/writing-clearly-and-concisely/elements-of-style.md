@@ -1,0 +1,1 @@
+../../../.github/skills-external/writing-clearly-and-concisely/elements-of-style.md

@@ -89,17 +89,148 @@ NATIVE_MODELS: dict[str, list[dict[str, Any]]] = {
             "effort_levels": list(EFFORT_LEVELS),
         },
     ],
-    # Only the confirmed CLI default is listed — add your codex model ids here.
+    # Codex CLI (ChatGPT sign-in). The ids are the `visibility: list` entries of
+    # the catalog the pinned binary ships, read with `codex debug models
+    # --bundled` on codex-cli 0.171.0 (2026-11-20). That proves the CLI knows
+    # the slug, not that a given ChatGPT plan grants it: the run form defaults
+    # to the CLI's own choice, and an id the plan refuses fails with the CLI's
+    # message. `codex-mini-latest`, the old placeholder, is not in that catalog.
+    # Effort is not offered (ADR-0081 scopes it to claude).
     "codex": [
         {
-            "id": "codex-mini-latest",
-            "label": "Codex Mini (latest)",
+            "id": "gpt-6.2-sol",
+            "label": "GPT-6.2-Sol",
+            "generation": "current",
+            "size_rank": 3,
+            "effort_levels": [],
+            "source": "codex-cli 0.171.0 bundled catalog",
+        },
+        {
+            "id": "gpt-6.2-astra",
+            "label": "GPT-6.2-Astra",
+            "generation": "current",
+            "size_rank": 2,
+            "effort_levels": [],
+            "source": "codex-cli 0.171.0 bundled catalog",
+        },
+        {
+            "id": "gpt-6.1-terra",
+            "label": "GPT-6.1 Terra",
             "generation": "current",
             "size_rank": 1,
             "effort_levels": [],
+            "source": "codex-cli 0.171.0 bundled catalog",
+        },
+        {
+            "id": "gpt-6.1-sol",
+            "label": "GPT-6.1-Sol",
+            "generation": "previous",
+            "size_rank": 3,
+            "effort_levels": [],
+            "source": "codex-cli 0.171.0 bundled catalog",
+        },
+        {
+            "id": "gpt-6-sol",
+            "label": "GPT-6-Sol",
+            "generation": "previous",
+            "size_rank": 3,
+            "effort_levels": [],
+            "source": "codex-cli 0.171.0 bundled catalog",
+        },
+        {
+            "id": "gpt-6-astra",
+            "label": "GPT-6-Astra",
+            "generation": "previous",
+            "size_rank": 2,
+            "effort_levels": [],
+            "source": "codex-cli 0.171.0 bundled catalog",
+        },
+        {
+            "id": "gpt-6-luna",
+            "label": "GPT-6-Luna",
+            "generation": "previous",
+            "size_rank": 1,
+            "effort_levels": [],
+            "source": "codex-cli 0.171.0 bundled catalog",
+        },
+        {
+            "id": "gpt-5.5",
+            "label": "GPT-5.5",
+            "generation": "previous",
+            "size_rank": 2,
+            "effort_levels": [],
+            "source": "codex-cli 0.171.0 bundled catalog",
+        },
+    ],
+    # Gemini CLI (Sign in with Google). The ids are what `gemini --list-models`
+    # prints offline on gemini-cli 0.70.0 (2026-11-20). `auto` lets the CLI
+    # route between Pro and Flash per request, so the effective model is read
+    # back from the run's own `result.stats.models` (ADR-0073).
+    "gemini": [
+        {
+            "id": "auto",
+            "label": "Auto (CLI routes Pro/Flash)",
+            "generation": "current",
+            "size_rank": 2,
+            "effort_levels": [],
+            "source": "gemini-cli 0.70.0 --list-models",
+        },
+        {
+            "id": "gemini-2.5-pro",
+            "label": "Gemini 2.5 Pro",
+            "generation": "current",
+            "size_rank": 3,
+            "effort_levels": [],
+            "source": "gemini-cli 0.70.0 --list-models",
+        },
+        {
+            "id": "gemini-3.5-flash",
+            "label": "Gemini 3.5 Flash",
+            "generation": "current",
+            "size_rank": 2,
+            "effort_levels": [],
+            "source": "gemini-cli 0.70.0 --list-models",
+        },
+        {
+            "id": "gemini-3.1-flash-lite",
+            "label": "Gemini 3.1 Flash-Lite",
+            "generation": "current",
+            "size_rank": 1,
+            "effort_levels": [],
+            "source": "gemini-cli 0.70.0 --list-models",
         },
     ],
 }
+
+# The CLI versions the codex/gemini integration was verified against (flags,
+# event schema, skill discovery, auth storage). An older CLI is refused at
+# preflight: `codex --full-auto` is how a schema change looks when it is not.
+MIN_NATIVE_CLI_VERSION: dict[str, str] = {
+    "codex": "0.171.0",
+    "gemini": "0.70.0",
+}
+
+# The image label each runner CLI's pinned version is recorded under
+# (Dockerfile.runner), read by the worker without starting a container.
+CLI_VERSION_LABELS: dict[str, str] = {
+    "claude": "claude-code.version",
+    "codex": "codex.version",
+    "gemini": "gemini-cli.version",
+}
+
+
+def native_cli_too_old(harness: str, cli_version: str) -> str | None:
+    """The required version when a codex/gemini CLI is older than verified.
+
+    ``None`` when the version is unknown (not assumed too old) or new enough.
+    """
+    required = MIN_NATIVE_CLI_VERSION.get(harness)
+    have = _version_tuple(cli_version or "")
+    need = _version_tuple(required or "")
+    if not required or have is None or need is None:
+        return None
+    return required if have < need else None
+
 
 # The oldest Claude Code CLI the API accepts for a model, where one is known.
 # 2.1.280 is what the API itself answered for claude-opus-5-5 on 2026-10-23
@@ -198,7 +329,11 @@ def native_catalog(
     """
     catalog: dict[str, list[dict[str, Any]]] = {}
     for harness, models in NATIVE_MODELS.items():
-        uses_gateway = claude_via_gateway or harness != "claude"
+        # codex and gemini always talk to their own provider on the operator's
+        # subscription; a gateway card says nothing about whether they can run.
+        uses_gateway = harness != "claude" or claude_via_gateway
+        if harness in MIN_NATIVE_CLI_VERSION:
+            uses_gateway = False
         coverage = gateway_coverage(harness, routing if uses_gateway else None)
         catalog[harness] = [
             {**model, "on_gateway": coverage[model["id"]]} for model in models

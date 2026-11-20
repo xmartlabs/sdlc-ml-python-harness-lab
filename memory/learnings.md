@@ -3537,4 +3537,40 @@ Haiku are the review and security ones (`pr-review-v1` ~0.77 of checks, `securit
 removal dropped success from 100% to 80%. Keep one ceiling case as the "no loss
 elsewhere" guard, never as the target.
 
+## 2026-11-20 — Verify a native CLI against the installed binary, offline, before wiring it
+
+Adding codex and gemini (ADR-0094) showed the lab's codex harness had been dead for
+months: `codex --quiet --full-auto` is refused by codex-cli 0.171.0
+(`unexpected argument '--full-auto'`), and its only catalog model was not in the CLI's
+own catalog. Nothing failed loudly because codex was host-only and rarely run.
+
+Both CLIs can be probed without logging in, so every claim can be checked before
+wiring:
+
+- `codex debug prompt-input "x"` renders exactly what the model would see (the skills
+  catalog, `AGENTS.md`). It showed codex 0.171 reads `.codex/skills` **and**
+  `.agents/skills` (root→cwd) **and** user scope `$CODEX_HOME/skills` +
+  `~/.agents/skills`. `codex debug models --bundled` gives the model catalog.
+- `gemini skills list` (with `GEMINI_CLI_TRUST_WORKSPACE=true`) shows the discovered
+  skills (`.gemini/skills` + `.agents/skills`, symlinks followed); `gemini
+  --list-models` gives the models. Its bundle ships its own docs
+  (`bundle/docs/`), which match the installed version.
+- With a fake key or no login, both stream the real event shapes (codex
+  `turn.failed` 401, rc 1 after ~30 s of retries; gemini rc 41).
+
+**Traps found this way.** Codex `workspace-write` cannot run inside the runner
+container (bubblewrap cannot create a namespace; legacy Landlock panics), so in
+Docker the container is the sandbox. Codex `turn.completed.usage` is the
+*cumulative* thread total, and its `input_tokens` includes the cache. `~/.codex` holds
+personal skills and memories that codex would load into every arm, `bare` included,
+so runs use a lab session dir plus an empty `HOME`. The runner's skill-mirror mask
+used to hide `.codex/skills`, which would have left a Docker codex run with zero lab
+skills.
+
+**How to apply:** when adding or bumping an agent CLI, install it into a scratch dir
+with an isolated `HOME`. Diff its `--help` against the builder, render its prompt
+input or skill list from the lab root and from a bare dir, and run one step with no
+credentials to capture the failure shape. Then pin the version in `Dockerfile.runner`
+and in `native_models.MIN_NATIVE_CLI_VERSION` together.
+
 <!-- Add new learnings above this line -->

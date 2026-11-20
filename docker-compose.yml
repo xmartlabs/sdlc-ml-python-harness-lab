@@ -49,11 +49,16 @@ services:
       # A shared root is a working set, not a search space.
       HARNESS_LAB_LOCAL_SOURCES_ROOT: /host-sources
       HARNESS_LAB_HOST_LOCAL_SOURCES_ROOT: ${HARNESS_LAB_LOCAL_SOURCES_DIR:-${PWD}/..}
+      # The codex/gemini session store (ADR-0094), read-only: the API only reads
+      # whether a login exists (its shape, never a token) for Health and the
+      # run preflight.
+      HARNESS_LAB_AUTH_DIR: /harness-auth
     volumes:
       - .:/app
       # Read-only on purpose: the lab copies repositories out of here and must
       # never be able to write into somebody's working copy.
       - ${HARNESS_LAB_LOCAL_SOURCES_DIR:-..}:/host-sources:ro
+      - ${HARNESS_LAB_AUTH_DIR:-${HOME}/.harness-lab/auth}:/harness-auth:ro
     ports:
       # Loopback by default. Authentication is only enforced once an admin
       # password exists (see session_middleware.auth_enabled), so publishing on
@@ -120,12 +125,19 @@ services:
       # Host path of the repo: runner containers are siblings created through
       # the host daemon, so their bind mounts must use host paths.
       HARNESS_LAB_HOST_REPO_ROOT: ${PWD}
+      # Subscription sessions of the codex/gemini CLIs (ADR-0094), one
+      # directory per provider, outside the repository. A run never mounts the
+      # store: the worker copies the run's own credential into
+      # data/runs/<run>/session/ and writes a refreshed one back when the run
+      # ends, so the store is read-write here (and read-only for the API).
+      HARNESS_LAB_AUTH_DIR: /harness-auth
     volumes:
       - .:/app
       # Docker-out-of-docker: the worker launches one runner container per
       # run through the host daemon. Root-equivalent host access — keep this
       # mount on the worker service only.
       - /var/run/docker.sock:/var/run/docker.sock
+      - ${HARNESS_LAB_AUTH_DIR:-${HOME}/.harness-lab/auth}:/harness-auth
     depends_on:
       redis:
         condition: service_healthy

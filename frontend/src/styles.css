@@ -5822,3 +5822,98 @@ button.danger:hover {
 .home-door-link:focus-visible { outline: none; }
 .home-door:has(.home-door-link:focus-visible) { border-color: var(--accent); }
 .home-door-info { position: relative; z-index: 1; }
+
+/* Agent CLIs (System → Agent CLIs, ADR-0094): one card per harness, enabled
+   ones first with a connection test, the rest with a guided "Enable". */
+.native-clis__group {
+  margin: 20px 0 8px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.native-clis__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.native-cli-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.native-cli-card--on {
+  border-color: var(--success);
+  background: linear-gradient(0deg, var(--success-soft), var(--success-soft)), var(--panel);
+}
+
+.native-cli-card--off {
+  opacity: 0.75;
+}
+
+.native-cli-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.native-cli-card__head strong {
+  flex: 1 1 auto;
+}
+
+.native-cli-card__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.native-cli-card__dot--on {
+  background: var(--success);
+}
+
+.native-cli-card__dot--off {
+  background: var(--danger);
+}
+
+.native-cli-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.native-cli-card__ok {
+  color: var(--success);
+  margin: 0;
+}
+
+.native-cli-card__guide p {
+  margin: 4px 0;
+}
+
+.native-cli-card__steps {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.native-cli-card__code {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}

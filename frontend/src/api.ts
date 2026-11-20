@@ -32,6 +32,8 @@ import type {
   HarnessSkill,
   HealResult,
   HealthReport,
+  NativeCliStatus,
+  NativeConnectState,
   LangfuseExport,
   LangfuseStatus,
   LMStudioCatalog,
@@ -411,7 +413,7 @@ export const api = {
     case_ids: string[];
     profile?: string;
     repetitions?: number;
-    harness?: "claude" | "opencode" | "codex";
+    harness?: "claude" | "opencode" | "codex" | "gemini";
     /** "catalog": profile vs profile + skill. "staged": no skill vs a staged one (ADR-0091). */
     source?: "catalog" | "staged";
   }) =>
@@ -431,7 +433,7 @@ export const api = {
     source: "catalog" | "staged";
     base: "minimal" | "full" | "both";
     repetitions: number;
-    harness?: "claude" | "opencode" | "codex";
+    harness?: "claude" | "opencode" | "codex" | "gemini";
     reuse_measured?: boolean;
     /** Preview only: which bases would be reused or created. Writes nothing. */
     dry_run?: boolean;
@@ -447,7 +449,7 @@ export const api = {
     model: string;
     levels: string[];
     repetitions: number;
-    harness?: "claude" | "opencode" | "codex";
+    harness?: "claude" | "opencode" | "codex" | "gemini";
   }) =>
     request<{ family_id: string; experiments: (ExperimentRecord & { warnings?: string[] })[] }>(
       "/api/experiments/harness-levels",
@@ -461,7 +463,7 @@ export const api = {
     case_ids: string[];
     base?: "minimal" | "full";
     repetitions: number;
-    harness?: "claude" | "opencode" | "codex";
+    harness?: "claude" | "opencode" | "codex" | "gemini";
   }) =>
     request<ExperimentRecord & { warnings?: string[] }>("/api/experiments/skill-refine", {
       method: "POST",
@@ -884,6 +886,26 @@ export const api = {
       method: "DELETE"
     }),
   readHealth: () => request<HealthReport>("/api/health/detail"),
+  listNativeClis: () =>
+    request<{ clis: NativeCliStatus[] }>("/api/harness/clis"),
+  connectNativeCli: (harness: string) =>
+    request<NativeConnectState>(`/api/harness/clis/${harness}/connect`, {
+      method: "POST"
+    }),
+  readNativeCliLogin: (harness: string) =>
+    request<NativeConnectState>(`/api/harness/clis/${harness}/connect`),
+  disconnectNativeCli: (harness: string) =>
+    request<{ harness: string; state: string }>(
+      `/api/harness/clis/${harness}/connect`,
+      { method: "DELETE" }
+    ),
+  testNativeCli: (harness: string, model = "") =>
+    request<NativeConnectState>(
+      `/api/harness/clis/${harness}/test?model=${encodeURIComponent(model)}`,
+      { method: "POST" }
+    ),
+  readNativeCliTest: (harness: string) =>
+    request<NativeConnectState>(`/api/harness/clis/${harness}/test`),
   heal: (action: string) =>
     request<HealResult>("/api/health/heal", {
       method: "POST",

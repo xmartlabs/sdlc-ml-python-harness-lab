@@ -15,6 +15,7 @@ import { Repositories } from "./pages/Repositories";
 import { RepositoryDetail } from "./pages/RepositoryDetail";
 import { Dashboard } from "./pages/Dashboard";
 import { Guide } from "./pages/Guide";
+import { AgentClis } from "./pages/AgentClis";
 import { Health } from "./pages/Health";
 import { HarnessByModel } from "./pages/HarnessByModel";
 import { CompareModels } from "./pages/CompareModels";
@@ -437,6 +438,7 @@ export default function App() {
         />
         <Route element={<Improvements />} path="/advanced/improvements" />
         <Route element={<Health />} path="/system/health" />
+        <Route element={<AgentClis />} path="/system/agent-clis" />
         <Route element={<Guide />} path="/system/guide" />
         <Route
           element={<Settings onThemeChange={setTheme} theme={theme} />}

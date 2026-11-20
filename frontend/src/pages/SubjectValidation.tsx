@@ -234,7 +234,8 @@ const MESSAGES = defineMessages({
       claudeAuthNote:
         "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or " +
         "host mode (make app-host).",
-      hostModeNote: "Needs host mode — run make app-host.",
+      hostModeNote:
+        "Uses your plan, not an API key: sign in once with make auth-codex or make auth-gemini (Docker or host mode).",
       executorModel: "Executor model",
       remove: "Remove",
       addArm: "Add an arm",
@@ -507,7 +508,8 @@ const MESSAGES = defineMessages({
       claudeAuthNote:
         "Funciona en Docker (CLAUDE_CODE_OAUTH_TOKEN o ANTHROPIC_API_KEY en .env) " +
         "o en modo host (make app-host).",
-      hostModeNote: "Necesita modo host — corré make app-host.",
+      hostModeNote:
+        "Usa tu plan, no una API key: iniciá sesión una vez con make auth-codex o make auth-gemini (Docker o modo host).",
       executorModel: "Modelo ejecutor",
       remove: "Quitar",
       addArm: "Agregar un brazo",

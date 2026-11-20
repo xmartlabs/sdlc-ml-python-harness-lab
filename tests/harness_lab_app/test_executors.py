@@ -94,6 +94,9 @@ def test_build_run_environment_without_env_file(
         "IS_SANDBOX": "1",
         "SDL_VIDEODRIVER": "dummy",
         "SDL_AUDIODRIVER": "dummy",
+        # Tells bench_run it is in the runner lane, where codex must rely on
+        # the container instead of its own bubblewrap sandbox (ADR-0094).
+        "HARNESS_LAB_IN_RUNNER": "1",
     }
 
 
@@ -196,6 +199,7 @@ def test_docker_executor_configures_container(
         "/app/.agents/skills": "",
         "/app/.opencode/skills": "",
         "/app/.codex/skills": "",
+        "/app/.gemini/skills": "",
     }
     assert f"/app/{RUNNER_SKILLS_DIR}" not in kwargs["tmpfs"]
     # An unmasked run reaches Docker exactly as it did before ADR-0049.

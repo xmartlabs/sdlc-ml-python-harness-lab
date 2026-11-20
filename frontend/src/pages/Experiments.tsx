@@ -167,7 +167,7 @@ const MESSAGES = defineMessages({
     runsHostedAuth: (harness: string) => `Runs the ${harness} CLI with its native auth.`,
     claudeAuthHelp:
       "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host).",
-    otherHostHelp: "Needs host mode — run make app-host.",
+    otherHostHelp: "Uses your plan, not an API key: sign in once with make auth-codex or make auth-gemini (Docker or host mode).",
     promptVariantsFixed: (variants: string) =>
       `Fixed by the design: ${variants} — every arm runs each of them.`,
     promptVariantsUnion:
@@ -412,7 +412,7 @@ const MESSAGES = defineMessages({
     runsHostedAuth: (harness: string) => `Corre la CLI de ${harness} con su autenticación nativa.`,
     claudeAuthHelp:
       "Funciona en Docker (CLAUDE_CODE_OAUTH_TOKEN o ANTHROPIC_API_KEY en .env) o en modo host (make app-host).",
-    otherHostHelp: "Necesita modo host — corré make app-host.",
+    otherHostHelp: "Usa tu plan, no una API key: iniciá sesión una vez con make auth-codex o make auth-gemini (Docker o modo host).",
     promptVariantsFixed: (variants: string) =>
       `Fijado por el diseño: ${variants} — cada brazo corre cada una de ellas.`,
     promptVariantsUnion:

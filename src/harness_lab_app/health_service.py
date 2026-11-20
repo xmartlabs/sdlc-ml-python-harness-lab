@@ -393,6 +393,168 @@ def _check_langfuse() -> tuple[str, str, list[str]]:
     return (ERROR if result.status in (401, 403) else WARN), result.reason, []
 
 
+# -- native agent CLIs (ADR-0094) --------------------------------------------
+
+
+def native_cli_status(facts: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """One row per native agent CLI: version, lane, session and billing.
+
+    The lane decides where the CLI runs: ``docker`` (the runner image, version
+    from its label) or ``host`` (the worker's PATH). Session state is read from
+    the shape of the credential file the official CLI wrote, never from its
+    value. Never raises.
+    """
+    import shutil
+    import subprocess  # nosec B404 - fixed argv, no shell
+
+    from harness_lab_app.native_auth import billing_mode, session_status
+    from harness_lab_app.native_models import (
+        MIN_NATIVE_CLI_VERSION,
+        native_cli_too_old,
+    )
+
+    facts = facts if facts is not None else worker_facts()
+    backend = get_settings().execution_backend
+    lane = "host" if backend == "subprocess" else "docker"
+    rows: list[dict[str, Any]] = []
+    for harness in ("claude", "codex", "gemini"):
+        version = ""
+        installed: bool | None = None
+        if lane == "docker":
+            versions = (facts or {}).get("cli_versions") or {}
+            version = str(versions.get(harness) or "")
+            if harness == "claude":
+                version = version or str((facts or {}).get("claude_cli_version") or "")
+            installed = bool(version) if facts else None
+        elif shutil.which(harness):
+            installed = True
+            with contextlib.suppress(Exception):
+                result = subprocess.run(  # nosec B603
+                    [harness, "--version"], capture_output=True, text=True, timeout=10
+                )
+                lines = (result.stdout or result.stderr or "").strip().splitlines()
+                version = lines[-1].strip()[:80] if lines else ""
+        else:
+            installed = False
+        row: dict[str, Any] = {
+            "harness": harness,
+            "lane": lane,
+            "installed": installed,
+            "version": version,
+            "min_version": MIN_NATIVE_CLI_VERSION.get(harness),
+            "too_old": native_cli_too_old(harness, version),
+            "sandbox": (
+                "container"
+                if lane == "docker"
+                else {"codex": "workspace-write", "gemini": "seatbelt"}.get(harness, "")
+            ),
+        }
+        if harness == "claude":
+            token = read_env_file_value("CLAUDE_CODE_OAUTH_TOKEN")
+            api_key = read_env_file_value("ANTHROPIC_API_KEY")
+            row["session"] = "connected" if (token or api_key) else "missing"
+            row["billing_mode"] = billing_mode(
+                "claude",
+                {
+                    "CLAUDE_CODE_OAUTH_TOKEN": token or "",
+                    "ANTHROPIC_API_KEY": api_key or "",
+                },
+            )
+        else:
+            status = session_status(harness)
+            row["session"] = status["state"]
+            row["auth_kind"] = status["auth_kind"]
+            row["billing_mode"] = (
+                "api" if status["state"] == "api_key" else billing_mode(harness)
+            )
+        row.update(_connect_fields(harness))
+        rows.append(row)
+    rows.insert(0, _opencode_row())
+    return rows
+
+
+def _connect_fields(harness: str) -> dict[str, Any]:
+    """What the System page needs to draw a card: how to connect, and the last test."""
+    from harness_lab_app import native_connect
+
+    auth = {"claude": "token", "codex": "subscription", "gemini": "subscription"}
+    fields: dict[str, Any] = {
+        "auth": auth.get(harness, "unknown"),
+        "connectable": harness in native_connect.CONNECTABLE,
+        "unavailable": native_connect.UNAVAILABLE.get(harness),
+        "testable": harness in {"codex", "gemini"},
+    }
+    if harness in {"codex", "gemini"}:
+        fields["login"] = native_connect.read_state(harness, "login")
+        fields["last_test"] = native_connect.read_state(harness, "test")
+    return fields
+
+
+def _opencode_row() -> dict[str, Any]:
+    """opencode routes through the lab's gateway: enabled when it is configured."""
+    base = read_env_file_value("GATEWAY_BASE_URL")
+    token = read_env_file_value("GATEWAY_TOKEN")
+    configured = bool(base and token and token not in {"", "sk-local-change-me"})
+    return {
+        "harness": "opencode",
+        "lane": "docker",
+        "installed": True,
+        "version": "",
+        "min_version": None,
+        "too_old": None,
+        "sandbox": "container",
+        "session": "connected" if configured else "missing",
+        "billing_mode": "gateway",
+        "auth": "gateway",
+        "connectable": False,
+        "unavailable": None,
+        "testable": False,
+    }
+
+
+def _check_native_cli(
+    harness: str, facts: dict[str, Any]
+) -> tuple[str, str, list[str]]:
+    """Health of one subscription-backed CLI: installed, current, signed in."""
+    row = next(r for r in native_cli_status(facts) if r["harness"] == harness)
+    login = f"make auth-{harness}"
+    if row["installed"] is None:
+        return UNKNOWN, "No worker replied, so the runner image could not be read.", []
+    if not row["installed"]:
+        where = "runner image" if row["lane"] == "docker" else "worker's PATH"
+        return (
+            WARN,
+            f"{harness} CLI not in the {where}; {harness} runs are refused.",
+            [],
+        )
+    if row["too_old"]:
+        return (
+            WARN,
+            f"{harness} {row['version']} is older than {row['too_old']}, the version "
+            "the lab verified; rebuild the runner image.",
+            [],
+        )
+    if row["session"] == "api_key":
+        return (
+            WARN,
+            f"{harness} session holds an API key (per-token billing), not a plan "
+            f"sign-in. Run `{login}`.",
+            [],
+        )
+    if row["session"] != "connected":
+        return (
+            WARN,
+            f"{harness} {row['version']}: no subscription login. Run `{login}`.",
+            [],
+        )
+    return (
+        OK,
+        f"{harness} {row['version']} ({row['lane']}, sandbox: {row['sandbox']}), "
+        "signed in with a subscription.",
+        [],
+    )
+
+
 # -- panel -------------------------------------------------------------------
 
 
@@ -411,6 +573,8 @@ def collect_health(session: Session) -> dict:
             lambda: _check_docker(facts),
             "build_runner_image",
         ),
+        _timed("codex_cli", "Codex CLI", lambda: _check_native_cli("codex", facts)),
+        _timed("gemini_cli", "Gemini CLI", lambda: _check_native_cli("gemini", facts)),
         _timed(
             "skills_drift", "Generated skill views", _check_skills_drift, "skills_sync"
         ),

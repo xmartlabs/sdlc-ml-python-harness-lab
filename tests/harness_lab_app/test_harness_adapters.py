@@ -26,15 +26,27 @@ def test_opencode_cmd_unchanged():
     ]
 
 
+# `codex exec` (codex-cli 0.171.0): `--full-auto` is refused by the current CLI
+# ("unexpected argument '--full-auto' found"), so the old form could not run.
+_CODEX_HOST = [
+    "codex",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "--sandbox",
+    "workspace-write",
+]
+
+
 def test_codex_cmd_headless_ignores_gateway_model():
     # Gateway-namespaced models don't map to native Codex ids → CLI default.
-    cmd = bench_run.build_codex_cmd("gateway/gpt-5.5", "build tetris")
-    assert cmd == ["codex", "--quiet", "--full-auto", "build tetris"]
+    cmd = bench_run.build_codex_cmd("gateway/gpt-5.5", in_container=False)
+    assert cmd == [*_CODEX_HOST, "-"]
 
 
 def test_codex_cmd_passes_native_model():
-    cmd = bench_run.build_codex_cmd("o4-mini", "build tetris")
-    assert cmd == ["codex", "--quiet", "--full-auto", "-m", "o4-mini", "build tetris"]
+    cmd = bench_run.build_codex_cmd("gpt-6.2-sol", in_container=False)
+    assert cmd == [*_CODEX_HOST, "-m", "gpt-6.2-sol", "-"]
 
 
 # stream-json + --verbose: observability flags every claude run now carries
@@ -87,17 +99,31 @@ def test_runner_adapter_passes_harness():
     assert cmd[cmd.index("--harness") + 1] == "claude"
 
 
-def test_preflight_blocks_host_harness_without_subprocess(monkeypatch):
+def test_preflight_blocks_a_docker_codex_run_without_a_subscription_login(
+    monkeypatch, tmp_path
+):
+    # codex runs in Docker now (ADR-0094); what it cannot do is run without
+    # the provider's own login in the lab's session store.
+    import harness_lab_app.health_service as hs
     import harness_lab_app.run_service as rs
     from harness_lab_app.run_service import RunPreflightError, RunService
     from harness_lab_app.schemas import RunConfigCreate
 
     settings = rs.get_settings()
     monkeypatch.setattr(settings, "execution_backend", "docker", raising=False)
+    monkeypatch.setenv("HARNESS_LAB_AUTH_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        hs,
+        "worker_facts",
+        lambda **_k: {
+            "runner_image_present": True,
+            "cli_versions": {"codex": "0.171.0"},
+        },
+    )
     service = RunService.__new__(RunService)
-    # codex is host-only in Docker mode.
+    monkeypatch.setattr(service, "_check_runner_image", lambda: None)
     cfg = RunConfigCreate(case_id="tetris-v1", prompt_variant="naive", harness="codex")
-    with pytest.raises(RunPreflightError, match="host mode"):
+    with pytest.raises(RunPreflightError, match="make auth-codex"):
         service.preflight(cfg)
 
 

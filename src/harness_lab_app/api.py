@@ -658,6 +658,95 @@ def create_app() -> FastAPI:
         # An unreachable gateway returns {}; that is "could not ask", not "none".
         return native_catalog(routing or None, claude_via_gateway=via_gateway)
 
+    @app.get("/api/harness/clis")
+    def list_native_clis():
+        """Connection state of each native agent CLI (ADR-0094): installed
+        version, lane (docker/host), sandbox, subscription session and billing
+        mode. Reads the shape of each credential file, never a token."""
+        from harness_lab_app.health_service import native_cli_status
+
+        return {"clis": native_cli_status()}
+
+    def _native_cli_or_404(harness: str) -> str:
+        from harness_lab_app.native_auth import NATIVE_SESSION_HARNESSES
+
+        if harness not in NATIVE_SESSION_HARNESSES:
+            raise HTTPException(status_code=404, detail=f"unknown CLI {harness!r}")
+        return harness
+
+    @app.post("/api/harness/clis/{harness}/connect")
+    def connect_native_cli(harness: str):
+        """Start the CLI's own device login on the worker (ADR-0094). Poll
+        ``GET …/connect`` for the URL and code to show the operator."""
+        from harness_lab_app import native_connect
+        from harness_lab_app.celery_app import enqueue_native_cli
+
+        harness = _native_cli_or_404(harness)
+        if harness in native_connect.UNAVAILABLE:
+            raise HTTPException(
+                status_code=409, detail=native_connect.UNAVAILABLE[harness]
+            )
+        if harness not in native_connect.CONNECTABLE:
+            raise HTTPException(status_code=409, detail="not connectable from the UI")
+        current = native_connect.read_state(harness, "login")
+        # A login already in flight is returned, not restarted: a second
+        # container would print a second code and invalidate the first.
+        if native_connect.login_in_flight(current):
+            return current
+        try:
+            enqueue_native_cli("connect_native_cli", harness)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail=f"Worker queue unreachable: {exc}"
+            ) from exc
+        return native_connect.write_state(harness, "login", {"state": "queued"})
+
+    @app.get("/api/harness/clis/{harness}/connect")
+    def connect_native_cli_state(harness: str):
+        from harness_lab_app import native_connect
+
+        return native_connect.read_state(_native_cli_or_404(harness), "login")
+
+    @app.post("/api/harness/clis/{harness}/test")
+    def test_native_cli(harness: str, model: str = ""):
+        """Send one minimal prompt with a run's exact credential (ADR-0094).
+        Spends one request of the plan's quota."""
+        from harness_lab_app import native_connect
+        from harness_lab_app.celery_app import enqueue_native_cli
+
+        harness = _native_cli_or_404(harness)
+        try:
+            enqueue_native_cli("test_native_cli", harness, model=model)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail=f"Worker queue unreachable: {exc}"
+            ) from exc
+        return native_connect.write_state(
+            harness, "test", {"state": "queued", "model": model}
+        )
+
+    @app.get("/api/harness/clis/{harness}/test")
+    def test_native_cli_state(harness: str):
+        from harness_lab_app import native_connect
+
+        return native_connect.read_state(_native_cli_or_404(harness), "test")
+
+    @app.delete("/api/harness/clis/{harness}/connect")
+    def disconnect_native_cli(harness: str):
+        """Forget this provider's login in the lab store (never ~/.codex).
+
+        The worker does it: the API mounts the store read-only."""
+        from harness_lab_app.celery_app import enqueue_native_cli
+
+        harness = _native_cli_or_404(harness)
+        try:
+            enqueue_native_cli("disconnect_native_cli", harness)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail=f"Worker queue unreachable: {exc}"
+            ) from exc
+        return {"harness": harness, "state": "disconnecting"}
+
     def _direct_options() -> tuple[list[dict], dict[str, str], list[DirectHostProbe]]:
         """Picker options for the direct sources, why each empty one is empty,
         and what each host answered.

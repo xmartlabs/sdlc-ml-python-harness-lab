@@ -207,6 +207,22 @@ _HARNESS_SIGNALS: dict[str, HarnessSignals] = {
         stream_error=("# stream error",),
         retry_noise=(CLAUDE_AWAITING_MARKER, "# claude session init"),
     ),
+    # codex and gemini step logs are rendered by harness_events with the same
+    # vocabulary: `# awaiting model` when a request is in flight (codex
+    # `turn.started` / a finished command; gemini a tool result going back),
+    # `# stream error:` for the CLI's reconnect notices (ADR-0094).
+    "codex": HarnessSignals(
+        request=(CLAUDE_AWAITING_MARKER,),
+        wait=(CLAUDE_AWAITING_MARKER, "# codex session init"),
+        stream_error=("# stream error",),
+        retry_noise=(CLAUDE_AWAITING_MARKER, "# codex session init"),
+    ),
+    "gemini": HarnessSignals(
+        request=(CLAUDE_AWAITING_MARKER,),
+        wait=(CLAUDE_AWAITING_MARKER, "# gemini session init"),
+        stream_error=("# stream error",),
+        retry_noise=(CLAUDE_AWAITING_MARKER, "# gemini session init"),
+    ),
 }
 
 #: Any harness this module has not been taught. It names no marker, so every

@@ -20,6 +20,14 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from harness_lab_app import governance_paths
 from harness_lab_app.config import get_settings
+from harness_lab_app.native_auth import (
+    CONTAINER_AGENT_HOME,
+    CONTAINER_AUTH_ROOT,
+    NATIVE_SESSION_HARNESSES,
+    harness_env,
+    return_run_session,
+    stage_run_session,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -65,18 +73,40 @@ RUNNER_MASKED_SKILL_DIRS = (
     ".agents/skills",
     ".opencode/skills",
     ".codex/skills",
+    ".gemini/skills",
 )
 
+# The one catalog each harness reads in the runner. claude and opencode read
+# `.claude/skills` (opencode scans it among others). codex reads
+# `.codex/skills` *and* `.agents/skills` from the project root down to its cwd,
+# and gemini `.gemini/skills` *and* `.agents/skills` (verified with
+# `codex debug prompt-input` and `gemini skills list`, codex-cli 0.171.0 /
+# gemini-cli 0.70.0). Keeping one directory per harness — and masking the
+# shared `.agents/skills` alias — is what makes "one catalog in the system
+# prompt" true for every harness, not just the first two. Masking codex's own
+# directory too (the old behaviour) left a codex `lab_root` run with **no** lab
+# skills at all, while the claude arm had all of them.
+RUNNER_SKILLS_DIR_FOR_HARNESS: dict[str, str] = {
+    "claude": ".claude/skills",
+    "opencode": ".claude/skills",
+    "codex": ".codex/skills",
+    "gemini": ".gemini/skills",
+}
 
-def runner_skill_masks(mount_root: str = "/app") -> dict[str, str]:
+
+def runner_skill_masks(mount_root: str = "/app", harness: str = "") -> dict[str, str]:
     """tmpfs mounts that hide every duplicate skill catalog from a run.
 
     Keys are absolute container paths, values the docker-py tmpfs options
-    string (empty = defaults). Mounted over the repo bind, so opencode
-    discovers exactly one catalog: :data:`RUNNER_SKILLS_DIR`.
+    string (empty = defaults). Mounted over the repo bind, so the harness
+    discovers exactly one catalog: its own
+    (:data:`RUNNER_SKILLS_DIR_FOR_HARNESS`, :data:`RUNNER_SKILLS_DIR` when the
+    harness is unknown — the historical behaviour).
     """
     root = mount_root.rstrip("/")
-    return {f"{root}/{directory}": "" for directory in RUNNER_MASKED_SKILL_DIRS}
+    kept = RUNNER_SKILLS_DIR_FOR_HARNESS.get(harness, RUNNER_SKILLS_DIR)
+    hidden = {*RUNNER_MASKED_SKILL_DIRS, RUNNER_SKILLS_DIR} - {kept}
+    return {f"{root}/{directory}": "" for directory in sorted(hidden)}
 
 
 # The lab's governance surface, and how much of it a run's condition hides
@@ -116,6 +146,7 @@ RUNNER_GOVERNANCE_DIRS = (
     ".agents",
     ".opencode",
     ".codex",
+    ".gemini",
     "memory",
     *(root.rstrip("/") for root in governance_paths.BARE_SKILL_ROOTS),
     *(root.rstrip("/") for root in governance_paths.BARE_HOOK_ROOTS),
@@ -249,15 +280,17 @@ def runner_masks(
     level: str,
     mount_root: str = "/app",
     hidden: list[str] | tuple[str, ...] | None = None,
+    harness: str = "",
 ) -> tuple[dict[str, str], list]:
     """Every mask a run gets: the skill mirrors plus its governance level.
 
     ``hidden`` adds the grading masks (:func:`runner_grading_masks`). It is
-    ``None`` for every container that is not the agent's.
+    ``None`` for every container that is not the agent's. ``harness`` decides
+    which skill mirror stays visible (:func:`runner_skill_masks`).
     """
     governance, files = runner_governance_masks(level, mount_root)
     tmpfs = dict(governance)
-    for path, options in runner_skill_masks(mount_root).items():
+    for path, options in runner_skill_masks(mount_root, harness).items():
         # A skill mirror inside an already-masked directory is redundant, and
         # Docker rejects the duplicate destination.
         if any(path.startswith(f"{masked}/") for masked in governance):
@@ -333,11 +366,16 @@ def claude_settings_env(repo_root: Path) -> dict[str, str]:
     return merged
 
 
-def build_run_environment() -> dict[str, str]:
+def build_run_environment(harness: str = "") -> dict[str, str]:
     """Environment for a run container: .env values with host URLs rewritten.
 
     `scripts/create_run.py:_load_env` uses `os.environ.setdefault`, so values
     injected here win over the `.env` file bind-mounted inside the container.
+
+    ``harness`` codex/gemini: every variable that would switch the CLI from its
+    subscription login to per-token billing is dropped, and the CLI is pointed
+    at its provider's session mount (:mod:`harness_lab_app.native_auth`).
+    Other harnesses get exactly the environment they always had.
     """
     settings = get_settings()
     # IS_SANDBOX=1: the run container is an isolated sandbox; Claude Code
@@ -375,7 +413,47 @@ def build_run_environment() -> dict[str, str]:
     for key in _HOST_URL_ENV_VARS:
         if env.get(key):
             env[key] = rewrite_localhost(env[key], settings.docker_host_alias)
+    # Marks the runner lane, so bench_run picks the container-sandbox flags
+    # (codex cannot use its own bubblewrap sandbox inside a container).
+    env["HARNESS_LAB_IN_RUNNER"] = "1"
+    if harness in NATIVE_SESSION_HARNESSES:
+        env = harness_env(
+            harness,
+            env,
+            session_root=f"{CONTAINER_AUTH_ROOT}/{harness}",
+            home=CONTAINER_AGENT_HOME,
+        )
+        env["HARNESS_LAB_AGENT_HOME"] = CONTAINER_AGENT_HOME
     return env
+
+
+def native_session_mount(harness: str, run_id: str, host_repo_root: str) -> Any | None:
+    """A read-write bind of a *private copy* of this provider's session, or None.
+
+    Only the run's own provider is mounted: a codex run never sees the gemini
+    session and vice versa. The store itself is never mounted into a run. The
+    worker copies the credential and the lab's config into
+    ``data/runs/<run>/session/<provider>`` (inside the repo bind the daemon
+    already shares), and :class:`_DockerHandle` writes a refreshed credential
+    back when the run ends and deletes the copy. Anything else the agent writes
+    in its CLI home — a gemini memory in ``GEMINI.md``, a codex ``AGENTS.md`` or
+    skill — dies with the run, so it can never reach another run or arm
+    (ADR-0094).
+    """
+    if harness not in NATIVE_SESSION_HARNESSES:
+        return None
+    from docker.types import Mount
+
+    settings = get_settings()
+    staged = stage_run_session(
+        harness, settings.data_runs_dir / run_id / "session" / harness
+    )
+    return Mount(
+        target=f"{CONTAINER_AUTH_ROOT}/{harness}",
+        source=_host_path(staged, settings.repo_root, host_repo_root),
+        type="bind",
+        read_only=False,
+    )
 
 
 # Hard limits for a container running an audited repository's own commands.
@@ -462,6 +540,7 @@ class RunExecutor(Protocol):
         image: str = "",
         hidden: list[str] | None = None,
         case_dir: str = "",
+        harness: str = "",
     ) -> RunHandle: ...
 
 
@@ -518,6 +597,7 @@ class SubprocessRunExecutor:
         image: str = "",
         hidden: list[str] | None = None,
         case_dir: str = "",  # noqa: ARG002
+        harness: str = "",  # noqa: ARG002 - the runner builds its own env on the host
     ) -> RunHandle:
         # The masks are a container's: the host lane is the escape hatch and
         # the test backend, and it has no mount to hide anything with. Both
@@ -567,9 +647,16 @@ class SubprocessRunExecutor:
 
 
 class _DockerHandle:
-    def __init__(self, container: Any):
+    def __init__(
+        self,
+        container: Any,
+        session: tuple[str, Path] | None = None,
+    ):
         self.container = container
         self._stopped = False
+        # (harness, staged session dir) for a codex/gemini run: the refreshed
+        # credential goes back to the store once the container is done.
+        self._session = session
 
     def iter_lines(self) -> Iterator[tuple[str, str]]:
         # `logs()` does not demux stdout/stderr; bench_run.py already merges
@@ -598,6 +685,10 @@ class _DockerHandle:
             # Cleanup is best-effort; the container may already be gone.
             with contextlib.suppress(Exception):
                 self.container.remove(force=True)
+            if self._session is not None:
+                harness, staged = self._session
+                self._session = None
+                return_run_session(harness, staged)
 
 
 def container_name_for_run(run_id: str) -> str:
@@ -630,6 +721,7 @@ class DockerRunExecutor:
         image: str = "",
         hidden: list[str] | None = None,
         case_dir: str = "",
+        harness: str = "",
     ) -> RunHandle:
         settings = get_settings()
         host_repo_root = settings.host_repo_root or str(settings.repo_root)
@@ -649,7 +741,9 @@ class DockerRunExecutor:
         # whatever the run's harness condition hides (ADR-0049).
         # And, for the agent's own container only, whatever would grade it for
         # it (ADR-0079): `hidden` is None for every other container.
-        tmpfs, mask_files = runner_masks(governance_mask, hidden=hidden)
+        tmpfs, mask_files = runner_masks(
+            governance_mask, hidden=hidden, harness=harness
+        )
         extra: dict[str, Any] = {}
         mounts: list[Any] = []
         if mask_files:
@@ -672,6 +766,14 @@ class DockerRunExecutor:
             readonly = self._case_dir_mount(case_dir, host_repo_root)
             if readonly is not None:
                 mounts.append(readonly)
+        # The run's own provider session, for a subscription-backed CLI only
+        # (codex, gemini). Never on the hardened lane: it runs code the lab
+        # did not write and calls no model.
+        session = (
+            None if hardened else native_session_mount(harness, run_id, host_repo_root)
+        )
+        if session is not None:
+            mounts.append(session)
         if mounts:
             extra["mounts"] = mounts
         # The agent lane is unchanged: full `.env`, the gateway alias, its
@@ -689,13 +791,22 @@ class DockerRunExecutor:
             volumes={host_repo_root: {"bind": "/app", "mode": "rw"}},
             tmpfs=tmpfs,
             environment=(
-                sanitized_run_environment() if hardened else build_run_environment()
+                sanitized_run_environment()
+                if hardened
+                else build_run_environment(harness)
             ),
             extra_hosts={settings.docker_host_alias: "host-gateway"},
             labels={"harness-lab.run-id": run_id},
             **extra,
         )
-        return _DockerHandle(container)
+        return _DockerHandle(
+            container,
+            session=(
+                (harness, settings.data_runs_dir / run_id / "session" / harness)
+                if session is not None
+                else None
+            ),
+        )
 
     @staticmethod
     def _mask_mounts(

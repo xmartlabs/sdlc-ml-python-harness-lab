@@ -153,7 +153,7 @@ const MESSAGES = defineMessages({
       ),
       claudeAuthHelp:
         "Works in Docker (put CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host).",
-      otherHostHelp: "Needs host mode — run make app-host.",
+      otherHostHelp: "Uses your plan, not an API key: sign in once with make auth-codex or make auth-gemini (Docker or host mode).",
       plannerModel: "Planner model",
       executorModel: "Executor model",
       nativeModelsHint: (harness: string) =>
@@ -342,7 +342,7 @@ const MESSAGES = defineMessages({
       ),
       claudeAuthHelp:
         "Funciona en Docker (poné CLAUDE_CODE_OAUTH_TOKEN o ANTHROPIC_API_KEY en .env) o en modo host (make app-host).",
-      otherHostHelp: "Necesita modo host — corré make app-host.",
+      otherHostHelp: "Usa tu plan, no una API key: iniciá sesión una vez con make auth-codex o make auth-gemini (Docker o modo host).",
       plannerModel: "Modelo planificador",
       executorModel: "Modelo ejecutor",
       nativeModelsHint: (harness: string) =>

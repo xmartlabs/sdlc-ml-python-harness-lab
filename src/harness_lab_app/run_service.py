@@ -390,33 +390,31 @@ class RunService:
                 "run would see it through the workspace's parent directory."
             )
         self._check_runner_image()
-        if config.harness in ("codex", "claude"):
-            # These harnesses drive their own CLI with native auth (no gateway
+        if config.harness in ("codex", "gemini"):
+            # Subscription-backed CLIs (ADR-0094): the provider's own login,
+            # kept per provider outside the repository, on either lane.
+            self._check_native_session(config)
+            return
+        if config.harness == "claude":
+            # claude drives its own CLI with native auth (no gateway
             # model/token). Host/subprocess mode uses your host login directly.
             # See docs/harness-adapters.md.
             if get_settings().execution_backend == "subprocess":
                 return
-            # Docker mode: the CLI must be baked into the runner image with
-            # credentials supplied via .env. claude is wired for Docker; codex is
-            # host-only for now.
-            if config.harness == "claude":
-                token = read_env_file_value(
-                    "CLAUDE_CODE_OAUTH_TOKEN"
-                ) or read_env_file_value("ANTHROPIC_API_KEY")
-                if token:
-                    self._check_claude_cli_version(config.executor_model)
-                    self._check_claude_model_served(config.executor_model)
-                    return
-                raise RunPreflightError(
-                    "The 'claude' harness in Docker needs credentials in .env: "
-                    "CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, uses your "
-                    "subscription) or ANTHROPIC_API_KEY. Or run host mode "
-                    "(make app-host)."
-                )
+            # Docker mode: the CLI is baked into the runner image and the
+            # credential comes from .env.
+            token = read_env_file_value(
+                "CLAUDE_CODE_OAUTH_TOKEN"
+            ) or read_env_file_value("ANTHROPIC_API_KEY")
+            if token:
+                self._check_claude_cli_version(config.executor_model)
+                self._check_claude_model_served(config.executor_model)
+                return
             raise RunPreflightError(
-                "The 'codex' harness runs the host CLI — start host mode "
-                "(make app-host) or set HARNESS_LAB_EXECUTION_BACKEND=subprocess. "
-                "(codex-in-Docker is not wired yet.)"
+                "The 'claude' harness in Docker needs credentials in .env: "
+                "CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`, uses your "
+                "subscription) or ANTHROPIC_API_KEY. Or run host mode "
+                "(make app-host)."
             )
         if config.score_mode != "none" and not (config.executor_model or "").strip():
             raise RunPreflightError(
@@ -747,6 +745,79 @@ class RunService:
                     if levels
                     else " — it has no effort control. Clear the effort."
                 )
+            )
+
+    def _check_native_session(self, config: RunConfigCreate) -> None:
+        """Refuse a codex/gemini run that cannot reach its subscription (ADR-0094).
+
+        Checks, in order, what would otherwise fail inside the run: a model id
+        meant for the gateway (the CLI would silently fall back to its own
+        default — a run filed under a model nobody chose), the CLI missing or
+        older than the version this integration was verified against, and no
+        login in the provider's session directory. Expiry is not judged here:
+        only the CLI knows whether its refresh token still works, and it says
+        so in the run's first step.
+        """
+        import shutil
+
+        from harness_lab_app.health_service import worker_facts
+        from harness_lab_app.native_auth import (
+            credential_file,
+            session_dir,
+            session_status,
+        )
+        from harness_lab_app.native_models import native_cli_too_old
+
+        harness = config.harness
+        model = (config.executor_model or "").strip()
+        if model.startswith(("gateway/", "lmstudio/", "ollama/")):
+            raise RunPreflightError(
+                f"'{model}' is a gateway/self-hosted model id; the '{harness}' "
+                "harness runs its own CLI on your subscription and would ignore "
+                "it. Pick one of its native models, or leave the model empty "
+                "for the CLI default."
+            )
+        login = "make auth-codex" if harness == "codex" else "make auth-gemini"
+        if get_settings().execution_backend == "subprocess":
+            if shutil.which(harness) is None:
+                raise RunPreflightError(
+                    f"The '{harness}' CLI is not on the worker's PATH. Install it "
+                    "(see docs/runbook-claude-codex.md) and restart host mode."
+                )
+        else:
+            facts = worker_facts()
+            from harness_lab_app.native_models import CLI_VERSION_LABELS
+
+            version = ""
+            if facts:
+                version = str((facts.get("cli_versions") or {}).get(harness) or "")
+            if facts and facts.get("runner_image_present") and not version:
+                raise RunPreflightError(
+                    f"The runner image has no {harness} CLI (no "
+                    f"'{CLI_VERSION_LABELS[harness]}' label). Rebuild it: Health → "
+                    "Build runner image, or `docker compose build runner`."
+                )
+            required = native_cli_too_old(harness, version)
+            if required:
+                raise RunPreflightError(
+                    f"The runner image has {harness} {version}; the lab's "
+                    f"integration was verified on {required} or newer. Rebuild "
+                    "the runner image with the version Dockerfile.runner pins."
+                )
+        status = session_status(harness)
+        state = status["state"]
+        if state == "api_key":
+            raise RunPreflightError(
+                f"The {harness} session in {session_dir(harness)} holds an API "
+                "key, not a ChatGPT sign-in: runs would bill per token. Run "
+                f"`{login}` to sign in with your plan instead."
+            )
+        if state != "connected":
+            raise RunPreflightError(
+                f"No {harness} subscription login in "
+                f"{credential_file(harness)} ({state}). Run `{login}` once; "
+                "the session is kept outside the repository and reused by every "
+                "run."
             )
 
     def _check_claude_cli_version(self, executor_model: str | None) -> None:

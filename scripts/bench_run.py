@@ -171,12 +171,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--harness",
         default=None,
-        choices=["opencode", "codex", "claude"],
+        choices=["opencode", "codex", "claude", "gemini"],
         help=f"Agent CLI that drives the run (default: {DEFAULT_HARNESS}). All harnesses (opencode, codex, "
-        "claude) run inside the Docker runner under `make app-up`; claude auth "
-        "comes from .env (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY). Host mode "
-        "(`make app-host`, subprocess backend) is an alternative for driving a "
-        "host CLI's interactive/native auth. See docs/harness-adapters.md.",
+        "claude, gemini) run inside the Docker runner under `make app-up`; claude "
+        "auth comes from .env (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY), "
+        "codex and gemini use their own subscription login kept per provider in "
+        "HARNESS_LAB_AUTH_DIR (`make auth-codex` / `make auth-gemini`). Host mode "
+        "(`make app-host`, subprocess backend) is an alternative. See "
+        "docs/harness-adapters.md.",
     )
     p.add_argument(
         "--score-mode",
@@ -305,16 +307,50 @@ _CAUSE_MARKERS = (
     "permission_error",
     "rate_limit_error",
     "overloaded_error",
+    # codex (`turn.failed`) and gemini (`result.error`), as rendered by
+    # harness_events: the provider's own words for a missing/expired login,
+    # an exhausted plan and an unknown model.
+    "401 Unauthorized",
+    "usage_limit_reached",
+    "UsageLimitReached",
+    "CreditsDepleted",
+    "429",
+    "RESOURCE_EXHAUSTED",
+    "model_not_supported",
+    "not supported when using Codex with a ChatGPT account",
 )
 _CAUSE_MAX = 300
 
 
-def harness_error_cause(step_log: Path) -> str | None:
+def _has_marker(line: str, marker: str) -> bool:
+    """A cause marker in ``line``; a bare status code only as a whole number."""
+    if marker.isdigit():
+        return re.search(rf"(?<!\d){marker}(?!\d)", line) is not None
+    return marker in line
+
+
+# Exit codes the Gemini CLI documents for headless mode (docs/cli/headless.md)
+# plus 41, which it returns when no auth method is configured. Named so a run
+# that never reached the model says why without opening its log.
+_GEMINI_EXIT_CAUSES = {
+    41: "Cause: gemini has no login — run `make auth-gemini` (Sign in with Google)",
+    42: "Cause: gemini rejected its input (invalid prompt or arguments)",
+    53: "Cause: gemini turn limit exceeded",
+}
+
+
+def harness_error_cause(
+    step_log: Path, *, harness: str = "", exit_code: int | None = None
+) -> str | None:
     """One short line naming why a harness CLI died, or ``None``.
 
     Reads the first ``API Error`` line of the step log and keeps the provider's
     own sentence and error code, so the run's stored failure reason carries the
-    cause even when the full error is too long to fit.
+    cause even when the full error is too long to fit. codex ``turn.failed`` and
+    gemini error ``result`` events are rendered with the same ``API Error``
+    prefix (:mod:`harness_lab_app.harness_events`), so one reader serves all
+    three. A gemini exit code the CLI documents is named when the log has no
+    provider line (exit 41: no login configured).
     """
     try:
         text = step_log.read_text(errors="replace")
@@ -322,8 +358,10 @@ def harness_error_cause(step_log: Path) -> str | None:
         return None
     line = next((ln for ln in text.splitlines() if "API Error" in ln), "")
     if not line:
+        if harness == "gemini" and exit_code in _GEMINI_EXIT_CAUSES:
+            return _GEMINI_EXIT_CAUSES[exit_code]
         return None
-    code = next((marker for marker in _CAUSE_MARKERS if marker in line), "")
+    code = next((marker for marker in _CAUSE_MARKERS if _has_marker(line, marker)), "")
     message = ""
     start = line.find('"message":"')
     if start != -1:
@@ -1447,6 +1485,15 @@ def write_metadata(
         "executor_model": args.executor_model,
         # Requested reasoning effort (ADR-0081); "" = the CLI's own default.
         "executor_effort": getattr(args, "executor_effort", "") or "",
+        # The CLI that drove the run, as it reported itself, and the isolation
+        # its commands ran under (ADR-0094): "workspace-write"/"seatbelt" for
+        # the CLI's own sandbox on the host, "container" when the per-run
+        # runner container is the sandbox.
+        "harness_cli_version": harness_cli_version(run.get("harness", "")),
+        "harness_sandbox": harness_sandbox(run.get("harness", "")),
+        # How the run is paid for: a subscription's quota has no per-token
+        # price, so its cost is recorded as unknown, never as 0.
+        "billing_mode": run_billing_mode(run.get("harness", "")),
         "score_mode": args.score_mode,
         "max_steps": args.max_steps,
         # Exclusions are applied to the native views BEFORE metadata is written,
@@ -2085,32 +2132,169 @@ def build_opencode_cmd(
 
 
 def _native_model(model: str | None) -> str | None:
-    """Return a native model id for codex/claude, or None to use the CLI default.
+    """Return a native model id for codex/claude/gemini, or None for the CLI default.
 
     The web form's executor models are namespaced by provider (``gateway/…`` for
     LiteLLM, ``lmstudio/…`` for the direct LM Studio route) and do not map to
-    native Codex/Claude model ids, so those are ignored (the CLI uses its
-    configured default). A bare id (no provider prefix) is treated as an
-    explicit native override.
+    native CLI model ids, so those are ignored (the CLI uses its configured
+    default). A bare id (no provider prefix) is treated as an explicit native
+    override. The web preflight refuses a namespaced id for codex/gemini, so a
+    managed run never reaches this with one.
     """
-    if not model or model.startswith(("gateway/", "lmstudio/")):
+    if not model or model.startswith(("gateway/", "lmstudio/", "ollama/")):
         return None
     return model
 
 
-def build_codex_cmd(executor_model: str | None, message: str) -> list[str]:
-    """Assemble a non-interactive OpenAI Codex CLI command (host, native auth).
+# Harnesses whose CLI takes the prompt on stdin (the `-` / empty `-p` forms):
+# a case prompt can be tens of KB, and argv has a limit stdin does not.
+STDIN_PROMPT_HARNESSES = frozenset({"codex", "gemini"})
 
-    --quiet prints only the final output; --full-auto auto-approves edits and
-    commands in the sandbox so a headless run does not block on approvals. The
-    prompt carries the ``workspace/<run_id>/`` path, so cwd stays REPO_ROOT like
-    opencode.
+# Codex's `workspace-write` sandbox needs bubblewrap to create a namespace, and
+# the runner container cannot (verified on harness-lab-runner, codex-cli
+# 0.171.0: "bwrap: No permissions to create a new namespace"; the legacy
+# Landlock path panics with "requires bubblewrap"). Inside the runner the
+# per-run container *is* the sandbox — the same reasoning that lets claude run
+# with --dangerously-skip-permissions there under IS_SANDBOX=1 — so codex is
+# told to rely on it. On the host the CLI's own sandbox stays on.
+CODEX_SANDBOX_HOST = "workspace-write"
+CODEX_SANDBOX_CONTAINER = "container"
+
+
+def in_runner_container() -> bool:
+    """True inside a lab runner container (set by ``build_run_environment``)."""
+    return os.environ.get("HARNESS_LAB_IN_RUNNER") == "1"
+
+
+def harness_sandbox(harness: str, *, in_container: bool | None = None) -> str:
+    """The isolation a harness's commands run under, as recorded in metadata.
+
+    ``workspace-write`` / ``seatbelt``: the CLI's own sandbox (host lane).
+    ``container``: the per-run runner container, the CLI's sandbox off.
+    ``""``: a harness the lab does not configure a sandbox for.
     """
-    cmd = ["codex", "--quiet", "--full-auto"]
+    container = in_runner_container() if in_container is None else in_container
+    if harness == "codex":
+        return CODEX_SANDBOX_CONTAINER if container else CODEX_SANDBOX_HOST
+    if harness == "gemini":
+        return CODEX_SANDBOX_CONTAINER if container else "seatbelt"
+    if harness == "claude" and container:
+        return CODEX_SANDBOX_CONTAINER
+    return ""
+
+
+@functools.cache
+def harness_cli_version(harness: str) -> str:
+    """``<cli> --version`` as the CLI reports it, or ``""`` (never raises).
+
+    Recorded in metadata.json so a run names the instrument that drove it
+    (ADR-0073). opencode's version is already in the harness fingerprint.
+    """
+    if harness not in {"codex", "claude", "gemini"} or not shutil.which(harness):
+        return ""
+    try:
+        result = subprocess.run(
+            [harness, "--version"], capture_output=True, text=True, timeout=20
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    lines = (result.stdout or result.stderr or "").strip().splitlines()
+    return lines[-1].strip()[:80] if lines else ""
+
+
+def run_billing_mode(harness: str) -> str:
+    """How this run is paid for (see :func:`native_auth.billing_mode`)."""
+    from harness_lab_app.native_auth import billing_mode
+
+    return billing_mode(harness)
+
+
+def harness_run_env(harness: str) -> dict[str, str] | None:
+    """The process environment for a codex/gemini step, or ``None`` (inherit).
+
+    Points the CLI at the lab's per-provider session directory, scrubs every
+    variable that would switch it to per-token billing, and gives it an empty
+    ``HOME`` so the operator's user-scope skills (``~/.agents/skills``,
+    ``~/.codex/skills``) never reach an arm. In the runner container the
+    executor has already mounted the session at ``/run/harness-auth/<h>`` and
+    set ``CODEX_HOME`` / ``GEMINI_CLI_HOME``; on the host the store is
+    ``HARNESS_LAB_AUTH_DIR``.
+    """
+    from harness_lab_app.native_auth import (
+        NATIVE_SESSION_HARNESSES,
+        ensure_session_dir,
+        harness_env,
+        prune_session_dir,
+    )
+
+    if harness not in NATIVE_SESSION_HARNESSES:
+        return None
+    env = dict(os.environ)
+    if in_runner_container():
+        variable = "CODEX_HOME" if harness == "codex" else "GEMINI_CLI_HOME"
+        root: str | Path = env.get(variable) or f"/run/harness-auth/{harness}"
+        home = Path(env.get("HARNESS_LAB_AGENT_HOME") or "/tmp/agent-home")  # nosec B108
+    else:
+        # The host lane reads the store in place (the CLI refreshes its token
+        # there), so whatever a previous run left beside the credential is
+        # removed first: only the allow-listed files may reach this run.
+        root = ensure_session_dir(harness)
+        prune_session_dir(harness)
+        # A fresh, empty HOME per step: nothing one run leaves in it reaches
+        # the next run or another arm.
+        home = Path(tempfile.mkdtemp(prefix=f"harness-lab-{harness}-home-"))
+    home.mkdir(parents=True, exist_ok=True)
+    return harness_env(harness, env, session_root=root, home=home)
+
+
+def build_codex_cmd(
+    executor_model: str | None, *, in_container: bool | None = None
+) -> list[str]:
+    """Assemble ``codex exec`` for a headless run on the ChatGPT login.
+
+    Verified against codex-cli 0.171.0 (``codex exec --help``): the old
+    ``codex --quiet --full-auto`` form is refused (``unexpected argument
+    '--full-auto'``). ``exec`` never asks for approval (``approval_policy =
+    never``), ``--json`` streams the JSONL events the lab archives and
+    translates (:mod:`harness_lab_app.harness_events`), and the trailing ``-``
+    reads the prompt from stdin. ``--skip-git-repo-check``: a workspace is not
+    always a git repository, and an empty bare workspace never is.
+    """
+    container = in_runner_container() if in_container is None else in_container
+    cmd = ["codex", "exec", "--json", "--skip-git-repo-check"]
+    if container:
+        cmd.append("--dangerously-bypass-approvals-and-sandbox")
+    else:
+        cmd += ["--sandbox", CODEX_SANDBOX_HOST]
     native = _native_model(executor_model)
     if native:
         cmd += ["-m", native]
-    cmd.append(message)
+    cmd.append("-")
+    return cmd
+
+
+def build_gemini_cmd(
+    executor_model: str | None, *, in_container: bool | None = None
+) -> list[str]:
+    """Assemble a headless Gemini CLI command (Sign in with Google).
+
+    Verified against @google/gemini-cli 0.70.0: ``-p`` runs headless and
+    *appends* to stdin, so ``-p ""`` with the prompt on stdin carries any
+    length; ``--output-format stream-json`` emits ``init`` / ``message`` /
+    ``tool_use`` / ``tool_result`` / ``error`` / ``result`` events;
+    ``--approval-mode yolo`` auto-approves every tool, which is only allowed
+    inside a sandbox — the macOS Seatbelt profile (``-s``) on the host, the
+    runner container in Docker. Auth and workspace trust come from the
+    environment (:func:`harness_lab_app.native_auth.harness_env`).
+    """
+    container = in_runner_container() if in_container is None else in_container
+    cmd = ["gemini", "--output-format", "stream-json", "--approval-mode", "yolo"]
+    if not container:
+        cmd.append("--sandbox")
+    native = _native_model(executor_model)
+    if native:
+        cmd += ["-m", native]
+    cmd += ["-p", ""]
     return cmd
 
 
@@ -2224,13 +2408,19 @@ def build_harness_cmd(
     add_dirs: Sequence[Path] = (),
     effort: str = "",
 ) -> list[str]:
-    """Dispatch to the per-harness command builder (opencode | codex | claude).
+    """Dispatch to the per-harness command builder (opencode | codex | claude | gemini).
 
     ``effort`` only reaches claude; :func:`main` refuses it for any other
     harness before a run starts, so it is never silently dropped here.
+
+    codex and gemini read their prompt from stdin (:data:`STDIN_PROMPT_HARNESSES`),
+    so ``message`` is not part of their argv: the caller passes it to
+    :func:`run_opencode` as ``stdin_text``.
     """
     if harness == "codex":
-        return build_codex_cmd(executor_model, message)
+        return build_codex_cmd(executor_model)
+    if harness == "gemini":
+        return build_gemini_cmd(executor_model)
     if harness == "claude":
         return build_claude_cmd(
             executor_model, message, add_dirs=add_dirs, effort=effort
@@ -2345,6 +2535,40 @@ def step_clock() -> float:
     return time.monotonic()
 
 
+# How often a codex/gemini step's translated sidecar is rewritten while the
+# step runs (seconds). It is rewritten once more when the step ends.
+_EVENTS_REFRESH_SECONDS = 5.0
+
+
+def raw_events_path(events_path: Path) -> Path:
+    """``step-N.events.jsonl`` → ``step-N.raw.jsonl`` (the untouched CLI stream)."""
+    from harness_lab_app.harness_events import RAW_EVENTS_SUFFIX
+
+    return events_path.with_name(
+        events_path.name.removesuffix(".events.jsonl") + RAW_EVENTS_SUFFIX
+    )
+
+
+def write_normalized_events(harness: str, raw_path: Path, events_path: Path) -> int:
+    """Translate a step's raw codex/gemini stream into the claude-shaped sidecar.
+
+    Every reader the lab has (attribution, trajectory, scoring, progress, the
+    Langfuse exporter) reads ``step-N.events.jsonl`` in claude's shape; the raw
+    stream stays beside it as provenance. Never raises: a translation failure
+    leaves the raw stream and an empty sidecar, which the readers treat as "no
+    events" rather than as a crash.
+    """
+    from harness_lab_app.harness_events import translate
+
+    try:
+        lines = raw_path.read_text(errors="replace").splitlines()
+        translated = translate(harness, lines)
+    except OSError:
+        translated = []
+    events_path.write_text("".join(f"{line}\n" for line in translated))
+    return len(translated)
+
+
 def run_opencode(
     cmd: list[str],
     log_path: Path,
@@ -2352,24 +2576,40 @@ def run_opencode(
     label: str = "opencode",
     cwd: Path | None = None,
     events_path: Path | None = None,
+    stdin_text: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> int:
     """Run the harness CLI, streaming output to terminal and capturing to log_path.
 
     If also_append is given, output is also appended to that file (combined log).
     `label` names the harness in the log header (used by the step counter).
     `cwd` overrides the working directory (default REPO_ROOT). When
-    `events_path` is given (claude stream-json mode), every raw line is teed
-    there and the log receives the human-readable rendering instead.
+    `events_path` is given (a harness with a JSON event stream), every raw line
+    is teed and the log receives the human-readable rendering instead. For
+    claude the tee *is* ``events_path``; for codex/gemini the raw stream goes to
+    ``step-N.raw.jsonl`` and ``events_path`` receives its claude-shaped
+    translation once the step ends (:func:`write_normalized_events`).
+    `stdin_text`, when given, is written to the CLI's stdin and closed (codex
+    and gemini take their prompt there). `env` replaces the process
+    environment (codex/gemini: the provider session, scrubbed of API keys).
     """
     import datetime as _dt
 
+    from harness_lab_app.harness_events import TRANSLATED_HARNESSES, render_event
+
     header = f"# {label} run started {_dt.datetime.utcnow().isoformat()}Z\n"
-    cmd_line = "# cmd: " + " ".join(cmd[:-1]) + " <prompt>\n\n"
+    shown = cmd if stdin_text is not None else cmd[:-1]
+    cmd_line = "# cmd: " + " ".join(shown) + " <prompt>\n\n"
+
+    translated = label in TRANSLATED_HARNESSES and events_path is not None
+    tee_path = (
+        raw_events_path(events_path) if translated and events_path else events_path
+    )
 
     append_fh = None
     if also_append is not None:
         append_fh = also_append.open("a")
-    events_fh = events_path.open("w") if events_path is not None else None
+    events_fh = tee_path.open("w") if tee_path is not None else None
 
     with log_path.open("w") as log:
         log.write(header + cmd_line)
@@ -2381,17 +2621,46 @@ def run_opencode(
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd) if cwd is not None else REPO_ROOT,
+            stdin=subprocess.PIPE if stdin_text is not None else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=env,
         )
+        if stdin_text is not None:
+            assert proc.stdin is not None
+            try:
+                proc.stdin.write(stdin_text)
+            except BrokenPipeError:
+                pass  # the CLI died before reading; its exit code says why
+            finally:
+                with contextlib.suppress(BrokenPipeError):
+                    proc.stdin.close()
         assert proc.stdout is not None
+        last_refresh = 0.0
         for line in proc.stdout:
             if events_fh is not None:
                 events_fh.write(stamp_event_line(line))
                 events_fh.flush()
-                rendered = render_claude_event(line)
+                # Keep the translated sidecar current while the step runs, so
+                # live progress reads it and a step the watchdog kills still
+                # leaves its usage and attribution behind. Throttled: each
+                # refresh re-translates the step so far.
+                if (
+                    translated
+                    and tee_path is not None
+                    and events_path is not None
+                    and time.monotonic() - last_refresh >= _EVENTS_REFRESH_SECONDS
+                    and ('"item.completed"' in line or '"tool_result"' in line)
+                ):
+                    write_normalized_events(label, tee_path, events_path)
+                    last_refresh = time.monotonic()
+                rendered = (
+                    render_event(label, line)
+                    if translated
+                    else render_claude_event(line)
+                )
                 if rendered is None:
                     continue
                 line = rendered
@@ -2406,6 +2675,8 @@ def run_opencode(
         events_fh.close()
     if append_fh:
         append_fh.close()
+    if translated and tee_path is not None and events_path is not None:
+        write_normalized_events(label, tee_path, events_path)
 
     return proc.returncode
 
@@ -2745,8 +3016,11 @@ def collect_claude_usage(out_dir: Path) -> dict:
     session_cost: dict[str, float] = {}
     turns = tool_calls = 0
     duration_ms = 0
+    reasoning_tokens = 0
     files_modified: set[str] = set()
     detected_model: str | None = None
+    billing_modes: set[str] = set()
+    model_output: dict[str, int] = {}
     saw_result = False
     for path in events_files:
         for raw in path.read_text(errors="replace").splitlines():
@@ -2786,6 +3060,14 @@ def collect_claude_usage(out_dir: Path) -> dict:
                 # bare one while costing 71% more.
                 cache_read_tokens += usage.get("cache_read_input_tokens") or 0
                 cache_creation_tokens += usage.get("cache_creation_input_tokens") or 0
+                reasoning_tokens += usage.get("reasoning_output_tokens") or 0
+                if event.get("billing_mode"):
+                    billing_modes.add(str(event["billing_mode"]))
+                for name, per_model in (event.get("modelUsage") or {}).items():
+                    if isinstance(per_model, dict):
+                        model_output[str(name)] = model_output.get(str(name), 0) + int(
+                            per_model.get("outputTokens") or 0
+                        )
                 if isinstance(event.get("total_cost_usd"), (int, float)):
                     session = f"{path.name}:{event.get('session_id') or ''}"
                     session_cost[session] = float(event["total_cost_usd"])
@@ -2793,6 +3075,20 @@ def collect_claude_usage(out_dir: Path) -> dict:
                 duration_ms += event.get("duration_ms") or 0
     if not saw_result and tool_calls == 0:
         return {}
+    if billing_modes:
+        # codex/gemini events (translated by harness_events) carry how the run
+        # was paid for. A subscription has no per-token price: the cost is
+        # *unknown*, never 0, and it must not be estimated from a price list.
+        collected_mode = (
+            sorted(billing_modes)[0] if len(billing_modes) == 1 else "mixed"
+        )
+    else:
+        collected_mode = ""
+    # The model that answered, when the stream names several (gemini's `auto`
+    # routes between Pro and Flash): the one with the most output, the same
+    # rule llm_transport applies to claude's `modelUsage` (ADR-0073).
+    if model_output and (not detected_model or detected_model == "auto"):
+        detected_model = max(model_output, key=lambda name: model_output[name])
     cost = sum(session_cost.values())
     collected: dict = {
         "turns": turns or None,
@@ -2805,7 +3101,11 @@ def collect_claude_usage(out_dir: Path) -> dict:
         "time_minutes": round(duration_ms / 60000, 2) if duration_ms else None,
         "files_modified": sorted(files_modified),
         "detected_model": detected_model,
+        "reasoning_tokens": reasoning_tokens or None,
+        "billing_mode": collected_mode or None,
     }
+    if collected_mode == "subscription":
+        collected["cost_source"] = "subscription_quota"
     return {k: v for k, v in collected.items() if v not in (None, [])}
 
 
@@ -2916,6 +3216,13 @@ def assemble_usage(
     if free is not None and usage.get("cost_usd") in (None, "", 0, 0.0):
         usage["cost_usd"] = free
         usage["cost_source"] = "self_hosted"
+    if harness in STDIN_PROMPT_HARNESSES:
+        # codex/gemini spend a subscription plan's quota, never a per-token
+        # bill: the cost is unknown, recorded as such, and never filled with 0
+        # or with a figure some other source attributed to this run id.
+        usage["cost_usd"] = None
+        usage["billing_mode"] = "subscription"
+        usage["cost_source"] = "subscription_quota"
     if stop_reason:
         usage["stop_reason"] = stop_reason
     if prompt_kinds:
@@ -3619,10 +3926,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.harness == "opencode":
         has_run_cmd = detect_run_subcommand()
     else:
-        # codex/claude are host CLIs; availability = the binary is on PATH.
+        # codex/claude/gemini are native CLIs; availability = the binary is on PATH.
         has_run_cmd = shutil.which(args.harness) is not None
-    # codex/claude can run against their CLI's default model, so a missing
-    # executor model is only fatal for opencode (gateway-routed).
+    # codex/claude/gemini can run against their CLI's default model, so a
+    # missing executor model is only fatal for opencode (gateway-routed).
     needs_model = args.harness == "opencode"
     max_steps = max(1, args.max_steps)
     # A case whose deliverable is a report (a review, an audit) is measured on
@@ -3771,6 +4078,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  Model:       {executor_model or '(harness default)'}")
             if args.executor_effort:
                 print(f"  Effort:      {args.executor_effort}")
+            sandbox = harness_sandbox(args.harness)
+            if sandbox:
+                print(f"  Sandbox:     {sandbox}")
             print(f"  Log:         {step_log.relative_to(REPO_ROOT)}")
             if agent_cwd is not None:
                 print(
@@ -3786,10 +4096,13 @@ def main(argv: list[str] | None = None) -> int:
 
             # For multi-step, each step log is primary; combined goes to opencode.log
             also_append = opencode_log if max_steps > 1 else None
-            # claude stream-json: raw events per step for attribution/usage.
+            # Event-stream harnesses: raw events per step for attribution/usage.
+            # claude's stream is the shape the readers speak; codex/gemini keep
+            # their raw stream in step-N.raw.jsonl and get a translated
+            # step-N.events.jsonl (harness_lab_app.harness_events).
             events_path = (
                 step_log.with_suffix(".events.jsonl")
-                if args.harness == "claude"
+                if args.harness in {"claude", *STDIN_PROMPT_HARNESSES}
                 else None
             )
             step_started = step_clock()
@@ -3800,6 +4113,10 @@ def main(argv: list[str] | None = None) -> int:
                 label=args.harness,
                 cwd=agent_cwd,
                 events_path=events_path,
+                stdin_text=(
+                    prompt_text if args.harness in STDIN_PROMPT_HARNESSES else None
+                ),
+                env=harness_run_env(args.harness),
             )
             step_seconds = step_clock() - step_started
             harness_seconds += step_seconds
@@ -3810,7 +4127,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(
                     f"  ⚠️  {args.harness} exited with code {rc} — see {step_log.relative_to(REPO_ROOT)}"
                 )
-                harness_cause = harness_error_cause(step_log)
+                harness_cause = harness_error_cause(
+                    step_log, harness=args.harness, exit_code=rc
+                )
                 stop_reason = "harness_error"
                 break
 

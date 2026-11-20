@@ -196,7 +196,7 @@ class SkillTrialCreate(BaseModel):
     repetitions: int = Field(default=3, ge=1, le=10)
     # Pinned in both arms, so launching from the shared form cannot swap in its
     # own default model or harness (ADR-0090).
-    harness: str = Field(default="claude", pattern="^(claude|opencode|codex)$")
+    harness: str = Field(default="claude", pattern="^(claude|opencode|codex|gemini)$")
     # "catalog": profile vs profile + a governed skill (ADR-0089).
     # "staged": no skill vs a staged one — a case's candidate, or yours (ADR-0091).
     source: str = Field(default="catalog", pattern="^(catalog|staged)$")
@@ -219,7 +219,7 @@ class HarnessLevelsCreate(BaseModel):
     model: str = Field(min_length=1)
     levels: list[str] = Field(min_length=2)
     repetitions: int = Field(default=1, ge=1, le=10)
-    harness: str = Field(default="claude", pattern="^(claude|opencode|codex)$")
+    harness: str = Field(default="claude", pattern="^(claude|opencode|codex|gemini)$")
 
 
 class SkillRefineCreate(BaseModel):
@@ -236,7 +236,7 @@ class SkillRefineCreate(BaseModel):
     case_ids: list[str] = Field(min_length=1)
     base: str = Field(default="full", pattern="^(minimal|full)$")
     repetitions: int = Field(default=3, ge=1, le=10)
-    harness: str = Field(default="claude", pattern="^(claude|opencode|codex)$")
+    harness: str = Field(default="claude", pattern="^(claude|opencode|codex|gemini)$")
 
 
 class SkillAuditRequest(BaseModel):

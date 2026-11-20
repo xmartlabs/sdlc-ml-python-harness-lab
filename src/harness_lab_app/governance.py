@@ -35,6 +35,7 @@ HARNESS_RULES_FILE: dict[str, str] = {
     "claude": "CLAUDE.md",
     "codex": "AGENTS.md",
     "antigravity": ".agents/rules/GEMINI.md",
+    "gemini": "GEMINI.md",
     "local": "LOCAL_AGENT.md",
 }
 

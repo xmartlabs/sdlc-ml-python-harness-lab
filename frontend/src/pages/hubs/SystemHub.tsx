@@ -15,6 +15,12 @@ const MESSAGES = defineMessages<{ title: string; lede: string; items: Capability
         to: "/system/settings"
       },
       {
+        title: "Agent CLIs",
+        body: "Claude, Codex, OpenCode: enable each one with clicks and test it with one real request.",
+        status: ["ui"],
+        to: "/system/agent-clis"
+      },
+      {
         title: "Health",
         body: "API, worker, gateway and local models: what answers and what does not.",
         status: ["ui"],
@@ -37,6 +43,12 @@ const MESSAGES = defineMessages<{ title: string; lede: string; items: Capability
         body: "Gateway, claves, modelos por defecto y runtimes locales. Escribe en .env sin reiniciar.",
         status: ["ui"],
         to: "/system/settings"
+      },
+      {
+        title: "CLIs de agentes",
+        body: "Claude, Codex, OpenCode: habilitá cada uno con clicks y probalo con un pedido real.",
+        status: ["ui"],
+        to: "/system/agent-clis"
       },
       {
         title: "Estado",

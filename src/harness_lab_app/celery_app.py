@@ -180,6 +180,23 @@ def enqueue_build_runner_image() -> None:
     )
 
 
+def enqueue_native_cli(task: str, harness: str, **kwargs: str) -> None:
+    """Publish a native-CLI connect/test task on the interactive lane (ADR-0094).
+
+    A device login waits for a person for up to fifteen minutes; on a run lane
+    it would hold every run behind it. Raises if the broker is unreachable.
+    """
+    if task not in {"connect_native_cli", "test_native_cli", "disconnect_native_cli"}:
+        raise ValueError(task)
+    celery_app.send_task(
+        f"harness_lab_app.tasks.{task}",
+        args=[harness],
+        kwargs=kwargs,
+        queue=INTERACTIVE_QUEUE,
+        retry=False,
+    )
+
+
 def enqueue_container_cleanup(run_id: str) -> None:
     """Publish a container-teardown task after a run is deleted (worker owns the
     docker socket); raises if the broker is unreachable."""

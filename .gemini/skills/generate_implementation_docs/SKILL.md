@@ -1,0 +1,1 @@
+../../../.github/skills/generate_implementation_docs.md

@@ -427,6 +427,7 @@ build-fresh:
 # api + celery worker + redis + the Vite dev server.
 app-up:
 	@echo "🚀 Starting local web app stack..."
+	@mkdir -p "$(AUTH_DIR)" && chmod 700 "$(AUTH_DIR)"
 	@docker compose build runner sandbox
 	@docker compose --profile dev up -d --build api worker worker-parallel worker-interactive redis frontend
 	@if [ "$$HARNESS_LAB_API_BIND_ADDR" = "0.0.0.0" ] \
@@ -507,6 +508,33 @@ app-api-host:
 	@echo "🧑‍💻 Web API on host (subprocess backend) at :8009…"
 	@. $(VENV_DIR)/bin/activate && $(_HOST_ENV) \
 		uvicorn harness_lab_app.api:app --host 0.0.0.0 --port 8009 --reload
+
+# Subscription logins for the codex / gemini harnesses (ADR-0094). Each CLI
+# keeps its session in its own directory under AUTH_DIR, outside the repo; a
+# run mounts only its own provider's. The official CLI performs the login:
+# nothing here reads, copies or prints a token.
+AUTH_DIR ?= $(or $(HARNESS_LAB_AUTH_DIR),$(HOME)/.harness-lab/auth)
+_AUTH_PY = $(VENV_DIR)/bin/python -c
+
+auth-codex:
+	@if ! command -v codex >/dev/null 2>&1; then echo "❌ codex CLI not found — npm install -g @openai/codex@0.171.0"; exit 1; fi
+	@HARNESS_LAB_AUTH_DIR="$(AUTH_DIR)" $(_AUTH_PY) 'from harness_lab_app.native_auth import ensure_session_dir as e; print(e("codex"))' >/dev/null
+	@echo "🔐 Codex: sign in with your ChatGPT plan (device code; works headless)."
+	@echo "   Session: $(AUTH_DIR)/codex  (never ~/.codex)"
+	@CODEX_HOME="$(AUTH_DIR)/codex" codex login --device-auth
+	@CODEX_HOME="$(AUTH_DIR)/codex" codex login status
+
+auth-gemini:
+	@if ! command -v gemini >/dev/null 2>&1; then echo "❌ gemini CLI not found — npm install -g @google/gemini-cli@0.70.0"; exit 1; fi
+	@HARNESS_LAB_AUTH_DIR="$(AUTH_DIR)" $(_AUTH_PY) 'from harness_lab_app.native_auth import ensure_session_dir as e; print(e("gemini"))' >/dev/null
+	@echo "🔐 Gemini CLI: choose 'Sign in with Google' (Google AI Pro/Ultra account),"
+	@echo "   open the printed URL, paste the code back, then type /quit."
+	@echo "   Session: $(AUTH_DIR)/gemini/.gemini  (never ~/.gemini)"
+	@GEMINI_CLI_HOME="$(AUTH_DIR)/gemini" NO_BROWSER=true GOOGLE_GENAI_USE_GCA=true \
+		env -u GEMINI_API_KEY -u GOOGLE_API_KEY gemini
+
+auth-status:
+	@HARNESS_LAB_AUTH_DIR="$(AUTH_DIR)" $(_AUTH_PY) 'import json; from harness_lab_app.native_auth import session_status as s; print(json.dumps([s("codex"), s("gemini")], indent=2))'
 
 # One command for host mode: redis + worker + API + frontend together, so the
 # codex/claude harnesses run against your host CLIs. Ctrl-C stops everything.
@@ -1004,6 +1032,9 @@ help:
 	@echo "Development Setup:"
 	@echo "  make init NAME=my_project Bootstrap a fresh clone as a new project (rename + env + gates; PROFILE=minimal)"
 	@echo "  make install              Set up virtual environment and dependencies"
+	@echo "  make auth-codex           Sign Codex CLI in with your ChatGPT plan (lab session, not ~/.codex)"
+	@echo "  make auth-gemini          Sign Gemini CLI in with Google (lab session, not ~/.gemini)"
+	@echo "  make auth-status          Show whether the codex/gemini subscription sessions exist"
 	@echo "  make setup-hooks          Set up pre-commit hooks"
 	@echo "  make generate-requirements Generate requirements.txt from current environment"
 	@echo ""
@@ -1084,4 +1115,4 @@ clean:
 .DEFAULT_GOAL := help
 
 # Declare phony targets
-.PHONY: init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test images-3d sandbox-build clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill prune skill-census skill-profile skill-profile-experiment refine-skill add-skill-trial stage-candidate
+.PHONY: auth-codex auth-gemini auth-status init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test images-3d sandbox-build clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill prune skill-census skill-profile skill-profile-experiment refine-skill add-skill-trial stage-candidate

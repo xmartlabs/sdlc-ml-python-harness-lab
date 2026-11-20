@@ -205,6 +205,10 @@ export type ValidationRecord = {
     total_tokens?: number | null;
     cost_usd?: number | null;
     time_minutes?: number | null;
+    // "subscription_quota": a plan's quota, no per-token price (ADR-0094).
+    cost_source?: string | null;
+    billing_mode?: string | null;
+    detected_model?: string | null;
   };
   effort: { steps?: number | null; interventions?: number | null };
   subjective: {
@@ -644,6 +648,12 @@ export type ArtifactRecord = {
 
 // The slice of data/runs/<id>/metadata.json the harness catalog reads.
 export type RunMetadata = {
+  harness?: string;
+  executor_model?: string | null;
+  // The instrument that drove the run (ADR-0094).
+  harness_cli_version?: string;
+  harness_sandbox?: string;
+  billing_mode?: string;
   skills_bundle?: string[];
   subagents?: string[];
   skills_disabled?: string[];
@@ -1995,6 +2005,55 @@ export type HealthCheck = {
 export type HealthReport = {
   status: "ok" | "warn" | "error" | "unknown";
   checks: HealthCheck[];
+};
+
+/**
+ * One native agent CLI as `GET /api/harness/clis` reports it (ADR-0094): where
+ * it runs, which version, its sandbox, whether a subscription login exists
+ * (read from the shape of its credential file, never a token) and how runs on
+ * it are paid for.
+ */
+/** Progress of a UI-driven login or connection test (native_connect.py). */
+export type NativeConnectState = {
+  harness?: string;
+  kind?: "login" | "test";
+  state:
+    | "idle"
+    | "queued"
+    | "starting"
+    | "waiting"
+    | "connected"
+    | "running"
+    | "ok"
+    | "failed";
+  url?: string;
+  code?: string;
+  expires_at?: number;
+  error?: string;
+  answer?: string;
+  model?: string;
+  requested_model?: string;
+  seconds?: number;
+  updated_at?: number;
+};
+
+export type NativeCliStatus = {
+  harness: "opencode" | "claude" | "codex" | "gemini";
+  lane: "docker" | "host";
+  installed: boolean | null;
+  version: string;
+  min_version: string | null;
+  too_old: string | null;
+  sandbox: string;
+  session: "connected" | "missing" | "incomplete" | "unreadable" | "api_key";
+  auth_kind?: string | null;
+  billing_mode: "subscription" | "api" | "gateway" | "unknown";
+  auth?: "gateway" | "token" | "subscription" | "unknown";
+  connectable?: boolean;
+  unavailable?: string | null;
+  testable?: boolean;
+  login?: NativeConnectState;
+  last_test?: NativeConnectState;
 };
 
 export type HealResult = {

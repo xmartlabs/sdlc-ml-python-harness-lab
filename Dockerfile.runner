@@ -108,6 +108,19 @@ ARG CLAUDE_CODE_VERSION=2.1.325
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" && claude --version
 LABEL claude-code.version="${CLAUDE_CODE_VERSION}"
 
+# Codex CLI and Gemini CLI for the subscription-backed `codex` / `gemini`
+# harnesses (ADR-0094). Pinned to the versions the lab verified its flags,
+# event schemas and skill discovery against; native_models.
+# MIN_NATIVE_CLI_VERSION refuses an image older than that. Auth is NOT baked
+# in: each run mounts only its own provider's session directory
+# (HARNESS_LAB_AUTH_DIR, `make auth-codex` / `make auth-gemini`) at
+# /run/harness-auth/<provider>. Bump an ARG and rebuild to move a CLI.
+ARG CODEX_VERSION=0.171.0
+ARG GEMINI_CLI_VERSION=0.70.0
+RUN npm install -g "@openai/codex@${CODEX_VERSION}" "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
+    && codex --version && gemini --version
+LABEL codex.version="${CODEX_VERSION}" gemini-cli.version="${GEMINI_CLI_VERSION}"
+
 # Fallback copy of the repo; at runtime the host repo is bind-mounted over /app
 # so runs.yaml/workspace/data land on the host filesystem.
 COPY . .

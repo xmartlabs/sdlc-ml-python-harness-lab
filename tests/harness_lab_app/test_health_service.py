@@ -75,6 +75,8 @@ def test_every_check_reports_even_with_nothing_running(isolated):
         "redis",
         "worker",
         "docker",
+        "codex_cli",
+        "gemini_cli",
         "skills_drift",
         "git_tree",
         "staging",

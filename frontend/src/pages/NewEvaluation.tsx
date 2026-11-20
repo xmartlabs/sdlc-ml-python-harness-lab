@@ -443,7 +443,7 @@ const MESSAGES = defineMessages({
     runsHarnessCli: (harness: string) => `Runs the ${harness} CLI with its native auth. `,
     claudeAuthHint:
       "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host).",
-    hostModeHint: "Needs host mode — run make app-host.",
+    hostModeHint: "Uses your plan, not an API key: sign in once with make auth-codex or make auth-gemini (Docker or host mode).",
     executorModelLabel: "Executor model",
     executorModelHeldFixed: "Held fixed across every arm — the experiment varies the factor above, never the model.",
     plannerModelLabel: "Planner model",
@@ -855,7 +855,7 @@ const MESSAGES = defineMessages({
     runsHarnessCli: (harness: string) => `Corre el CLI de ${harness} con su autenticación nativa. `,
     claudeAuthHint:
       "Funciona en Docker (CLAUDE_CODE_OAUTH_TOKEN o ANTHROPIC_API_KEY en .env) o en modo host (make app-host).",
-    hostModeHint: "Necesita modo host — corré make app-host.",
+    hostModeHint: "Usa tu plan, no una API key: iniciá sesión una vez con make auth-codex o make auth-gemini (Docker o modo host).",
     executorModelLabel: "Modelo ejecutor",
     executorModelHeldFixed: "Fijo en todos los brazos — el experimento varía el factor de arriba, nunca el modelo.",
     plannerModelLabel: "Modelo planificador",

@@ -995,6 +995,11 @@ def _execute_pending_run(
         options: dict[str, Any] = {}
         if mask != GOVERNANCE_MASK_NONE:
             options["governance_mask"] = mask
+        # The harness decides which skill mirror stays visible in the runner
+        # and, for codex/gemini, which provider session is mounted (ADR-0094).
+        # Passed only when set, so every existing call shape is unchanged.
+        if config_payload.harness:
+            options["harness"] = config_payload.harness
         image, hidden = _case_agent_machine(session, config_payload.case_id)
         if image:
             options["image"] = image
@@ -2084,6 +2089,8 @@ def audit_run(run_id: str, auditor_model: str | None = None) -> None:
     if auditor_model:
         command += ["--auditor-model", auditor_model]
     env = {**os.environ, **build_run_environment()}
+    # Not a runner container: the marker only belongs to the agent lane.
+    env.pop("HARNESS_LAB_IN_RUNNER", None)
 
     try:
         result = subprocess.run(
@@ -2555,6 +2562,8 @@ def improve_run(
     if strictness:
         command += ["--strictness", strictness]
     env = {**os.environ, **build_run_environment()}
+    # Not a runner container: the marker only belongs to the agent lane.
+    env.pop("HARNESS_LAB_IN_RUNNER", None)
 
     try:
         result = subprocess.run(
@@ -2952,6 +2961,126 @@ def build_runner_image() -> dict[str, Any]:
     return {"ok": True, "detail": f"Built {settings.runner_image}"}
 
 
+def _run_cli_container(harness: str, label: str, command: list[str]) -> Any:
+    """A runner container for a native CLI, with its private session mounted.
+
+    Goes through :class:`DockerRunExecutor`, so the connection flows get exactly
+    a run's isolation: only this provider's session (a private copy), the
+    scrubbed environment, an empty HOME, and the credential copied back to the
+    store on ``wait()`` only when it is a well-formed subscription login.
+    """
+    from harness_lab_app.executors import DockerRunExecutor
+
+    return DockerRunExecutor().start(
+        f"connect-{harness}-{label}", command, harness=harness, hidden=[]
+    )
+
+
+@celery_app.task(name="harness_lab_app.tasks.connect_native_cli", acks_late=False)
+def connect_native_cli(harness: str) -> dict[str, Any]:
+    """Drive a CLI's device login for the UI (System → Agent CLIs, ADR-0094).
+
+    Publishes the URL and the one-time code the CLI prints, then waits for the
+    operator to approve it in their browser. The CLI writes its own credential;
+    the executor moves it into the store on exit. Runs on the interactive lane:
+    the wait can last the code's whole lifetime and must not hold a run lane.
+    """
+    from harness_lab_app import native_connect
+    from harness_lab_app.native_auth import ensure_session_dir, session_status
+
+    spec = native_connect.CONNECTABLE.get(harness)
+    if spec is None:
+        return native_connect.write_state(
+            harness, "login", {"state": "failed", "error": "not connectable"}
+        )
+    ensure_session_dir(harness)
+    native_connect.write_state(harness, "login", {"state": "starting"})
+    try:
+        handle = _run_cli_container(harness, "login", list(spec["login"]))
+    except Exception as exc:  # docker down, image missing: the UI says so
+        return native_connect.write_state(
+            harness,
+            "login",
+            {"state": "failed", "error": f"{type(exc).__name__}: {exc}"},
+        )
+    output: list[str] = []
+    published = False
+    deadline = time.monotonic() + int(spec["timeout_seconds"]) + 60
+    for _level, line in handle.iter_lines():
+        output.append(line)
+        if not published:
+            prompt = native_connect.parse_device_prompt("\n".join(output))
+            if prompt:
+                native_connect.write_state(
+                    harness,
+                    "login",
+                    {
+                        "state": "waiting",
+                        **prompt,
+                        "expires_at": time.time() + int(spec["timeout_seconds"]),
+                    },
+                )
+                published = True
+        if time.monotonic() > deadline:
+            handle.stop()
+            break
+    exit_code = handle.wait()  # copies a fresh credential back into the store
+    status = session_status(harness)
+    if exit_code == 0 and status["state"] == "connected":
+        return native_connect.write_state(harness, "login", {"state": "connected"})
+    tail = "\n".join(output[-6:])
+    return native_connect.write_state(
+        harness,
+        "login",
+        {"state": "failed", "error": f"login exited {exit_code}: {tail[-400:]}"},
+    )
+
+
+@celery_app.task(name="harness_lab_app.tasks.test_native_cli", acks_late=False)
+def test_native_cli(harness: str, model: str = "") -> dict[str, Any]:
+    """Send one minimal prompt with a run's exact credential and environment.
+
+    The only honest "connected": the provider answered, through the same
+    container, session copy and scrubbed env a run uses. Spends one request of
+    the plan's quota.
+    """
+    from harness_lab_app import native_connect
+
+    native_connect.write_state(harness, "test", {"state": "running", "model": model})
+    started = time.monotonic()
+    try:
+        handle = _run_cli_container(
+            harness, "test", native_connect.test_command(harness, model)
+        )
+        output = [line for _level, line in handle.iter_lines()]
+        exit_code = handle.wait()
+    except Exception as exc:
+        return native_connect.write_state(
+            harness,
+            "test",
+            {"state": "failed", "error": f"{type(exc).__name__}: {exc}"},
+        )
+    summary = native_connect.summarize_test(harness, "\n".join(output), exit_code)
+    summary["seconds"] = round(time.monotonic() - started, 1)
+    summary["requested_model"] = model
+    return native_connect.write_state(harness, "test", summary)
+
+
+@celery_app.task(name="harness_lab_app.tasks.disconnect_native_cli", acks_late=False)
+def disconnect_native_cli(harness: str) -> dict[str, Any]:
+    """Forget a provider's login in the lab store (never the operator's own)."""
+    from harness_lab_app import native_connect
+    from harness_lab_app.native_auth import (
+        NATIVE_SESSION_HARNESSES,
+        credential_file,
+    )
+
+    if harness in NATIVE_SESSION_HARNESSES:
+        credential_file(harness).unlink(missing_ok=True)
+    native_connect.write_state(harness, "test", {"state": "idle"})
+    return native_connect.write_state(harness, "login", {"state": "idle"})
+
+
 @control_command()
 def harness_facts(_state: Any) -> dict[str, Any]:
     """Answer "is the run runtime usable?" for the health panel (ADR-0018).
@@ -2970,6 +3099,9 @@ def harness_facts(_state: Any) -> dict[str, Any]:
         # From the image's label, so no container is started to ask (ADR-0070
         # erratum: an unpinned CLI install stayed on a cached old version).
         "claude_cli_version": "",
+        # Every native CLI's pinned version, by harness (ADR-0094), from the
+        # same image labels.
+        "cli_versions": {},
         "docker_version": "",
         "docker_error": "",
     }
@@ -2986,6 +3118,12 @@ def harness_facts(_state: Any) -> dict[str, Any]:
             facts["runner_image_present"] = True
             labels = (image.labels or {}) if hasattr(image, "labels") else {}
             facts["claude_cli_version"] = str(labels.get("claude-code.version", ""))
+            from harness_lab_app.native_models import CLI_VERSION_LABELS
+
+            facts["cli_versions"] = {
+                harness: str(labels.get(label, ""))
+                for harness, label in CLI_VERSION_LABELS.items()
+            }
     except Exception as exc:  # the failure *is* the answer this command reports
         facts["docker_error"] = f"{type(exc).__name__}: {exc}"
     return facts

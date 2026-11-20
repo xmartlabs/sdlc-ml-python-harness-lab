@@ -55,11 +55,12 @@ export const CONTINUABLE_STATES: RunRecord["state"][] = [
 // Offered alongside whatever budget the parent used, which is already in the list.
 const CONTINUE_STEP_OPTIONS = [1, 3, 6, 10];
 
-// Harnesses whose CLI emits final summaries, not per-tool logs — so file/tool/
-// governance attribution can't be parsed from them. claude runs now capture
-// stream-json events (first-class tool calls), so a claude run only falls back
-// to the summary-only note when its attribution carries no signals (old runs).
-const SUMMARY_ONLY_HARNESSES = new Set(["claude", "codex"]);
+// Harnesses whose CLI emitted final summaries, not per-tool logs, in older
+// runs — so file/tool/governance attribution can't be parsed from them. claude,
+// codex and gemini runs now capture JSON event streams (first-class tool calls,
+// ADR-0094), so they only fall back to the summary-only note when their
+// attribution carries no signals (runs from before the streams).
+const SUMMARY_ONLY_HARNESSES = new Set(["claude", "codex", "gemini"]);
 
 const MESSAGES = defineMessages({
   en: {
@@ -77,6 +78,15 @@ const MESSAGES = defineMessages({
       governance: "Governance",
       executorModel: "Executor model",
       executorEffort: "Reasoning effort",
+      cliVersion: "CLI version",
+      sandbox: "Sandbox",
+      billing: "Billing",
+      billingLabel: {
+        subscription: "subscription quota",
+        api: "per-token API",
+        gateway: "through the gateway",
+        unknown: "unknown"
+      } as Record<string, string>,
       effortDefault: "CLI default",
       stepBudget: "Step budget",
       sourceBlurb: {
@@ -170,6 +180,7 @@ const MESSAGES = defineMessages({
       objective: "Objective",
       tokens: "Tokens",
       costUsd: "Cost (USD)",
+      subscriptionCost: "(subscription quota — no per-token price)",
       steps: "Steps",
       interventions: "Interventions",
       timeMin: "Time (min)",
@@ -358,6 +369,15 @@ const MESSAGES = defineMessages({
       governance: "Gobernanza",
       executorModel: "Modelo ejecutor",
       executorEffort: "Esfuerzo de razonamiento",
+      cliVersion: "Versión del CLI",
+      sandbox: "Sandbox",
+      billing: "Facturación",
+      billingLabel: {
+        subscription: "cuota de suscripción",
+        api: "API por token",
+        gateway: "por el gateway",
+        unknown: "desconocida"
+      } as Record<string, string>,
       effortDefault: "Default del CLI",
       stepBudget: "Presupuesto de pasos",
       sourceBlurb: {
@@ -454,6 +474,7 @@ const MESSAGES = defineMessages({
       objective: "Objetivo",
       tokens: "Tokens",
       costUsd: "Costo (USD)",
+      subscriptionCost: "(cuota de suscripción — sin precio por token)",
       steps: "Pasos",
       interventions: "Intervenciones",
       timeMin: "Tiempo (min)",
@@ -643,7 +664,13 @@ const MESSAGES = defineMessages({
  * knowing which arm produced it, against which commit, with whose governance,
  * is how a pile of runs gets mistaken for a measurement.
  */
-function RunConditionStrip({ context }: { context: RunContext }) {
+function RunConditionStrip({
+  context,
+  metadata
+}: {
+  context: RunContext;
+  metadata?: RunMetadata | null;
+}) {
   const m = useMessages(MESSAGES);
   return (
     <div className="panel run-condition">
@@ -695,6 +722,26 @@ function RunConditionStrip({ context }: { context: RunContext }) {
           <div>
             <span>{m.condition.executorEffort}</span>
             <strong>{context.executor_effort || m.condition.effortDefault}</strong>
+          </div>
+        ) : null}
+        {metadata?.harness_cli_version ? (
+          <div>
+            <span>{m.condition.cliVersion}</span>
+            <strong className="mono">{metadata.harness_cli_version}</strong>
+          </div>
+        ) : null}
+        {metadata?.harness_sandbox ? (
+          <div>
+            <span>{m.condition.sandbox}</span>
+            <strong>{metadata.harness_sandbox}</strong>
+          </div>
+        ) : null}
+        {metadata?.billing_mode ? (
+          <div>
+            <span>{m.condition.billing}</span>
+            <strong>
+              {m.condition.billingLabel[metadata.billing_mode] ?? metadata.billing_mode}
+            </strong>
           </div>
         ) : null}
         <div>
@@ -1388,7 +1435,7 @@ export function RunDetail({
       ) : null}
       {shownTab === "detail" ? (
         <>
-      {runContext ? <RunConditionStrip context={runContext} /> : null}
+      {runContext ? <RunConditionStrip context={runContext} metadata={metadata} /> : null}
       <RunProgressPanel
         live={run.state === "running" || run.state === "pending"}
         runId={run.run_id}
@@ -1564,7 +1611,13 @@ export function RunDetail({
               </div>
               <div>
                 <span>{m.validation.costUsd}</span>
-                <strong>{validation.cost?.cost_usd ?? "—"}</strong>
+                <strong>
+                  {validation.cost?.cost_usd ?? "—"}
+                  {validation.cost?.cost_usd == null &&
+                  validation.cost?.cost_source === "subscription_quota" ? (
+                    <span className="muted small"> {m.validation.subscriptionCost}</span>
+                  ) : null}
+                </strong>
               </div>
               <div>
                 <span>{m.validation.steps}</span>
