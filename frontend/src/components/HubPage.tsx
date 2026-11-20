@@ -48,16 +48,29 @@ export function StatusChip({ status }: { status: CapabilityStatus }) {
   return <span className={`hub-chip hub-chip--${status}`}>{m.status[status]}</span>;
 }
 
-export function FlowDiagram({ steps }: { steps: FlowStep[] }) {
+/**
+ * A row of numbered steps. With `current` (0-based), it is a progress strip:
+ * the steps before it are done (✓), it is lit, the rest wait. Without it, a
+ * static map, as every hub drew it before.
+ */
+export function FlowDiagram({ steps, current }: { steps: FlowStep[]; current?: number }) {
   return (
-    <ol className="hub-flow">
-      {steps.map((step, index) => (
-        <li className="hub-flow-step" key={step.title}>
-          <span className="hub-flow-n">{index + 1}</span>
-          <strong>{step.title}</strong>
-          <span className="muted">{step.detail}</span>
-        </li>
-      ))}
+    <ol className={current === undefined ? "hub-flow" : "hub-flow hub-flow--progress"}>
+      {steps.map((step, index) => {
+        const state =
+          current === undefined ? "" : index < current ? "done" : index === current ? "current" : "todo";
+        return (
+          <li
+            aria-current={state === "current" ? "step" : undefined}
+            className={state ? `hub-flow-step hub-flow-step--${state}` : "hub-flow-step"}
+            key={step.title}
+          >
+            <span className="hub-flow-n">{state === "done" ? "✓" : index + 1}</span>
+            <strong>{step.title}</strong>
+            {step.detail ? <span className="muted">{step.detail}</span> : null}
+          </li>
+        );
+      })}
     </ol>
   );
 }

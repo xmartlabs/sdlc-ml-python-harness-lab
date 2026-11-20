@@ -82,6 +82,28 @@ const MESSAGES = defineMessages({
     newName: "New name",
     stagedOk: (name: string) => `Staged as ${name}.`,
     continueToAb: "Continue to v1 vs v2",
+    gotTitle: "What the audit found",
+    got: (misses: number, runs: number) =>
+      misses === 0
+        ? `The auditor read ${runs} run${runs === 1 ? "" : "s"} and found no check the skill misses. You can still edit the draft below.`
+        : `The auditor read ${runs} run${runs === 1 ? "" : "s"} and found ${misses} check${misses === 1 ? "" : "s"} the skill does not make the agent pass. It wrote a v2 that addresses them.`,
+    nextTitle: "What happens next",
+    nextSteps: [
+      "Read what it misses below, and edit the v2 draft if you disagree.",
+      "Stage it: the v2 is saved as a new skill. The original is not touched and nothing runs yet.",
+      "Then v1 vs v2: same case, same model, only the version changes. The verdict says whether v2 fixed it."
+    ],
+    stagedTitle: "v2 is ready to measure",
+    stagedBody: (v1: string, v2: string) =>
+      `${v2} is staged next to ${v1}. Nothing ran yet, and ${v1} is unchanged. The next step runs both on the same case and model, so the only difference is the version.`,
+    abTitle: "Measure v1 vs v2",
+    abBody: (v1: string, v2: string) =>
+      `Pick where to measure: the case the audit read is chosen. ${v1} and ${v2} run with the same model and base; read the case checks per version.`,
+    afterTitle: "After the runs",
+    afterSteps: [
+      "v2 passes more checks (the ones the audit named): promote it in Skills → Staged → Promote, and it replaces v1.",
+      "No difference, or v2 is worse: audit again from these new runs, or keep v1."
+    ],
     nodes: { case: "Case", model: "Model", base: "Base", reps: "Repetitions" },
     caseQ: "Which case?",
     modelQ: "Which agent and model?",
@@ -91,7 +113,7 @@ const MESSAGES = defineMessages({
     baseFull: "Full",
     repsQ: "How many times each?",
     outcome:
-      "v1 vs v2 on the same case and model. If v2 wins, promote it (Skills → Promote); if not, audit again.",
+      "v1 vs v2 on the same case and model. If v2 wins, promote it (Skills → Staged → Promote); if not, audit again.",
     auditorModel: "Auditor model (optional)",
     auditorModelHint: "Leave empty to use the lab's default auditor."
   },
@@ -135,16 +157,38 @@ const MESSAGES = defineMessages({
     newName: "Nombre nuevo",
     stagedOk: (name: string) => `Preparada como ${name}.`,
     continueToAb: "Seguir a v1 vs v2",
+    gotTitle: "Qué encontró la auditoría",
+    got: (misses: number, runs: number) =>
+      misses === 0
+        ? `El auditor leyó ${runs} corrida${runs === 1 ? "" : "s"} y no encontró chequeos que la skill no cubra. Igual podés editar el borrador de abajo.`
+        : `El auditor leyó ${runs} corrida${runs === 1 ? "" : "s"} y encontró ${misses} chequeo${misses === 1 ? "" : "s"} que la skill no hace pasar al agente. Escribió una v2 que los ataca.`,
+    nextTitle: "Qué sigue",
+    nextSteps: [
+      "Leé abajo qué le falta, y editá el borrador v2 si no estás de acuerdo.",
+      "Preparala: la v2 se guarda como una skill nueva. La original no se toca y todavía no corre nada.",
+      "Después v1 contra v2: mismo caso, mismo modelo, solo cambia la versión. El veredicto dice si la v2 lo arregló."
+    ],
+    stagedTitle: "La v2 está lista para medir",
+    stagedBody: (v1: string, v2: string) =>
+      `${v2} quedó preparada al lado de ${v1}. Todavía no corrió nada y ${v1} no cambió. El paso siguiente corre las dos en el mismo caso y modelo, así la única diferencia es la versión.`,
+    abTitle: "Medir v1 contra v2",
+    abBody: (v1: string, v2: string) =>
+      `Elegí dónde medir: ya está elegido el caso que leyó la auditoría. ${v1} y ${v2} corren con el mismo modelo y base; mirá los chequeos del caso por versión.`,
+    afterTitle: "Después de las corridas",
+    afterSteps: [
+      "La v2 pasa más chequeos (los que nombró la auditoría): promovela en Skills → Preparadas → Promover, y reemplaza a la v1.",
+      "Sin diferencia, o la v2 es peor: auditá de nuevo con estas corridas nuevas, o quedate con la v1."
+    ],
     nodes: { case: "Caso", model: "Modelo", base: "Base", reps: "Repeticiones" },
     caseQ: "¿En qué caso?",
     modelQ: "¿Qué agente y modelo?",
     armHint: "La pestaña es la CLI de agente que corre el modelo; abajo, solo los modelos que puede manejar.",
     baseQ: "¿Sobre qué base?",
-    baseMinimal: "Mínima",
-    baseFull: "Completa",
+    baseMinimal: "Minimal",
+    baseFull: "Full",
     repsQ: "¿Cuántas veces cada uno?",
     outcome:
-      "v1 contra v2, en el mismo caso y modelo. Si gana v2, promovelo (Skills → Promover); si no, auditá de nuevo.",
+      "v1 contra v2, en el mismo caso y modelo. Si gana la v2, promovela (Skills → Preparadas → Promover); si no, auditá de nuevo.",
     auditorModel: "Modelo auditor (opcional)",
     auditorModelHint: "Dejalo vacío para usar el auditor por defecto del lab."
   }
@@ -236,6 +280,11 @@ export function ImproveFlow() {
       .stageSkillDraft(draftName, draftText)
       .then(() => {
         setStagedOk({ skill, name: draftName });
+        // The "ready to measure" box is at the top; the button that got here
+        // is at the bottom. Bring the next step into view.
+        window.requestAnimationFrame(() =>
+          document.querySelector(".improve-next")?.scrollIntoView({ behavior: "smooth", block: "start" })
+        );
         api
           .listStagedSkills()
           .then((rows) => setStaged(rows.filter((row) => row.status !== "archived")))
@@ -276,8 +325,17 @@ export function ImproveFlow() {
 
     return (
       <div className="improve-flow">
-        <FlowDiagram steps={loopSteps} />
-        <p className="muted">{m.phaseC}</p>
+        <FlowDiagram current={4} steps={loopSteps} />
+        <div className="callout improve-next">
+          <h3>{m.abTitle}</h3>
+          <p>{m.abBody(skill, v2For)}</p>
+          <h3>{m.afterTitle}</h3>
+          <ol>
+            {m.afterSteps.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ol>
+        </div>
         <GuideFlow
           estimate={(values) => {
             const caseId = String(values.case);
@@ -322,7 +380,10 @@ export function ImproveFlow() {
   return (
     // Inside the Skills page now (ADR-0093 amendment): the page owns the title.
     <div className="improve-flow">
-      <FlowDiagram steps={loopSteps} />
+      <FlowDiagram
+        current={phase === "a" ? (busy ? 1 : 0) : v2For ? 3 : 2}
+        steps={loopSteps}
+      />
 
       {phase === "a" ? (
         <div className="guide-body">
@@ -407,6 +468,28 @@ export function ImproveFlow() {
           <div className="guide-main">
             <section aria-live="polite" className="guide-step">
               <span className="guide-step-label">{m.phaseB}</span>
+              {v2For ? (
+                <div className="callout callout--ok improve-next">
+                  <h3>{m.stagedTitle}</h3>
+                  <p>{m.stagedBody(skill, v2For)}</p>
+                  <div className="guide-actions">
+                    <button className="primary" onClick={() => setPhase("c")} type="button">
+                      {m.continueToAb} →
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="callout improve-next">
+                  <h3>{m.gotTitle}</h3>
+                  <p>{m.got(audit.misses.length, audit.runs_read)}</p>
+                  <h3>{m.nextTitle}</h3>
+                  <ol>
+                    {m.nextSteps.map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
               <h2>{m.summary}</h2>
               <p>{audit.summary}</p>
               <p className="muted guide-small">{m.provenance(audit.runs_read, audit.model)}</p>
@@ -467,7 +550,7 @@ export function ImproveFlow() {
                 >
                   {m.back}
                 </button>
-                <button className="primary" disabled={busy || !draftName.trim()} onClick={stage} type="button">
+                <button className="primary" disabled={busy || !draftName.trim() || Boolean(v2For)} onClick={stage} type="button">
                   {busy ? m.staging : m.stageAs(draftName)}
                 </button>
               </div>
