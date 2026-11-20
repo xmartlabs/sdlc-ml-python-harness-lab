@@ -2415,3 +2415,34 @@ export type RetryOptions = {
   last_completed_step: number | null;
   continue_reason: string;
 };
+
+/** The LLM's reading of one skill against an experiment's evidence (ADR-0092). */
+export type SkillAuditResult = {
+  skill: string;
+  experiment_id: string;
+  model: string;
+  covers: string[];
+  misses: { check: string; why: string; fix: string }[];
+  summary: string;
+  v2: string;
+  v2_name: string;
+  runs_read: number;
+};
+
+/** Decision thresholds the lab uses, read from statistics.py and pruning.py. */
+export type MetricCriteria = {
+  repetitions: {
+    exploratory_below: number;
+    judgement_from: number;
+    validation_from: number;
+    where: string;
+  };
+  success_interval: { method: string; confidence: number; where: string };
+  pruning: {
+    success_margin: number;
+    relative_margin: number;
+    any_observed_loss_keeps: boolean;
+    ceiling_or_floor_is_no_signal: boolean;
+    where: string;
+  };
+};

@@ -1,31 +1,26 @@
 import { useEffect, useState } from "react";
 import type { ComponentType } from "react";
 import type { ReactNode } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 
 import { defineMessages, useMessages } from "../i18n";
 import type { IconProps } from "./icons";
 import { LanguageToggle } from "./LanguageToggle";
 import { XmartlabsLogo } from "./XmartlabsLogo";
 import {
-  IconBook,
   IconChevronLeft,
   IconChevronRight,
-  IconCompare,
   IconCpu,
   IconFiles,
   IconFlask,
   IconHome,
   IconLayers,
-  IconLightbulb,
   IconList,
-  IconPlus,
-  IconPulse,
   IconPuzzle,
   IconRepo,
-  IconSearch,
   IconSettings,
-  IconTrophy
+  IconSparkles,
+  IconTrendUp
 } from "./icons";
 
 type ShellProps = {
@@ -33,6 +28,8 @@ type ShellProps = {
   /** False in open mode: no password is set, so the UI warns instead of offering sign-out. */
   authEnabled: boolean;
   onLogout: () => void;
+  /** Runs queued or running, from the list App already polls. */
+  activeRuns?: number;
 };
 
 const COLLAPSED_STORAGE_KEY = "ahl.sidebar.collapsed";
@@ -40,34 +37,24 @@ const COLLAPSED_STORAGE_KEY = "ahl.sidebar.collapsed";
 const MESSAGES = defineMessages({
   en: {
     groups: {
-      evaluate: "Evaluate",
-      evidence: "Evidence",
-      local: "Local models",
-      advanced: "Advanced",
-      system: "System"
+      tryOut: "Try",
+      lab: "Lab"
     },
     nav: {
       home: "Home",
-      newEvaluation: "New evaluation",
-      subject: "Validate your tool",
-      audit: "Audit a repository",
-      harnessByModel: "Harness x model",
-      compareModels: "Compare models",
-      experiments: "Experiments",
-      findings: "Findings",
-      cases: "Cases",
-      repositories: "Repositories",
+      models: "Models",
+      harness: "Harness",
       skills: "Skills",
-      tuneLocal: "Tune your local model",
-      localResults: "Results",
-      runs: "Runs",
-      compare: "Compare",
       benchmarks: "Benchmarks",
-      improvements: "Improvements",
-      health: "Health",
-      guide: "Guide",
-      settings: "Settings"
+      repo: "Your repo",
+      improve: "Improve a skill",
+      results: "Results",
+      metrics: "Metrics",
+      runs: "Runs",
+      system: "System"
     },
+    runsActive: (n: number) => `Runs · ${n} active`,
+    runsNone: "Runs · none active",
     expandSidebar: "Expand sidebar",
     collapseSidebar: "Collapse sidebar",
     signOut: "Sign out",
@@ -76,34 +63,24 @@ const MESSAGES = defineMessages({
   },
   es: {
     groups: {
-      evaluate: "Evaluar",
-      evidence: "Evidencia",
-      local: "Modelos locales",
-      advanced: "Avanzado",
-      system: "Sistema"
+      tryOut: "Probar",
+      lab: "Lab"
     },
     nav: {
       home: "Inicio",
-      newEvaluation: "Nueva evaluación",
-      subject: "Validá tu herramienta",
-      audit: "Auditar un repositorio",
-      harnessByModel: "Arnés x modelo",
-      compareModels: "Comparar modelos",
-      experiments: "Experimentos",
-      findings: "Hallazgos",
-      cases: "Casos",
-      repositories: "Repositorios",
+      models: "Modelos",
+      harness: "Arnés",
       skills: "Skills",
-      tuneLocal: "Optimizá tu modelo local",
-      localResults: "Resultados",
-      runs: "Corridas",
-      compare: "Comparar",
       benchmarks: "Benchmarks",
-      improvements: "Mejoras",
-      health: "Estado",
-      guide: "Guía",
-      settings: "Configuración"
+      repo: "Tu repo",
+      improve: "Mejorar una skill",
+      results: "Resultados",
+      metrics: "Métricas",
+      runs: "Corridas",
+      system: "Sistema"
     },
+    runsActive: (n: number) => `Corridas · ${n} activas`,
+    runsNone: "Corridas · ninguna activa",
     expandSidebar: "Expandir la barra lateral",
     collapseSidebar: "Contraer la barra lateral",
     signOut: "Cerrar sesión",
@@ -121,17 +98,22 @@ type NavItem = {
   label: NavKey;
   icon: ComponentType<IconProps>;
   end?: boolean;
+  /** Screens that belong to this entry: it stays highlighted inside them. */
+  owns?: string[];
 };
 
 type NavGroup = { title: GroupKey | null; items: NavItem[] };
 
 /**
- * Navigation grouped by what a person came to do, not by which table backs it.
+ * Navigation by capability (ADR-0090): seven entries instead of twenty.
  *
- * "Evaluate" is where you go with a question, "Evidence" is what the lab knows,
- * "Advanced" is the operational machinery underneath. Nothing was removed in
- * the regrouping — Runs, Compare and the leaderboard all still exist, they just
- * stopped competing with the workflows for the top of the page.
+ * Each entry opens a hub — a board of cards saying what the capability does,
+ * whether it is built, and where it lives. Every screen the old navigation
+ * listed still exists at the same route; it is now reached from its hub, and
+ * the hub's entry stays highlighted while you are inside it (`owns`).
+ *
+ * The routes the backend emits (attention feed) are untouched, which a contract
+ * test checks (tests/harness_lab_app/test_attention.py).
  */
 const NAV_GROUPS: NavGroup[] = [
   {
@@ -139,50 +121,69 @@ const NAV_GROUPS: NavGroup[] = [
     items: [{ to: "/", label: "home", icon: IconHome, end: true }]
   },
   {
-    title: "evaluate",
+    // Each entry opens its guided flow (ADR-0093); the screens it drives keep
+    // their routes and highlight the entry while you are inside them.
+    title: "tryOut",
     items: [
-      { to: "/evaluate/new", label: "newEvaluation", icon: IconPlus },
-      { to: "/evaluate/subject", label: "subject", icon: IconPuzzle },
-      { to: "/evaluate/audit", label: "audit", icon: IconSearch },
-      { to: "/evaluate/harness-by-model", label: "harnessByModel", icon: IconLayers },
-      { to: "/evaluate/compare-models", label: "compareModels", icon: IconCompare },
-      { to: "/evaluate/experiments", label: "experiments", icon: IconFlask }
+      {
+        to: "/flows/models",
+        label: "models",
+        icon: IconCpu,
+        owns: ["/models", "/local/", "/evaluate/compare-models"]
+      },
+      {
+        to: "/flows/harness",
+        label: "harness",
+        icon: IconLayers,
+        owns: ["/harness", "/evaluate/harness-by-model", "/evaluate/new"]
+      },
+      {
+        to: "/flows/skills",
+        label: "skills",
+        icon: IconPuzzle,
+        owns: ["/evidence/skills"]
+      },
+      {
+        to: "/flows/improve",
+        label: "improve",
+        icon: IconSparkles,
+        owns: []
+      },
+      {
+        to: "/benchmarks",
+        label: "benchmarks",
+        icon: IconFiles,
+        owns: ["/evidence/cases"]
+      },
+      {
+        to: "/your-repo",
+        label: "repo",
+        icon: IconRepo,
+        owns: ["/evaluate/audit", "/evaluate/subject", "/evidence/repositories"]
+      }
     ]
   },
   {
-    title: "evidence",
+    title: "lab",
     items: [
-      { to: "/evidence/findings", label: "findings", icon: IconSearch },
-      { to: "/evidence/cases", label: "cases", icon: IconFiles },
-      { to: "/evidence/repositories", label: "repositories", icon: IconRepo },
-      { to: "/evidence/skills", label: "skills", icon: IconPuzzle }
-    ]
-  },
-  {
-    title: "local",
-    items: [
-      { to: "/local/tune", label: "tuneLocal", icon: IconCpu },
-      { to: "/local/results", label: "localResults", icon: IconTrophy }
-    ]
-  },
-  {
-    title: "advanced",
-    items: [
-      { to: "/advanced/runs", label: "runs", icon: IconList },
-      { to: "/advanced/compare", label: "compare", icon: IconCompare },
-      { to: "/advanced/benchmarks", label: "benchmarks", icon: IconTrophy },
-      { to: "/advanced/improvements", label: "improvements", icon: IconLightbulb }
-    ]
-  },
-  {
-    title: "system",
-    items: [
-      { to: "/system/health", label: "health", icon: IconPulse },
-      { to: "/system/guide", label: "guide", icon: IconBook },
-      { to: "/system/settings", label: "settings", icon: IconSettings }
+      { to: "/flows/metrics", label: "metrics", icon: IconTrendUp, owns: ["/advanced/compare", "/advanced/improvements", "/evidence/findings"] },
+      { to: "/advanced/runs", label: "runs", icon: IconList, owns: ["/advanced/runs"] },
+      {
+        to: "/results",
+        label: "results",
+        icon: IconFlask,
+        owns: ["/evaluate/experiments", "/advanced/benchmarks"]
+      },
+      { to: "/system", label: "system", icon: IconSettings, owns: ["/system/"] }
     ]
   }
 ];
+
+function ownsPath(item: NavItem, pathname: string): boolean {
+  return (item.owns ?? []).some((prefix) =>
+    prefix.endsWith("/") ? pathname.startsWith(prefix) : pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
+}
 
 function getStoredCollapsed(): boolean {
   if (typeof window === "undefined") {
@@ -191,8 +192,9 @@ function getStoredCollapsed(): boolean {
   return window.localStorage.getItem(COLLAPSED_STORAGE_KEY) === "true";
 }
 
-export function Shell({ children, authEnabled, onLogout }: ShellProps) {
+export function Shell({ children, authEnabled, onLogout, activeRuns = 0 }: ShellProps) {
   const [collapsed, setCollapsed] = useState(getStoredCollapsed);
+  const { pathname } = useLocation();
   const m = useMessages(MESSAGES);
 
   useEffect(() => {
@@ -254,7 +256,7 @@ export function Shell({ children, authEnabled, onLogout }: ShellProps) {
                 return (
                   <NavLink
                     className={({ isActive }) =>
-                      isActive ? "nav-item active" : "nav-item"
+                      isActive || ownsPath(item, pathname) ? "nav-item active" : "nav-item"
                     }
                     end={item.end}
                     key={item.to}
@@ -293,6 +295,16 @@ export function Shell({ children, authEnabled, onLogout }: ShellProps) {
             {m.authOff} <code>make set-password</code> {m.authOffTail}
           </div>
         )}
+        {/* Runs are one click away from every flow (ADR-0093). */}
+        <div className="workbench-topbar">
+          <NavLink
+            className={activeRuns > 0 ? "runs-pill runs-pill--live" : "runs-pill"}
+            to="/advanced/runs"
+          >
+            <span aria-hidden="true" className="runs-pill-dot" />
+            {activeRuns > 0 ? m.runsActive(activeRuns) : m.runsNone}
+          </NavLink>
+        </div>
         {children}
       </main>
     </div>

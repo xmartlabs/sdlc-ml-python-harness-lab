@@ -3,17 +3,25 @@ import { Link } from "react-router-dom";
 
 import { api } from "../api";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { FlowDiagram } from "../components/HubPage";
+import { InfoTooltip } from "../components/InfoTooltip";
+import { Showcase } from "../components/Showcase";
 import { Spinner } from "../components/Spinner";
 import {
   IconAlert,
   IconArrowRight,
   IconCheck,
   IconCompare,
+  IconCpu,
+  IconFiles,
   IconFlask,
   IconInfo,
   IconLayers,
   IconPuzzle,
-  IconSearch
+  IconRepo,
+  IconSearch,
+  IconSparkles,
+  IconTrendUp
 } from "../components/icons";
 import type { IconProps } from "../components/icons";
 import { defineMessages, useMessages } from "../i18n";
@@ -46,6 +54,20 @@ const MODES = [
   { key: "discovery", icon: IconSearch, to: "/evaluate/audit" }
 ] as const;
 
+/**
+ * The four doors (ADR-0090): what a newcomer came to try, each opening its hub.
+ * The evaluation modes above are still one click away, under "in detail".
+ */
+const DOORS = [
+  { key: "models", icon: IconCpu, to: "/flows/models" },
+  { key: "harness", icon: IconLayers, to: "/flows/harness" },
+  { key: "skills", icon: IconPuzzle, to: "/flows/skills" },
+  { key: "improve", icon: IconSparkles, to: "/flows/improve" },
+  { key: "metrics", icon: IconTrendUp, to: "/flows/metrics" },
+  { key: "benchmarks", icon: IconFiles, to: "/benchmarks" },
+  { key: "repo", icon: IconRepo, to: "/your-repo" }
+] as const;
+
 const SEVERITY_ICON: Record<string, ComponentType<IconProps>> = {
   critical: IconAlert,
   warning: IconAlert,
@@ -55,6 +77,36 @@ const SEVERITY_ICON: Record<string, ComponentType<IconProps>> = {
 const MESSAGES = defineMessages({
   en: {
     heading: "What do you want to learn?",
+    doorsTitle: "What do you want to try today?",
+    doorsLede: "Four ways in. The experiment's design — what stays fixed, what varies — is built by each form, not here.",
+    doors: {
+      models: { title: "Models", body: "Local vs cloud, or a new frontier model on the 3D cases.", tags: ["LM Studio", "Ollama", "Claude"], tip: "Varies the model; the case, prompt and steps stay fixed. Answers: which model solves this case best, at what cost?" },
+      harness: { title: "Harness", body: "No harness → minimal → full, on any case.", tags: ["3D too", "bare", "minimal"], tip: "Varies how much harness the agent carries; model and case stay fixed. Answers: how much harness does this model need here?" },
+      skills: { title: "Skills", body: "Does this skill earn a place, on minimal or on full?", tags: ["the case's", "catalog", "yours"], tip: "Varies one skill. From the case, the catalog, another repo or written by hand; against minimal, full, or both." },
+      improve: { title: "Improve a skill", body: "The LLM as auditor: what it misses, a v2, v1 vs v2.", tags: ["audit", "v2 draft"], tip: "Reads the runs that used the skill, drafts a v2 you review, and sets up v1 vs v2." },
+      metrics: { title: "Metrics", body: "Compare runs, what to improve, what each number means.", tags: ["compare", "criteria"], tip: "Reads what already ran. Creates nothing." },
+      benchmarks: { title: "Benchmarks", body: "Pick a test case, by family.", tags: ["SWE-bench", "3D games", "Security", "Web"], tip: "Every case carries a check the agent did not write." },
+      repo: { title: "Your repo", body: "Check your project's harness and take home what helps.", tags: ["30 seconds", "audit", "export"], tip: "No comparison: it reviews a project of yours and says what it lacks." }
+    },
+    open: "Open",
+    loopTitle: "The lab's loop",
+    loopNote: "the same for every door",
+    loop: [
+      { title: "Pick a case", detail: "Benchmarks" },
+      { title: "Run two configurations", detail: "model, harness or skill" },
+      { title: "Read the verdict", detail: "Results, with its interval" },
+      { title: "Keep what worked", detail: "make harness-export" }
+    ],
+    routesTitle: "A first journey, by what you have",
+    routesNote: "15 to 45 minutes each",
+    routes: [
+      { who: "A local model", hint: "LM Studio or Ollama", steps: ["Tune it in 5 steps", "Run clinic-slots-t1", "Compare it with a cloud model"], to: "/local/tune" },
+      { who: "A new skill", hint: "yours or from GitHub", steps: ["Import it in Skills", "Minimal vs minimal + skill", "Does it earn its place?"], to: "/evidence/skills?tab=import" },
+      { who: "A new frontier model", hint: "the one out this week", steps: ["Compare models on a 3D case", "See which phases it passed", "Play what it built"], to: "/evaluate/compare-models" },
+      { who: "Your team's repo", hint: "cloned on your machine", steps: ["make harness-check", "Audit it in the UI", "Take home what it lacks"], to: "/evaluate/audit" }
+    ],
+    modesTitle: "Evaluation modes, in detail",
+    modesHint: "Five designs the lab enforces — what each holds fixed and what it varies.",
     lede: "An evaluation instrument for AI-assisted software engineering. Start from a question; the lab holds you to a design that can answer it.",
     quickStart: {
       title: "Start in 30 seconds — check a repository's harness",
@@ -145,6 +197,36 @@ const MESSAGES = defineMessages({
   },
   es: {
     heading: "¿Qué querés aprender?",
+    doorsTitle: "¿Qué querés probar hoy?",
+    doorsLede: "Cuatro puertas. El diseño del experimento (qué queda fijo, qué varía) lo arma cada formulario, no esta página.",
+    doors: {
+      models: { title: "Modelos", body: "Local contra nube, o un frontera nuevo en los casos 3D.", tags: ["LM Studio", "Ollama", "Claude"], tip: "Varía el modelo; el caso, el prompt y los pasos quedan fijos. Responde: ¿qué modelo resuelve mejor este caso, a qué costo?" },
+      harness: { title: "Arnés", body: "Sin arnés → minimal → full, en cualquier caso.", tags: ["también 3D", "bare", "minimal"], tip: "Varía cuánto arnés lleva el agente; el modelo y el caso quedan fijos. Responde: ¿cuánto arnés necesita este modelo acá?" },
+      skills: { title: "Skills", body: "¿Esta skill se gana un lugar, en minimal o en full?", tags: ["la del caso", "catálogo", "tuya"], tip: "Varía una skill. Del caso, del catálogo, de otro repo o escrita a mano; contra minimal, full o las dos." },
+      improve: { title: "Mejorar una skill", body: "El LLM como auditor: qué le falta, una v2, v1 contra v2.", tags: ["auditoría", "borrador v2"], tip: "Lee las corridas que usaron la skill, escribe un borrador de v2 que revisás, y arma v1 contra v2." },
+      metrics: { title: "Métricas", body: "Comparar corridas, qué mejorar, qué significa cada número.", tags: ["comparar", "criterios"], tip: "Lee lo que ya corrió. No crea nada." },
+      benchmarks: { title: "Benchmarks", body: "Elegí un caso de prueba por familia.", tags: ["SWE-bench", "Juegos 3D", "Seguridad", "Web"], tip: "Cada caso trae un chequeo que el agente no escribió." },
+      repo: { title: "Tu repo", body: "Revisá el arnés de tu proyecto y llevate lo que sirve.", tags: ["30 segundos", "auditoría", "export"], tip: "No compara nada: revisa un proyecto tuyo y dice qué le falta." }
+    },
+    open: "Abrir",
+    loopTitle: "El ciclo del lab",
+    loopNote: "siempre el mismo, para cualquier puerta",
+    loop: [
+      { title: "Elegí un caso", detail: "Benchmarks" },
+      { title: "Corré dos configuraciones", detail: "modelo, arnés o skill" },
+      { title: "Leé el veredicto", detail: "Resultados, con intervalo" },
+      { title: "Quedate con lo que sirvió", detail: "make harness-export" }
+    ],
+    routesTitle: "Primer recorrido, según lo que tengas",
+    routesNote: "15 a 45 minutos cada uno",
+    routes: [
+      { who: "Un modelo local", hint: "LM Studio u Ollama", steps: ["Afinalo en 5 pasos", "Corré clinic-slots-t1", "Comparalo con uno de la nube"], to: "/local/tune" },
+      { who: "Una skill nueva", hint: "tuya o de GitHub", steps: ["Importala en Skills", "Minimal vs minimal + skill", "¿Se gana su lugar?"], to: "/evidence/skills?tab=import" },
+      { who: "Un modelo frontera nuevo", hint: "el que salió esta semana", steps: ["Compará modelos en un caso 3D", "Mirá qué fases pasó", "Jugá lo que construyó"], to: "/evaluate/compare-models" },
+      { who: "El repo de tu equipo", hint: "clonado en tu máquina", steps: ["make harness-check", "Auditalo en la UI", "Llevate lo que le falta"], to: "/evaluate/audit" }
+    ],
+    modesTitle: "Los modos de evaluación, en detalle",
+    modesHint: "Cinco diseños que el lab hace cumplir: qué deja fijo cada uno y qué varía.",
     lede: "Un instrumento de evaluación para ingeniería de software asistida por IA. Arrancá de una pregunta; el lab te exige un diseño que pueda responderla.",
     quickStart: {
       title: "Empezá en 30 segundos — revisá el arnés de un repositorio",
@@ -303,21 +385,52 @@ export function Home() {
     };
   }, []);
 
-  // A lab nobody has run anything on yet gets the journeys. Cases cannot be the
-  // signal: the benchmark cases are seeded on startup, so a fresh install always
-  // has some and the panel never showed.
-  const isNewLab = summary !== null && summary.success.n === 0;
-
   return (
     <section className="page home">
       <header className="page-header">
         <div>
-          <h1>{m.heading}</h1>
+          <h1>{m.doorsTitle}</h1>
           <p className="lede">{m.lede}</p>
         </div>
       </header>
 
       {error ? <ErrorBanner message={error === UNABLE_TO_REACH ? m.unableToReach : error} /> : null}
+
+      <Showcase />
+
+      <div className="home-doors">
+        {DOORS.map((door) => {
+          const Icon = door.icon;
+          const text = m.doors[door.key];
+          return (
+            <div className="home-door" key={door.key}>
+              <span className="home-door-icon">
+                <Icon size={20} />
+              </span>
+              <h2>
+                {/* The card's link covers the card; the ⓘ sits above it, so a
+                    link never holds a button. */}
+                <Link className="home-door-link" to={door.to}>
+                  {text.title}
+                </Link>
+                <span className="home-door-info">
+                  <InfoTooltip text={text.tip} />
+                </span>
+              </h2>
+              <p className="muted">{text.body}</p>
+              <span className="home-door-tags">
+                {text.tags.map((tag) => (
+                  <span key={tag}>{tag}</span>
+                ))}
+              </span>
+              <span className="home-door-go">
+                {m.open}
+                <IconArrowRight size={14} />
+              </span>
+            </div>
+          );
+        })}
+      </div>
 
       <section className="panel quick-start">
         <div className="quick-start-body">
@@ -338,38 +451,74 @@ export function Home() {
         </div>
       </section>
 
-      <div className="mode-cards">
-        {MODES.map((mode) => {
-          const Icon = mode.icon;
-          const text = m.modes[mode.key];
-          return (
-            <article className="mode-card" key={mode.key}>
-              <span className="mode-card-icon">
-                <Icon size={22} />
+      <section className="panel home-loop">
+        <div className="panel-head">
+          <h2>{m.loopTitle}</h2>
+          <span className="muted">{m.loopNote}</span>
+        </div>
+        <FlowDiagram steps={m.loop} />
+      </section>
+
+      <section className="panel home-routes">
+        <div className="panel-head">
+          <h2>{m.routesTitle}</h2>
+          <span className="muted">{m.routesNote}</span>
+        </div>
+        <div className="home-route-list">
+          {m.routes.map((route) => (
+            <Link className="home-route" key={route.who} to={route.to}>
+              <span className="home-route-who">
+                <strong>{route.who}</strong>
+                <small className="muted">{route.hint}</small>
               </span>
-              <h2>{text.title}</h2>
-              <p className="mode-card-question">{text.question}</p>
-              <dl className="mode-card-design">
-                {text.holds.length > 0 ? (
+              <ol className="home-route-steps">
+                {route.steps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      <details className="panel home-modes">
+        <summary>
+          <strong>{m.modesTitle}</strong>
+          <span className="muted">{m.modesHint}</span>
+        </summary>
+        <div className="mode-cards">
+          {MODES.map((mode) => {
+            const Icon = mode.icon;
+            const text = m.modes[mode.key];
+            return (
+              <article className="mode-card" key={mode.key}>
+                <span className="mode-card-icon">
+                  <Icon size={22} />
+                </span>
+                <h2>{text.title}</h2>
+                <p className="mode-card-question">{text.question}</p>
+                <dl className="mode-card-design">
+                  {text.holds.length > 0 ? (
+                    <div>
+                      <dt>{m.heldFixed}</dt>
+                      <dd>{text.holds.join(" · ")}</dd>
+                    </div>
+                  ) : null}
                   <div>
-                    <dt>{m.heldFixed}</dt>
-                    <dd>{text.holds.join(" · ")}</dd>
+                    <dt>{m.varies}</dt>
+                    <dd>{text.varies}</dd>
                   </div>
-                ) : null}
-                <div>
-                  <dt>{m.varies}</dt>
-                  <dd>{text.varies}</dd>
-                </div>
-              </dl>
-              <p className="mode-card-note muted">{text.note}</p>
-              <Link className="primary mode-card-cta" to={mode.to}>
-                {text.cta}
-                <IconArrowRight size={15} />
-              </Link>
-            </article>
-          );
-        })}
-      </div>
+                </dl>
+                <p className="mode-card-note muted">{text.note}</p>
+                <Link className="primary mode-card-cta" to={mode.to}>
+                  {text.cta}
+                  <IconArrowRight size={15} />
+                </Link>
+              </article>
+            );
+          })}
+        </div>
+      </details>
 
       <section className="panel subtle honesty">
         <h2>{m.honestyTitle}</h2>
@@ -380,8 +529,9 @@ export function Home() {
         </ul>
       </section>
 
-      {isNewLab ? (
-        <section className="panel subtle onboarding">
+      {/* Shown always (ADR-0090): a newcomer joining an established lab is
+          still new, and the first validated run said nothing about them. */}
+      <section className="panel subtle onboarding">
           <h2>{m.onboardingTitle}</h2>
           <ol className="onboarding-steps">
             {m.onboarding.map((step) => (
@@ -390,8 +540,7 @@ export function Home() {
               </li>
             ))}
           </ol>
-        </section>
-      ) : null}
+      </section>
 
       <section className="panel attention">
         <div className="panel-head">

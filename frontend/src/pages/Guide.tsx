@@ -151,7 +151,7 @@ export function Guide() {
 
         <div className="panel guide-content">
           {content ? (
-            <Markdown onDocLink={openDocLink}>{content.content}</Markdown>
+            <Markdown diagrams onDocLink={openDocLink}>{content.content}</Markdown>
           ) : (
             <p className="muted">{m.selectGuide}</p>
           )}

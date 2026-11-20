@@ -118,12 +118,17 @@ from harness_lab_app.schemas import (
     GatewayModelUpdate,
     GatewayTestRequest,
     GroupIssueRequest,
+    HarnessLevelsCreate,
     HealRequest,
     RunBatchCreate,
     RunBatchRead,
     RunConfigCreate,
     RunContinueRequest,
     RunCreate,
+    SkillAuditRequest,
+    SkillDraftStage,
+    SkillRefineCreate,
+    SkillTrialCreate,
     StagedSkillCreate,
     StagedSkillFileWrite,
     StagedSkillImportRequest,
@@ -319,6 +324,110 @@ def _prepare_gateway_env() -> None:
 def _client_key(request: Request | None) -> str:
     """Throttle bucket for a login attempt."""
     return request.client.host if request is not None and request.client else "unknown"
+
+
+def _unique_experiment_id(session: Session, base_id: str) -> str:
+    """``base_id``, or ``base_id-N`` when that id is taken (bounded by the slug)."""
+    from harness_lab_app.models import Experiment
+
+    taken = set(
+        session.exec(
+            select(Experiment.experiment_id).where(
+                Experiment.experiment_id.startswith(base_id[:60])
+            )
+        ).all()
+    )
+    experiment_id, suffix = base_id, 2
+    while experiment_id in taken:
+        experiment_id = f"{base_id[:60]}-{suffix}"
+        suffix += 1
+    return experiment_id
+
+
+def _create_base_trials(data: Any, pin: dict[str, str], session: Session) -> dict:
+    """One clean A/B per base, in one family; reuse an identical one (ADR-0092)."""
+    from harness_lab_app.models import Experiment
+    from harness_lab_app.skill_trial import (
+        base_design,
+        base_experiment_id,
+        base_family,
+        same_design,
+    )
+    from harness_lab_app.skills_catalog import known_skill_names
+    from harness_lab_app.staged_skill_service import StagedSkillService
+
+    staged = data.source == "staged"
+    if staged and data.skill not in StagedSkillService(session).active_names():
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"'{data.skill}' is not staged. Stage the case's candidate or "
+                "import the skill first (Skills → Import)."
+            ),
+        )
+    if not staged and data.skill not in known_skill_names():
+        raise HTTPException(
+            status_code=422, detail=f"'{data.skill}' is not a governed skill"
+        )
+    bases = ["minimal", "full"] if data.base == "both" else [data.base]
+    if not staged and "full" in bases:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"'{data.skill}' is a catalog skill, so full already carries it: "
+                "there is no full A/B to run. Pick base 'minimal', or use "
+                "`make prune` to ask whether it can leave full."
+            ),
+        )
+    service = ExperimentService(session)
+    created: list[dict] = []
+    reused: list[dict] = []
+    for base in bases:
+        try:
+            wanted = base_design(
+                skill=data.skill,
+                staged=staged,
+                base=base,
+                cases=data.case_ids,
+                model=data.model,
+                reps=data.repetitions,
+                pin_arm=pin,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if data.reuse_measured:
+            match = None
+            for row in session.exec(
+                select(Experiment).where(Experiment.family_id == wanted.family_id)
+            ).all():
+                if sorted(row.case_ids or []) != sorted(wanted.case_ids):
+                    continue
+                stored = [
+                    {
+                        "role": c.role.value if hasattr(c.role, "value") else c.role,
+                        "overrides": dict(c.overrides or {}),
+                    }
+                    for c in service.conditions(row.experiment_id)
+                ]
+                if same_design(stored, wanted):
+                    match = row
+                    break
+            if match is not None:
+                reused.append(match.model_dump())
+                continue
+        wanted.experiment_id = _unique_experiment_id(
+            session, base_experiment_id(data.skill, base, data.model)
+        )
+        try:
+            experiment, warnings = service.create_experiment(wanted)
+        except ExperimentError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        created.append({**experiment.model_dump(), "warnings": warnings})
+    return {
+        "family_id": base_family(data.skill, data.model),
+        "experiments": created,
+        "reused": reused,
+    }
 
 
 def create_app() -> FastAPI:
@@ -1432,6 +1541,391 @@ def create_app() -> FastAPI:
         except ExperimentError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {**experiment.model_dump(), "warnings": warnings}
+
+    @app.post("/api/experiments/skill-trial", status_code=201)
+    def create_skill_trial(
+        data: SkillTrialCreate, session: Session = Depends(get_session)
+    ):
+        """Create (never launch) a one-skill trial (ADR-0089, ADR-0090, ADR-0091).
+
+        ``source="catalog"``: the profile against the profile plus one governed
+        skill — the design ``make add-skill-trial`` builds.
+        ``source="staged"``: no skill against a staged one (a case's candidate,
+        or a skill you imported) — the design **New evaluation → Add skills**
+        builds with Enforce on. Launching stays on the Experiments page, behind
+        the shared launch form and preflight.
+        """
+        from harness_lab_app.models import Experiment
+        from harness_lab_app.skill_trial import (
+            design,
+            staged_design,
+            staged_trial_experiment_id,
+            trial_experiment_id,
+        )
+        from harness_lab_app.skills_catalog import (
+            known_skill_names,
+            profile_disabled,
+        )
+        from harness_lab_app.staged_skill_service import StagedSkillService
+
+        pin = {"executor_model": data.model, "harness": data.harness}
+        if data.base is not None:
+            return _create_base_trials(data, pin, session)
+        if data.source == "staged":
+            if data.skill not in StagedSkillService(session).active_names():
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"'{data.skill}' is not staged. Stage the case's candidate "
+                        "or import the skill first (Skills → Import)."
+                    ),
+                )
+            base_id = staged_trial_experiment_id(data.skill, data.model)
+        else:
+            if data.skill not in known_skill_names():
+                raise HTTPException(
+                    status_code=422, detail=f"'{data.skill}' is not a governed skill"
+                )
+            try:
+                base_disabled = profile_disabled(data.profile)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            base_id = trial_experiment_id(data.skill, data.profile, data.model)
+        taken = set(
+            session.exec(
+                select(Experiment.experiment_id).where(
+                    Experiment.experiment_id.startswith(base_id[:60])
+                )
+            ).all()
+        )
+        experiment_id = base_id
+        suffix = 2
+        while experiment_id in taken:
+            experiment_id = f"{base_id[:60]}-{suffix}"
+            suffix += 1
+        try:
+            if data.source == "staged":
+                created = staged_design(
+                    skill=data.skill,
+                    cases=data.case_ids,
+                    model=data.model,
+                    reps=data.repetitions,
+                    experiment_id=experiment_id,
+                    pin_arm=pin,
+                )
+            else:
+                created = design(
+                    skill=data.skill,
+                    cases=data.case_ids,
+                    model=data.model,
+                    reps=data.repetitions,
+                    base_disabled=base_disabled,
+                    profile=data.profile,
+                    experiment_id=experiment_id,
+                    pin_arm=pin,
+                )
+            experiment, warnings = ExperimentService(session).create_experiment(created)
+        except (ValueError, ExperimentError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {**experiment.model_dump(), "warnings": warnings}
+
+    @app.post("/api/experiments/harness-levels", status_code=201)
+    def create_harness_levels(
+        data: HarnessLevelsCreate, session: Session = Depends(get_session)
+    ):
+        """None / minimal / full on one case and model, as clean A/Bs (ADR-0093).
+
+        Created, never launched. Every level uses the case's plain prompt: a
+        bare arm cannot be asked to follow a harness it cannot see.
+        """
+        from harness_lab_app.harness_levels import ladder_designs, ladder_family
+        from harness_lab_app.models import Case
+        from harness_lab_app.skills_catalog import profile_disabled
+
+        case = session.exec(select(Case).where(Case.case_id == data.case_id)).first()
+        if case is None:
+            raise HTTPException(
+                status_code=404, detail=f"Unknown case '{data.case_id}'."
+            )
+        if "default" not in (case.prompt_variants or {}):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"'{data.case_id}' has no plain 'default' prompt, so it cannot "
+                    "run without a harness."
+                ),
+            )
+        try:
+            designs = ladder_designs(
+                case_id=data.case_id,
+                model=data.model,
+                harness=data.harness,
+                levels=data.levels,
+                reps=data.repetitions,
+                minimal_disabled=profile_disabled("minimal"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        service = ExperimentService(session)
+        created: list[dict] = []
+        for design in designs:
+            design.experiment_id = _unique_experiment_id(session, design.experiment_id)
+            try:
+                experiment, warnings = service.create_experiment(design)
+            except ExperimentError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            created.append({**experiment.model_dump(), "warnings": warnings})
+        return {
+            "family_id": ladder_family(data.case_id, data.model),
+            "experiments": created,
+        }
+
+    @app.post("/api/experiments/skill-refine", status_code=201)
+    def create_skill_refine(
+        data: SkillRefineCreate, session: Session = Depends(get_session)
+    ):
+        """Create (never launch) v1 vs v2 of one skill (ADR-0092)."""
+        from harness_lab_app.skill_refine import design, staged_design
+        from harness_lab_app.skills_catalog import known_skill_names, profile_disabled
+        from harness_lab_app.staged_skill_service import StagedSkillService
+
+        staged = StagedSkillService(session).active_names()
+        if data.candidate not in staged:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"'{data.candidate}' is not staged. Stage the v2 first "
+                    "(the skill audit's draft, or Skills → Import)."
+                ),
+            )
+        base_disabled = profile_disabled(data.base)
+        pin = {"executor_model": data.model, "harness": data.harness}
+        base_id = f"refine-{data.skill}-vs-{data.candidate}".lower().replace("_", "-")
+        experiment_id = _unique_experiment_id(session, base_id[:64])
+        try:
+            if data.skill in staged:
+                created = staged_design(
+                    skill=data.skill,
+                    candidate=data.candidate,
+                    cases=data.case_ids,
+                    model=data.model,
+                    reps=data.repetitions,
+                    base_disabled=base_disabled,
+                    experiment_id=experiment_id,
+                    pin_arm=pin,
+                )
+            elif data.skill in known_skill_names():
+                created = design(
+                    skill=data.skill,
+                    candidate=data.candidate,
+                    cases=data.case_ids,
+                    model=data.model,
+                    reps=data.repetitions,
+                    base_disabled=base_disabled,
+                    invoke=True,
+                    profile=data.base,
+                )
+                created.experiment_id = experiment_id
+                for condition in created.conditions:
+                    condition.overrides = {**pin, **condition.overrides}
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"'{data.skill}' is neither staged nor a governed skill.",
+                )
+            experiment, warnings = ExperimentService(session).create_experiment(created)
+        except (ValueError, ExperimentError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {**experiment.model_dump(), "warnings": warnings}
+
+    @app.post("/api/skills/{name}/audit")
+    def audit_one_skill(
+        name: str, data: SkillAuditRequest, session: Session = Depends(get_session)
+    ):
+        """The LLM as auditor of one skill: diagnosis + a v2 draft (ADR-0092).
+
+        Reads the experiment's evidence for the arms that carried the skill.
+        Writes nothing: staging the draft is ``POST /api/skills/drafts``.
+        """
+        from harness_lab_app.llm_transport import TransportError
+        from harness_lab_app.skill_audit import SkillAuditError, audit_skill
+
+        try:
+            result = audit_skill(
+                session, name, data.experiment_id, model=data.auditor_model
+            )
+        except ExperimentNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except SkillAuditError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except TransportError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"The auditor could not be reached: {exc}",
+            ) from exc
+        return result.as_dict()
+
+    @app.post("/api/skills/drafts", status_code=201)
+    def stage_skill_draft(
+        data: SkillDraftStage, session: Session = Depends(get_session)
+    ):
+        """Stage a reviewed v2 draft as a new staged skill (ADR-0092)."""
+        from harness_lab_app.staged_skill_service import (
+            StagedSkillError,
+            StagedSkillService,
+        )
+
+        description = data.description
+        if not description:
+            match = re.search(r"^description:\s*(.+)$", data.content, re.MULTILINE)
+            description = match.group(1).strip().strip('"') if match else ""
+        try:
+            skill = StagedSkillService(session).create_skill(
+                data.name, description, data.content
+            )
+        except StagedSkillError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"name": skill.name, "status": skill.status}
+
+    @app.get("/api/estimate")
+    def estimate_run_cost(
+        case_id: str, model: str, session: Session = Depends(get_session)
+    ):
+        """Median cost and minutes per run, from this case and model's history.
+
+        What the guide shows before anything is created. ``n`` is how many
+        completed runs the median stands on; 0 means unknown, never free.
+        """
+        from statistics import median
+
+        from sqlmodel import col
+
+        from harness_lab_app.models import Run, RunConfig, Score
+
+        configs = session.exec(
+            select(RunConfig.id).where(
+                RunConfig.case_id == case_id, RunConfig.executor_model == model
+            )
+        ).all()
+        if not configs:
+            return {"case_id": case_id, "model": model, "n": 0}
+        run_ids = session.exec(
+            select(Run.run_id).where(
+                col(Run.run_config_id).in_(configs),
+                Run.state == "completed",
+            )
+        ).all()
+        costs: list[float] = []
+        minutes: list[float] = []
+        for score in session.exec(
+            select(Score).where(
+                col(Score.run_id).in_(run_ids),
+                col(Score.name).in_(["cost_usd", "wall_time_minutes"]),
+            )
+        ).all():
+            if score.value_num is None:
+                continue
+            (costs if score.name == "cost_usd" else minutes).append(score.value_num)
+        return {
+            "case_id": case_id,
+            "model": model,
+            "n": len(costs),
+            "cost_usd": median(costs) if costs else None,
+            "minutes": median(minutes) if minutes else None,
+        }
+
+    @app.get("/api/metrics/criteria")
+    def metric_criteria():
+        """The rules that turn numbers into a verdict, read from the code.
+
+        Shown beside the score registry on the Metrics page, so the values a
+        person might want to adjust are the ones the lab actually uses.
+        """
+        from harness_lab_app import pruning, statistics
+
+        return {
+            "repetitions": {
+                "exploratory_below": statistics.EXPLORATORY_ONLY,
+                "judgement_from": statistics.USEFUL_COMPARISON,
+                "validation_from": statistics.STRONGER_EVIDENCE,
+                "where": "src/harness_lab_app/statistics.py",
+            },
+            "success_interval": {
+                "method": "wilson",
+                "confidence": 0.95,
+                "where": "src/harness_lab_app/statistics.py",
+            },
+            "pruning": {
+                "success_margin": pruning.DEFAULT_SUCCESS_MARGIN,
+                "relative_margin": pruning.DEFAULT_RELATIVE_MARGIN,
+                "any_observed_loss_keeps": True,
+                "ceiling_or_floor_is_no_signal": True,
+                "where": "src/harness_lab_app/pruning.py",
+            },
+        }
+
+    @app.get("/api/cases/{case_id}/candidate-skills")
+    def list_case_candidate_skills(
+        case_id: str, session: Session = Depends(get_session)
+    ):
+        """The skills a case ships to be trialled, and whether each is staged (ADR-0091)."""
+        from harness_lab_app.candidate_skills import candidates_for_case
+        from harness_lab_app.staged_skill_service import StagedSkillService
+
+        root = get_settings().repo_root
+        staged = {
+            skill.name: skill for skill in StagedSkillService(session).list_skills()
+        }
+        out = []
+        for name, folder in candidates_for_case(root, case_id).items():
+            row = staged.get(name)
+            out.append(
+                {
+                    "name": name,
+                    "source": str(folder.relative_to(root)),
+                    "staged": row is not None and row.status != "archived",
+                    "status": row.status if row is not None else None,
+                }
+            )
+        return out
+
+    @app.post("/api/cases/{case_id}/candidate-skills/{name}/stage", status_code=201)
+    def stage_case_candidate_skill(
+        case_id: str,
+        name: str,
+        replace: bool = False,
+        session: Session = Depends(get_session),
+    ):
+        """Stage a case's candidate, as ``make stage-candidate`` does (ADR-0091).
+
+        ``replace`` re-reads it from the case, dropping local edits to the
+        staged copy — the same opt-in as the CLI's REPLACE=1.
+        """
+        from harness_lab_app.candidate_skills import (
+            CandidateSkillError,
+            candidates_for_case,
+            stage,
+        )
+        from harness_lab_app.skill_import import SkillImportError
+        from harness_lab_app.staged_skill_service import StagedSkillError
+
+        root = get_settings().repo_root
+        folder = candidates_for_case(root, case_id).get(name)
+        if folder is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Case '{case_id}' ships no candidate skill '{name}'.",
+            )
+        try:
+            result = stage(session, root, folder, name, replace=replace)
+        except (SkillImportError, CandidateSkillError, StagedSkillError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {
+            "name": result.name,
+            "files": result.files,
+            "source": result.source,
+            "warnings": result.warnings,
+        }
 
     @app.post("/api/experiments/from-suite", status_code=201)
     def create_experiment_from_suite(

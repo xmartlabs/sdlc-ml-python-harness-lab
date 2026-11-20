@@ -1,19 +1,30 @@
-import { useEffect, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
+import { caseDisplayName } from "../caseLabels";
+import { parseReps } from "../components/CaseSkillTrial";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { SkillCensusPanel } from "../components/SkillCensusPanel";
 import { defineMessages, useMessages } from "../i18n";
 import type {
+  CaseRecord,
+  ExperimentRecord,
   HarnessSkill,
+  SkillProfileRecord,
   StagedSkillFileRecord,
   StagedSkillImportChoice,
   StagedSkillImportChoices,
   StagedSkillImportPreview,
   StagedSkillRecord
 } from "../types";
+
+type SkillsTab = "catalog" | "try" | "import" | "usage";
+
+const TAB_ORDER: SkillsTab[] = ["catalog", "try", "import", "usage"];
+const DEFAULT_TRIAL_MODEL = "claude-haiku-4-5-20251001";
 
 const SKILL_SKELETON = `---
 name: my-new-skill
@@ -150,7 +161,35 @@ const MESSAGES = defineMessages({
       heading: "Governed catalog",
       count: (count: number) => `${count} skills (read-only)`,
       noDescription: "no description",
-      editVia: "edit via .github/skills + make sync-skills"
+      editVia: "edit via .github/skills + make sync-skills",
+      inMinimal: "in minimal",
+      optional: "optional",
+      tryOnMinimal: "Try on top of minimal"
+    },
+    tabs: {
+      catalog: "Catalog",
+      try: "Try",
+      import: "Import",
+      usage: "Usage"
+    },
+    trial: {
+      heading: "Trial a skill on top of minimal",
+      hint: "Pick the cases the skill targets plus one general case, so a loss outside its niche shows up. The skill is asked for (Enforce), so the trial measures whether it helps when used.",
+      skillLabel: "Skill",
+      skillPlaceholder: "Choose a governed skill",
+      modelLabel: "Model",
+      casesLabel: "Cases",
+      noCases: "No active cases yet.",
+      repetitionsLabel: "Repetitions per arm (1–10)",
+      submit: "Create trial",
+      submitRuns: (runs: number) => `Create trial (${runs} runs)`,
+      creating: "Creating...",
+      cliEquivalent: "CLI equivalent",
+      success: (id: string, model: string) =>
+        `Created experiment ${id}. Both arms run ${model} on the claude harness — fixed in the design, so the launch form cannot swap them.`,
+      openIt: "Open it to launch",
+      openItHint: "Launching happens there, with the same preflight as every experiment.",
+      noSkillsAvailable: "Every governed skill is already in the minimal profile."
     },
     notices: {
       savedDescription: (name: string) =>
@@ -284,7 +323,35 @@ const MESSAGES = defineMessages({
       heading: "Catálogo gobernado",
       count: (count: number) => `${count} skills (de solo lectura)`,
       noDescription: "sin descripción",
-      editVia: "editar vía .github/skills + make sync-skills"
+      editVia: "editar vía .github/skills + make sync-skills",
+      inMinimal: "en minimal",
+      optional: "opcional",
+      tryOnMinimal: "Probar sobre minimal"
+    },
+    tabs: {
+      catalog: "Catálogo",
+      try: "Probar",
+      import: "Importar",
+      usage: "Uso"
+    },
+    trial: {
+      heading: "Probá una skill sobre minimal",
+      hint: "Elegí los casos que la skill apunta más un caso general, para que una pérdida fuera de su nicho se note. La skill se pide (Enforce), así que la prueba mide si ayuda cuando se usa.",
+      skillLabel: "Skill",
+      skillPlaceholder: "Elegí una skill gobernada",
+      modelLabel: "Modelo",
+      casesLabel: "Casos",
+      noCases: "Todavía no hay casos activos.",
+      repetitionsLabel: "Repeticiones por brazo (1 a 10)",
+      submit: "Crear prueba",
+      submitRuns: (runs: number) => `Crear prueba (${runs} corridas)`,
+      creating: "Creando...",
+      cliEquivalent: "Equivalente en CLI",
+      success: (id: string, model: string) =>
+        `Se creó el experimento ${id}. Los dos brazos corren ${model} con el arnés claude: quedan fijos en el diseño, así que el formulario de lanzamiento no puede cambiarlos.`,
+      openIt: "Abrila para lanzarla",
+      openItHint: "Lanzarla pasa ahí, con el mismo preflight que cualquier experimento.",
+      noSkillsAvailable: "Todas las skills gobernadas ya están en el perfil minimal."
     },
     notices: {
       savedDescription: (name: string) =>
@@ -328,8 +395,14 @@ function isChoices(value: ImportResult): value is StagedSkillImportChoices {
 
 export function Skills() {
   const m = useMessages(MESSAGES);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const activeTab: SkillsTab = TAB_ORDER.includes(tabParam as SkillsTab)
+    ? (tabParam as SkillsTab)
+    : "catalog";
   const [governed, setGoverned] = useState<HarnessSkill[]>([]);
   const [staged, setStaged] = useState<StagedSkillRecord[]>([]);
+  const [profiles, setProfiles] = useState<Record<string, SkillProfileRecord> | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [content, setContent] = useState(SKILL_SKELETON);
@@ -337,6 +410,51 @@ export function Skills() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Trial form (Try tab): an additive skill trial on top of the minimal profile.
+  const [trialCases, setTrialCases] = useState<CaseRecord[]>([]);
+  const [trialSkill, setTrialSkill] = useState("");
+  const [trialModel, setTrialModel] = useState(DEFAULT_TRIAL_MODEL);
+  const [trialCaseIds, setTrialCaseIds] = useState<string[]>([]);
+  const [trialRepetitionsText, setTrialRepetitionsText] = useState("3");
+  const trialRepetitions = parseReps(trialRepetitionsText);
+  const [trialBusy, setTrialBusy] = useState(false);
+  const [trialError, setTrialError] = useState<string | null>(null);
+  const [trialResult, setTrialResult] = useState<(ExperimentRecord & { warnings?: string[] }) | null>(
+    null
+  );
+
+  const setTab = (tab: SkillsTab, extra: Record<string, string> = {}) => {
+    const next: Record<string, string> = { ...extra };
+    if (tab !== "catalog") {
+      next.tab = tab;
+    }
+    setSearchParams(next);
+  };
+
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      return;
+    }
+    event.preventDefault();
+    const index = TAB_ORDER.indexOf(activeTab);
+    const delta = event.key === "ArrowRight" ? 1 : -1;
+    const nextIndex = (index + delta + TAB_ORDER.length) % TAB_ORDER.length;
+    setTab(TAB_ORDER[nextIndex]);
+  };
+
+  const minimalSkills = useMemo(
+    () => new Set(profiles?.minimal?.skills ?? []),
+    [profiles]
+  );
+  const trialableSkills = useMemo(
+    () => governed.filter((skill) => !minimalSkills.has(skill.name)),
+    [governed, minimalSkills]
+  );
+  const activeCases = useMemo(
+    () => trialCases.filter((item) => item.status === "active"),
+    [trialCases]
+  );
 
   // Import (URL or upload). The preview is what the user reviews before
   // anything is written; until they confirm, the server has stored nothing.
@@ -363,6 +481,49 @@ export function Skills() {
   };
 
   useEffect(refresh, []);
+  useEffect(() => {
+    api.listSkillProfiles().then(setProfiles).catch(() => {});
+    api.listCases().then(setTrialCases).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const preselected = searchParams.get("skill");
+    if (preselected) {
+      setTrialSkill(preselected);
+    }
+  }, [searchParams]);
+
+  const handleTryOnMinimal = (skillName: string) => {
+    setTab("try", { skill: skillName });
+  };
+
+  const toggleTrialCase = (caseId: string) => {
+    setTrialCaseIds((current) =>
+      current.includes(caseId)
+        ? current.filter((id) => id !== caseId)
+        : [...current, caseId]
+    );
+  };
+
+  const handleCreateTrial = () => {
+    if (!trialSkill || trialCaseIds.length === 0) {
+      return;
+    }
+    setTrialBusy(true);
+    setTrialError(null);
+    setTrialResult(null);
+    api
+      .createSkillTrial({
+        skill: trialSkill,
+        model: trialModel.trim(),
+        case_ids: trialCaseIds,
+        repetitions: trialRepetitions ?? 1,
+        harness: "claude"
+      })
+      .then((result) => setTrialResult(result))
+      .catch((err: Error) => setTrialError(err.message))
+      .finally(() => setTrialBusy(false));
+  };
 
   const resetForm = () => {
     setEditing(null);
@@ -620,19 +781,153 @@ export function Skills() {
         </div>
       </header>
 
-      <section className="panel">
-        <div className="panel-head">
-          <h2>{m.howto.heading}</h2>
-          <span className="muted">docs/guide-skill-validation.md</span>
-        </div>
-        <ol className="skills-howto">
-          <li>{m.howto.step1}</li>
-          <li>{m.howto.step2}</li>
-          <li>{m.howto.step3}</li>
-          <li>{m.howto.step4}</li>
-        </ol>
-      </section>
+      <div className="skills-tabs" role="tablist">
+        {TAB_ORDER.map((tab) => (
+          <button
+            aria-selected={activeTab === tab}
+            className={activeTab === tab ? "skills-tabs-tab skills-tabs-tab--active" : "skills-tabs-tab"}
+            key={tab}
+            onClick={() => setTab(tab)}
+            onKeyDown={handleTabKeyDown}
+            role="tab"
+            type="button"
+          >
+            {m.tabs[tab]}
+          </button>
+        ))}
+      </div>
 
+      {activeTab === "try" ? (
+        <>
+          <section className="panel">
+            <div className="panel-head">
+              <h2>{m.howto.heading}</h2>
+              <span className="muted">docs/guide-skill-validation.md</span>
+            </div>
+            <ol className="skills-howto">
+              <li>{m.howto.step1}</li>
+              <li>{m.howto.step2}</li>
+              <li>{m.howto.step3}</li>
+              <li>{m.howto.step4}</li>
+            </ol>
+          </section>
+
+          <section className="panel">
+            <div className="panel-head">
+              <h2>{m.trial.heading}</h2>
+            </div>
+            <p className="muted">{m.trial.hint}</p>
+            {trialableSkills.length === 0 ? (
+              <p className="muted">{m.trial.noSkillsAvailable}</p>
+            ) : (
+              <>
+                <div className="form-grid">
+                  <label>
+                    <span>{m.trial.skillLabel}</span>
+                    <select
+                      onChange={(event) => setTrialSkill(event.target.value)}
+                      value={trialSkill}
+                    >
+                      <option value="">{m.trial.skillPlaceholder}</option>
+                      {trialableSkills.map((skill) => (
+                        <option key={skill.name} value={skill.name}>
+                          {skill.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>{m.trial.modelLabel}</span>
+                    <input
+                      onChange={(event) => setTrialModel(event.target.value)}
+                      value={trialModel}
+                    />
+                  </label>
+                  <label>
+                    <span>{m.trial.repetitionsLabel}</span>
+                    <input
+                      max={10}
+                      min={1}
+                      inputMode="numeric"
+                      onChange={(event) => setTrialRepetitionsText(event.target.value)}
+                      type="number"
+                      value={trialRepetitionsText}
+                    />
+                  </label>
+                  <label className="full">
+                    <span>{m.trial.casesLabel}</span>
+                    {activeCases.length === 0 ? (
+                      <p className="muted">{m.trial.noCases}</p>
+                    ) : (
+                      <div className="choice-list skills-trial-cases">
+                        {activeCases.map((item) => (
+                          <label className="inline-check" key={item.case_id} title={item.case_id}>
+                            <input
+                              checked={trialCaseIds.includes(item.case_id)}
+                              onChange={() => toggleTrialCase(item.case_id)}
+                              type="checkbox"
+                            />
+                            <span>{caseDisplayName(item, item.case_id)}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </label>
+                </div>
+                <div className="panel-actions">
+                  <button
+                    className="primary"
+                    disabled={
+                      trialBusy ||
+                      !trialSkill ||
+                      !trialModel.trim() ||
+                      trialRepetitions === null ||
+                      trialCaseIds.length === 0
+                    }
+                    onClick={handleCreateTrial}
+                    type="button"
+                  >
+                    {trialBusy
+                      ? m.trial.creating
+                      : trialRepetitions !== null && trialCaseIds.length > 0
+                        ? m.trial.submitRuns(2 * trialCaseIds.length * trialRepetitions)
+                        : m.trial.submit}
+                  </button>
+                </div>
+                <p className="muted">{m.trial.cliEquivalent}</p>
+                <code>
+                  make add-skill-trial SKILL={trialSkill || "<skill>"} MODEL={trialModel || "<model>"}{" "}
+                  CASES="{trialCaseIds.join(" ")}"
+                </code>
+                {trialError ? (
+                  <ErrorBanner message={trialError} onDismiss={() => setTrialError(null)} />
+                ) : null}
+                {trialResult ? (
+                  <div className="import-preview">
+                    <p>{m.trial.success(trialResult.experiment_id, trialModel.trim())}</p>
+                    {trialResult.warnings && trialResult.warnings.length > 0 ? (
+                      <ul className="warning-list">
+                        {trialResult.warnings.map((warning) => (
+                          <li key={warning}>{warning}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    <p>
+                      <Link to={`/evaluate/experiments?experiment=${trialResult.experiment_id}`}>
+                        {m.trial.openIt}
+                      </Link>{" "}
+                      <span className="muted">{m.trial.openItHint}</span>
+                    </p>
+                  </div>
+                ) : null}
+              </>
+            )}
+          </section>
+        </>
+      ) : null}
+
+      {activeTab === "import" ? (
+      <>
       <section className="panel">
         <div className="panel-head">
           <h2>{m.importSection.heading}</h2>
@@ -937,27 +1232,44 @@ export function Skills() {
           </div>
         )}
       </section>
+      </>
+      ) : null}
 
-      <SkillCensusPanel />
+      {activeTab === "usage" ? <SkillCensusPanel /> : null}
 
+      {activeTab === "catalog" ? (
       <section className="panel">
         <div className="panel-head">
           <h2>{m.governed.heading}</h2>
           <span className="muted">{m.governed.count(governed.length)}</span>
         </div>
         <div className="table">
-          {governed.map((skill) => (
-            <div className="table-row harness-row" key={skill.name}>
-              <span className="harness-name">
-                <strong>{skill.name}</strong>
-                <small>{skill.description || m.governed.noDescription}</small>
-              </span>
-              <span className="badge neutral">{skill.kind}</span>
-              <span className="muted">{m.governed.editVia}</span>
-            </div>
-          ))}
+          {governed.map((skill) => {
+            const inMinimal = profiles ? minimalSkills.has(skill.name) : null;
+            return (
+              <div className="table-row harness-row" key={skill.name}>
+                <span className="harness-name">
+                  <strong>{skill.name}</strong>
+                  <small>{skill.description || m.governed.noDescription}</small>
+                </span>
+                <span className="badge neutral">{skill.kind}</span>
+                {inMinimal === null ? null : (
+                  <span className={inMinimal ? "badge ok" : "badge neutral"}>
+                    {inMinimal ? m.governed.inMinimal : m.governed.optional}
+                  </span>
+                )}
+                <span className="muted">{m.governed.editVia}</span>
+                {inMinimal === false ? (
+                  <button onClick={() => handleTryOnMinimal(skill.name)} type="button">
+                    {m.governed.tryOnMinimal}
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
       </section>
+      ) : null}
     </section>
   );
 }

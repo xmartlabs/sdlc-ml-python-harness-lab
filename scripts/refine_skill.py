@@ -46,12 +46,8 @@ from harness_lab_app.experiment_service import (  # noqa: E402
     ExperimentError,
     ExperimentService,
 )
-from harness_lab_app.models import ConditionRole, ExperimentMode  # noqa: E402
-from harness_lab_app.schemas import (  # noqa: E402
-    ExperimentConditionCreate,
-    ExperimentCreate,
-    RunConfigCreate,
-)
+from harness_lab_app.schemas import RunConfigCreate  # noqa: E402
+from harness_lab_app.skill_refine import HARNESS_PROMPT, design  # noqa: E402
 from harness_lab_app.skills_catalog import known_skill_names  # noqa: E402
 from ml_python_base.skills_sync.profiles import (  # noqa: E402
     FULL,
@@ -59,73 +55,7 @@ from ml_python_base.skills_sync.profiles import (  # noqa: E402
     load_profiles,
 )
 
-HARNESS_PROMPT = "harness"
-
-
-def design(
-    *,
-    skill: str,
-    candidate: str,
-    cases: list[str],
-    model: str,
-    reps: int,
-    base_disabled: list[str],
-    invoke: bool = False,
-    profile: str = FULL,
-) -> ExperimentCreate:
-    """Control keeps ``skill``; treatment swaps it for staged ``candidate``.
-
-    With ``invoke`` both arms are asked to use their version (ADR-0041), which
-    measures "is the rewrite better when used" rather than "does it fire".
-    """
-    if skill in base_disabled:
-        raise ValueError(
-            f"'{skill}' is not in profile '{profile}': refine it under a profile "
-            "that carries it"
-        )
-    control = {
-        "prompt_variant": HARNESS_PROMPT,
-        "skills_disabled": sorted(base_disabled),
-        "skills_extra": [],
-        "skills_invoke": [skill] if invoke else [],
-    }
-    treatment = {
-        "prompt_variant": HARNESS_PROMPT,
-        "skills_disabled": sorted({*base_disabled, skill}),
-        "skills_extra": [candidate],
-        "skills_invoke": [candidate] if invoke else [],
-    }
-    mode = "invoked" if invoke else "available"
-    return ExperimentCreate(
-        experiment_id=f"refine-{skill}-{candidate}-{mode}"[:64],
-        name=f"Refine {skill}: {candidate} in its place ({model})",
-        question=(
-            f"Does {candidate} resolve as many cases as {skill}, sooner or "
-            "cheaper, when it takes its place?"
-        ),
-        mode=ExperimentMode.harness_evaluation,
-        case_ids=list(cases),
-        prompt_variants=[],
-        repetitions=reps,
-        family_id=f"refine-{skill}"[:48],
-        notes=(
-            f"Skill refinement (ADR-0085) under profile '{profile}'. The "
-            "treatment disables the governed skill and stages the candidate — "
-            "one intervention across two fields. Promotion is manual."
-        ),
-        conditions=[
-            ExperimentConditionCreate(
-                label=f"governed-{skill}"[:64],
-                role=ConditionRole.control,
-                overrides=control,
-            ),
-            ExperimentConditionCreate(
-                label=f"candidate-{candidate}"[:64],
-                role=ConditionRole.treatment,
-                overrides=treatment,
-            ),
-        ],
-    )
+__all__ = ["HARNESS_PROMPT", "design", "main"]
 
 
 def main(argv: list[str] | None = None) -> int:

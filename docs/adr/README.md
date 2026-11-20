@@ -117,6 +117,10 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0087 — A case can ship the candidate skill it trials](0087-a-case-can-ship-the-candidate-skill-it-trials.md)
 - [0088 — The lab measures propensity, not only capability](0088-the-lab-measures-propensity-not-only-capability.md)
 - [0089 — A profile grows one trialled skill at a time](0089-a-profile-grows-one-trialled-skill-at-a-time.md)
+- [0090 — The navigation is grouped by capability, and Home shows real runs](0090-the-navigation-is-grouped-by-capability.md)
+- [0091 — A case that ships a skill offers its trial from the UI](0091-a-case-that-ships-a-skill-offers-its-trial.md)
+- [0092 — A skill is trialled on a chosen base, and improved in an audited loop](0092-a-skill-is-trialled-on-a-chosen-base-and-improved-in-a-loop.md)
+- [0093 — The lab is driven by guided flows with a live diagram](0093-the-lab-is-driven-by-guided-flows.md)
 
 ## Why ADRs exist
 

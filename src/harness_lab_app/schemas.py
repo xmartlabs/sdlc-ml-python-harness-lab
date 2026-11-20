@@ -181,6 +181,75 @@ class SuiteArmCreate(BaseModel):
     overrides: dict = Field(default_factory=dict)
 
 
+class SkillTrialCreate(BaseModel):
+    """Trial one governed skill on top of a profile, from the web UI (ADR-0089).
+
+    The same design as ``make add-skill-trial``: control is the profile, the
+    treatment adds the skill and asks for it. Creating never launches — the
+    experiment is launched from the Experiments page like any other.
+    """
+
+    skill: str
+    model: str = Field(min_length=1)
+    case_ids: list[str] = Field(min_length=1)
+    profile: str = "minimal"
+    repetitions: int = Field(default=3, ge=1, le=10)
+    # Pinned in both arms, so launching from the shared form cannot swap in its
+    # own default model or harness (ADR-0090).
+    harness: str = Field(default="claude", pattern="^(claude|opencode|codex)$")
+    # "catalog": profile vs profile + a governed skill (ADR-0089).
+    # "staged": no skill vs a staged one — a case's candidate, or yours (ADR-0091).
+    source: str = Field(default="catalog", pattern="^(catalog|staged)$")
+    # Which harness the skill is trialled on top of (ADR-0092). Unset keeps the
+    # original single design for `source`. "both" creates the minimal and the
+    # full A/B in one family, never a four-arm design.
+    base: str | None = Field(default=None, pattern="^(minimal|full|both)$")
+    # With "both": an identical A/B already in the lab is reused, not re-run.
+    reuse_measured: bool = True
+
+
+class HarnessLevelsCreate(BaseModel):
+    """None / minimal / full on one case and model, as a ladder of A/Bs (ADR-0093)."""
+
+    case_id: str
+    model: str = Field(min_length=1)
+    levels: list[str] = Field(min_length=2)
+    repetitions: int = Field(default=1, ge=1, le=10)
+    harness: str = Field(default="claude", pattern="^(claude|opencode|codex)$")
+
+
+class SkillRefineCreate(BaseModel):
+    """v1 against v2 of one skill, on the same cases and model (ADR-0092).
+
+    ``skill`` is v1, ``candidate`` the staged v2. A staged v1 (a case's
+    candidate, or yours) is compared add-for-add; a governed v1 is swapped out
+    for the candidate, as ``make refine-skill`` does. Created, never launched.
+    """
+
+    skill: str
+    candidate: str
+    model: str = Field(min_length=1)
+    case_ids: list[str] = Field(min_length=1)
+    base: str = Field(default="full", pattern="^(minimal|full)$")
+    repetitions: int = Field(default=3, ge=1, le=10)
+    harness: str = Field(default="claude", pattern="^(claude|opencode|codex)$")
+
+
+class SkillAuditRequest(BaseModel):
+    """Audit one skill from an experiment where it was used (ADR-0092)."""
+
+    experiment_id: str
+    auditor_model: str = ""
+
+
+class SkillDraftStage(BaseModel):
+    """Stage an audited v2 draft under ``name`` — the explicit, reviewed step."""
+
+    name: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    description: str = ""
+
+
 class SuiteExperimentCreate(BaseModel):
     """Generate an experiment from a regression suite (§13).
 

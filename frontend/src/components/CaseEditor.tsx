@@ -340,7 +340,7 @@ export function CaseEditor({
     setDraft((current) => ({ ...current, ...changes }));
 
   return (
-    <section className="panel">
+    <section className="panel" id="case-editor">
       <div className="panel-head">
         <h2>{m.editCase}</h2>
         <span className="badge neutral">{caseRecord.sync_state}</span>

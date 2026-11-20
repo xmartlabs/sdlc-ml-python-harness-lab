@@ -48,9 +48,39 @@ The two cases share four properties:
   measure the agent.
 - Each has calibration under `data/reference/<case>/`.
 
-## Trialling a candidate skill
+## Test a skill on its case — from the UI
 
-A skill joins the catalog only after it wins an A/B
+Any case that ships `candidate-skill/<name>/` offers three paths in one panel
+([ADR-0091](adr/0091-a-case-that-ships-a-skill-offers-its-trial.md)). Open
+**Benchmarks → Review, security & containment → Browse**, pick the case, and scroll
+to **Test a skill on this case** (or go straight to
+`/evidence/cases?case=pr-review-v1`).
+
+| You want to… | Do this | What it creates |
+|---|---|---|
+| **Try the case's skill** | **Stage it** → pick a model → **Create the A/B** | no skill vs `review_pull_request`, asked for |
+| **Improve it** | **Edit the staged copy** (Skills → Import), then **Create the A/B** again | the same design; the edit changes the content hash, so v1 and v2 runs stay apart |
+| **Bring yours** | **Import a skill** (GitHub, SKILL.md or .zip), pick it in the panel, **Create the A/B** | no skill vs your skill, on this case |
+
+Each path builds the same two arms the first trials used (family
+`candidate-skill-trials`): the `harness` prompt, one model and harness pinned in
+both, control adds nothing, treatment adds the staged skill and asks for it. It is
+**created, not launched**: the link opens it in Experiments, behind the usual launch
+form and preflight. Read the result in this order:
+
+1. `skill_invoked` for the treatment — near 1, or the arm measured nothing;
+2. the case's own checks per arm (for the review case: defects found, decoys,
+   precision);
+3. only then the success delta, with 5+ runs per arm.
+
+A **model comparison** (Evaluate → Compare models) is a different question: it runs
+each model with the harness as it is, so it says nothing about a skill the case
+ships. If a run's `skills_consulted` is empty, no skill was opened — the agent
+reviewed on its own.
+
+## Trialling a candidate skill from the terminal
+
+The same flow, step by step. A skill joins the catalog only after it wins an A/B
 ([ADR-0086](adr/0086-pruning-never-trades-quality-for-a-smaller-harness.md)).
 
 1. **Stage it.** The candidate lives next to its case, hidden from every agent

@@ -1263,7 +1263,7 @@ export function SubjectValidation() {
           <div className="panel">
             <div className="panel-head">
               <h2>{m.skillsPanel.heading}</h2>
-              <Link className="button-link" to="/evidence/skills">
+              <Link className="button-link" to="/evidence/skills?tab=import">
                 {m.skillsPanel.skillsWorkbench}
               </Link>
             </div>

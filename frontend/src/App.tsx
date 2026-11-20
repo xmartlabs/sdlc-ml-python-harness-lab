@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { api, SESSION_EXPIRED_EVENT } from "./api";
 import { CaseEditor } from "./components/CaseEditor";
+import { CaseSkillTrial } from "./components/CaseSkillTrial";
 import { Layout } from "./components/Layout";
 import { RunDetailRoute } from "./components/RunDetailRoute";
 import { defineMessages, useMessages } from "./i18n";
@@ -18,6 +19,13 @@ import { Health } from "./pages/Health";
 import { HarnessByModel } from "./pages/HarnessByModel";
 import { CompareModels } from "./pages/CompareModels";
 import { Home } from "./pages/Home";
+import { BenchmarksHub } from "./pages/hubs/BenchmarksHub";
+import { HarnessHub } from "./pages/hubs/HarnessHub";
+import { ModelsHub } from "./pages/hubs/ModelsHub";
+import { RepoHub } from "./pages/hubs/RepoHub";
+import { ResultsHub } from "./pages/hubs/ResultsHub";
+import { SystemHub } from "./pages/hubs/SystemHub";
+import { FlowPage } from "./pages/flows/FlowPage";
 import { Improvements } from "./pages/Improvements";
 import { Login } from "./pages/Login";
 import { LocalModels } from "./pages/LocalModels";
@@ -340,6 +348,15 @@ export default function App() {
         }
       >
         <Route element={<Home />} path="/" />
+        {/* Capability hubs (ADR-0090): each links to screens that keep their routes. */}
+        <Route element={<ModelsHub />} path="/models" />
+        <Route element={<HarnessHub />} path="/harness" />
+        <Route element={<BenchmarksHub />} path="/benchmarks" />
+        <Route element={<RepoHub />} path="/your-repo" />
+        <Route element={<ResultsHub />} path="/results" />
+        <Route element={<SystemHub />} path="/system" />
+        {/* Guided flows (ADR-0093): one question per step, a live diagram beside it. */}
+        <Route element={<FlowPage />} path="/flows/:flow" />
         <Route element={<NewEvaluation />} path="/evaluate/new" />
         <Route element={<Audit />} path="/evaluate/audit" />
         <Route element={<SubjectValidation />} path="/evaluate/subject" />
@@ -365,13 +382,17 @@ export default function App() {
                 selectedCaseId={selectedCaseId}
               />
               {selectedCase !== null ? (
-                <CaseEditor
-                  caseRecord={selectedCase}
-                  key={selectedCase.case_id}
-                  onCloned={upsertCase}
-                  onDeleted={removeCase}
-                  onSaved={upsertCase}
-                />
+                <>
+                  <CaseEditor
+                    caseRecord={selectedCase}
+                    key={selectedCase.case_id}
+                    onCloned={upsertCase}
+                    onDeleted={removeCase}
+                    onSaved={upsertCase}
+                  />
+                  {/* Try the case's skill, improve it, or bring yours (ADR-0091). */}
+                  <CaseSkillTrial caseRecord={selectedCase} key={`trial-${selectedCase.case_id}`} />
+                </>
               ) : null}
             </>
           }

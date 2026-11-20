@@ -25,31 +25,23 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-CANDIDATE_GLOB = "benchmarks/*/candidate-skill/*/SKILL.md"
-SOURCE_KIND = "manual"
+from harness_lab_app.candidate_skills import (  # noqa: E402  # noqa: E402
+    CANDIDATE_GLOB,
+    SOURCE_KIND,
+    CandidateSkillError,
+    candidates as _candidates,
+    read_tree,
+)
+
+__all__ = ["CANDIDATE_GLOB", "SOURCE_KIND", "candidates", "main", "read_tree"]
 
 
 def candidates(root: Path = REPO_ROOT) -> dict[str, Path]:
     """Every candidate skill in the case corpus, by folder name."""
-    found: dict[str, Path] = {}
-    for skill_md in sorted(root.glob(CANDIDATE_GLOB)):
-        name = skill_md.parent.name
-        if name in found:
-            raise SystemExit(
-                f"❌ candidate '{name}' is declared twice: {found[name]} and "
-                f"{skill_md.parent}"
-            )
-        found[name] = skill_md.parent
-    return found
-
-
-def read_tree(folder: Path) -> dict[str, bytes]:
-    """The candidate's files, relative to its folder; symlinks are skipped."""
-    return {
-        str(path.relative_to(folder)): path.read_bytes()
-        for path in sorted(folder.rglob("*"))
-        if path.is_file() and not path.is_symlink() and "__pycache__" not in path.parts
-    }
+    try:
+        return _candidates(root)
+    except CandidateSkillError as exc:
+        raise SystemExit(f"❌ {exc}") from exc
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -77,34 +69,17 @@ def main(argv: list[str] | None = None) -> int:
 
     from sqlmodel import Session
 
+    from harness_lab_app.candidate_skills import stage
     from harness_lab_app.db import get_engine, init_db
-    from harness_lab_app.skill_import import SkillImportError, build_skill
-    from harness_lab_app.staged_skill_service import (
-        StagedSkillError,
-        StagedSkillService,
-    )
-
-    try:
-        imported = build_skill(
-            read_tree(folder),
-            fallback_name=args.skill,
-            source_url=str(folder.relative_to(REPO_ROOT)),
-            source_kind=SOURCE_KIND,
-        )
-    except SkillImportError as exc:
-        sys.exit(f"❌ {exc}")
-    if imported.name != args.skill:
-        sys.exit(
-            f"❌ SKILL.md names '{imported.name}' but its folder is '{args.skill}'; "
-            "make them match."
-        )
+    from harness_lab_app.skill_import import SkillImportError
+    from harness_lab_app.staged_skill_service import StagedSkillError
 
     init_db()
     with Session(get_engine()) as session:
         try:
-            skill = StagedSkillService(session).import_skill(
-                imported, name=args.skill, replace=args.replace
-            )
+            result = stage(session, REPO_ROOT, folder, args.skill, replace=args.replace)
+        except (SkillImportError, CandidateSkillError) as exc:
+            sys.exit(f"❌ {exc}")
         except StagedSkillError as exc:
             hint = (
                 " Add REPLACE=1 to overwrite it."
@@ -112,10 +87,8 @@ def main(argv: list[str] | None = None) -> int:
                 else ""
             )
             sys.exit(f"❌ {exc}{hint}")
-    print(
-        f"✓ staged '{skill.name}' ({len(imported.files)} file(s)) from {folder.relative_to(REPO_ROOT)}"
-    )
-    for warning in imported.warnings:
+    print(f"✓ staged '{result.name}' ({result.files} file(s)) from {result.source}")
+    for warning in result.warnings:
         print(f"    ⚠ {warning}")
     print(
         "  Next: Evaluate → New evaluation → Add skills → tick it, Enforce skill use."

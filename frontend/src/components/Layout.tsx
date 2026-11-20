@@ -64,7 +64,11 @@ export function Layout({ runs, onUpdateRun, authEnabled, onLogout }: LayoutProps
   }, [runId, trackedState]);
 
   return (
-    <Shell authEnabled={authEnabled} onLogout={onLogout}>
+    <Shell
+      activeRuns={runs.filter((run) => POLLABLE_STATES.includes(run.state)).length}
+      authEnabled={authEnabled}
+      onLogout={onLogout}
+    >
       <Outlet />
     </Shell>
   );

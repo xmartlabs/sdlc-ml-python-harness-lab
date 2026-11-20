@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import {
@@ -8,6 +9,14 @@ import {
   shortInstanceLabel,
   uninstallableRequirements
 } from "../caseLabels";
+import {
+  CASE_FAMILIES,
+  caseFamily,
+  groupByFamily,
+  isPlayable,
+  needsOwnImage
+} from "../caseFamilies";
+import type { CaseFamily } from "../caseFamilies";
 import { EmptyState } from "../components/EmptyState";
 import { HelpPanel } from "../components/HelpPanel";
 import { Spinner } from "../components/Spinner";
@@ -171,7 +180,19 @@ const MESSAGES = defineMessages({
     noCasesTitle: "No cases here.",
     caseHeader: "Case",
     type: "Type",
-    sync: "Sync"
+    sync: "Sync",
+    familyLabels: {
+      swe_bench: "SWE-bench",
+      game_3d: "3D games",
+      security: "Review, security & containment",
+      web: "Web in a browser",
+      build: "Build from scratch",
+      other: "Your cases"
+    } as Record<CaseFamily, string>,
+    familyAll: (count: number) => `All (${count})`,
+    ownImageBadge: "own image · make images-3d",
+    playableBadge: "playable",
+    addCase: "Add a case"
   },
   es: {
     templateLabels: {
@@ -305,7 +326,19 @@ const MESSAGES = defineMessages({
     noCasesTitle: "No hay casos acá.",
     caseHeader: "Caso",
     type: "Tipo",
-    sync: "Sincronización"
+    sync: "Sincronización",
+    familyLabels: {
+      swe_bench: "SWE-bench",
+      game_3d: "Juegos 3D",
+      security: "Revisión, seguridad y contención",
+      web: "Web en navegador",
+      build: "Construir desde cero",
+      other: "Tus casos"
+    } as Record<CaseFamily, string>,
+    familyAll: (count: number) => `Todas (${count})`,
+    ownImageBadge: "imagen propia · make images-3d",
+    playableBadge: "se puede jugar",
+    addCase: "Sumá un caso"
   }
 });
 
@@ -338,6 +371,34 @@ export function Cases({
   selectedCaseId
 }: CasesProps) {
   const m = useMessages(MESSAGES);
+  const [searchParams, setSearchParams] = useSearchParams();
+  // `?case=<id>` opens that case and brings its skill-trial panel into view, so
+  // a hub can link straight to "test a skill on this case" (ADR-0091).
+  const caseParam = searchParams.get("case");
+  useEffect(() => {
+    if (!caseParam || !cases.some((item) => item.case_id === caseParam)) return;
+    onSelectCase(caseParam);
+    const timer = window.setTimeout(() => {
+      document.querySelector(".case-skill-trial")?.scrollIntoView({ block: "start" });
+    }, 300);
+    return () => window.clearTimeout(timer);
+    // Only when the requested case changes or first becomes available.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [caseParam, cases.length]);
+  const familyParam = searchParams.get("family");
+  const selectedFamily: CaseFamily | "all" =
+    familyParam && (CASE_FAMILIES as readonly string[]).includes(familyParam)
+      ? (familyParam as CaseFamily)
+      : "all";
+  const handleFamilyChange = (family: CaseFamily | "all") => {
+    const next = new URLSearchParams(searchParams);
+    if (family === "all") {
+      next.delete("family");
+    } else {
+      next.set("family", family);
+    }
+    setSearchParams(next);
+  };
   const [template, setTemplate] = useState("single_prompt");
   const [name, setName] = useState(m.defaultCaseName);
   const [caseId, setCaseId] = useState("new-case");
@@ -434,15 +495,20 @@ export function Cases({
     }
   };
 
+  const casesByFamily = useMemo(() => groupByFamily(cases), [cases]);
+
   const visibleCases = useMemo(() => {
+    let scoped = cases;
     if (caseFilter === "swe-bench") {
-      return cases.filter((item) => SWE_CASE_TYPES.has(item.type));
+      scoped = scoped.filter((item) => SWE_CASE_TYPES.has(item.type));
+    } else if (caseFilter === "other") {
+      scoped = scoped.filter((item) => !SWE_CASE_TYPES.has(item.type));
     }
-    if (caseFilter === "other") {
-      return cases.filter((item) => !SWE_CASE_TYPES.has(item.type));
+    if (selectedFamily !== "all") {
+      scoped = scoped.filter((item) => caseFamily(item) === selectedFamily);
     }
-    return cases;
-  }, [cases, caseFilter]);
+    return scoped;
+  }, [cases, caseFilter, selectedFamily]);
 
   const handleLoadProCatalog = async () => {
     setIsLoadingCatalog(true);
@@ -612,6 +678,120 @@ export function Cases({
       <HelpPanel doc="create-case" title={m.helpTitle}>
         {m.helpBody(<strong>{m.newCase}</strong>)}
       </HelpPanel>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>{m.caseList}</h2>
+          <div className="toolbar">
+            {(
+              [
+                { value: "all", label: m.all(cases.length) },
+                {
+                  value: "swe-bench",
+                  label: m.sweBenchFilter(
+                    cases.filter((item) => SWE_CASE_TYPES.has(item.type)).length
+                  )
+                },
+                {
+                  value: "other",
+                  label: m.otherFilter(
+                    cases.filter((item) => !SWE_CASE_TYPES.has(item.type)).length
+                  )
+                }
+              ] as { value: CaseFilter; label: string }[]
+            ).map((option) => (
+              <button
+                className={caseFilter === option.value ? "badge neutral" : "badge"}
+                key={option.value}
+                onClick={() => setCaseFilter(option.value)}
+                type="button"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="toolbar case-family-filter">
+          <button
+            className={selectedFamily === "all" ? "badge neutral" : "badge"}
+            onClick={() => handleFamilyChange("all")}
+            type="button"
+          >
+            {m.familyAll(cases.length)}
+          </button>
+          {CASE_FAMILIES.filter((family) => casesByFamily[family].length > 0).map(
+            (family) => (
+              <button
+                className={selectedFamily === family ? "badge neutral" : "badge"}
+                key={family}
+                onClick={() => handleFamilyChange(family)}
+                type="button"
+              >
+                {`${m.familyLabels[family]} (${casesByFamily[family].length})`}
+              </button>
+            )
+          )}
+        </div>
+        {visibleCases.length === 0 ? (
+          <EmptyState
+            description={
+              caseFilter === "swe-bench" ? m.noSweBenchCases : m.noCasesSeedOrCreate
+            }
+            title={m.noCasesTitle}
+          />
+        ) : (
+          <div className="table">
+            <div className="table-row table-head">
+              <span>{m.caseHeader}</span>
+              <span>{m.type}</span>
+              <span>{m.sync}</span>
+            </div>
+            {visibleCases.map((item) => (
+              <button
+                className={selectedCaseId === item.case_id ? "table-row selectable active" : "table-row selectable"}
+                key={item.case_id}
+                onClick={() => {
+                  onSelectCase(item.case_id);
+                  // The editor renders below the import panels (ADR-0090):
+                  // bring it into view so the click visibly does something.
+                  window.requestAnimationFrame(() => {
+                    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+                    document
+                      .getElementById("case-editor")
+                      ?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+                  });
+                }}
+                type="button"
+              >
+                <span>
+                  <strong style={{ display: "block" }}>
+                    {item.name && item.name !== item.case_id
+                      ? item.name
+                      : item.case_id}
+                  </strong>
+                  <small className="muted" style={{ display: "block" }}>
+                    {SWE_CASE_TYPES.has(item.type)
+                      ? shortInstanceLabel(item.case_id)
+                      : item.case_id}
+                  </small>
+                </span>
+                {caseTypeBadge(item)}
+                <span>
+                  <span className="badge neutral">{item.sync_state}</span>
+                  {needsOwnImage(item) ? (
+                    <span className="badge neutral">{m.ownImageBadge}</span>
+                  ) : null}
+                  {isPlayable(item) ? (
+                    <span className="badge neutral">{m.playableBadge}</span>
+                  ) : null}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <h2 className="section-heading">{m.addCase}</h2>
 
       <section className="panel">
         <div className="panel-head">
@@ -961,79 +1141,6 @@ export function Cases({
             {isSaving ? m.saving : m.createCase}
           </button>
         </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-head">
-          <h2>{m.caseList}</h2>
-          <div className="toolbar">
-            {(
-              [
-                { value: "all", label: m.all(cases.length) },
-                {
-                  value: "swe-bench",
-                  label: m.sweBenchFilter(
-                    cases.filter((item) => SWE_CASE_TYPES.has(item.type)).length
-                  )
-                },
-                {
-                  value: "other",
-                  label: m.otherFilter(
-                    cases.filter((item) => !SWE_CASE_TYPES.has(item.type)).length
-                  )
-                }
-              ] as { value: CaseFilter; label: string }[]
-            ).map((option) => (
-              <button
-                className={caseFilter === option.value ? "badge neutral" : "badge"}
-                key={option.value}
-                onClick={() => setCaseFilter(option.value)}
-                type="button"
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {visibleCases.length === 0 ? (
-          <EmptyState
-            description={
-              caseFilter === "swe-bench" ? m.noSweBenchCases : m.noCasesSeedOrCreate
-            }
-            title={m.noCasesTitle}
-          />
-        ) : (
-          <div className="table">
-            <div className="table-row table-head">
-              <span>{m.caseHeader}</span>
-              <span>{m.type}</span>
-              <span>{m.sync}</span>
-            </div>
-            {visibleCases.map((item) => (
-              <button
-                className={selectedCaseId === item.case_id ? "table-row selectable active" : "table-row selectable"}
-                key={item.case_id}
-                onClick={() => onSelectCase(item.case_id)}
-                type="button"
-              >
-                <span>
-                  <strong style={{ display: "block" }}>
-                    {item.name && item.name !== item.case_id
-                      ? item.name
-                      : item.case_id}
-                  </strong>
-                  <small className="muted" style={{ display: "block" }}>
-                    {SWE_CASE_TYPES.has(item.type)
-                      ? shortInstanceLabel(item.case_id)
-                      : item.case_id}
-                  </small>
-                </span>
-                {caseTypeBadge(item)}
-                <span className="badge neutral">{item.sync_state}</span>
-              </button>
-            ))}
-          </div>
-        )}
       </section>
     </section>
   );

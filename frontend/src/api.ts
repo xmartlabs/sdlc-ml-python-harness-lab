@@ -39,7 +39,9 @@ import type {
   OllamaCatalog,
   RuntimeFacts,
   LeaderboardRunRow,
+  MetricCriteria,
   ModelCatalog,
+  SkillAuditResult,
   ModelComparison,
   OverviewReport,
   OfficialReferenceRow,
@@ -269,6 +271,17 @@ export const api = {
   listDocs: () => request<DocEntry[]>("/api/docs"),
   getDoc: (slug: string) => request<DocContent>(`/api/docs/${slug}`),
   listStagedSkills: () => request<StagedSkillRecord[]>("/api/staged-skills"),
+  /** The skills a case ships to be trialled, and whether each is staged (ADR-0091). */
+  listCaseCandidateSkills: (caseId: string) =>
+    request<{ name: string; source: string; staged: boolean; status: string | null }[]>(
+      `/api/cases/${encodeURIComponent(caseId)}/candidate-skills`
+    ),
+  /** Stage a case's candidate, as `make stage-candidate` does. */
+  stageCaseCandidateSkill: (caseId: string, name: string, replace = false) =>
+    request<{ name: string; files: number; source: string; warnings: string[] }>(
+      `/api/cases/${encodeURIComponent(caseId)}/candidate-skills/${encodeURIComponent(name)}/stage${replace ? "?replace=true" : ""}`,
+      { method: "POST" }
+    ),
   createStagedSkill: (name: string, description: string, content: string) =>
     request<StagedSkillRecord>("/api/staged-skills", {
       method: "POST",
@@ -387,6 +400,92 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload)
     }),
+  /**
+   * An additive skill trial (ADR-0089): the profile vs the profile plus one
+   * skill, asked for. Created, never launched — the caller sends the person to
+   * the Experiments page, where the shared launch form and preflight run.
+   */
+  createSkillTrial: (payload: {
+    skill: string;
+    model: string;
+    case_ids: string[];
+    profile?: string;
+    repetitions?: number;
+    harness?: "claude" | "opencode" | "codex";
+    /** "catalog": profile vs profile + skill. "staged": no skill vs a staged one (ADR-0091). */
+    source?: "catalog" | "staged";
+  }) =>
+    request<ExperimentRecord & { warnings?: string[] }>("/api/experiments/skill-trial", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  /**
+   * A skill trialled on a chosen base (ADR-0092): minimal, full, or both — both
+   * is two clean A/Bs in one family. An identical A/B already in the lab is
+   * reused, not re-run. Created, never launched.
+   */
+  createSkillTrialOnBase: (payload: {
+    skill: string;
+    model: string;
+    case_ids: string[];
+    source: "catalog" | "staged";
+    base: "minimal" | "full" | "both";
+    repetitions: number;
+    harness?: "claude" | "opencode" | "codex";
+    reuse_measured?: boolean;
+  }) =>
+    request<{
+      family_id: string;
+      experiments: (ExperimentRecord & { warnings?: string[] })[];
+      reused: ExperimentRecord[];
+    }>("/api/experiments/skill-trial", { method: "POST", body: JSON.stringify(payload) }),
+  /** None / minimal / full on one case and model, as a ladder of A/Bs (ADR-0093). */
+  createHarnessLevels: (payload: {
+    case_id: string;
+    model: string;
+    levels: string[];
+    repetitions: number;
+    harness?: "claude" | "opencode" | "codex";
+  }) =>
+    request<{ family_id: string; experiments: (ExperimentRecord & { warnings?: string[] })[] }>(
+      "/api/experiments/harness-levels",
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
+  /** v1 against a staged v2 of one skill (ADR-0092). Created, never launched. */
+  createSkillRefine: (payload: {
+    skill: string;
+    candidate: string;
+    model: string;
+    case_ids: string[];
+    base?: "minimal" | "full";
+    repetitions: number;
+    harness?: "claude" | "opencode" | "codex";
+  }) =>
+    request<ExperimentRecord & { warnings?: string[] }>("/api/experiments/skill-refine", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  /** The LLM as auditor of one skill: diagnosis + a v2 draft. Writes nothing. */
+  auditSkill: (name: string, experimentId: string, auditorModel = "") =>
+    request<SkillAuditResult>(`/api/skills/${encodeURIComponent(name)}/audit`, {
+      method: "POST",
+      body: JSON.stringify({ experiment_id: experimentId, auditor_model: auditorModel })
+    }),
+  /** Stage a reviewed v2 draft. The explicit step after an audit. */
+  stageSkillDraft: (name: string, content: string, description = "") =>
+    request<{ name: string; status: string }>("/api/skills/drafts", {
+      method: "POST",
+      body: JSON.stringify({ name, content, description })
+    }),
+  /** Median cost and minutes per run for a case and model; n=0 means unknown. */
+  estimateRun: (caseId: string, model: string) =>
+    request<{ case_id: string; model: string; n: number; cost_usd?: number | null; minutes?: number | null }>(
+      `/api/estimate?case_id=${encodeURIComponent(caseId)}&model=${encodeURIComponent(model)}`
+    ),
+  /** The rules that turn numbers into a verdict, read from the code. */
+  getMetricCriteria: () => request<MetricCriteria>("/api/metrics/criteria"),
+  listExperimentsInFamily: (familyId: string) =>
+    request<ExperimentRecord[]>(`/api/experiments?family_id=${encodeURIComponent(familyId)}`),
   /**
    * A regression suite, as an experiment (§13).
    *

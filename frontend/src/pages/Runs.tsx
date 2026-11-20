@@ -204,7 +204,7 @@ const MESSAGES = defineMessages({
       experimentalTitle: "Experimental (staged, off by default)",
       askAgent: "Ask the agent to use them",
       askAgentHint: "at the start of every step",
-      profile: "Harness",
+      profile: "Skills: minimal / full",
       profileCustom: "custom",
       profileHint: (name: string, count: number) =>
         name === "full"
@@ -393,7 +393,7 @@ const MESSAGES = defineMessages({
       experimentalTitle: "Experimentales (staged, desactivadas por defecto)",
       askAgent: "Pedirle al agente que las use",
       askAgentHint: "al comienzo de cada paso",
-      profile: "Arnés",
+      profile: "Skills: minimal / full",
       profileCustom: "personalizado",
       profileHint: (name: string, count: number) =>
         name === "full"

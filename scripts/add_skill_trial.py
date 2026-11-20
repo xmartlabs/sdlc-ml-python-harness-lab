@@ -41,11 +41,11 @@ from harness_lab_app.experiment_service import (  # noqa: E402
     ExperimentError,
     ExperimentService,
 )
-from harness_lab_app.models import ConditionRole, ExperimentMode  # noqa: E402
-from harness_lab_app.schemas import (  # noqa: E402
-    ExperimentConditionCreate,
-    ExperimentCreate,
-    RunConfigCreate,
+from harness_lab_app.schemas import RunConfigCreate  # noqa: E402
+from harness_lab_app.skill_trial import (  # noqa: E402
+    DEFAULT_PROFILE,
+    HARNESS_PROMPT,
+    design,
 )
 from harness_lab_app.skills_catalog import known_skill_names  # noqa: E402
 from ml_python_base.skills_sync.profiles import (  # noqa: E402
@@ -53,71 +53,7 @@ from ml_python_base.skills_sync.profiles import (  # noqa: E402
     load_profiles,
 )
 
-HARNESS_PROMPT = "harness"
-DEFAULT_PROFILE = "minimal"
-
-
-def _slug(text: str) -> str:
-    return text.replace("/", "-").replace(".", "-").replace("_", "-").lower()
-
-
-def design(
-    *,
-    skill: str,
-    cases: list[str],
-    model: str,
-    reps: int,
-    base_disabled: list[str],
-    profile: str = DEFAULT_PROFILE,
-) -> ExperimentCreate:
-    """Control is ``profile``; treatment is ``profile`` + ``skill``, invoked."""
-    if skill not in base_disabled:
-        raise ValueError(
-            f"'{skill}' is already in profile '{profile}': adding it changes "
-            "nothing. Use `make prune` to ask whether it can leave."
-        )
-    control = {
-        "prompt_variant": HARNESS_PROMPT,
-        "skills_disabled": sorted(base_disabled),
-        "skills_invoke": [],
-    }
-    treatment = {
-        "prompt_variant": HARNESS_PROMPT,
-        "skills_disabled": sorted(set(base_disabled) - {skill}),
-        "skills_invoke": [skill],
-    }
-    return ExperimentCreate(
-        experiment_id=f"add-{_slug(skill)}-to-{_slug(profile)}-{_slug(model)}"[:64],
-        name=f"Add {skill} to {profile} ({model})",
-        question=(
-            f"Does {profile} plus {skill}, when used, resolve more of these cases, "
-            f"or as many sooner or cheaper, than {profile} alone?"
-        ),
-        mode=ExperimentMode.harness_evaluation,
-        case_ids=list(cases),
-        prompt_variants=[],
-        repetitions=reps,
-        family_id=f"add-to-{_slug(profile)}"[:48],
-        notes=(
-            f"Additive skill trial (ADR-0089) on profile '{profile}'. The "
-            "treatment re-enables one governed skill and asks for it — one "
-            "intervention across two fields. Read skill_invoked first. "
-            "Promotion is manual and needs a win on the target cases without a "
-            "loss on the general one."
-        ),
-        conditions=[
-            ExperimentConditionCreate(
-                label=_slug(profile)[:64],
-                role=ConditionRole.control,
-                overrides=control,
-            ),
-            ExperimentConditionCreate(
-                label=f"{_slug(profile)}-plus-{_slug(skill)}"[:64],
-                role=ConditionRole.treatment,
-                overrides=treatment,
-            ),
-        ],
-    )
+__all__ = ["design", "main"]
 
 
 def main(argv: list[str] | None = None) -> int:

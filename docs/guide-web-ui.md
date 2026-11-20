@@ -285,17 +285,74 @@ scorecard, and a narrower one than it might be mistaken for.
 
 ## Where things live
 
-The navigation is grouped by what you came to do, not by which table backs it.
-Nothing was removed in the regrouping — the old paths still resolve, they just
-redirect.
+The navigation is grouped by **capability** — what you came to try — in seven
+entries ([ADR-0090](adr/0090-the-navigation-is-grouped-by-capability.md)). Each
+entry opens a **hub**: a board of cards that say what a capability does, whether
+it is **In the UI**, **Terminal only** or **To build**, and where it lives. No
+screen moved: every route below answers as it always did, the old flat paths
+still redirect, and an entry stays highlighted while you are inside any screen
+it owns.
 
-| Group | Screens | For |
+| Entry | Hub | Screens it reaches |
 |---|---|---|
-| — | **Home** | choosing what to learn, and what needs attention |
-| **Evaluate** | New evaluation, Experiments | stating a question and reading its answer |
-| **Evidence** | Findings, Cases, Repositories, Skills | what the lab knows and what it measures against |
-| **Advanced** | Runs, Compare, Benchmarks, Improvements | the operational machinery underneath |
-| **System** | Health, Guide, Settings | the lab itself |
+| **Home** | `/` | showcase of real runs (each opens a flow), seven doors, the loop, first journeys, what needs attention |
+| **Models** | `/models` | Compare models, Harness × model, Tune your local model, Local results |
+| **Harness & skills** | `/harness` | the two profiles and the latest pruning verdict (live); New evaluation; Skills |
+| **Benchmarks** | `/benchmarks` | Cases, grouped by family (SWE-bench, 3D games, security, web, build, yours) |
+| **Your repo** | `/your-repo` | Audit, Validate your tool, Repositories |
+| **Results** | `/results` | Experiments, Runs, Ranking, Findings, Compare, Improvements |
+| **System** | `/system` | Settings, Health, Guide |
+
+### Guided flows
+
+Most of what people come to try starts from a guided flow, at `/flows/<name>`
+([ADR-0093](adr/0093-the-lab-is-driven-by-guided-flows.md)). Each one asks one question
+per step, answered with buttons, and keeps the long explanation behind an ⓘ. A flow
+diagram beside it lights up what you chose and marks the next step. Click a lit node,
+or an answer in the trail, to go back.
+
+| Flow | You choose | It creates |
+|---|---|---|
+| **Models** | case → models → repetitions | a Compare-models experiment (family `models-<case>`) |
+| **Harness** | case (3D included) → model → levels (none, minimal, full) → repetitions | a Harness × model experiment |
+| **Skills** | where the skill comes from → skill → base (minimal, full, both) → case → model → repetitions | one A/B per base, in one family ([ADR-0092](adr/0092-a-skill-is-trialled-on-a-chosen-base-and-improved-in-a-loop.md)) |
+| **Improve a skill** | skill → an experiment that used it → LLM audit → review the v2 draft → stage it → v1 vs v2 | a refine experiment |
+| **Metrics** | compare runs · what to improve · what we measure | nothing: it reads |
+
+The last step always shows **arms, runs, estimated cost and time**, and only then
+**Create (N runs)**:
+
+- The estimate is the lab's median for that case and model. With no measured run it
+  shows "—".
+- Repetitions are a stepper from 1 to 10.
+- Nothing is launched from a flow. The link opens the experiment in Experiments, behind
+  the usual launch form and preflight.
+
+**Runs** are one click away from every page: the pill at the top shows how many are
+active, and **Runs** and **Metrics** sit under *Lab* in the sidebar.
+
+### The Home showcase
+
+Home opens with a rotating banner of real runs: the racing3d car → kart
+continuation, chess3d across models, OpenCity as the player and the grader see
+it, and a replay of an agent-containment run. Hovering or focusing it holds the
+slide, **Pause** stops it, and `prefers-reduced-motion` starts it paused.
+
+To feature another run, add its media to `frontend/public/showcase/` and one
+entry to `frontend/src/showcase.ts` (copy in both languages, the run id as
+`source`). Keep clips short (≤ 12 s, ≤ 1 MB, no audio). A 3D run's grader
+already saves screenshots in `data/runs/<id>/workspace/.lab-grade/shots/`.
+
+### Trying a skill from the UI
+
+**Skills → Catalog** marks each governed skill as *in minimal* or *optional*.
+On an optional one, **Try on top of minimal** opens the **Try** tab with it
+selected: pick the cases it targets plus one general case, a model and the
+repetitions, then **Create trial**. That calls `POST /api/experiments/skill-trial`,
+which builds the same two-arm experiment as `make add-skill-trial`
+([ADR-0089](adr/0089-a-profile-grows-one-trialled-skill-at-a-time.md)) and
+**does not launch it** — the link takes you to the experiment, where the usual
+launch form and preflight run.
 
 ### Look and feel
 
@@ -350,15 +407,21 @@ To check a change without opening a browser, screenshot the dev server headlessl
 
 ## Screens
 
-### Home — what do you want to learn?
+### Home — what do you want to try today?
 
-The landing page opens with a **Start in 30 seconds** band — `make harness-check
-REPO=<path>` and a link to the [demo guide](demo-guide.md) — then asks one question
-and offers four answers, and closes with what the lab will and will not tell you
-(it measures harnesses and workflows, never people). Each card states the
-question it can answer, what it holds fixed, what it varies, and what it is **not**
-allowed to claim — so the choice of mode happens before any data is collected
-rather than after.
+The landing page opens with the [showcase](#the-home-showcase) of real runs, then
+four doors — **Models**, **Harness & skills**, **Benchmarks**, **Your repo** —
+each opening its hub. Below them: the **Start in 30 seconds** band
+(`make harness-check REPO=<path>` and the [demo guide](demo-guide.md)), the lab's
+loop as a diagram, four first journeys by what you have (a local model, a new
+skill, a new frontier model, your team's repo), what the lab will and will not
+tell you (it measures harnesses and workflows, never people), and the six guide
+journeys — shown always, not only on a fresh lab.
+
+The five evaluation modes sit under **Evaluation modes, in detail**. Each card
+states the question it can answer, what it holds fixed, what it varies, and what
+it is **not** allowed to claim — so the choice of mode happens before any data is
+collected rather than after.
 
 - **Validate your tool** → the five-step subject-validation wizard. First because
   it is the only door that opens on a fresh instance — no repository needed — and
