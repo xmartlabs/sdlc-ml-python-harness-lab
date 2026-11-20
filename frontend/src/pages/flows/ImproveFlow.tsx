@@ -5,12 +5,23 @@ import { api } from "../../api";
 import { FlowDiagram } from "../../components/HubPage";
 import { GuideFlow } from "../../components/guide/GuideFlow";
 import type { GuideStep, GuideValues } from "../../components/guide/GuideFlow";
-import { armFor, estimateCells, loadCases, loadModels } from "../../components/guide/guideData";
+import {
+  armFor,
+  estimateCells,
+  launchBlocker,
+  launchExperiments,
+  loadCases,
+  loadClis,
+  loadModels,
+  loadNative
+} from "../../components/guide/guideData";
+import { armLabel, HarnessModelChooser } from "../../components/guide/HarnessModelChooser";
 import { defineMessages, useMessages } from "../../i18n";
 import type {
   CaseRecord,
   ExperimentRecord,
   ModelOption,
+  NativeModelRecord,
   SkillAuditResult,
   StagedSkillRecord
 } from "../../types";
@@ -73,13 +84,12 @@ const MESSAGES = defineMessages({
     continueToAb: "Continue to v1 vs v2",
     nodes: { case: "Case", model: "Model", base: "Base", reps: "Repetitions" },
     caseQ: "Which case?",
-    modelQ: "Which model?",
+    modelQ: "Which agent and model?",
+    armHint: "The tab is the agent CLI that runs the model; under it, only the models it can drive.",
     baseQ: "On which base?",
     baseMinimal: "Minimal",
     baseFull: "Full",
     repsQ: "How many times each?",
-    local: "local · this machine",
-    cloud: "cloud",
     outcome:
       "v1 vs v2 on the same case and model. If v2 wins, promote it (Skills → Promote); if not, audit again.",
     auditorModel: "Auditor model (optional)",
@@ -127,13 +137,12 @@ const MESSAGES = defineMessages({
     continueToAb: "Seguir a v1 vs v2",
     nodes: { case: "Caso", model: "Modelo", base: "Base", reps: "Repeticiones" },
     caseQ: "¿En qué caso?",
-    modelQ: "¿Qué modelo?",
+    modelQ: "¿Qué agente y modelo?",
+    armHint: "La pestaña es la CLI de agente que corre el modelo; abajo, solo los modelos que puede manejar.",
     baseQ: "¿Sobre qué base?",
     baseMinimal: "Mínima",
     baseFull: "Completa",
     repsQ: "¿Cuántas veces cada uno?",
-    local: "local · esta máquina",
-    cloud: "nube",
     outcome:
       "v1 contra v2, en el mismo caso y modelo. Si gana v2, promovelo (Skills → Promover); si no, auditá de nuevo.",
     auditorModel: "Modelo auditor (opcional)",
@@ -159,6 +168,7 @@ export function ImproveFlow() {
   const [params] = useSearchParams();
   const [cases, setCases] = useState<CaseRecord[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [native, setNative] = useState<Record<string, NativeModelRecord[]>>({});
   const [staged, setStaged] = useState<StagedSkillRecord[]>([]);
   const [experiments, setExperiments] = useState<ExperimentRecord[]>([]);
 
@@ -180,6 +190,8 @@ export function ImproveFlow() {
   useEffect(() => {
     loadCases().then(setCases);
     loadModels().then(setModels);
+    loadNative().then(setNative);
+    void loadClis();
     api
       .listStagedSkills()
       .then((rows) => setStaged(rows.filter((row) => row.status !== "archived")))
@@ -241,13 +253,12 @@ export function ImproveFlow() {
         key: "model",
         node: m.nodes.model,
         question: m.modelQ,
-        kind: "one",
-        options: () =>
-          models.map((model) => ({
-            id: model.id,
-            label: model.label || model.id,
-            sub: /lmstudio|ollama/i.test(model.id) ? m.local : m.cloud
-          }))
+        hint: m.armHint,
+        kind: "custom",
+        display: (value: string) => armLabel(value, models, native),
+        render: (values: GuideValues, pick: (value: string) => void) => (
+          <HarnessModelChooser onPick={pick} value={String(values.model ?? "")} />
+        )
       },
       {
         key: "base",
@@ -264,13 +275,7 @@ export function ImproveFlow() {
     const initial: GuideValues = { base: "full", ...(defaultCase ? { case: defaultCase } : {}) };
 
     return (
-      <section className="page">
-        <header className="page-header">
-          <div>
-            <p className="eyebrow">{m.title}</p>
-            <h1>{m.title}</h1>
-          </div>
-        </header>
+      <div className="improve-flow">
         <FlowDiagram steps={loopSteps} />
         <p className="muted">{m.phaseC}</p>
         <GuideFlow
@@ -278,7 +283,10 @@ export function ImproveFlow() {
             const caseId = String(values.case);
             const modelId = String(values.model);
             const reps = Number(values.reps ?? 0);
-            return estimateCells([{ caseId, modelId, runs: 2 * reps }], 2);
+            return Promise.all([
+              estimateCells([{ caseId, modelId, runs: 2 * reps }], 2),
+              launchBlocker(cases.find((row) => row.case_id === caseId), [modelId])
+            ]).then(([cells, blocker]) => ({ ...cells, blocker }));
           }}
           initial={initial}
           onCreate={async (values) => {
@@ -290,31 +298,30 @@ export function ImproveFlow() {
               candidate: v2For,
               model: arm.model,
               harness: arm.harness,
+              effort: arm.effort,
               case_ids: [caseId],
               base: values.base as "minimal" | "full",
               repetitions: Number(values.reps)
             });
             return { ids: [created.experiment_id], warnings: created.warnings };
           }}
+          onLaunch={(values, created) =>
+            launchExperiments(created.ids, cases.find((row) => row.case_id === String(values.case)), String(values.model))
+          }
           outcome={m.outcome}
           cli={(values) =>
-            `make refine-skill SKILL=${skill} CANDIDATE=${v2For} MODEL=${String(values.model)} CASES="${String(values.case)}"`
+            `make refine-skill SKILL=${skill} CANDIDATE=${v2For} MODEL=${armFor(String(values.model)).model} HARNESS=${armFor(String(values.model)).harness} CASES="${String(values.case)}"`
           }
           steps={steps}
           title={m.title}
         />
-      </section>
+      </div>
     );
   }
 
   return (
-    <section className="page">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">{m.title}</p>
-          <h1>{m.title}</h1>
-        </div>
-      </header>
+    // Inside the Skills page now (ADR-0093 amendment): the page owns the title.
+    <div className="improve-flow">
       <FlowDiagram steps={loopSteps} />
 
       {phase === "a" ? (
@@ -477,6 +484,6 @@ export function ImproveFlow() {
           </div>
         </div>
       ) : null}
-    </section>
+    </div>
   );
 }

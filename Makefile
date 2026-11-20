@@ -436,6 +436,13 @@ app-up:
 		echo "    anyone on your network can start runs, which execute code."; \
 		echo "    Run: make set-password"; \
 	fi
+	@# The 3D cases run in their own Godot image (ADR-0078), ~6.5 GB, which
+	@# app-up does not build. Say so here rather than in a failed run.
+	@if ls benchmarks/*3d*/task.yaml >/dev/null 2>&1 \
+		&& ! docker image inspect harness-lab-runner-godot:latest >/dev/null 2>&1; then \
+		echo "ℹ️  The 3D cases (chess3d, racing3d, opencity3d) need their Godot image, not built yet."; \
+		echo "    Build it once with: make images-3d   (a few minutes; the run preflight refuses them until then)"; \
+	fi
 
 # Stop the dev stack. Containers are removed; named volumes and everything
 # under data/ survive, so `make app-up` brings the same lab back.

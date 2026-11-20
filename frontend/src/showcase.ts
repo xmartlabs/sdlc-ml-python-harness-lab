@@ -66,7 +66,7 @@ export const SHOWCASE: ShowcaseSlide[] = [
       ]
     },
     to: "/flows/models?case=racing3d-v1",
-    to2: "/flows/harness?case=racing3d-v1",
+    to2: "/flows/models?vary=levels&case=racing3d-v1",
     source: "racing3d-v1-K-004 → C-001",
     text: {
       en: {
@@ -107,7 +107,7 @@ export const SHOWCASE: ShowcaseSlide[] = [
       ]
     },
     to: "/flows/models?case=chess3d-v1",
-    to2: "/flows/harness?case=chess3d-v1",
+    to2: "/flows/models?vary=levels&case=chess3d-v1",
     source: "chess3d-v1-K-008 · K-009",
     text: {
       en: {
@@ -148,7 +148,7 @@ export const SHOWCASE: ShowcaseSlide[] = [
       ]
     },
     to: "/flows/models?case=opencity3d-v1",
-    to2: "/flows/harness?case=opencity3d-v1",
+    to2: "/flows/models?vary=levels&case=opencity3d-v1",
     source: "opencity3d-v1-K-001",
     text: {
       en: {

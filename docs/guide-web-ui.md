@@ -295,7 +295,7 @@ it owns.
 
 | Entry | Hub | Screens it reaches |
 |---|---|---|
-| **Home** | `/` | showcase of real runs (each opens a flow), seven doors, the loop, first journeys, what needs attention |
+| **Home** | `/` | showcase of real runs (each opens a flow), five doors, the loop, first journeys, what needs attention |
 | **Models** | `/models` | Compare models, Harness × model, Tune your local model, Local results |
 | **Harness & skills** | `/harness` | the two profiles and the latest pruning verdict (live); New evaluation; Skills |
 | **Benchmarks** | `/benchmarks` | Cases, grouped by family (SWE-bench, 3D games, security, web, build, yours) |
@@ -313,20 +313,42 @@ or an answer in the trail, to go back.
 
 | Flow | You choose | It creates |
 |---|---|---|
-| **Models** | case → models → repetitions | a Compare-models experiment (family `models-<case>`) |
-| **Harness** | case (3D included) → model → levels (none, minimal, full) → repetitions | a Harness × model experiment |
-| **Skills** | where the skill comes from → skill → base (minimal, full, both) → case → model → repetitions | one A/B per base, in one family ([ADR-0092](adr/0092-a-skill-is-trialled-on-a-chosen-base-and-improved-in-a-loop.md)) |
-| **Improve a skill** | skill → an experiment that used it → LLM audit → review the v2 draft → stage it → v1 vs v2 | a refine experiment |
+| **Models and harness** → *Models* | case → Model 1 → Model 2 (optional) → harness level (full, minimal, none) → repetitions | a Compare-models experiment (family `models-<case>`); one model alone is a one-arm probe |
+| **Models and harness** → *Harness levels* | case (3D included) → agent and model → levels (none, minimal, full) → repetitions | one A/B per adjacent level pair, in one family, each with a verdict |
+| **Skills** → *Try a skill* | where the skill comes from → skill → base (minimal, full, both) → case → model → repetitions | one A/B per base, in one family ([ADR-0092](adr/0092-a-skill-is-trialled-on-a-chosen-base-and-improved-in-a-loop.md)) |
+| **Skills** → *Improve a skill* | skill → an experiment that used it → LLM audit → review the v2 draft → stage it → v1 vs v2 | a refine experiment |
 | **Metrics** | compare runs · what to improve · what we measure | nothing: it reads |
 
+Two doors each hold two branches, because each pair asks one kind of question.
+
+- **Models and harness** asks first *What do you compare?*: models (at a harness level
+  you pick) or harness levels (on one model).
+- **Skills** asks first *Try a skill* or *Improve a skill*.
+
+The old routes `/flows/harness` and `/flows/improve` still work: they land on the
+matching branch and keep `?case=` and `?skill=`.
+
 The last step always shows **arms, runs, estimated cost and time**, and only then
-**Create (N runs)**:
+**Create and launch (N runs)**:
 
 - The estimate is the lab's median for that case and model. With no measured run it
   shows "—".
 - Repetitions are a stepper from 1 to 10.
-- Nothing is launched from a flow. The link opens the experiment in Experiments, behind
-  the usual launch form and preflight.
+- **Create and launch** queues the runs. It passes the same preflight as the Experiments
+  page, so a run that cannot start is refused before anything is queued. **Create only**
+  leaves the experiment in Experiments to launch later.
+
+Every model step works the same way: pick the **agent** (`opencode`, `claude`, `codex`,
+`gemini`), then one of **its** models.
+
+- Each agent tab says whether it can run now. Sign codex and gemini in under
+  System → Agent CLIs.
+- Under opencode, choose **Local** or **Through the gateway**, then a vendor.
+- A model the run would be refused for, such as a Claude model with no gateway card,
+  shows disabled with the reason.
+- On the **claude** tab, a row sets the **reasoning effort** (`--effort`): Default, low,
+  medium, high, xhigh or max. Pick it before the model. The same model at two efforts
+  makes a valid pair to compare.
 
 **Runs** are one click away from every page: the pill at the top shows how many are
 active, and **Runs** and **Metrics** sit under *Lab* in the sidebar.

@@ -14,12 +14,10 @@ import {
   IconFiles,
   IconFlask,
   IconHome,
-  IconLayers,
   IconList,
   IconPuzzle,
   IconRepo,
   IconSettings,
-  IconSparkles,
   IconTrendUp
 } from "./icons";
 
@@ -42,12 +40,10 @@ const MESSAGES = defineMessages({
     },
     nav: {
       home: "Home",
-      models: "Models",
-      harness: "Harness",
+      models: "Models and harness",
       skills: "Skills",
       benchmarks: "Benchmarks",
       repo: "Your repo",
-      improve: "Improve a skill",
       results: "Results",
       metrics: "Metrics",
       runs: "Runs",
@@ -68,12 +64,10 @@ const MESSAGES = defineMessages({
     },
     nav: {
       home: "Inicio",
-      models: "Modelos",
-      harness: "Arnés",
+      models: "Modelos y arnés",
       skills: "Skills",
       benchmarks: "Benchmarks",
       repo: "Tu repo",
-      improve: "Mejorar una skill",
       results: "Resultados",
       metrics: "Métricas",
       runs: "Corridas",
@@ -126,28 +120,25 @@ const NAV_GROUPS: NavGroup[] = [
     title: "tryOut",
     items: [
       {
+        // Models and harness are one flow since 2026-11-20 (ADR-0093).
         to: "/flows/models",
         label: "models",
         icon: IconCpu,
-        owns: ["/models", "/local/", "/evaluate/compare-models"]
+        owns: [
+          "/models",
+          "/local/",
+          "/evaluate/compare-models",
+          "/harness",
+          "/evaluate/harness-by-model",
+          "/evaluate/new"
+        ]
       },
       {
-        to: "/flows/harness",
-        label: "harness",
-        icon: IconLayers,
-        owns: ["/harness", "/evaluate/harness-by-model", "/evaluate/new"]
-      },
-      {
+        // Trying and improving a skill are one flow too.
         to: "/flows/skills",
         label: "skills",
         icon: IconPuzzle,
         owns: ["/evidence/skills"]
-      },
-      {
-        to: "/flows/improve",
-        label: "improve",
-        icon: IconSparkles,
-        owns: []
       },
       {
         to: "/benchmarks",

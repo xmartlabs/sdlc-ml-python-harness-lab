@@ -336,7 +336,7 @@ class RunService:
     def preview_command(self, run_id: str, config: RunConfigCreate) -> list[str]:
         return self.adapter.build_command(run_id, config)
 
-    def _check_runner_image(self) -> None:
+    def _check_runner_image(self, config: RunConfigCreate | None = None) -> None:
         """Refuse a docker-backed run when the runner image is not built yet.
 
         Without this the run is persisted, queued, and dies in the executor
@@ -346,6 +346,12 @@ class RunService:
         answer is cached, so this costs nothing in the common case. Silence
         when no worker replies: that is the worker check's story to tell, and
         guessing here would block runs whenever the broadcast is slow.
+
+        With ``config``, a case that brings its own image (ADR-0078, the 3D
+        cases) is checked too: `make app-up` builds only the shared image, so a
+        stack reset can leave the Godot one missing while everything else is
+        fine (chess3d-v1-K-015, 2026-11-20). A worker that does not report its
+        case images (``case_images_present`` absent) is not second-guessed.
         """
         from harness_lab_app.health_service import worker_facts
 
@@ -358,6 +364,33 @@ class RunService:
                 "the run would fail immediately. Open Health and use "
                 "'Build runner image' — it builds on the worker and takes a "
                 "few minutes."
+            )
+        present = facts.get("case_images_present")
+        if (
+            config is None
+            or not facts.get("docker_ok")
+            or not isinstance(present, list)
+        ):
+            return
+        from harness_lab_app.case_profile import CaseProfileError, runner_image_for
+        from harness_lab_app.models import Case
+
+        case = self.session.exec(
+            select(Case).where(Case.case_id == config.case_id)
+        ).first()
+        if case is None:
+            return
+        try:
+            image = runner_image_for(case)
+        except CaseProfileError:
+            return  # the executor reports a malformed image with the case's name
+        if image and image not in present:
+            raise RunPreflightError(
+                f"Case '{config.case_id}' runs in its own image, {image!r}, which "
+                "is not built on this machine, so the run would fail in its first "
+                "second. Build it once with `make images-3d` (a few minutes; "
+                "`make app-up` builds only the shared runner image), then launch "
+                "again."
             )
 
     def preflight(self, config: RunConfigCreate) -> None:
@@ -389,7 +422,7 @@ class RunService:
                 "governance is masked inside the runner container, and a host "
                 "run would see it through the workspace's parent directory."
             )
-        self._check_runner_image()
+        self._check_runner_image(config)
         if config.harness in ("codex", "gemini"):
             # Subscription-backed CLIs (ADR-0094): the provider's own login,
             # kept per provider outside the repository, on either lane.

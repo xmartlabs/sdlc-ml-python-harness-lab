@@ -31,14 +31,26 @@ export type GuideStep = {
   node: string;
   question: string;
   hint?: string;
-  kind: "one" | "many" | "reps";
+  kind: "one" | "many" | "reps" | "custom";
   /** Options, given what was chosen before. */
   options?: (values: GuideValues) => GuideOption[];
   /** With kind "many": how many must be picked. */
   min?: number;
   /** Skip this step for these values (it is not drawn either). */
   skip?: (values: GuideValues) => boolean;
+  /** With kind "custom": the control that answers the step (it calls `pick`). */
+  render?: (values: GuideValues, pick: (value: string) => void) => ReactNode;
+  /** With kind "custom": how the answer reads in the trail, diagram and review. */
+  display?: (value: string) => string;
+  /**
+   * With kind "custom": the step may be answered with "none". The button shows
+   * `label`, and the answer stored is `SKIPPED`, which `display` should name.
+   */
+  skippable?: { label: string; hint?: string };
 };
+
+/** The answer of a skippable step the person chose to leave out. */
+export const SKIPPED = "__none__";
 
 export type GuideValues = Record<string, string | string[] | number | undefined>;
 
@@ -51,6 +63,12 @@ export type GuideEstimate = {
   /** How many runs the median stands on. */
   basis: number;
   notes?: string[];
+  /**
+   * Why a launch would be refused right now (the server's preflight, e.g. the
+   * case's own image is not built). Shown in red; "Create and launch" waits for
+   * it to be fixed, "Create only" still works.
+   */
+  blocker?: string;
 };
 
 export type GuideCreated = { ids: string[]; reused?: string[]; warnings?: string[] };
@@ -63,11 +81,19 @@ type GuideFlowProps = {
   estimate: (values: GuideValues) => Promise<GuideEstimate>;
   /** What the result will be, one line. */
   outcome: string;
+  /** The outcome line for these answers, when it depends on a branch. */
+  outcomeFor?: (values: GuideValues) => string;
   /** Terminal equivalent, shown folded. */
   cli?: (values: GuideValues) => string;
   /** Extra content on the review screen (e.g. a reuse toggle). */
   reviewExtra?: (values: GuideValues, set: (key: string, value: GuideValues[string]) => void) => ReactNode;
   onCreate: (values: GuideValues) => Promise<GuideCreated>;
+  /**
+   * Launch what `onCreate` made, with the shared settings and the server's
+   * preflight. When given, the review offers "Create and launch" first; the
+   * returned number is how many runs were queued.
+   */
+  onLaunch?: (values: GuideValues, created: GuideCreated) => Promise<number>;
   /** Where a created experiment is opened. */
   openPath?: (id: string) => string;
   onRestart?: () => void;
@@ -92,14 +118,22 @@ const MESSAGES = defineMessages({
     less: "Fewer",
     more: "More",
     toReview: "Review",
-    arms: "arms",
-    runs: "runs",
+    arms: (n: number): string => (n === 1 ? "arm" : "arms"),
+    runs: (n: number): string => (n === 1 ? "run" : "runs"),
     cost: "estimated cost",
     time: "time, one at a time",
     basis: (n: number) => `Estimated from the lab's median for this case and model (n=${n}).`,
     noBasis: "No measured run of this case with this model yet: the first run tells the cost.",
     many: (n: number) => `That is ${n} runs. Check it is what you want before creating.`,
-    create: (n: number) => `Create (${n} runs)`,
+    create: (n: number) => `Create (${n} run${n === 1 ? "" : "s"})`,
+    createOnly: "Create only",
+    blocked: "It cannot launch yet:",
+    createLaunch: (n: number) => `Create and launch (${n} run${n === 1 ? "" : "s"})`,
+    launching: "Launching…",
+    launchedNote: (n: number) => `Launched: ${n} run${n === 1 ? "" : "s"} queued. Follow ${n === 1 ? "it" : "them"} in Runs.`,
+    launchFailed: "Created, but the launch was refused:",
+    openRuns: "See the runs",
+    openExperiment: "Open the experiment",
     creating: "Creating…",
     createdNote:
       "Created, not launched. Launch it from Experiments, behind the usual launch form and preflight.",
@@ -128,14 +162,23 @@ const MESSAGES = defineMessages({
     less: "Menos",
     more: "Más",
     toReview: "Revisar",
-    arms: "brazos",
-    runs: "corridas",
+    arms: (n: number) => (n === 1 ? "brazo" : "brazos"),
+    runs: (n: number) => (n === 1 ? "corrida" : "corridas"),
     cost: "costo estimado",
     time: "tiempo, de a una",
     basis: (n: number) => `Estimado con la mediana real del lab para este caso y modelo (n=${n}).`,
     noBasis: "No hay corridas medidas de este caso con este modelo: la primera dice el costo.",
     many: (n: number) => `Son ${n} corridas. Revisá que sea lo que querés antes de crear.`,
-    create: (n: number) => `Crear (${n} corridas)`,
+    create: (n: number) => `Crear (${n} corrida${n === 1 ? "" : "s"})`,
+    createOnly: "Solo crear",
+    blocked: "Todavía no se puede lanzar:",
+    createLaunch: (n: number) => `Crear y lanzar (${n} corrida${n === 1 ? "" : "s"})`,
+    launching: "Lanzando…",
+    launchedNote: (n: number) =>
+      n === 1 ? "Lanzado: 1 corrida en cola. Seguila en Corridas." : `Lanzado: ${n} corridas en cola. Seguilas en Corridas.`,
+    launchFailed: "Creado, pero el lanzamiento fue rechazado:",
+    openRuns: "Ver las corridas",
+    openExperiment: "Abrir el experimento",
     creating: "Creando…",
     createdNote:
       "Creado, no lanzado. Se lanza desde Experimentos, con el formulario y el preflight de siempre.",
@@ -171,6 +214,7 @@ function labelFor(step: GuideStep, values: GuideValues): string {
   const value = values[step.key];
   if (value === undefined) return "";
   if (step.kind === "reps") return String(value);
+  if (step.kind === "custom") return step.display ? step.display(String(value)) : String(value);
   const options = step.options?.(values) ?? [];
   const name = (id: string) => options.find((option) => option.id === id)?.label ?? id;
   return Array.isArray(value) ? value.map(name).join(" · ") : name(String(value));
@@ -269,9 +313,11 @@ export function GuideFlow({
   initial,
   estimate,
   outcome,
+  outcomeFor,
   cli,
   reviewExtra,
   onCreate,
+  onLaunch,
   openPath = (id) => `/evaluate/experiments?experiment=${encodeURIComponent(id)}`,
   onRestart
 }: GuideFlowProps) {
@@ -283,12 +329,17 @@ export function GuideFlow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<GuideCreated | null>(null);
+  // Runs queued by "Create and launch"; null when nothing was launched.
+  const [launched, setLaunched] = useState<number | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
 
   // Keep in step with a new `initial` (a deep link from the showcase).
   useEffect(() => {
     setValues(initial ?? {});
     setConfirmed(new Set(Object.keys(initial ?? {})));
     setCreated(null);
+    setLaunched(null);
+    setLaunchError(null);
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(initial ?? {})]);
@@ -315,6 +366,8 @@ export function GuideFlow({
 
   const set = (key: string, value: GuideValues[string]) => {
     setCreated(null);
+    setLaunched(null);
+    setLaunchError(null);
     setValues((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -323,16 +376,34 @@ export function GuideFlow({
     setValues((prev) => Object.fromEntries(Object.entries(prev).filter(([key]) => !drop.has(key))));
     setConfirmed((prev) => new Set([...prev].filter((key) => !drop.has(key))));
     setCreated(null);
+    setLaunched(null);
+    setLaunchError(null);
     setError(null);
   };
 
-  const create = () => {
+  const create = async (launch: boolean) => {
     setBusy(true);
     setError(null);
-    onCreate(values)
-      .then(setCreated)
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setBusy(false));
+    setLaunchError(null);
+    let made: GuideCreated;
+    try {
+      made = await onCreate(values);
+      setCreated(made);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+      return;
+    }
+    if (launch && onLaunch && made.ids.length > 0) {
+      try {
+        setLaunched(await onLaunch(values, made));
+      } catch (err) {
+        // Created stays created: the experiment opens in Experiments, where
+        // the same launch can be retried once the reason is fixed.
+        setLaunchError(err instanceof Error ? err.message : String(err));
+      }
+    }
+    setBusy(false);
   };
 
   const step = complete ? null : steps[index];
@@ -356,7 +427,21 @@ export function GuideFlow({
             <span className="guide-step-label">{m.step(index + 1, steps.length)}</span>
             <h2>{step.question}</h2>
             {step.hint ? <p className="muted">{step.hint}</p> : null}
-            {step.kind === "reps" ? (
+            {step.kind === "custom" && step.render ? (
+              // Keyed by step: two steps with the same control (Model 1,
+              // Model 2) each start fresh instead of inheriting the other's tab.
+              <div className="guide-custom" key={step.key}>
+                {step.skippable ? (
+                  <div className="guide-skip">
+                    <button className="secondary" onClick={() => set(step.key, SKIPPED)} type="button">
+                      {step.skippable.label}
+                    </button>
+                    {step.skippable.hint ? <span className="muted guide-small">{step.skippable.hint}</span> : null}
+                  </div>
+                ) : null}
+                {step.render(values, (value) => set(step.key, value))}
+              </div>
+            ) : step.kind === "reps" ? (
               <div className="guide-reps-wrap">
                 <span className="guide-field-label">
                   {m.perArm} <InfoTooltip text={m.perArmTip} />
@@ -461,11 +546,11 @@ export function GuideFlow({
                   <div className="guide-totals">
                     <div>
                       <strong>{estimateValue.arms}</strong>
-                      <span>{m.arms}</span>
+                      <span>{m.arms(estimateValue.arms)}</span>
                     </div>
                     <div>
                       <strong>{estimateValue.runs}</strong>
-                      <span>{m.runs}</span>
+                      <span>{m.runs(estimateValue.runs)}</span>
                     </div>
                     <div>
                       <strong>{estimateValue.costUsd === null ? "—" : `~${money(estimateValue.costUsd)}`}</strong>
@@ -485,16 +570,41 @@ export function GuideFlow({
                     </p>
                   ))}
                   {estimateValue.runs > 12 ? <p className="guide-warn">{m.many(estimateValue.runs)}</p> : null}
+                  {estimateValue.blocker ? (
+                    <p className="guide-error" role="alert">
+                      {m.blocked} {estimateValue.blocker}
+                    </p>
+                  ) : null}
                 </>
               ) : (
                 <p className="muted guide-small">{m.estimating}</p>
               )}
               {reviewExtra ? reviewExtra(values, set) : null}
             </div>
-            <p className="muted">{outcome}</p>
+            <p className="muted">{outcomeFor ? outcomeFor(values) : outcome}</p>
             {error ? <p className="guide-error">{error}</p> : null}
-            {created ? (
+            {created && launched !== null ? (
               <div className="callout callout--ok">
+                <p>{m.launchedNote(launched)}</p>
+                <p>
+                  <Link to="/advanced/runs">{m.openRuns}</Link>
+                  {created.ids.map((id) => (
+                    <span key={id}>
+                      {" · "}
+                      <Link to={openPath(id)}>
+                        {m.openExperiment}: {id}
+                      </Link>
+                    </span>
+                  ))}
+                </p>
+              </div>
+            ) : created ? (
+              <div className="callout callout--ok">
+                {launchError ? (
+                  <p className="guide-error">
+                    {m.launchFailed} {launchError}
+                  </p>
+                ) : null}
                 <p>{m.createdNote}</p>
                 {created.reused && created.reused.length > 0 ? <p>{m.reusedNote(created.reused.join(", "))}</p> : null}
                 {created.warnings?.map((warning) => (
@@ -512,11 +622,30 @@ export function GuideFlow({
               </div>
             ) : null}
             <div className="guide-actions">
-              {!created ? (
+              {!created && onLaunch ? (
+                <>
+                  <button
+                    className="primary"
+                    disabled={busy || !estimateValue || estimateValue.runs === 0 || Boolean(estimateValue.blocker)}
+                    onClick={() => void create(true)}
+                    type="button"
+                  >
+                    {busy ? m.launching : m.createLaunch(estimateValue?.runs ?? 0)}
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={busy || !estimateValue || estimateValue.runs === 0}
+                    onClick={() => void create(false)}
+                    type="button"
+                  >
+                    {m.createOnly}
+                  </button>
+                </>
+              ) : !created ? (
                 <button
                   className="primary"
                   disabled={busy || !estimateValue || estimateValue.runs === 0}
-                  onClick={create}
+                  onClick={() => void create(false)}
                   type="button"
                 >
                   {busy ? m.creating : m.create(estimateValue?.runs ?? 0)}
@@ -533,7 +662,7 @@ export function GuideFlow({
                 {m.restart}
               </button>
             </div>
-            {cli ? (
+            {cli && cli(values) ? (
               <details className="guide-cli">
                 <summary className="muted">{m.cli}</summary>
                 <pre>

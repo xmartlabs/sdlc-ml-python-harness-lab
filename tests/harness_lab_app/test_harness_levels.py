@@ -101,6 +101,47 @@ def test_the_endpoint_creates_the_rungs_and_never_launches(session):
     assert session.exec(select(Run)).all() == []
 
 
+def test_an_effort_is_pinned_in_every_arm_of_every_rung(session):
+    """`--effort` is part of the arm (ADR-0081): set once, held in every level,
+    so the only thing that moves within a rung is still the harness level."""
+    session.add(
+        Case(
+            case_id="chess3d-v1",
+            name="chess3d-v1",
+            type=CaseType.build_from_scratch,
+            prompt_variants={"default": "d", "harness": "h"},
+        )
+    )
+    session.commit()
+    created = _endpoint("/api/experiments/harness-levels", "POST")(
+        data=HarnessLevelsCreate(
+            case_id="chess3d-v1",
+            model="claude-opus-5-5",
+            levels=["bare", "full"],
+            effort="high",
+        ),
+        session=session,
+    )
+    ids = [row["experiment_id"] for row in created["experiments"]]
+    conditions = session.exec(
+        select(ExperimentCondition).where(ExperimentCondition.experiment_id.in_(ids))  # type: ignore[attr-defined]
+    ).all()
+    assert {c.overrides.get("executor_effort") for c in conditions} == {"high"}
+
+
+def test_no_effort_leaves_the_arms_exactly_as_before():
+    for design in ladder_designs(
+        case_id="tetris-v2",
+        model="claude-haiku-4-5",
+        harness="claude",
+        levels=["minimal", "full"],
+        reps=1,
+        minimal_disabled=["a"],
+    ):
+        for condition in design.conditions:
+            assert "executor_effort" not in condition.overrides
+
+
 def test_a_case_without_a_plain_prompt_is_refused(session):
     session.add(
         Case(

@@ -1697,6 +1697,8 @@ def create_app() -> FastAPI:
         from harness_lab_app.staged_skill_service import StagedSkillService
 
         pin = {"executor_model": data.model, "harness": data.harness}
+        if data.effort:
+            pin["executor_effort"] = data.effort
         if data.base is not None:
             return _create_base_trials(data, pin, session)
         if data.source == "staged":
@@ -1791,6 +1793,7 @@ def create_app() -> FastAPI:
                 levels=data.levels,
                 reps=data.repetitions,
                 minimal_disabled=profile_disabled("minimal"),
+                effort=data.effort,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1828,6 +1831,8 @@ def create_app() -> FastAPI:
             )
         base_disabled = profile_disabled(data.base)
         pin = {"executor_model": data.model, "harness": data.harness}
+        if data.effort:
+            pin["executor_effort"] = data.effort
         base_id = f"refine-{data.skill}-vs-{data.candidate}".lower().replace("_", "-")
         experiment_id = _unique_experiment_id(session, base_id[:64])
         try:
@@ -1928,24 +1933,51 @@ def create_app() -> FastAPI:
 
     @app.get("/api/estimate")
     def estimate_run_cost(
-        case_id: str, model: str, session: Session = Depends(get_session)
+        case_id: str,
+        model: str,
+        level: str = "",
+        session: Session = Depends(get_session),
     ):
         """Median cost and minutes per run, from this case and model's history.
 
         What the guide shows before anything is created. ``n`` is how many
         completed runs the median stands on; 0 means unknown, never free.
+
+        ``level`` (``bare`` | ``minimal`` | ``full``) keeps only the runs made
+        at that harness level, so a first bare run of a 3D case is not priced
+        with the full-harness runs before it. Empty reads every run, as before.
         """
         from statistics import median
 
         from sqlmodel import col
 
-        from harness_lab_app.models import Run, RunConfig, Score
+        from harness_lab_app.models import HarnessSource, Run, RunConfig, Score
+        from harness_lab_app.skills_catalog import profile_disabled
 
-        configs = session.exec(
-            select(RunConfig.id).where(
+        if level not in ("", "bare", "minimal", "full"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown harness level '{level}'. Use bare, minimal or full.",
+            )
+        rows = session.exec(
+            select(RunConfig).where(
                 RunConfig.case_id == case_id, RunConfig.executor_model == model
             )
         ).all()
+        if level:
+            minimal = sorted(profile_disabled("minimal"))
+
+            def at_level(config: RunConfig) -> bool:
+                source = config.harness_source
+                if level == "bare":
+                    return source == HarnessSource.bare
+                if source != HarnessSource.lab_root:
+                    return False
+                disabled = sorted(config.skills_disabled or [])
+                return disabled == (minimal if level == "minimal" else [])
+
+            rows = [config for config in rows if at_level(config)]
+        configs = [config.id for config in rows]
         if not configs:
             return {"case_id": case_id, "model": model, "n": 0}
         run_ids = session.exec(

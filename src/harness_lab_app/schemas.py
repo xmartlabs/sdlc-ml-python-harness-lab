@@ -197,6 +197,9 @@ class SkillTrialCreate(BaseModel):
     # Pinned in both arms, so launching from the shared form cannot swap in its
     # own default model or harness (ADR-0090).
     harness: str = Field(default="claude", pattern="^(claude|opencode|codex|gemini)$")
+    # Reasoning effort (ADR-0081), pinned in every arm like the model. Empty
+    # keeps the CLI default, so an older request builds exactly what it did.
+    effort: str = Field(default="", pattern="^(|low|medium|high|xhigh|max)$")
     # "catalog": profile vs profile + a governed skill (ADR-0089).
     # "staged": no skill vs a staged one — a case's candidate, or yours (ADR-0091).
     source: str = Field(default="catalog", pattern="^(catalog|staged)$")
@@ -220,6 +223,9 @@ class HarnessLevelsCreate(BaseModel):
     levels: list[str] = Field(min_length=2)
     repetitions: int = Field(default=1, ge=1, le=10)
     harness: str = Field(default="claude", pattern="^(claude|opencode|codex|gemini)$")
+    # Reasoning effort (ADR-0081), pinned in every arm like the model. Empty
+    # keeps the CLI default, so an older request builds exactly what it did.
+    effort: str = Field(default="", pattern="^(|low|medium|high|xhigh|max)$")
 
 
 class SkillRefineCreate(BaseModel):
@@ -237,6 +243,9 @@ class SkillRefineCreate(BaseModel):
     base: str = Field(default="full", pattern="^(minimal|full)$")
     repetitions: int = Field(default=3, ge=1, le=10)
     harness: str = Field(default="claude", pattern="^(claude|opencode|codex|gemini)$")
+    # Reasoning effort (ADR-0081), pinned in every arm like the model. Empty
+    # keeps the CLI default, so an older request builds exactly what it did.
+    effort: str = Field(default="", pattern="^(|low|medium|high|xhigh|max)$")
 
 
 class SkillAuditRequest(BaseModel):

@@ -414,6 +414,8 @@ export const api = {
     profile?: string;
     repetitions?: number;
     harness?: "claude" | "opencode" | "codex" | "gemini";
+    /** Reasoning effort pinned in every arm (ADR-0081); "" = the CLI default. */
+    effort?: string;
     /** "catalog": profile vs profile + skill. "staged": no skill vs a staged one (ADR-0091). */
     source?: "catalog" | "staged";
   }) =>
@@ -434,6 +436,8 @@ export const api = {
     base: "minimal" | "full" | "both";
     repetitions: number;
     harness?: "claude" | "opencode" | "codex" | "gemini";
+    /** Reasoning effort pinned in every arm (ADR-0081); "" = the CLI default. */
+    effort?: string;
     reuse_measured?: boolean;
     /** Preview only: which bases would be reused or created. Writes nothing. */
     dry_run?: boolean;
@@ -450,6 +454,8 @@ export const api = {
     levels: string[];
     repetitions: number;
     harness?: "claude" | "opencode" | "codex" | "gemini";
+    /** Reasoning effort pinned in every arm (ADR-0081); "" = the CLI default. */
+    effort?: string;
   }) =>
     request<{ family_id: string; experiments: (ExperimentRecord & { warnings?: string[] })[] }>(
       "/api/experiments/harness-levels",
@@ -464,6 +470,8 @@ export const api = {
     base?: "minimal" | "full";
     repetitions: number;
     harness?: "claude" | "opencode" | "codex" | "gemini";
+    /** Reasoning effort pinned in every arm (ADR-0081); "" = the CLI default. */
+    effort?: string;
   }) =>
     request<ExperimentRecord & { warnings?: string[] }>("/api/experiments/skill-refine", {
       method: "POST",
@@ -482,9 +490,11 @@ export const api = {
       body: JSON.stringify({ name, content, description })
     }),
   /** Median cost and minutes per run for a case and model; n=0 means unknown. */
-  estimateRun: (caseId: string, model: string) =>
+  /** `level` (bare | minimal | full) prices only the runs made at that harness level. */
+  estimateRun: (caseId: string, model: string, level = "") =>
     request<{ case_id: string; model: string; n: number; cost_usd?: number | null; minutes?: number | null }>(
-      `/api/estimate?case_id=${encodeURIComponent(caseId)}&model=${encodeURIComponent(model)}`
+      `/api/estimate?case_id=${encodeURIComponent(caseId)}&model=${encodeURIComponent(model)}` +
+        (level ? `&level=${encodeURIComponent(level)}` : "")
     ),
   /** The rules that turn numbers into a verdict, read from the code. */
   getMetricCriteria: () => request<MetricCriteria>("/api/metrics/criteria"),

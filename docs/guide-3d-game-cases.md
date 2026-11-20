@@ -58,9 +58,18 @@ Godot runs in two modes inside the runner:
 Both modes work inside the hardened validation lane: no network, every capability
 dropped, 4 GB of memory.
 
-If a case names an image that was not built, the run fails before any container
-starts, with a message that names `make images-3d`. The failure is recorded as the
-lab's, not the agent's.
+`make app-up` builds only the shared runner image. When a 3D case's image is missing,
+it says so and names `make images-3d`.
+
+If a case names an image that was not built, the run is refused before it is queued.
+The worker reports which `harness-lab-*` images it has (`case_images_present`), and the
+run preflight checks the case's `runner_image` against that list. The guided flows show
+the refusal on the review screen, and **Create and launch** waits until the image is
+built.
+
+Before 2026-11-20, a missing image was caught only when the executor started, so the run
+was queued and failed in its first second (chess3d-v1-K-015). That failure is recorded as
+the lab's, not the agent's.
 
 ## How a game is graded
 

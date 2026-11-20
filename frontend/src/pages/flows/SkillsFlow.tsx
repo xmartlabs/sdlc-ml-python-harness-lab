@@ -4,10 +4,20 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../../api";
 import { GuideFlow } from "../../components/guide/GuideFlow";
 import type { GuideOption, GuideStep, GuideValues } from "../../components/guide/GuideFlow";
-import { armFor, estimateCells, loadCases, loadModels, modelOptions } from "../../components/guide/guideData";
+import {
+  armFor,
+  estimateCells,
+  launchBlocker,
+  launchExperiments,
+  loadCases,
+  loadClis,
+  loadModels,
+  loadNative
+} from "../../components/guide/guideData";
+import { armLabel, HarnessModelChooser } from "../../components/guide/HarnessModelChooser";
 import { caseOptions } from "./ModelsFlow";
 import { defineMessages, useMessages } from "../../i18n";
-import type { CaseRecord, ModelOption, SkillProfileRecord, StagedSkillRecord } from "../../types";
+import type { CaseRecord, ModelOption, NativeModelRecord, SkillProfileRecord, StagedSkillRecord } from "../../types";
 
 /**
  * Skills flow (ADR-0093): does a skill earn a place on minimal, full, or
@@ -44,10 +54,9 @@ const MESSAGES = defineMessages({
     baseFull: "Full — on top of everything",
     baseBoth: "Both — where does it help?",
     caseQ: "Which case?",
-    modelQ: "Which model?",
+    modelQ: "Which agent and model?",
+    armHint: "The tab is the agent CLI that runs the model; under it, only the models it can drive.",
     repsQ: "How many times each?",
-    local: "local · this machine",
-    cloud: "cloud",
     reuseLabel: "Reuse an identical A/B already measured",
     reuseHint:
       "Skips re-running a base already measured with the same skill, case and model.",
@@ -83,10 +92,9 @@ const MESSAGES = defineMessages({
     baseFull: "Full — encima de todo el catálogo",
     baseBoth: "Las dos — ¿dónde aporta?",
     caseQ: "¿En qué caso?",
-    modelQ: "¿Qué modelo?",
+    modelQ: "¿Qué agente y modelo?",
+    armHint: "La pestaña es la CLI de agente que corre el modelo; abajo, solo los modelos que puede manejar.",
     repsQ: "¿Cuántas veces cada uno?",
-    local: "local · esta máquina",
-    cloud: "nube",
     reuseLabel: "Reusar un A/B idéntico ya medido",
     reuseHint:
       "Evita re-correr una base ya medida con la misma skill, caso y modelo.",
@@ -103,6 +111,7 @@ export function SkillsFlow() {
   const [params] = useSearchParams();
   const [cases, setCases] = useState<CaseRecord[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [native, setNative] = useState<Record<string, NativeModelRecord[]>>({});
   const [profiles, setProfiles] = useState<Record<string, SkillProfileRecord>>({});
   const [staged, setStaged] = useState<StagedSkillRecord[]>([]);
   const [governed, setGoverned] = useState<{ name: string; description: string }[]>([]);
@@ -111,6 +120,8 @@ export function SkillsFlow() {
   useEffect(() => {
     loadCases().then(setCases);
     loadModels().then(setModels);
+    loadNative().then(setNative);
+    void loadClis();
     api.listSkillProfiles().then(setProfiles).catch(() => setProfiles({}));
     api
       .listStagedSkills()
@@ -192,7 +203,17 @@ export function SkillsFlow() {
     { key: "skill", node: m.nodes.skill, question: m.skillQ, hint: m.stagedHint, kind: "one", options: skillOptions },
     { key: "base", node: m.nodes.base, question: m.baseQ, kind: "one", options: baseOptions },
     { key: "case", node: m.nodes.case, question: m.caseQ, kind: "one", options: () => caseOptions(cases) },
-    { key: "model", node: m.nodes.model, question: m.modelQ, kind: "one", options: () => modelOptions(models, m.local, m.cloud) },
+    {
+      key: "model",
+      node: m.nodes.model,
+      question: m.modelQ,
+      hint: m.armHint,
+      kind: "custom",
+      display: (value: string) => armLabel(value, models, native),
+      render: (values: GuideValues, pick: (value: string) => void) => (
+        <HarnessModelChooser onPick={pick} value={String(values.model ?? "")} />
+      )
+    },
     { key: "reps", node: m.nodes.reps, question: m.repsQ, kind: "reps" }
   ];
 
@@ -215,6 +236,7 @@ export function SkillsFlow() {
               skill: String(values.skill),
               model: arm.model,
               harness: arm.harness,
+              effort: arm.effort,
               case_ids: [caseId],
               source: String(values.source) === "catalog" ? "catalog" : "staged",
               base,
@@ -228,7 +250,11 @@ export function SkillsFlow() {
             // A preview that cannot run (skill not staged yet) counts both bases.
           }
         }
-        return estimateCells([{ caseId, modelId, runs: 2 * bases * reps }], 2 * bases, notes);
+        const [cells, blocker] = await Promise.all([
+          estimateCells([{ caseId, modelId, runs: 2 * bases * reps }], 2 * bases, notes),
+          launchBlocker(cases.find((row) => row.case_id === caseId), [modelId])
+        ]);
+        return { ...cells, blocker };
       }}
       initial={initial}
       onCreate={async (values) => {
@@ -250,6 +276,7 @@ export function SkillsFlow() {
           skill,
           model: arm.model,
           harness: arm.harness,
+          effort: arm.effort,
           case_ids: [caseId],
           source: source === "catalog" ? "catalog" : "staged",
           base,
@@ -262,6 +289,9 @@ export function SkillsFlow() {
           warnings: result.experiments.flatMap((experiment) => experiment.warnings ?? [])
         };
       }}
+      onLaunch={(values, created) =>
+        launchExperiments(created.ids, cases.find((row) => row.case_id === String(values.case)), String(values.model))
+      }
       reviewExtra={(values, set) =>
         values.base === "both" ? (
           <label className="checkbox">
@@ -282,6 +312,7 @@ export function SkillsFlow() {
           skill: String(values.skill),
           model: arm.model,
           harness: arm.harness,
+          effort: arm.effort,
           case_ids: [String(values.case)],
           source: String(values.source) === "catalog" ? "catalog" : "staged",
           base: String(values.base),

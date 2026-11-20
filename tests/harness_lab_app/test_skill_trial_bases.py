@@ -146,6 +146,31 @@ def test_both_bases_create_two_clean_ab_in_one_family(session, staging):
     assert session.exec(select(Run)).all() == []
 
 
+def test_a_trial_pins_the_chosen_effort_in_both_arms_of_each_base(session, staging):
+    _seed(session)
+    _endpoint("/api/cases/{case_id}/candidate-skills/{name}/stage", "POST")(
+        case_id="pr-review-v1",
+        name="review_pull_request",
+        replace=False,
+        session=session,
+    )
+    created = _endpoint("/api/experiments/skill-trial", "POST")(
+        data=SkillTrialCreate(
+            skill="review_pull_request",
+            model="claude-opus-5-5",
+            case_ids=["pr-review-v1"],
+            source="staged",
+            base="both",
+            reuse_measured=False,
+            effort="max",
+        ),
+        session=session,
+    )
+    for row in created["experiments"]:
+        arms = _arms(session, row["experiment_id"])
+        assert {arm.get("executor_effort") for arm in arms.values()} == {"max"}
+
+
 def _finish_runs(session, experiment_id: str, per_arm: int) -> None:
     """Record ``per_arm`` completed runs on each arm of ``experiment_id``."""
     from harness_lab_app.models import RunConfig, RunState

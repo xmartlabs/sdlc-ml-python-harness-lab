@@ -61,13 +61,20 @@ def ladder_designs(
     reps: int,
     minimal_disabled: list[str],
     prompt_variant: str = "default",
+    effort: str = "",
 ) -> list[ExperimentCreate]:
-    """One clean A/B per rung, in one family. Never launched here."""
+    """One clean A/B per rung, in one family. Never launched here.
+
+    ``effort`` (ADR-0081) is pinned in every arm when given; empty leaves the
+    CLI default and the arms exactly as they were before the option existed.
+    """
     pin = {
         "harness": harness,
         "executor_model": model,
         "prompt_variant": prompt_variant,
     }
+    if effort:
+        pin["executor_effort"] = effort
     family = ladder_family(case_id, model)
     designs: list[ExperimentCreate] = []
     for lower, upper in rungs(levels):

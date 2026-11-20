@@ -20,7 +20,6 @@ import {
   IconPuzzle,
   IconRepo,
   IconSearch,
-  IconSparkles,
   IconTrendUp
 } from "../components/icons";
 import type { IconProps } from "../components/icons";
@@ -55,14 +54,14 @@ const MODES = [
 ] as const;
 
 /**
- * The four doors (ADR-0090): what a newcomer came to try, each opening its hub.
+ * The doors (ADR-0090, ADR-0093): what a newcomer came to try, each opening a
+ * guided flow. Models and harness share one door, and so do trying and
+ * improving a skill (2026-11-20): each pair is one question with two branches.
  * The evaluation modes above are still one click away, under "in detail".
  */
 const DOORS = [
   { key: "models", icon: IconCpu, to: "/flows/models" },
-  { key: "harness", icon: IconLayers, to: "/flows/harness" },
   { key: "skills", icon: IconPuzzle, to: "/flows/skills" },
-  { key: "improve", icon: IconSparkles, to: "/flows/improve" },
   { key: "metrics", icon: IconTrendUp, to: "/flows/metrics" },
   { key: "benchmarks", icon: IconFiles, to: "/benchmarks" },
   { key: "repo", icon: IconRepo, to: "/your-repo" }
@@ -80,10 +79,8 @@ const MESSAGES = defineMessages({
     doorsTitle: "What do you want to try today?",
     doorsLede: "Four ways in. The experiment's design — what stays fixed, what varies — is built by each form, not here.",
     doors: {
-      models: { title: "Models", body: "Local vs cloud, or a new frontier model on the 3D cases.", tags: ["LM Studio", "Ollama", "Claude"], tip: "Varies the model; the case, prompt and steps stay fixed. Answers: which model solves this case best, at what cost?" },
-      harness: { title: "Harness", body: "No harness → minimal → full, on any case.", tags: ["3D too", "bare", "minimal"], tip: "Varies how much harness the agent carries; model and case stay fixed. Answers: how much harness does this model need here?" },
-      skills: { title: "Skills", body: "Does this skill earn a place, on minimal or on full?", tags: ["the case's", "catalog", "yours"], tip: "Varies one skill. From the case, the catalog, another repo or written by hand; against minimal, full, or both." },
-      improve: { title: "Improve a skill", body: "The LLM as auditor: what it misses, a v2, v1 vs v2.", tags: ["audit", "v2 draft"], tip: "Reads the runs that used the skill, drafts a v2 you review, and sets up v1 vs v2." },
+      models: { title: "Models and harness", body: "Local vs cloud, a new frontier model, or none → minimal → full on one model.", tags: ["LM Studio", "Claude", "3D too", "no harness"], tip: "Compare models: one or two, at the harness level you pick. Harness levels: one model, none → minimal → full, an A/B with a verdict per step up." },
+      skills: { title: "Skills", body: "Does this skill earn a place? And can the LLM make it better?", tags: ["the case's", "catalog", "yours", "LLM audit"], tip: "Try a skill: from the case, the catalog, another repo or written by hand, against minimal, full or both. Improve a skill: the LLM reads its runs, drafts a v2 you review, and sets up v1 vs v2." },
       metrics: { title: "Metrics", body: "Compare runs, what to improve, what each number means.", tags: ["compare", "criteria"], tip: "Reads what already ran. Creates nothing." },
       benchmarks: { title: "Benchmarks", body: "Pick a test case, by family.", tags: ["SWE-bench", "3D games", "Security", "Web"], tip: "Every case carries a check the agent did not write." },
       repo: { title: "Your repo", body: "Check your project's harness and take home what helps.", tags: ["30 seconds", "audit", "export"], tip: "No comparison: it reviews a project of yours and says what it lacks." }
@@ -200,10 +197,8 @@ const MESSAGES = defineMessages({
     doorsTitle: "¿Qué querés probar hoy?",
     doorsLede: "Cuatro puertas. El diseño del experimento (qué queda fijo, qué varía) lo arma cada formulario, no esta página.",
     doors: {
-      models: { title: "Modelos", body: "Local contra nube, o un frontera nuevo en los casos 3D.", tags: ["LM Studio", "Ollama", "Claude"], tip: "Varía el modelo; el caso, el prompt y los pasos quedan fijos. Responde: ¿qué modelo resuelve mejor este caso, a qué costo?" },
-      harness: { title: "Arnés", body: "Sin arnés → minimal → full, en cualquier caso.", tags: ["también 3D", "bare", "minimal"], tip: "Varía cuánto arnés lleva el agente; el modelo y el caso quedan fijos. Responde: ¿cuánto arnés necesita este modelo acá?" },
-      skills: { title: "Skills", body: "¿Esta skill se gana un lugar, en minimal o en full?", tags: ["la del caso", "catálogo", "tuya"], tip: "Varía una skill. Del caso, del catálogo, de otro repo o escrita a mano; contra minimal, full o las dos." },
-      improve: { title: "Mejorar una skill", body: "El LLM como auditor: qué le falta, una v2, v1 contra v2.", tags: ["auditoría", "borrador v2"], tip: "Lee las corridas que usaron la skill, escribe un borrador de v2 que revisás, y arma v1 contra v2." },
+      models: { title: "Modelos y arnés", body: "Local contra nube, un frontera nuevo, o sin → minimal → full con un modelo.", tags: ["LM Studio", "Claude", "también 3D", "sin arnés"], tip: "Comparar modelos: uno o dos, con el nivel de arnés que elijas. Niveles de arnés: un modelo, sin → minimal → full, un A/B con veredicto por escalón." },
+      skills: { title: "Skills", body: "¿Esta skill se gana un lugar? ¿Y el LLM la puede mejorar?", tags: ["la del caso", "catálogo", "tuya", "auditoría LLM"], tip: "Probar una skill: del caso, del catálogo, de otro repo o escrita a mano, contra minimal, full o las dos. Mejorar una skill: el LLM lee sus corridas, escribe una v2 que revisás y arma v1 contra v2." },
       metrics: { title: "Métricas", body: "Comparar corridas, qué mejorar, qué significa cada número.", tags: ["comparar", "criterios"], tip: "Lee lo que ya corrió. No crea nada." },
       benchmarks: { title: "Benchmarks", body: "Elegí un caso de prueba por familia.", tags: ["SWE-bench", "Juegos 3D", "Seguridad", "Web"], tip: "Cada caso trae un chequeo que el agente no escribió." },
       repo: { title: "Tu repo", body: "Revisá el arnés de tu proyecto y llevate lo que sirve.", tags: ["30 segundos", "auditoría", "export"], tip: "No compara nada: revisa un proyecto tuyo y dice qué le falta." }

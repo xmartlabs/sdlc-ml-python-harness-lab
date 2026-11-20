@@ -3104,6 +3104,10 @@ def harness_facts(_state: Any) -> dict[str, Any]:
         "cli_versions": {},
         "docker_version": "",
         "docker_error": "",
+        # The lab's own images a case may name (ADR-0078), e.g. the Godot
+        # runner of the 3D cases: `make app-up` builds only the shared one, so
+        # the run preflight asks which case images exist before queueing.
+        "case_images_present": [],
     }
     if settings.execution_backend != "docker":
         return facts
@@ -3113,6 +3117,15 @@ def harness_facts(_state: Any) -> dict[str, Any]:
         client = docker.from_env()
         facts["docker_version"] = client.version().get("Version", "")
         facts["docker_ok"] = True
+        with contextlib.suppress(Exception):
+            from harness_lab_app.case_profile import image_is_allowed
+
+            facts["case_images_present"] = sorted(
+                tag
+                for image in client.images.list(name="harness-lab-*")
+                for tag in (getattr(image, "tags", None) or [])
+                if image_is_allowed(tag)
+            )
         with contextlib.suppress(Exception):
             image = client.images.get(settings.runner_image)
             facts["runner_image_present"] = True

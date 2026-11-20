@@ -213,7 +213,7 @@ def lab(session, monkeypatch):
     _seed_case(session)
     TargetService(session).create_target(_target())
     service = RunService(session)
-    monkeypatch.setattr(service, "_check_runner_image", lambda: None)
+    monkeypatch.setattr(service, "_check_runner_image", lambda _config=None: None)
     monkeypatch.setattr(service, "_publish", lambda _run_id: None)
     monkeypatch.setattr(
         "harness_lab_app.run_service.resolve_ref", lambda _url, _ref: _SHA

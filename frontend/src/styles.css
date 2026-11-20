@@ -5917,3 +5917,56 @@ button.danger:hover {
   background: var(--accent-soft);
   color: var(--accent);
 }
+
+/* Harness → model chooser of the guided flows (ADR-0093, amended 2026-11-20):
+   one tab per agent CLI with its readiness, then only that agent's models. */
+.hm-chooser { display: grid; gap: var(--space-3); }
+.hm-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+.hm-tab {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  cursor: pointer;
+}
+.hm-tab strong { font-size: 0.98rem; }
+.hm-tab:hover { border-color: var(--accent); }
+.hm-tab--active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 -3px 0 var(--accent); }
+.hm-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hm-dot { display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted); }
+.hm-dot::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.hm-dot--ok::before { background: var(--success); }
+.hm-dot--warn::before { background: var(--warning); }
+.hm-dot--off::before { background: var(--danger); }
+.hm-about { margin: 0; }
+.hm-filters { display: grid; gap: var(--space-2); justify-items: start; }
+.guide-option[data-disabled="true"] { opacity: 0.55; }
+.guide-option[data-disabled="true"]:hover { border-color: var(--line); }
+.guide-option-hit:disabled { cursor: not-allowed; }
+@media (max-width: 720px) {
+  .hm-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.guide-custom { display: grid; gap: var(--space-3); }
+.guide-skip { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.hm-effort { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.hm-effort .segmented button { padding: 4px 10px; font-size: 0.8rem; }
+.hm-effort .segmented button:not(.active):hover { background: var(--panel-soft); color: var(--text); }
+.hm-effort .segmented button.active,
+.hm-effort .segmented button.active:hover { background: var(--accent); color: white; }
+/* A card that is itself the button (the Improve flow's skill and experiment
+   pickers) keeps the padding the hit area carries on the other cards. */
+button.guide-option {
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+}
+button.guide-option[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }

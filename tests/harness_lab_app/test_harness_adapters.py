@@ -121,7 +121,7 @@ def test_preflight_blocks_a_docker_codex_run_without_a_subscription_login(
         },
     )
     service = RunService.__new__(RunService)
-    monkeypatch.setattr(service, "_check_runner_image", lambda: None)
+    monkeypatch.setattr(service, "_check_runner_image", lambda _config=None: None)
     cfg = RunConfigCreate(case_id="tetris-v1", prompt_variant="naive", harness="codex")
     with pytest.raises(RunPreflightError, match="make auth-codex"):
         service.preflight(cfg)
@@ -252,7 +252,9 @@ def _docker_claude(monkeypatch, routing):
     from harness_lab_app.run_service import RunService
 
     monkeypatch.setattr(rs.get_settings(), "execution_backend", "docker", raising=False)
-    monkeypatch.setattr(RunService, "_check_runner_image", lambda _self: None)
+    monkeypatch.setattr(
+        RunService, "_check_runner_image", lambda _self, _config=None: None
+    )
     monkeypatch.setattr(
         rs,
         "read_env_file_value",

@@ -101,6 +101,31 @@ def test_a_staged_v1_and_v2_differ_only_in_the_version(session, staging):
     assert session.exec(select(Run)).all() == []
 
 
+def test_a_refine_pins_the_chosen_effort_in_both_versions(session, staging):
+    _seed_case(session)
+    _stage(session, "review_pull_request")
+    _stage(session, "review_pull_request-v2")
+    created = _endpoint("/api/experiments/skill-refine", "POST")(
+        data=SkillRefineCreate(
+            skill="review_pull_request",
+            candidate="review_pull_request-v2",
+            model="claude-opus-5-5",
+            case_ids=["pr-review-v1"],
+            effort="low",
+        ),
+        session=session,
+    )
+    efforts = {
+        c.overrides.get("executor_effort")
+        for c in session.exec(
+            select(ExperimentCondition).where(
+                ExperimentCondition.experiment_id == created["experiment_id"]
+            )
+        ).all()
+    }
+    assert efforts == {"low"}
+
+
 def test_a_refine_whose_v2_is_not_staged_is_refused(session, staging):
     _seed_case(session)
     with pytest.raises(HTTPException) as exc:
@@ -262,6 +287,45 @@ def test_the_estimate_is_the_median_of_completed_runs_and_says_how_many(session)
     assert estimate["n"] == 2  # the failed run is not a price
     assert estimate["cost_usd"] == pytest.approx(0.25)
     assert estimate["minutes"] == pytest.approx(1.5)
+
+
+def test_the_estimate_can_be_read_for_one_harness_level(session):
+    """A bare run of a 3D case costs differently from a full one: the guide asks
+    for the level it will run, so the price is not borrowed from another level."""
+    from harness_lab_app.models import HarnessSource
+    from harness_lab_app.skills_catalog import profile_disabled
+
+    levels = {
+        "bare": ({"harness_source": HarnessSource.bare}, 1.0),
+        "minimal": ({"skills_disabled": profile_disabled("minimal")}, 2.0),
+        "full": ({}, 4.0),
+        # An ad-hoc ablation is no named level: it never prices one.
+        "custom": ({"skills_disabled": ["review_pull_request"]}, 99.0),
+    }
+    for name, (fields, cost) in levels.items():
+        config = RunConfig(
+            case_id="chess3d-v1",
+            prompt_variant="default",
+            executor_model="opus",
+            **fields,
+        )
+        session.add(config)
+        session.commit()
+        session.refresh(config)
+        session.add(
+            Run(run_id=f"r-{name}", run_config_id=config.id, state=RunState.completed)
+        )
+        session.add(Score(run_id=f"r-{name}", name="cost_usd", value_num=cost))
+    session.commit()
+    estimate = _endpoint("/api/estimate", "GET")
+    for name, cost in (("bare", 1.0), ("minimal", 2.0), ("full", 4.0)):
+        row = estimate(case_id="chess3d-v1", model="opus", level=name, session=session)
+        assert (row["n"], row["cost_usd"]) == (1, cost), name
+    # No level: every run of the case and model, as before.
+    assert estimate(case_id="chess3d-v1", model="opus", session=session)["n"] == 4
+    with pytest.raises(HTTPException) as exc:
+        estimate(case_id="chess3d-v1", model="opus", level="max", session=session)
+    assert exc.value.status_code == 422
 
 
 def test_an_unmeasured_estimate_says_unknown_not_free(session):

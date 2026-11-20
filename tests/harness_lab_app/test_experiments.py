@@ -376,10 +376,11 @@ def lab(session, monkeypatch):
         )
     )
     runs = RunService(session)
-    monkeypatch.setattr(runs, "_check_runner_image", lambda: None)
+    monkeypatch.setattr(runs, "_check_runner_image", lambda _config=None: None)
     monkeypatch.setattr(runs, "_publish", lambda _run_id: None)
     monkeypatch.setattr(
-        "harness_lab_app.run_service.RunService._check_runner_image", lambda _self: None
+        "harness_lab_app.run_service.RunService._check_runner_image",
+        lambda _self, _config=None: None,
     )
     monkeypatch.setattr(
         "harness_lab_app.run_service.RunService._publish", lambda _self, _run_id: None

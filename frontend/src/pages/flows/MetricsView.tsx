@@ -423,7 +423,7 @@ function ImproveTab({
                     {skillName ? (
                       <Link
                         className="secondary"
-                        to={`/flows/skills?source=case&skill=${encodeURIComponent(skillName)}&case=${encodeURIComponent(caseId)}`}
+                        to={`/flows/skills?do=try&source=case&skill=${encodeURIComponent(skillName)}&case=${encodeURIComponent(caseId)}`}
                       >
                         {m.improve.tryIt}
                       </Link>

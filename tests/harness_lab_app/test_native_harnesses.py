@@ -521,7 +521,7 @@ def _service(monkeypatch: pytest.MonkeyPatch, backend: str, facts: dict):
     monkeypatch.setattr(rs.get_settings(), "execution_backend", backend, raising=False)
     monkeypatch.setattr(hs, "worker_facts", lambda **_k: facts)
     service = RunService.__new__(RunService)
-    monkeypatch.setattr(service, "_check_runner_image", lambda: None)
+    monkeypatch.setattr(service, "_check_runner_image", lambda _config=None: None)
     return service
 
 
