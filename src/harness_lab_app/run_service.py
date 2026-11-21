@@ -313,10 +313,16 @@ class RunService:
                 self.session.add(run)
             self.session.commit()
 
-    def list_runs(self, batch_id: str | None = None) -> list[Run]:
+    def list_runs(
+        self, batch_id: str | None = None, include_adhoc: bool = False
+    ) -> list[Run]:
         statement = select(Run).order_by(desc(cast("Any", Run.created_at)))
         if batch_id:
             statement = statement.where(Run.batch_id == batch_id)
+        if not include_adhoc:
+            # Ad hoc runs (ADR-0095) live on their task's page; in the run list
+            # they would read as benchmark attempts with no score.
+            statement = statement.where(cast("Any", Run.run_id).not_like("adhoc-%"))
         return list(self.session.exec(statement))
 
     def get_run(self, run_id: str) -> Run:

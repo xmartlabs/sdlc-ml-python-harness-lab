@@ -27,6 +27,9 @@ class CaseType(StrEnum):
     repo_task = "repo_task"
     swe_bench_instance = "swe_bench_instance"
     swe_pro_instance = "swe_pro_instance"
+    # A task the operator types against their own repository (ADR-0095). It is
+    # not a benchmark: no checks, no rubric, never in the case library.
+    adhoc = "adhoc"
 
 
 class CaseProvenance(StrEnum):
@@ -308,6 +311,11 @@ class Run(SQLModel, table=True):
     # row only when the lane that owns it answered; null for every run that
     # predates the second lane, all of which ran on `runs`.
     lane: str | None = None
+    # When the run's bulky files were deleted (ADR-0095): the workspace copy of
+    # a benchmark run in light mode, or every file of an ad hoc run. The DB rows
+    # (validation, scores, metrics) stay, so a purged run is still measured; it
+    # can no longer open a sandbox, be re-validated or be continued.
+    purged_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -906,3 +914,79 @@ class TuningProfile(SQLModel, table=True):
     server_version: str = ""
     recommended: bool = False
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class AdhocTask(SQLModel, table=True):
+    """A free-form task the operator runs against their own repository (ADR-0095).
+
+    The task is the comparable unit: one folder, one base commit, one prompt.
+    Every run of it — whatever harness, model or effort — starts from the same
+    commit, which is what makes "same task, another model" a fair comparison.
+
+    ``source_path`` is the folder as the lab container sees it (under the
+    read-only local sources mount); ``host_path`` is the same folder on the
+    operator's machine, which is what the apply container mounts and what the
+    UI prints. The lab's own copy lives in the paired ``TargetRepository``.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    task_id: str = Field(index=True, unique=True)
+    title: str = ""
+    prompt: str
+    source_path: str
+    host_path: str
+    branch: str = ""
+    base_commit: str
+    target_id: str = Field(index=True)
+    case_id: str = Field(index=True)
+    setup_commands: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    validation_commands: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class AdhocRun(SQLModel, table=True):
+    """What one ad hoc run cost and what the operator decided about it.
+
+    Denormalised on purpose: an ad hoc run's files are deleted soon after it
+    ends (ADR-0095), so every number the comparison table needs is copied here
+    once and outlives the run directory. ``decision`` is the operator's verdict;
+    ``apply_state`` is what happened to their working copy, which is a separate
+    fact — a change can be approved and never applied, or applied and undone.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: str = Field(index=True, unique=True)
+    task_id: str = Field(index=True)
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    billed_tokens: int | None = None
+    cost_usd: float | None = None
+    estimated_cost_usd: float | None = None
+    cost_source: str = ""
+    billing_mode: str = ""
+    minutes: float | None = None
+    turns: int | None = None
+    tool_calls: int | None = None
+    files_changed: int | None = None
+    lines_added: int | None = None
+    lines_removed: int | None = None
+    patch_files: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSON)
+    )
+    metrics_captured_at: datetime | None = None
+    # pending | approved | rejected | discarded
+    decision: str = "pending"
+    decision_reason: str = ""
+    notes: str = ""
+    decided_at: datetime | None = None
+    # none | applying | applied | undoing | undone | failed
+    apply_state: str = "none"
+    apply_error: str = ""
+    applied_at: datetime | None = None
+    files_purged: bool = False
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

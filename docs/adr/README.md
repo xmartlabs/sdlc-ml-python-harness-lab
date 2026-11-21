@@ -121,6 +121,8 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0091 — A case that ships a skill offers its trial from the UI](0091-a-case-that-ships-a-skill-offers-its-trial.md)
 - [0092 — A skill is trialled on a chosen base, and improved in an audited loop](0092-a-skill-is-trialled-on-a-chosen-base-and-improved-in-a-loop.md)
 - [0093 — The lab is driven by guided flows with a live diagram](0093-the-lab-is-driven-by-guided-flows.md)
+- [0094 — Codex and Gemini run on their own subscription login](0094-codex-and-gemini-run-on-their-own-subscription-login.md)
+- [0095 — An ad hoc task runs on a copy and is applied on request](0095-an-adhoc-task-runs-on-a-copy-and-is-applied-on-request.md)
 
 ## Why ADRs exist
 

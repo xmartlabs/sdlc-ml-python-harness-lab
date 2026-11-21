@@ -386,6 +386,11 @@ def _apply_sqlite_compat_migrations() -> None:
                 text("ALTER TABLE localmachine ADD COLUMN bandwidth_gbs FLOAT")
             )
 
+        # When a run's bulky files were purged (ADR-0095). Null for every run
+        # before purging existed: they still have all their files.
+        if columns and "purged_at" not in columns:
+            connection.execute(text("ALTER TABLE run ADD COLUMN purged_at DATETIME"))
+
         _migrate_staged_skills(connection)
 
 

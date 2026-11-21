@@ -259,3 +259,15 @@ export const IconCpu = (p: IconProps) => (
     <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.5 4.5l2 2M17.5 17.5l2 2M4.5 19.5l2-2M17.5 6.5l2-2" />
   </Svg>
 );
+
+/** A checklist: one real task on the operator's own repository, run to a verdict. */
+export const IconChecklist = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M9 6h11" />
+    <path d="M9 12h11" />
+    <path d="M9 18h11" />
+    <path d="m4 6 1 1 2-2" />
+    <path d="m4 12 1 1 2-2" />
+    <path d="m4 18 1 1 2-2" />
+  </Svg>
+);

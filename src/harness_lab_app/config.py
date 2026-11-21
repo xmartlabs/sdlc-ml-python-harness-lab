@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     sandbox_image: str = "harness-lab-sandbox:latest"
     sandbox_idle_seconds: int = 3600
 
+    # Ad hoc tasks (ADR-0095). Files of an undecided ad hoc run are deleted
+    # after this many days; the metrics row stays. The apply container is a
+    # throwaway run of this image: it needs git and Python, nothing else.
+    adhoc_retention_days: int = 7
+    adhoc_apply_image: str = "harness-lab-worker:latest"
+
     # Session auth (ADR-0015). The password hash, session secret and TTL are read
     # from `.env` per request (see session_middleware) so `make set-password`
     # applies without a restart; only this deployment-time flag is cached here.

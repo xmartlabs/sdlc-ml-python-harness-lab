@@ -21,6 +21,7 @@ from fastapi import (
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from harness_lab_app.adhoc_api import adhoc_router
 from harness_lab_app.artifact_service import ArtifactService
 from harness_lab_app.attribution_service import AttributionService
 from harness_lab_app.audit_service import AuditService
@@ -476,6 +477,7 @@ def create_app() -> FastAPI:
     # (ADR-0015).
     app.add_middleware(SessionMiddleware)
     app.include_router(local_router)
+    app.include_router(adhoc_router)
 
     @app.on_event("startup")
     def startup() -> None:

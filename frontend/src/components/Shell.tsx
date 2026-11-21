@@ -8,6 +8,7 @@ import type { IconProps } from "./icons";
 import { LanguageToggle } from "./LanguageToggle";
 import { XmartlabsLogo } from "./XmartlabsLogo";
 import {
+  IconChecklist,
   IconChevronLeft,
   IconChevronRight,
   IconCpu,
@@ -44,6 +45,7 @@ const MESSAGES = defineMessages({
       skills: "Skills",
       benchmarks: "Benchmarks",
       repo: "Your repo",
+      adhoc: "Ad hoc tasks",
       results: "Results",
       metrics: "Metrics",
       runs: "Runs",
@@ -68,6 +70,7 @@ const MESSAGES = defineMessages({
       skills: "Skills",
       benchmarks: "Benchmarks",
       repo: "Tu repo",
+      adhoc: "Tareas ad hoc",
       results: "Resultados",
       metrics: "Métricas",
       runs: "Corridas",
@@ -151,6 +154,12 @@ const NAV_GROUPS: NavGroup[] = [
         label: "repo",
         icon: IconRepo,
         owns: ["/evaluate/audit", "/evaluate/subject", "/evidence/repositories"]
+      },
+      {
+        to: "/adhoc",
+        label: "adhoc",
+        icon: IconChecklist,
+        owns: ["/adhoc"]
       }
     ]
   },

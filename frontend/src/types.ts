@@ -2528,3 +2528,148 @@ export type MetricCriteria = {
     where: string;
   };
 };
+
+// --- Ad hoc tasks on the operator's own repository (ADR-0095) ---------------
+
+/** The operator's folder, as the picker and the apply pipeline see it right now. */
+export type AdhocSource = {
+  path: string;
+  host_path: string;
+  is_repo: boolean;
+  branch: string;
+  head: string;
+  dirty: boolean;
+  dirty_files: string[];
+  remote_url: string;
+  /** Commits made since the task pinned its base, when known. */
+  head_moved_by?: number | null;
+};
+
+/** One ad hoc task: a prompt pinned to a commit of a folder on this machine. */
+export type AdhocTask = {
+  task_id: string;
+  title: string;
+  prompt: string;
+  source_path: string;
+  host_path: string;
+  branch: string;
+  base_commit: string;
+  target_id: string;
+  case_id: string;
+  setup_commands: string[];
+  validation_commands: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+/** A task row in the list, with the aggregates the list shows without opening it. */
+export type AdhocTaskSummary = AdhocTask & {
+  runs: number;
+  live_runs: number;
+  applied_run_id: string | null;
+  last_run_at: string | null;
+  total_cost_usd: number | null;
+};
+
+/** The task page: its metadata, every run, and the folder's live state. */
+export type AdhocTaskDetail = {
+  task: AdhocTask;
+  runs: AdhocRunRecord[];
+  source: AdhocSource;
+};
+
+/** One run of an ad hoc task: harness, model, metrics, decision and apply state. */
+export type AdhocRunRecord = {
+  run_id: string;
+  task_id: string;
+  state: RunState;
+  harness: string;
+  executor_model: string;
+  executor_effort?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  reasoning_tokens?: number | null;
+  billed_tokens?: number | null;
+  cost_usd?: number | null;
+  estimated_cost_usd?: number | null;
+  cost_source?: string | null;
+  billing_mode?: string | null;
+  minutes?: number | null;
+  turns?: number | null;
+  tool_calls?: number | null;
+  files_changed?: number | null;
+  lines_added?: number | null;
+  lines_removed?: number | null;
+  decision: "pending" | "approved" | "rejected" | "discarded";
+  decision_reason?: string | null;
+  notes?: string | null;
+  apply_state: "none" | "applying" | "applied" | "undoing" | "undone" | "failed";
+  apply_error?: string | null;
+  applied_at?: string | null;
+  files_purged: boolean;
+  failure_reason?: string | null;
+  /** Days ad hoc files survive before the sweep deletes them; 7 when absent. */
+  files_retention_days?: number | null;
+};
+
+/** One changed file in a run's patch. */
+export type AdhocPatchFile = {
+  path: string;
+  added: number;
+  removed: number;
+  status: "added" | "modified" | "deleted" | "renamed" | string;
+  binary: boolean;
+  flags: string[];
+};
+
+/** A run's clean patch: the unified diff, its files, and the apply command. */
+export type AdhocPatch = {
+  patch: string;
+  files: AdhocPatchFile[];
+  truncated: boolean;
+  /** True once the run's files were purged: only the file list remains. */
+  purged?: boolean;
+  /** The `git apply` command for the operator's own terminal. */
+  apply_command: string;
+};
+
+/** Read-only verdict on whether a run's patch can be applied right now. */
+export type AdhocApplyCheck = {
+  can_apply: boolean;
+  blockers: string[];
+  warnings: string[];
+  /** Null when the base commit is not in the folder's current history. */
+  head_moved_by: number | null;
+  overlapping_dirty: string[];
+};
+
+/** One category of disk usage, and how it is purged. */
+export type StorageCategory = {
+  key: string;
+  label: string;
+  bytes: number;
+  items: number;
+};
+
+export type StorageReport = {
+  total_bytes: number;
+  categories: StorageCategory[];
+  benchmark_light_candidates: { runs: number; bytes: number };
+  adhoc_expired: { runs: number; bytes: number };
+  adhoc_retention_days?: number;
+};
+
+export type StoragePurgeScope =
+  | "adhoc_expired"
+  | "adhoc_all_files"
+  | "benchmark_workspaces"
+  | "sandboxes";
+
+export type StoragePurgeResult = {
+  freed_bytes: number;
+  runs: number;
+};

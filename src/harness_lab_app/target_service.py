@@ -261,7 +261,12 @@ class TargetService:
         statement = select(TargetRepository)
         if not include_archived:
             statement = statement.where(TargetRepository.status == TargetStatus.active)
-        rows = list(self.session.exec(statement).all())
+        # An ad hoc task's copy (ADR-0095) is not a repository under audit.
+        rows = [
+            row
+            for row in self.session.exec(statement).all()
+            if not row.target_id.startswith("adhoc-")
+        ]
         return sorted(rows, key=lambda row: row.target_id)
 
     def get_target(self, target_id: str) -> TargetRepository:

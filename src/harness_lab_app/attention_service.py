@@ -162,7 +162,9 @@ class AttentionService:
         finished = [
             run
             for run in self.session.exec(select(Run)).all()
-            if run.state == RunState.completed and run.run_id not in scored
+            if run.state == RunState.completed
+            and run.run_id not in scored
+            and not run.run_id.startswith("adhoc-")
         ]
         if not finished:
             return []
@@ -239,7 +241,9 @@ class AttentionService:
         bare = [
             target
             for target in self.session.exec(select(TargetRepository)).all()
-            if target.status == TargetStatus.active and not target.validation_commands
+            if target.status == TargetStatus.active
+            and not target.validation_commands
+            and not target.target_id.startswith("adhoc-")
         ]
         if not bare:
             return []

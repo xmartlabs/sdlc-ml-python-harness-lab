@@ -300,8 +300,9 @@ it owns.
 | **Harness & skills** | `/harness` | the two profiles and the latest pruning verdict (live); New evaluation; Skills |
 | **Benchmarks** | `/benchmarks` | Cases, grouped by family (SWE-bench, 3D games, security, web, build, yours) |
 | **Your repo** | `/your-repo` | Audit, Validate your tool, Repositories |
+| **Ad hoc tasks** | `/adhoc` | your folder + a prompt → run, review, apply or undo, compare runs by model ([guide](guide-adhoc-tasks.md)) |
 | **Results** | `/results` | Experiments, Runs, Ranking, Findings, Compare, Improvements |
-| **System** | `/system` | Settings, Health, Guide |
+| **System** | `/system` | Settings, Health, Storage, Guide |
 
 ### Guided flows
 

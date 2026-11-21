@@ -6001,3 +6001,83 @@ button.guide-option[aria-pressed="true"] { border-color: var(--accent); backgrou
 .improve-next h3 { margin: 0; font-size: 1rem; }
 .improve-next p { margin: 0; }
 .improve-next ol { margin: 0; padding-left: 1.2rem; display: grid; gap: 4px; }
+
+/* --- Ad hoc tasks: file list and diff viewer (ADR-0095) ------------------- */
+
+.diff-file-list {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.diff-file-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.diff-file-counts {
+  display: inline-flex;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.diff-count--add { color: var(--success); }
+.diff-count--del { color: var(--danger); }
+
+.diff-view {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+
+.diff-file {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.diff-file-head {
+  padding: 6px 10px;
+  background: var(--panel-soft);
+  cursor: pointer;
+}
+
+.diff-body {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  max-height: 420px;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.diff-line {
+  display: block;
+  white-space: pre;
+}
+
+.diff-line--add {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.diff-line--del {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.diff-line--hunk {
+  color: var(--accent);
+}
+
+.diff-line--meta {
+  color: var(--muted);
+}
