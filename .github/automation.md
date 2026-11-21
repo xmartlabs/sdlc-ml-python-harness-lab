@@ -33,9 +33,11 @@ This file defines Level 3 enforcement so quality does not depend on model behavi
 ## Local Git Gates
 
 `make setup-hooks` installs `pre-commit`, `commit-msg`, and `pre-push` hooks.
-The local quality hook runs `make ci` before commits and pushes, including the
-complete Python test suite, skill-sync checks, and frontend type/build checks.
-It runs even for documentation-only changes and propagates a failed gate.
+Commits run only the file hooks on staged files (seconds). The local quality
+hook runs `make ci` before pushes, including the complete Python test suite (in
+parallel with `pytest-xdist`), skill-sync checks, and frontend type/build checks,
+and propagates a failed gate. A push changing only `docs/` or `memory/` Markdown
+runs `make check-sync` instead.
 Formatting and autofix hooks run only at commit time; push checks do not edit
 source files. This prevents a first branch push from rewriting unrelated
 benchmarks, fixtures, or vendored skills while checking the branch's history.
