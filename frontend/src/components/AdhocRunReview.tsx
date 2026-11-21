@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
+import { AdhocRunEvaluation } from "./AdhocRunEvaluation";
 import { DiffView } from "./DiffView";
 import { ErrorBanner } from "./ErrorBanner";
 import { RunProgressPanel } from "./RunProgressPanel";
@@ -37,7 +38,7 @@ const MESSAGES = defineMessages({
     purged: "Files purged — metrics only.",
     noChange: "This run left no change to review: nothing to apply. Discard it to free its files.",
     retention: (days: number) =>
-      `Ad hoc files are deleted after ${days} days or when you decide; the metrics stay.`,
+      `The run's files (workspace, steps, logs) stay for the sandbox and the audit until you reject or discard it, or for ${days} days. The metrics always stay.`,
     files: "Changed files",
     openFull: "Open full run",
     actions: {
@@ -80,7 +81,7 @@ const MESSAGES = defineMessages({
     purged: "Archivos purgados — solo quedan las métricas.",
     noChange: "Esta corrida no dejó cambios para revisar: no hay nada que aplicar. Descartala para liberar sus archivos.",
     retention: (days: number) =>
-      `Los archivos ad hoc se borran después de ${days} días o cuando decidís; las métricas quedan.`,
+      `Los archivos de la corrida (workspace, pasos, logs) quedan para el sandbox y la auditoría hasta que la rechazás o descartás, o por ${days} días. Las métricas quedan siempre.`,
     files: "Archivos modificados",
     openFull: "Abrir corrida completa",
     actions: {
@@ -395,6 +396,7 @@ export function AdhocRunReview({
       <p className="small">
         <Link to={`/advanced/runs/${run.run_id}`}>{m.openFull}</Link>
       </p>
+      {!run.files_purged ? <AdhocRunEvaluation onChanged={onChanged} run={run} /> : null}
     </div>
   );
 }

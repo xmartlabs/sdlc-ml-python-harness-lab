@@ -3628,3 +3628,9 @@ session copy.
 - A source edit is not a deploy (2026-09-10) bit again: the UI hot-reloaded the
   new pages while the API answered 404 for 14 h-old code. `docker compose up -d`
   recreates only services whose config changed; `restart api` for code.
+- Deleting an ad hoc run's workspace "to save disk" the moment its patch
+  existed blinded the sandbox, the LLM audit (reads steps/, diff.patch,
+  metadata, usage, prompt) and attribution (reads steps/). Keep the whole run
+  dir until the operator decides; the measurement is in the DB from the start.
+  Attribution must be indexed *after* finalization, not by the generic
+  post-run hook, which ran first.

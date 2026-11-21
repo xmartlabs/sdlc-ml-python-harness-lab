@@ -80,12 +80,22 @@ operator presses Apply or runs the printed command.**
    rejected / discarded, with a reason) and the apply state. Ad hoc runs are
    left out of the leaderboard, the run list, the case library, the targets
    list and the attention feed: one-off work is not an attempt at a benchmark.
-5. **Least data for ad hoc runs.** The archived copy is deleted as soon as the
-   patch exists; `change.patch` and a few small logs stay until the run is
-   decided, or for `HARNESS_LAB_ADHOC_RETENTION_DAYS` (default 7). Rejected or
-   discarded runs lose their files immediately. An applied change keeps its
-   patch so Undo works. The DB rows always stay.
-6. **Light mode for benchmark runs.** A Storage page reports disk use by
+5. **Files while you review, none after.** An undecided or approved run keeps
+   its whole directory — the workspace (sandbox: terminal, desktop), `steps/`
+   (which skills the agent opened), the diff and the logs (LLM audit, LLM
+   judge) — for `HARNESS_LAB_ADHOC_RETENTION_DAYS` (default 7). Rejected or
+   discarded runs lose their files immediately; an applied run past retention
+   keeps only `change.patch`, so Undo still works. The metrics row and the
+   patch's file list are in the database from the moment the run ends.
+   *Amended the same day:* the first version deleted the workspace as soon as
+   the patch existed, which left the sandbox, the audit and the skills panel
+   with nothing to read.
+6. **Evaluation on request.** The case-specific checks do not apply to a free
+   prompt, so an ad hoc case carries a generic rubric — "does the change do
+   what the task asked, without unrelated edits" — and the LLM judge grades
+   against it when the operator presses the button (one model call, never
+   automatic). The LLM audit and the skills panel are the ones every run has.
+7. **Light mode for benchmark runs.** A Storage page reports disk use by
    category and offers purges: expired ad hoc files, all ad hoc files, sandbox
    copies, and the workspace copies of finished benchmark runs older than N
    days. A light-purged run keeps diff, logs, steps, usage and scores and is

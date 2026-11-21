@@ -47,7 +47,12 @@ Decision record: [ADR-0095](adr/0095-an-adhoc-task-runs-on-a-copy-and-is-applied
    - **Copy command** — `git -C <folder> apply --3way <patch>` for your own
      terminal; `--3way` lets you resolve a conflict the button refuses.
    - **Approve without applying**, **Reject** (with a reason) or **Discard**.
-6. **Run again with another model.** Every run of a task starts from the same
+6. **Evaluate it** (under the review): **Terminal** and **Desktop** open a copy
+   of the run's workspace to run the tests, start the app or play the game;
+   **Grade with the LLM judge** scores it 0-10 against the task itself (one
+   model call); **Run the LLM audit** explains how the agent worked and which
+   skills it opened.
+7. **Run again with another model.** Every run of a task starts from the same
    commit, so the table compares like with like: tokens, cost (real, estimated
    for subscriptions, $0 for local models), minutes, files and lines changed,
    decision, apply state.
@@ -56,10 +61,9 @@ Decision record: [ADR-0095](adr/0095-an-adhoc-task-runs-on-a-copy-and-is-applied
 
 | | Kept |
 |---|---|
-| Always (database) | prompt, harness, model, effort, tokens, cost, time, turns, files/lines changed, decision and reason, apply state |
-| Until decided, or 7 days | `change.patch` and a few small logs in `data/runs/<run>/` |
-| Never past the run | the copy of your repository the agent worked in |
-| Applied changes | the patch stays (a few KB) so Undo works |
+| Always (database) | prompt, harness, model, effort, tokens, cost, time, turns, files/lines changed, decision and reason, apply state, judge score |
+| Until rejected/discarded, or 7 days | the whole run: workspace (sandbox), steps (skills used), diff and logs (audit, judge) |
+| Applied changes past 7 days | only `change.patch` (a few KB), so Undo works |
 
 Rejected and discarded runs lose their files immediately. Change the retention
 with `HARNESS_LAB_ADHOC_RETENTION_DAYS`. Deleting a task removes its copy, its

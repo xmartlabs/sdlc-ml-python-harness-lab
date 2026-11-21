@@ -50,21 +50,26 @@ PROMPT_VARIANT = "task"
 DECISIONS = {"approved", "rejected", "discarded"}
 LIVE_RUN_STATES = {RunState.pending, RunState.running, RunState.scoring}
 LIVE_APPLY_STATES = {"applying", "undoing"}
-# Files a finished ad hoc run keeps until it is decided or expires. Everything
-# else in its run directory — above all the archived copy of the repository —
-# is removed as soon as the patch has been written.
-KEPT_FILES = (
-    "change.patch",
-    "change.error.txt",
-    "provisioned_commit.txt",
-    "usage.json",
-    "prompt.md",
-    "metadata.json",
-    "report.md",
-    "opencode.log",
-    "claude.log",
-    "case_spec.json",
-)
+# An undecided ad hoc run keeps its whole directory: the workspace for the
+# sandbox, steps/ for the skills it used, diff.patch and logs for the LLM audit
+# and judge. Everything goes when it is rejected or discarded, or after
+# `adhoc_retention_days`; the metrics row and change.patch's file list are in
+# the database from the moment the run ends, so nothing measured is lost.
+
+# How a run with no case of its own is graded when the operator asks (ADR-0095).
+# The case checks, if any, are the task's own verification commands.
+ADHOC_RUBRIC = """Grade how well the change does what the task asked, 0-10.
+
+- 9-10: does exactly what was asked, nothing missing, no unrelated edits, the
+  code is correct and fits the repository's existing style.
+- 7-8: does what was asked with minor gaps or small unrelated edits.
+- 4-6: partly done, or done with mistakes a reviewer must fix before merging.
+- 1-3: attempts the task but is mostly wrong, incomplete or breaks something.
+- 0: no change, or a change unrelated to the task.
+
+Penalise edits outside the task's scope (lockfiles, CI, unrelated files)
+unless the task needed them. If verification commands ran, a failing check
+caps the grade at 5. Judge only the change and the evidence given."""
 _PATCH_PREVIEW_BYTES = 2_000_000
 _SLUG = re.compile(r"[^a-z0-9]+")
 
@@ -84,6 +89,11 @@ class AdhocConflictError(AdhocError):
 def is_adhoc_id(identifier: str | None) -> bool:
     """Whether a run, case or target id belongs to an ad hoc task."""
     return bool(identifier) and str(identifier).startswith(PREFIX)
+
+
+def _judged(run: Run) -> bool:
+    """Whether the run's score came from the LLM judge (never the operator)."""
+    return run.score is not None and (run.notes or "").startswith("LLM-judged")
 
 
 def _provenance_url(folder: Path) -> str:
@@ -277,6 +287,7 @@ class AdhocService:
             tags=["adhoc"],
             origin_target_id=task_id,
             prompt_variants={PROMPT_VARIANT: text},
+            scoring_rubric=ADHOC_RUBRIC,
             max_steps=1,
         )
         task = AdhocTask(
@@ -551,6 +562,14 @@ class AdhocService:
             "applied_at": row.applied_at.isoformat() if row.applied_at else None,
             "files_purged": row.files_purged,
             "files_retention_days": get_settings().adhoc_retention_days,
+            # What the lab can still do with the run's files.
+            "has_workspace": (
+                not row.files_purged
+                and (get_settings().data_runs_dir / row.run_id / "workspace").is_dir()
+            ),
+            # The LLM judge's grade, when the operator asked for one.
+            "judge_score": run.score if run and _judged(run) else None,
+            "judge_notes": (run.notes or "") if run and _judged(run) else "",
         }
 
     def _run_states(self, run_ids: list[str]) -> dict[str, RunState]:
@@ -599,6 +618,11 @@ class AdhocService:
                 + error_file.read_text(errors="replace").strip()
             )[:2000]
         if target_patch.exists():
+            # The judge and the audit read diff.patch; a run trimmed by an older
+            # lab lost it, and change.patch holds exactly the agent's change.
+            audit_diff = directory / "diff.patch"
+            if not audit_diff.exists():
+                audit_diff.write_bytes(target_patch.read_bytes())
             files = adhoc_git.summarize_patch(target_patch.read_bytes(), directory)
             row.patch_files = [file.__dict__ for file in files]
             row.files_changed = len(files)
@@ -608,11 +632,7 @@ class AdhocService:
         row.updated_at = utc_now()
         self.session.add(row)
         self.session.commit()
-        # The archived repository copy is the bulk of a run (hundreds of MB on a
-        # real repository) and nothing after this point reads it.
-        if target_patch.exists() or not archived.is_dir():
-            self._trim_run_dir(directory)
-            self._reindex_artifacts(run_id)
+        self._reindex_artifacts(run_id)
 
     def _reindex_artifacts(self, run_id: str) -> None:
         """Artifact rows follow the files: none may point at a deleted one."""
@@ -622,18 +642,6 @@ class AdhocService:
             ArtifactService(self.session).index_run(run_id)
         except Exception:  # indexing is a convenience, never a failure
             self.session.rollback()
-
-    @staticmethod
-    def _trim_run_dir(directory: Path) -> None:
-        if not directory.is_dir():
-            return
-        for child in directory.iterdir():
-            if child.name in KEPT_FILES:
-                continue
-            if child.is_dir() and not child.is_symlink():
-                shutil.rmtree(child, ignore_errors=True)
-            else:
-                child.unlink(missing_ok=True)
 
     def capture_metrics(self, run_id: str, commit: bool = True) -> None:
         """Copy cost and effort from the run's validation (or usage.json) once."""
@@ -682,12 +690,43 @@ class AdhocService:
 
     # ---- review --------------------------------------------------------
 
+    def request_judge(self, run_id: str) -> dict[str, Any]:
+        """Mark the run for the LLM judge; the worker grades it (ADR-0095).
+
+        On demand, not after every run: it costs tokens, and an ad hoc change
+        is the operator's call first. The judge reads the prompt, the diff and
+        the verification results against ``ADHOC_RUBRIC``.
+        """
+        row = self.get_adhoc_run(run_id)
+        run = self.session.exec(select(Run).where(Run.run_id == run_id)).first()
+        if run is None or run.state in LIVE_RUN_STATES:
+            raise AdhocConflictError(
+                "The run is still going: judge it once it finishes."
+            )
+        if row.files_purged:
+            raise AdhocConflictError(
+                "This run's files were purged: nothing left to judge."
+            )
+        case = self._case(self.get_task(row.task_id))
+        if not case.scoring_rubric:
+            # Tasks created before the rubric existed.
+            case.scoring_rubric = ADHOC_RUBRIC
+            self.session.add(case)
+        if run.state == RunState.completed and not _judged(run):
+            raise AdhocConflictError("This run already carries a score.")
+        # The judge only grades runs waiting for a score (or re-grades its own).
+        if run.state != RunState.completed:
+            run.state = RunState.awaiting_manual_score
+            self.session.add(run)
+        self.session.commit()
+        return self.run_record(run_id)
+
     def patch(self, run_id: str) -> dict[str, Any]:
         row = self.get_adhoc_run(run_id)
         self.finalize_run(run_id)
         task = self.get_task(row.task_id)
         path = patch_path(run_id)
-        if row.files_purged or not path.exists():
+        if not path.exists():
             return {
                 "patch": "",
                 "files": row.patch_files,
@@ -740,13 +779,26 @@ class AdhocService:
         from harness_lab_app.storage_service import tree_bytes
 
         row = self.get_adhoc_run(run_id)
-        if row.apply_state in ({"applied"} | LIVE_APPLY_STATES):
-            # Undo needs the patch; an applied change keeps its few KB.
+        if row.apply_state in LIVE_APPLY_STATES:
             return 0
         self.capture_metrics(run_id)
         directory = run_dir(run_id)
-        freed = tree_bytes(directory)
-        shutil.rmtree(directory, ignore_errors=True)
+        freed = 0
+        if row.apply_state == "applied":
+            # Undo needs the patch: an applied change keeps its few KB and
+            # loses everything else (the workspace copy is the bulk).
+            if directory.is_dir():
+                for child in directory.iterdir():
+                    if child.name == "change.patch":
+                        continue
+                    freed += tree_bytes(child)
+                    if child.is_dir() and not child.is_symlink():
+                        shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        child.unlink(missing_ok=True)
+        else:
+            freed = tree_bytes(directory)
+            shutil.rmtree(directory, ignore_errors=True)
         live = get_settings().workspace_dir / run_id
         if live.is_dir():
             freed += tree_bytes(live)
@@ -778,7 +830,8 @@ class AdhocService:
         row = self.get_adhoc_run(run_id)
         task = self.get_task(row.task_id)
         path = patch_path(run_id)
-        if row.files_purged or not path.exists():
+        # The patch itself is the test: a purged *applied* run keeps it for undo.
+        if not path.exists():
             return {
                 **asdict(adhoc_git.ApplyCheck(can_apply=False)),
                 "blockers": [
@@ -802,7 +855,7 @@ class AdhocService:
         run = self.session.exec(select(Run).where(Run.run_id == run_id)).first()
         if run is not None and run.state in LIVE_RUN_STATES:
             raise AdhocConflictError("The run is still going.")
-        if row.files_purged or not patch_path(run_id).exists():
+        if not patch_path(run_id).exists():
             raise AdhocConflictError("This run's files were purged: nothing to apply.")
         if undo and row.apply_state != "applied":
             raise AdhocConflictError("Only an applied change can be undone.")

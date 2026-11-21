@@ -235,7 +235,7 @@ def test_every_run_of_a_task_starts_from_the_same_commit_in_native(session, lab)
     assert first != second and all(is_adhoc_id(r) for r in (first, second))
 
 
-def test_finalizing_writes_the_clean_patch_keeps_metrics_and_drops_the_copy(
+def test_finalizing_writes_the_clean_patch_keeps_metrics_and_the_workspace(
     session, lab
 ):
     task = _task(session, lab)
@@ -249,8 +249,11 @@ def test_finalizing_writes_the_clean_patch_keeps_metrics_and_drops_the_copy(
     assert "+    return sum(items or [])" in patch
     assert "test_app.py" in patch
     assert "setup.log" not in patch
-    assert not (run_dir / "workspace").exists()
+    # Kept until the operator decides: the sandbox, the audit and the skills
+    # panel all read it.
+    assert (run_dir / "workspace").is_dir()
     record = AdhocService(session).run_record(run_id)
+    assert record["has_workspace"] is True
     assert record["files_changed"] == 2
     assert record["input_tokens"] == 1200
     assert record["billed_tokens"] == 1200 + 300 + 5000
@@ -644,3 +647,70 @@ def test_a_malformed_task_id_is_refused_before_any_path_is_built(session, lab):
             AdhocService(session).get_task(bad)
         with pytest.raises(adhoc_service.AdhocNotFoundError):
             AdhocService(session).delete_task(bad)
+
+
+def test_a_new_task_carries_the_generic_rubric_for_the_judge(session, lab):
+    task = _task(session, lab)
+
+    case = session.exec(select(Case).where(Case.case_id == task.case_id)).one()
+
+    assert case.scoring_rubric == adhoc_service.ADHOC_RUBRIC
+
+
+def test_asking_for_the_judge_readies_a_finished_run(session, lab):
+    task = _task(session, lab)
+    run_id = _launch(session, task)
+    _simulate_run(session, lab, run_id)
+    AdhocService(session).finalize_run(run_id)
+
+    record = AdhocService(session).request_judge(run_id)
+
+    assert record["state"] == "awaiting_manual_score"
+    assert record["judge_score"] is None
+
+
+def test_the_judge_is_refused_while_the_run_is_live(session, lab):
+    task = _task(session, lab)
+    run_id = _launch(session, task)
+
+    with pytest.raises(AdhocConflictError, match="still going"):
+        AdhocService(session).request_judge(run_id)
+
+
+def test_a_judge_score_shows_on_the_record(session, lab):
+    task = _task(session, lab)
+    run_id = _launch(session, task)
+    _simulate_run(session, lab, run_id)
+    run = session.exec(select(Run).where(Run.run_id == run_id)).one()
+    run.state = RunState.completed
+    run.score = 8
+    run.notes = "LLM-judged against the rubric (model): does what was asked."
+    session.add(run)
+    session.commit()
+
+    record = AdhocService(session).run_record(run_id)
+
+    assert record["judge_score"] == 8
+    assert "does what was asked" in record["judge_notes"]
+
+
+def test_an_applied_run_past_retention_keeps_only_its_patch(session, lab, monkeypatch):
+    task = _task(session, lab)
+    run_id = _launch(session, task)
+    _simulate_run(session, lab, run_id)
+    AdhocService(session).finalize_run(run_id)
+    monkeypatch.setattr(adhoc_apply, "folder_lease", lambda _source: _null_context())
+    _apply(session, run_id, undo=False)
+    row = session.exec(select(AdhocRun).where(AdhocRun.run_id == run_id)).one()
+    row.created_at = row.created_at.replace(year=row.created_at.year - 1)
+    session.add(row)
+    session.commit()
+
+    result = StorageService(session).purge("adhoc_expired")
+
+    run_dir = lab["settings"].data_runs_dir / run_id
+    assert result["runs"] == 1
+    assert [p.name for p in run_dir.iterdir()] == ["change.patch"]
+    # Undo still works on a purged applied run.
+    _apply(session, run_id, undo=True)
+    assert AdhocService(session).run_record(run_id)["apply_state"] == "undone"

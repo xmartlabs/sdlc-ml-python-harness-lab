@@ -138,6 +138,19 @@ def enqueue_improve(
     )
 
 
+def enqueue_adhoc_judge(run_id: str) -> None:
+    """Publish an LLM-judge grading of an ad hoc run (ADR-0095).
+
+    Interactive lane: one model call, and the operator is looking at the page.
+    """
+    celery_app.send_task(
+        "harness_lab_app.tasks.judge_adhoc_run",
+        args=[run_id],
+        queue=INTERACTIVE_QUEUE,
+        retry=False,
+    )
+
+
 def enqueue_adhoc_apply(run_id: str, undo: bool = False) -> None:
     """Publish an apply/undo of an ad hoc change (ADR-0095).
 

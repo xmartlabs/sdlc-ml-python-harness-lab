@@ -973,6 +973,8 @@ export const api = {
     request<AdhocApplyCheck>(`/api/adhoc/runs/${runId}/apply-check`),
   applyAdhocRun: (runId: string) =>
     request<AdhocRunRecord>(`/api/adhoc/runs/${runId}/apply`, { method: "POST" }),
+  judgeAdhocRun: (runId: string) =>
+    request<AdhocRunRecord>(`/api/adhoc/runs/${runId}/judge`, { method: "POST" }),
   undoAdhocRun: (runId: string) =>
     request<AdhocRunRecord>(`/api/adhoc/runs/${runId}/undo`, { method: "POST" }),
   decideAdhocRun: (

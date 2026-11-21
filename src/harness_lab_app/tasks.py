@@ -1710,6 +1710,9 @@ def _finalize_adhoc_run(session: Session, run_id: str) -> None:
 
     try:
         AdhocService(session).finalize_run(run_id)
+        # Which skills the agent opened: indexed from steps/, which the run
+        # keeps until the operator decides.
+        _index_attribution(session, run_id)
     except Exception as exc:  # never fail a run over its cleanup
         session.rollback()
         session.add(
@@ -1911,6 +1914,14 @@ def _keep_lease(
             lost.set()
             return
         last_ok = time.monotonic()
+
+
+@celery_app.task(name="harness_lab_app.tasks.judge_adhoc_run", acks_late=True)
+def judge_adhoc_run(run_id: str) -> None:
+    """Grade an ad hoc run with the LLM judge against the generic rubric."""
+    init_db()
+    with Session(engine) as session:
+        _autoscore_run(session, run_id)
 
 
 @celery_app.task(name="harness_lab_app.tasks.validate_run", acks_late=True)

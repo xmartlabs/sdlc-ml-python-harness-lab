@@ -2614,6 +2614,11 @@ export type AdhocRunRecord = {
   failure_reason?: string | null;
   /** Days ad hoc files survive before the sweep deletes them; 7 when absent. */
   files_retention_days?: number | null;
+  /** Whether the run's workspace is still on disk (sandbox, audit). */
+  has_workspace?: boolean;
+  /** The LLM judge's grade, when one was asked for; null otherwise. */
+  judge_score?: number | null;
+  judge_notes?: string;
 };
 
 /** One changed file in a run's patch. */

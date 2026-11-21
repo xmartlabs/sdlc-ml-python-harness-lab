@@ -210,6 +210,23 @@ def undo_adhoc_run(run_id: str, session: Session = Depends(get_session)):
     return _start_apply(run_id, undo=True, session=session)
 
 
+@adhoc_router.post("/api/adhoc/runs/{run_id}/judge", status_code=202)
+def judge_adhoc_run(run_id: str, session: Session = Depends(get_session)):
+    from harness_lab_app.celery_app import enqueue_adhoc_judge
+
+    try:
+        record = AdhocService(session).request_judge(run_id)
+    except _EXPECTED as exc:
+        raise _http(exc) from exc
+    try:
+        enqueue_adhoc_judge(run_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail=f"Queue broker unavailable: {exc!r}"
+        ) from exc
+    return record
+
+
 @adhoc_router.post("/api/adhoc/runs/{run_id}/decision")
 def decide_adhoc_run(
     run_id: str, data: AdhocDecision, session: Session = Depends(get_session)

@@ -207,7 +207,7 @@ class StorageService:
             row.run_id
             for row in self.session.exec(select(AdhocRun)).all()
             if not row.files_purged
-            and row.apply_state not in ({"applied"} | LIVE_APPLY_STATES)
+            and row.apply_state not in LIVE_APPLY_STATES
             and states.get(row.run_id) not in LIVE_RUN_STATES
         ]
 
