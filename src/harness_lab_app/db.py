@@ -390,6 +390,19 @@ def _apply_sqlite_compat_migrations() -> None:
         # before purging existed: they still have all their files.
         if columns and "purged_at" not in columns:
             connection.execute(text("ALTER TABLE run ADD COLUMN purged_at DATETIME"))
+        adhoc_run_columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('adhocrun')")
+            ).fetchall()
+        }
+        if adhoc_run_columns and "applied_hashes" not in adhoc_run_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE adhocrun ADD COLUMN applied_hashes JSON "
+                    "NOT NULL DEFAULT '{}'"
+                )
+            )
 
         _migrate_staged_skills(connection)
 

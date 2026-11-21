@@ -68,7 +68,7 @@ def operator(tmp_path: Path) -> tuple[Path, str]:
     return _repo(tmp_path / "operator")
 
 
-def _agent_change(operator: tuple[Path, str], tmp_path: Path) -> tuple[str, Path]:
+def _agent_change(operator: tuple[Path, str], tmp_path: Path) -> tuple[bytes, Path]:
     source, base = operator
     copy = _agent_copy(source, tmp_path / "copy")
     (copy / "app.py").write_text("def greet(name):\n    return f'hi {name}'\n")
@@ -100,9 +100,9 @@ def test_setup_output_in_the_provisioning_commit_stays_out(operator, tmp_path):
     """
     patch, _ = _agent_change(operator, tmp_path)
 
-    assert "setup-output.txt" not in patch
-    assert "node_modules" not in patch
-    assert "ignored/out.txt" not in patch
+    assert b"setup-output.txt" not in patch
+    assert b"node_modules" not in patch
+    assert b"ignored/out.txt" not in patch
 
 
 def test_an_operator_commit_saying_provisioned_is_not_mistaken_for_the_lab(
@@ -117,8 +117,8 @@ def test_an_operator_commit_saying_provisioned_is_not_mistaken_for_the_lab(
 
     patch = build_change_patch(copy, base)
 
-    assert "+v3" in patch
-    assert "setup-output.txt" not in patch
+    assert b"+v3" in patch
+    assert b"setup-output.txt" not in patch
 
 
 def test_a_committed_agent_change_still_appears(operator, tmp_path):
@@ -245,7 +245,7 @@ def test_a_merge_in_progress_blocks(operator, tmp_path):
 def test_an_empty_patch_is_refused(operator):
     source, base = operator
 
-    result = check_apply(source, "", base)
+    result = check_apply(source, b"", base)
 
     assert not result.can_apply
 
@@ -270,7 +270,7 @@ def test_cli_prints_the_check_as_json_and_exits_by_verdict(operator, tmp_path, c
     source, base = operator
     patch, _ = _agent_change(operator, tmp_path)
     patch_file = tmp_path / "change.patch"
-    patch_file.write_text(patch)
+    patch_file.write_bytes(patch)
 
     code = adhoc_git.main(["apply", str(source), str(patch_file), base])
 
@@ -278,3 +278,189 @@ def test_cli_prints_the_check_as_json_and_exits_by_verdict(operator, tmp_path, c
     assert code == 0
     assert out["can_apply"] is True
     assert (source / "new_module.py").exists()
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the 2026-11-21 review: real repositories are not ASCII,
+# not LF, and an agent's .git is not to be trusted.
+# ---------------------------------------------------------------------------
+
+
+def test_a_crlf_file_round_trips_byte_for_byte(tmp_path):
+    source, _ = _repo(tmp_path / "operator")
+    (source / "run.bat").write_bytes(b"@echo off\r\necho one\r\n")
+    _git(source, "add", "-A")
+    _git(source, "commit", "-qm", "windows file")
+    base = _git(source, "rev-parse", "HEAD")
+    copy = _agent_copy(source, tmp_path / "copy")
+    (copy / "run.bat").write_bytes(b"@echo off\r\necho two\r\n")
+
+    patch = build_change_patch(copy, base)
+    result = apply_patch(source, patch, base)
+
+    assert b"\r\n" in patch
+    assert result.can_apply, result.blockers
+    assert (source / "run.bat").read_bytes() == b"@echo off\r\necho two\r\n"
+
+
+def test_a_latin1_file_does_not_break_the_patch(tmp_path):
+    source, _ = _repo(tmp_path / "operator")
+    (source / "legacy.txt").write_bytes("caf\xe9\n".encode("latin-1"))
+    _git(source, "add", "-A")
+    _git(source, "commit", "-qm", "latin-1")
+    base = _git(source, "rev-parse", "HEAD")
+    copy = _agent_copy(source, tmp_path / "copy")
+    (copy / "legacy.txt").write_bytes("caf\xe9 cr\xe8me\n".encode("latin-1"))
+
+    patch = build_change_patch(copy, base)
+    result = apply_patch(source, patch, base)
+
+    assert result.can_apply, result.blockers
+    assert (source / "legacy.txt").read_bytes() == "caf\xe9 cr\xe8me\n".encode(
+        "latin-1"
+    )
+
+
+def test_an_agent_config_cannot_run_commands_in_the_lab(tmp_path):
+    source, base = _repo(tmp_path / "operator")
+    copy = _agent_copy(source, tmp_path / "copy")
+    marker_fsmonitor = tmp_path / "fsmonitor-ran"
+    marker_filter = tmp_path / "filter-ran"
+    marker_diff = tmp_path / "extdiff-ran"
+    with (copy / ".git" / "config").open("a") as config:
+        config.write(
+            f'[core]\n\tfsmonitor = "touch {marker_fsmonitor}; false"\n'
+            f'[filter "evil"]\n\tclean = "touch {marker_filter}; cat"\n'
+            f'[diff]\n\texternal = "touch {marker_diff}"\n'
+        )
+    (copy / ".gitattributes").write_text("*.py filter=evil\n")
+    (copy / "app.py").write_text("changed\n")
+
+    patch = build_change_patch(copy, base)
+    summarize_patch(patch, copy)
+
+    assert not marker_fsmonitor.exists()
+    assert not marker_filter.exists()
+    assert not marker_diff.exists()
+    assert b"+changed" in patch
+
+
+def test_an_agent_config_include_is_refused(tmp_path):
+    source, base = _repo(tmp_path / "operator")
+    copy = _agent_copy(source, tmp_path / "copy")
+    with (copy / ".git" / "config").open("a") as config:
+        config.write(f"[include]\n\tpath = {tmp_path}/other.cfg\n")
+
+    with pytest.raises(adhoc_git.AdhocGitError, match="includes"):
+        build_change_patch(copy, base)
+
+
+def test_the_recorded_provisioning_sha_survives_an_amend(tmp_path):
+    source, base = _repo(tmp_path / "operator")
+    copy = _agent_copy(source, tmp_path / "copy")
+    provisioned = _git(copy, "rev-parse", "HEAD")
+    (copy / "app.py").write_text("agent work\n")
+    _git(copy, "commit", "-qa", "--amend", "--no-edit")
+
+    by_grep = build_change_patch(copy, base)
+    by_record = build_change_patch(copy, base, provisioned)
+
+    # The amended commit still says "provisioned": the grep finds it and loses
+    # the change. The SHA recorded before the agent started does not.
+    assert b"agent work" not in by_grep
+    assert b"+agent work" in by_record
+    assert b"setup-output.txt" not in by_record
+
+
+def test_non_ascii_and_spaced_paths_are_counted_and_checked(tmp_path):
+    source, _ = _repo(tmp_path / "operator")
+    (source / "guía de uso.md").write_text("uno\n")
+    _git(source, "add", "-A")
+    _git(source, "commit", "-qm", "doc")
+    base = _git(source, "rev-parse", "HEAD")
+    copy = _agent_copy(source, tmp_path / "copy")
+    (copy / "guía de uso.md").write_text("dos\n")
+    patch = build_change_patch(copy, base)
+
+    files = summarize_patch(patch, copy)
+    assert [item.path for item in files] == ["guía de uso.md"]
+    assert files[0].added == 1 and files[0].removed == 1
+
+    (source / "guía de uso.md").write_text("mi trabajo\n")
+    result = check_apply(source, patch, base)
+    assert result.overlapping_dirty == ["guía de uso.md"]
+    assert not result.can_apply
+
+
+def test_undo_refuses_when_an_applied_file_was_edited_elsewhere(tmp_path):
+    source, _ = _repo(tmp_path / "operator")
+    (source / "long.py").write_text("".join(f"line {n}\n" for n in range(40)))
+    _git(source, "add", "-A")
+    _git(source, "commit", "-qm", "long file")
+    base = _git(source, "rev-parse", "HEAD")
+    copy = _agent_copy(source, tmp_path / "copy")
+    (copy / "long.py").write_text(
+        "".join(("AGENT\n" if n == 2 else f"line {n}\n") for n in range(40))
+    )
+    patch = build_change_patch(copy, base)
+    applied = apply_patch(source, patch, base)
+    assert applied.can_apply and applied.applied_hashes
+    # An edit far from the agent's hunk: `git apply -R --check` alone would pass.
+    text = (source / "long.py").read_text().replace("line 35\n", "MINE\n")
+    (source / "long.py").write_text(text)
+
+    result = apply_patch(
+        source, patch, base, reverse=True, expected_hashes=applied.applied_hashes
+    )
+
+    assert not result.can_apply
+    assert "MINE" in (source / "long.py").read_text()
+
+
+def test_a_redelivered_apply_reports_the_change_as_already_there(
+    operator, tmp_path, capsys
+):
+    source, base = operator
+    patch, _ = _agent_change(operator, tmp_path)
+    patch_file = tmp_path / "change.patch"
+    patch_file.write_bytes(patch)
+    assert adhoc_git.main(["apply", str(source), str(patch_file), base]) == 0
+    capsys.readouterr()
+
+    code = adhoc_git.main(["apply", str(source), str(patch_file), base])
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert out["warnings"] == ["The change was already applied to this folder."]
+
+
+def test_build_cli_writes_the_patch_bytes(operator, tmp_path, capsys):
+    source, base = operator
+    copy = _agent_copy(source, tmp_path / "copy")
+    (copy / "app.py").write_text("changed\n")
+    out_file = tmp_path / "out.patch"
+
+    code = adhoc_git.main(["build", str(copy), base, str(out_file)])
+
+    assert code == 0
+    assert b"+changed" in out_file.read_bytes()
+
+
+def test_the_summary_survives_being_asked_from_inside_another_repository(
+    operator, tmp_path
+):
+    """The lab reads patches from data/runs/<id>/, a folder inside its own repo.
+
+    `git apply --numstat` run there treats every path as relative to that
+    subfolder and drops them all; the first real run showed files_changed=None.
+    """
+    patch, _ = _agent_change(operator, tmp_path)
+    host = tmp_path / "lab"
+    host.mkdir()
+    _git(host, "init", "-q")
+    inside = host / "data" / "runs" / "adhoc-x-001-K-001"
+    inside.mkdir(parents=True)
+
+    files = summarize_patch(patch, inside)
+
+    assert {item.path for item in files} == {"app.py", "new_module.py"}

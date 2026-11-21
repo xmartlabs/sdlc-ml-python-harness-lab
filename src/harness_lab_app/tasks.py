@@ -3324,7 +3324,9 @@ def harness_facts(_state: Any) -> dict[str, Any]:
     return facts
 
 
-@celery_app.task(name="harness_lab_app.tasks.apply_adhoc_change", acks_late=True)
+# acks_late=False: a lost apply is a button pressed again; a redelivered one
+# would write to the operator's folder twice.
+@celery_app.task(name="harness_lab_app.tasks.apply_adhoc_change", acks_late=False)
 def apply_adhoc_change(run_id: str, undo: bool = False) -> None:
     """Write (or reverse) an approved ad hoc change in the operator's folder.
 
@@ -3342,25 +3344,38 @@ def apply_adhoc_change(run_id: str, undo: bool = False) -> None:
 
     init_db()
     action = "undo" if undo else "apply"
+    expected_state = "undoing" if undo else "applying"
     with Session(engine) as session:
         service = AdhocService(session)
         try:
             row = service.get_adhoc_run(run_id)
+        except Exception:
+            return
+        # Compare-and-set: a redelivered message, or one whose row a restart
+        # already released, must not write to the folder a second time.
+        if row.apply_state != expected_state:
+            return
+        hashes: dict[str, str] = {}
+        try:
             task = service.get_task(row.task_id)
+            expected = dict(row.applied_hashes or {}) if undo else None
             with folder_lease(task.source_path):
                 if get_settings().execution_backend == "docker":
                     result = run_in_container(
-                        action, task.source_path, run_id, task.base_commit
+                        action, task.source_path, run_id, task.base_commit, expected
                     )
                 else:
                     result = apply_locally(
-                        action, task.source_path, run_id, task.base_commit
+                        action, task.source_path, run_id, task.base_commit, expected
                     )
             ok = bool(result.get("can_apply"))
+            hashes = dict(result.get("applied_hashes") or {})
             error = "" if ok else "; ".join(result.get("blockers") or ["Refused."])
         except (ApplyRefused, Exception) as exc:  # always leave applying/undoing
             ok, error = False, str(exc)
-        service.finish_apply(run_id, undo=undo, ok=ok, error=error)
+        service.finish_apply(
+            run_id, undo=undo, ok=ok, error=error, applied_hashes=hashes
+        )
 
 
 def _sweep_expired_adhoc_files() -> None:

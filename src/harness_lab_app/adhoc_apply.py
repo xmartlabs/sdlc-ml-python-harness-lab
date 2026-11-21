@@ -26,7 +26,10 @@ from typing import Any
 
 from harness_lab_app.config import get_settings
 
-LEASE_SECONDS = 300
+# Longer than the container may run (CONTAINER_TIMEOUT), so the lease cannot
+# lapse while a write is still in progress.
+CONTAINER_TIMEOUT = 600
+LEASE_SECONDS = CONTAINER_TIMEOUT + 120
 _LEASE_PREFIX = "harness-lab:adhoc-apply:"
 _SCRIPT_RELATIVE = Path("src") / "harness_lab_app" / "adhoc_git.py"
 
@@ -89,7 +92,11 @@ def folder_lease(source_path: str):
 
 
 def run_in_container(
-    action: str, source_path: str, run_id: str, base_commit: str
+    action: str,
+    source_path: str,
+    run_id: str,
+    base_commit: str,
+    expected_hashes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run ``adhoc_git.py <action>`` against the folder in a one-shot container.
 
@@ -124,6 +131,7 @@ def run_in_container(
                 "/repo",
                 "/lab/change.patch",
                 base_commit,
+                json.dumps(expected_hashes or {}),
             ],
             entrypoint=[],
             volumes={
@@ -136,7 +144,7 @@ def run_in_container(
             detach=True,
             labels={"harness-lab.adhoc-apply": run_id},
         )
-        outcome = container.wait(timeout=600)
+        outcome = container.wait(timeout=CONTAINER_TIMEOUT)
         stdout = container.logs(stdout=True, stderr=False) or b""
         stderr = container.logs(stdout=False, stderr=True) or b""
     except docker.errors.ImageNotFound as exc:
@@ -174,7 +182,11 @@ def _parse(raw: bytes) -> dict[str, Any] | None:
 
 
 def apply_locally(
-    action: str, source_path: str, run_id: str, base_commit: str
+    action: str,
+    source_path: str,
+    run_id: str,
+    base_commit: str,
+    expected_hashes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """The subprocess backend: the folder is reachable directly (host mode)."""
     from dataclasses import asdict
@@ -183,8 +195,18 @@ def apply_locally(
     from harness_lab_app.adhoc_service import patch_path
     from harness_lab_app.local_sources_service import resolve
 
-    patch = patch_path(run_id).read_text(encoding="utf-8")
+    patch = patch_path(run_id).read_bytes()
+    repo = resolve(source_path)
+    reverse = action == "undo"
     result = adhoc_git.apply_patch(
-        resolve(source_path), patch, base_commit, reverse=action == "undo"
+        repo, patch, base_commit, reverse=reverse, expected_hashes=expected_hashes
     )
+    if not result.can_apply and not reverse and adhoc_git.already_applied(repo, patch):
+        result = adhoc_git.ApplyCheck(
+            can_apply=True,
+            warnings=["The change was already applied to this folder."],
+            applied_hashes=adhoc_git.file_hashes(
+                repo, [i.path for i in adhoc_git.summarize_patch(patch, repo)]
+            ),
+        )
     return asdict(result)

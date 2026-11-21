@@ -274,6 +274,10 @@ def test_apply_and_undo_go_through_the_folder_lease(session, lab, monkeypatch):
     record = AdhocService(session).run_record(run_id)
     assert record["apply_state"] == "applied"
     assert record["decision"] == "approved"
+    assert set(AdhocService(session).get_adhoc_run(run_id).applied_hashes) == {
+        "app.py",
+        "test_app.py",
+    }
     assert _git(lab["repo"], "diff", "--cached", "--name-only") == ""
 
     with pytest.raises(AdhocConflictError):
@@ -478,13 +482,22 @@ def _apply(session: Session, run_id: str, undo: bool) -> None:
     service.begin_apply(run_id, undo=undo)
     row = service.get_adhoc_run(run_id)
     task = service.get_task(row.task_id)
+    expected = dict(row.applied_hashes or {}) if undo else None
     with adhoc_apply.folder_lease(task.source_path):
         result = adhoc_apply.apply_locally(
-            "undo" if undo else "apply", task.source_path, run_id, task.base_commit
+            "undo" if undo else "apply",
+            task.source_path,
+            run_id,
+            task.base_commit,
+            expected,
         )
     ok = bool(result.get("can_apply"))
     service.finish_apply(
-        run_id, undo=undo, ok=ok, error="; ".join(result.get("blockers") or [])
+        run_id,
+        undo=undo,
+        ok=ok,
+        error="; ".join(result.get("blockers") or []),
+        applied_hashes=dict(result.get("applied_hashes") or {}),
     )
 
 
@@ -574,3 +587,60 @@ def test_the_router_is_mounted_and_owns_the_contract_routes():
         "/api/storage/purge",
     } <= paths
     assert "app.include_router(adhoc_router)" in inspect.getsource(api.create_app)
+
+
+def test_undo_after_an_edit_is_refused_and_the_change_stays_applied(
+    session, lab, monkeypatch
+):
+    task = _task(session, lab)
+    run_id = _launch(session, task)
+    _simulate_run(session, lab, run_id)
+    AdhocService(session).finalize_run(run_id)
+    monkeypatch.setattr(adhoc_apply, "folder_lease", lambda _source: _null_context())
+    _apply(session, run_id, undo=False)
+    (lab["repo"] / "test_app.py").write_text("# my edit\n")
+
+    _apply(session, run_id, undo=True)
+
+    record = AdhocService(session).run_record(run_id)
+    assert record["apply_state"] == "applied"
+    assert "changed since" in record["apply_error"]
+    assert (lab["repo"] / "test_app.py").read_text() == "# my edit\n"
+
+
+def test_the_runner_writes_the_patch_against_the_recorded_sha(
+    session, lab, monkeypatch
+):
+    """bench_run.write_adhoc_change_patch: the path real runs take."""
+    import sys
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "scripts"))
+    sys.modules.pop("bench_run", None)
+    bench_run = __import__("bench_run")
+    task = _task(session, lab)
+    run_id = _launch(session, task)
+    _simulate_run(session, lab, run_id)
+    run_dir = lab["settings"].data_runs_dir / run_id
+    workspace = run_dir / "workspace"
+    provisioned = _git(workspace, "rev-parse", "HEAD~0")
+    (run_dir / "provisioned_commit.txt").write_text(provisioned + "\n")
+    (run_dir / "case_spec.json").write_text(
+        json.dumps({"target": {"commit": task.base_commit}})
+    )
+    # The agent amends the provisioning commit with its own work.
+    _git(workspace, "add", "-A")
+    _git(workspace, "commit", "-q", "--amend", "--no-edit")
+
+    bench_run.write_adhoc_change_patch(run_dir, workspace, run_id)
+
+    patch = (run_dir / "change.patch").read_bytes()
+    assert b"items or []" in patch
+    assert b"setup.log" not in patch
+
+
+def test_a_malformed_task_id_is_refused_before_any_path_is_built(session, lab):
+    for bad in ("../../etc", "adhoc-x/../../y", "tetris-v1", "adhoc-"):
+        with pytest.raises(adhoc_service.AdhocNotFoundError):
+            AdhocService(session).get_task(bad)
+        with pytest.raises(adhoc_service.AdhocNotFoundError):
+            AdhocService(session).delete_task(bad)

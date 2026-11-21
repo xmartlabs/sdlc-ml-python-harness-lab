@@ -55,6 +55,8 @@ LIVE_APPLY_STATES = {"applying", "undoing"}
 # is removed as soon as the patch has been written.
 KEPT_FILES = (
     "change.patch",
+    "change.error.txt",
+    "provisioned_commit.txt",
     "usage.json",
     "prompt.md",
     "metadata.json",
@@ -100,8 +102,19 @@ def _slug(text: str, limit: int = 32) -> str:
     return (slug[:limit].strip("-")) or "repo"
 
 
+_TASK_ID = re.compile(r"^adhoc-[a-z0-9]+(?:-[a-z0-9]+)*-\d{3}$")
+_RUN_ID = re.compile(r"^adhoc-[a-z0-9]+(?:-[a-z0-9]+)*-\d{3}-K-\d{3,}$")
+
+
+def _checked_task_id(task_id: str) -> str:
+    """A task id is a path segment (data/checkouts/<id>): shape-checked first."""
+    if not _TASK_ID.match(task_id or ""):
+        raise AdhocNotFoundError(f"Unknown ad hoc task: {task_id!r}")
+    return task_id
+
+
 def run_dir(run_id: str) -> Path:
-    if not is_adhoc_id(run_id) or "/" in run_id or ".." in run_id:
+    if not _RUN_ID.match(run_id or ""):
         raise AdhocError(f"Not an ad hoc run id: {run_id!r}")
     return get_settings().data_runs_dir / run_id
 
@@ -359,6 +372,7 @@ class AdhocService:
         return summaries
 
     def get_task(self, task_id: str) -> AdhocTask:
+        _checked_task_id(task_id)
         task = self.session.exec(
             select(AdhocTask).where(AdhocTask.task_id == task_id)
         ).first()
@@ -440,8 +454,9 @@ class AdhocService:
                 self.session.delete(item)
         self.session.delete(task)
         self.session.commit()
-        checkout = get_settings().checkouts_dir / task_id
-        if is_adhoc_id(task_id) and checkout.is_dir():
+        root = get_settings().checkouts_dir
+        checkout = root / _checked_task_id(task_id)
+        if checkout.is_dir() and checkout.resolve().parent == root.resolve():
             shutil.rmtree(checkout, ignore_errors=True)
 
     # ---- runs ----------------------------------------------------------
@@ -459,13 +474,21 @@ class AdhocService:
         from harness_lab_app.schemas import RunConfigCreate, RunCreate
 
         task = self.get_task(task_id)
+        steps = max(1, min(int(max_steps or 1), 5))
+        case = self._case(task)
+        if case.max_steps < steps:
+            # The runner caps a run at its case's max_steps; the case is this
+            # task's private carrier, so it follows the largest request.
+            case.max_steps = steps
+            self.session.add(case)
+            self.session.commit()
         config = RunConfigCreate(
             case_id=task.case_id,
             prompt_variant=PROMPT_VARIANT,
             harness=harness,
             executor_model=(executor_model or None),
             executor_effort=executor_effort or "",
-            max_steps=max(1, min(int(max_steps or 1), 5)),
+            max_steps=steps,
             target_repo_id=task.target_id,
             # Empty on purpose: a pinned target resolves to its pinned commit
             # without asking any remote (ADR-0042), which is the task's base.
@@ -556,17 +579,27 @@ class AdhocService:
         directory = run_dir(run_id)
         archived = directory / "workspace"
         target_patch = directory / "change.patch"
+        # The runner writes change.patch inside its container, where the agent
+        # ran. Rebuilding here is a fallback for runs from before that, and runs
+        # hardened (adhoc_git.git_untrusted) because the agent wrote this .git.
         if archived.is_dir() and not target_patch.exists():
             task = self.get_task(row.task_id)
+            recorded = directory / "provisioned_commit.txt"
+            diff_from = recorded.read_text().strip() if recorded.exists() else ""
             try:
-                target_patch.write_text(
-                    adhoc_git.build_change_patch(archived, task.base_commit),
-                    encoding="utf-8",
+                target_patch.write_bytes(
+                    adhoc_git.build_change_patch(archived, task.base_commit, diff_from)
                 )
-            except adhoc_git.AdhocGitError as exc:
-                row.apply_error = f"Could not build the change: {exc}"
+            except Exception as exc:  # a broken change must not block cleanup
+                row.apply_error = f"Could not build the change: {exc}"[:2000]
+        error_file = directory / "change.error.txt"
+        if not target_patch.exists() and error_file.exists():
+            row.apply_error = (
+                "Could not build the change: "
+                + error_file.read_text(errors="replace").strip()
+            )[:2000]
         if target_patch.exists():
-            files = adhoc_git.summarize_patch(target_patch.read_text(encoding="utf-8"))
+            files = adhoc_git.summarize_patch(target_patch.read_bytes(), directory)
             row.patch_files = [file.__dict__ for file in files]
             row.files_changed = len(files)
             row.lines_added = sum(file.added for file in files)
@@ -663,6 +696,7 @@ class AdhocService:
                 "apply_command": "",
             }
         raw = path.read_bytes()
+        # For display only: the bytes on disk are what gets applied.
         text = raw[:_PATCH_PREVIEW_BYTES].decode("utf-8", errors="replace")
         return {
             "patch": text,
@@ -753,7 +787,7 @@ class AdhocService:
             }
         result = adhoc_git.check_apply(
             resolve(task.source_path),
-            path.read_text(encoding="utf-8"),
+            path.read_bytes(),
             task.base_commit,
         )
         if row.apply_state == "applied":
@@ -798,11 +832,19 @@ class AdhocService:
             ).all()
         )
 
-    def finish_apply(self, run_id: str, undo: bool, ok: bool, error: str = "") -> None:
+    def finish_apply(
+        self,
+        run_id: str,
+        undo: bool,
+        ok: bool,
+        error: str = "",
+        applied_hashes: dict[str, str] | None = None,
+    ) -> None:
         row = self.get_adhoc_run(run_id)
         if ok:
             row.apply_state = "undone" if undo else "applied"
             row.applied_at = None if undo else utc_now()
+            row.applied_hashes = {} if undo else dict(applied_hashes or {})
             row.apply_error = ""
             if not undo and row.decision == "pending":
                 row.decision = "approved"

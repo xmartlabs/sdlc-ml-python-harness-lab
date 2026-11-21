@@ -987,6 +987,8 @@ class AdhocRun(SQLModel, table=True):
     apply_state: str = "none"
     apply_error: str = ""
     applied_at: datetime | None = None
+    # SHA-256 of each touched file right after apply; undo refuses if any differ.
+    applied_hashes: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
     files_purged: bool = False
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

@@ -278,8 +278,17 @@ def evidence_summary(session: Session) -> dict[str, Any]:
     from harness_lab_app.overview_service import OverviewService
 
     overview = OverviewService(session).build()
-    cases = list(session.exec(select(Case)).all())
-    targets = list(session.exec(select(TargetRepository)).all())
+    # Ad hoc tasks (ADR-0095) are neither benchmark cases nor audited repositories.
+    cases = [
+        c
+        for c in session.exec(select(Case)).all()
+        if not c.case_id.startswith("adhoc-")
+    ]
+    targets = [
+        t
+        for t in session.exec(select(TargetRepository)).all()
+        if not t.target_id.startswith("adhoc-")
+    ]
     experiments = list(session.exec(select(Experiment)).all())
 
     return {

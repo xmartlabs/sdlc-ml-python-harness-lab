@@ -42,11 +42,18 @@ operator presses Apply or runs the printed command.**
    preflight, provisioning, runner, progress, cancellation and cost capture are
    unchanged. Every run of a task starts from the same commit, which is what
    makes "same task, another model" a comparison.
-2. **The clean patch.** After the run the worker writes `change.patch`: a
-   `git diff --binary` of the archived copy against the lab's provisioning
-   commit (so setup output and anything the lab staged stay out), with
-   dependency and cache directories excluded. It applies on the operator's
-   base commit.
+2. **The clean patch, built where the agent ran.** The runner records the
+   provisioning commit's SHA (`provisioned_commit.txt`) before the agent starts
+   and, when the run ends, writes `change.patch` inside its own container: a
+   `git diff --binary` against that SHA (so setup output and anything the lab
+   staged stay out, and an agent that amends the commit cannot hide its work),
+   with dependency and cache directories excluded, kept as **bytes** (CRLF,
+   Latin-1 and binary hunks survive). It is built before the lab's validation,
+   so nothing validation writes can reach the operator's repository. Git runs
+   on the agent's copy **hardened**: no system/global config, `core.fsmonitor`,
+   hooks, attributes, external diff and textconv off, every configured filter
+   driver overridden, and a config `include` refused — the agent wrote that
+   `.git/config`, and nothing in it may run in the lab's processes.
 3. **Apply amends ADR-0042/0045.** The rule now reads: *the lab writes to the
    operator's folder only when they press Apply (or Undo) for one reviewed
    change, only the files that change touches, never inside `.git`, and never
@@ -57,10 +64,15 @@ operator presses Apply or runs the printed command.**
    checked inside, immediately before writing: no merge/rebase/cherry-pick in
    progress, no `index.lock`, no uncommitted change in a file the patch
    touches, and `git apply --check`. `git apply` is all or nothing, so a refused
-   apply leaves the folder as it was. Undo is `git apply --reverse` under the
-   same checks, refused once the applied files changed. One apply per folder
-   at a time: the `AdhocRun.apply_state` row plus a Redis `SET NX` lease (file
-   locks exclude nothing on the Docker Desktop bind). The printed command
+   apply leaves the folder as it was. Undo is `git apply --reverse`, refused
+   when any touched file's SHA-256 differs from what apply recorded — `git
+   apply -R --check` alone would pass an edit far from the agent's hunks and
+   silently take part of the file back. One apply per folder at a time: the
+   `AdhocRun.apply_state` row plus a Redis `SET NX` lease that outlasts the
+   container timeout (file locks exclude nothing on the Docker Desktop bind).
+   The task is not acknowledged late and compare-and-sets the row before
+   writing, so a redelivered message never writes twice; an apply that finds its
+   change already in place reports it applied. The printed command
    (`git apply --3way …`) stays available for anyone who prefers their own git.
 4. **Measurement outlives the files.** `AdhocRun` holds tokens (input, output,
    cache, reasoning, billed), real or estimated cost and its source, minutes,
@@ -97,6 +109,18 @@ operator presses Apply or runs the printed command.**
   the signal is. Tasks never enter experiments or the leaderboard.
 - `create_all` registers only imported models; the app imports `models` before
   `init_db`, so the two new tables are created on start-up like every other.
+
+## Verification
+
+Exercised end to end on 2026-11-21 against the running stack with a real model
+(Haiku 4.5, $0.06): task creation copied and pinned a throwaway repository, the
+runner built a 250-byte patch, metrics were recorded, Apply wrote the file
+unstaged and owned by the operator's uid through the one-shot container, and
+Undo left the folder clean. The first live run found a bug no unit test had:
+`git apply --numstat` run from `data/runs/<id>/` — a subfolder of the lab's own
+repository — reads paths relative to that subfolder and drops them all, so the
+file list came back empty (and the dirty-overlap check went blind). The count
+now runs in an empty directory outside any repository.
 
 ## Alternatives considered
 

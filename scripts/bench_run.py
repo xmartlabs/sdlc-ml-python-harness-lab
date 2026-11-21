@@ -1698,6 +1698,7 @@ def finalize_workspace(out_dir: Path, workspace: Path, run_id: str) -> int:
         )
 
     diff_lines = write_diff_patch(out_dir, dest)
+    write_adhoc_change_patch(out_dir, dest, run_id)
 
     shutil.rmtree(workspace)
     if WORKSPACE_ROOT.exists() and not any(WORKSPACE_ROOT.iterdir()):
@@ -1735,6 +1736,36 @@ def _diffable_copy(dest: Path, into: Path) -> Path:
         ignore=lambda _dir, names: [n for n in names if n in DIFF_EXCLUDED_DIRS],
     )
     return into
+
+
+def write_adhoc_change_patch(out_dir: Path, dest: Path, run_id: str) -> None:
+    """The applicable change of an ad hoc run, built where the agent ran (ADR-0095).
+
+    Here, inside the runner container, and before the worker validates the
+    archive: the agent controlled this repository's ``.git/config``, so git runs
+    on it hardened and only in the sandbox the agent already had; and nothing
+    the lab's own validation writes can end up in the operator's repository.
+    """
+    if not run_id.startswith("adhoc-") or not (dest / ".git").exists():
+        return
+    try:
+        spec = json.loads((out_dir / "case_spec.json").read_text())
+    except (OSError, ValueError):
+        print("  ⚠️  ad hoc run without case_spec.json — no change.patch.")
+        return
+    base_commit = str((spec.get("target") or {}).get("commit") or "")
+    recorded = out_dir / "provisioned_commit.txt"
+    diff_from = recorded.read_text().strip() if recorded.exists() else ""
+    from harness_lab_app import adhoc_git
+
+    try:
+        patch = adhoc_git.build_change_patch(dest, base_commit, diff_from)
+    except adhoc_git.AdhocGitError as exc:
+        (out_dir / "change.error.txt").write_text(f"{exc}\n")
+        print(f"  ❌ change.patch not written: {exc}")
+        return
+    (out_dir / "change.patch").write_bytes(patch)
+    print(f"  change.patch: {len(patch)} bytes (ad hoc, applicable)")
 
 
 def write_diff_patch(out_dir: Path, dest: Path) -> int:
@@ -1951,6 +1982,15 @@ def _provision_git_target(
         ],
         cwd=REPO_ROOT,
     )
+    # Recorded before the agent starts (ADR-0095): an agent can amend or reword
+    # this commit, but not change what was written about it beforehand. The ad
+    # hoc patch is diffed against exactly this SHA.
+    provisioned_sha = _run_git(
+        ["git", "-C", str(workspace), "rev-parse", "HEAD"], cwd=REPO_ROOT
+    ).stdout.strip()
+    run_data_dir = DATA_DIR / workspace.name
+    if provisioned_sha and run_data_dir.is_dir():
+        (run_data_dir / "provisioned_commit.txt").write_text(provisioned_sha + "\n")
     print(f"  ✓ Target {target_id} provisioned at {commit[:10]}.")
 
 
