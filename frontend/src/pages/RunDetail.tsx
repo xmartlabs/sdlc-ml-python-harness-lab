@@ -181,6 +181,8 @@ const MESSAGES = defineMessages({
       tokens: "Tokens",
       costUsd: "Cost (USD)",
       subscriptionCost: "(subscription quota — no per-token price)",
+      estimatedCost: (value: number, model: string, asOf: string) =>
+        `≈ ${value.toFixed(2)} estimated at the API list price of ${model} (short context, ${asOf}); a subscription run has no real bill.`,
       steps: "Steps",
       interventions: "Interventions",
       timeMin: "Time (min)",
@@ -475,6 +477,8 @@ const MESSAGES = defineMessages({
       tokens: "Tokens",
       costUsd: "Costo (USD)",
       subscriptionCost: "(cuota de suscripción — sin precio por token)",
+      estimatedCost: (value: number, model: string, asOf: string) =>
+        `≈ ${value.toFixed(2)} estimado al precio de lista de la API de ${model} (contexto corto, ${asOf}); una corrida con suscripción no tiene cobro real.`,
       steps: "Pasos",
       interventions: "Intervenciones",
       timeMin: "Tiempo (min)",
@@ -1616,6 +1620,17 @@ export function RunDetail({
                   {validation.cost?.cost_usd == null &&
                   validation.cost?.cost_source === "subscription_quota" ? (
                     <span className="muted small"> {m.validation.subscriptionCost}</span>
+                  ) : null}
+                  {validation.cost?.cost_usd == null &&
+                  validation.cost?.estimated_cost_usd != null ? (
+                    <span className="muted small">
+                      {" "}
+                      {m.validation.estimatedCost(
+                        validation.cost.estimated_cost_usd,
+                        validation.cost.estimate_basis?.model ?? "",
+                        validation.cost.estimate_basis?.as_of ?? ""
+                      )}
+                    </span>
                   ) : null}
                 </strong>
               </div>

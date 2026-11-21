@@ -207,6 +207,16 @@ export type ValidationRecord = {
     time_minutes?: number | null;
     // "subscription_quota": a plan's quota, no per-token price (ADR-0094).
     cost_source?: string | null;
+    // A subscription run's tokens at the provider's API list price. Beside
+    // cost_usd, never in it: the real cost of a plan's quota stays unknown.
+    estimated_cost_usd?: number | null;
+    estimate_basis?: {
+      kind: "api_list_price";
+      model: string;
+      source: string;
+      as_of: string;
+      context: "short";
+    } | null;
     billing_mode?: string | null;
     detected_model?: string | null;
   };

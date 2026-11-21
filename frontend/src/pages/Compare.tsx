@@ -117,6 +117,8 @@ const MESSAGES = defineMessages({
       composite: "Composite",
       tokens: "Tokens",
       costUsd: "Cost (USD)",
+      costEstimated: (value: string) => `≈ ${value} (estimated, API price)`,
+      costSubscription: "— subscription quota",
       timeMinutes: "Time (min)",
       steps: "Steps",
       interventions: "Interventions"
@@ -188,6 +190,8 @@ const MESSAGES = defineMessages({
       composite: "Compuesto",
       tokens: "Tokens",
       costUsd: "Costo (USD)",
+      costEstimated: (value: string) => `≈ ${value} (estimado, precio API)`,
+      costSubscription: "— cuota de suscripción",
       timeMinutes: "Tiempo (min)",
       steps: "Pasos",
       interventions: "Intervenciones"
@@ -310,8 +314,22 @@ function buildMetrics(m: Messages): Metric[] {
     },
     {
       label: m.metrics.costUsd,
-      display: (c) => fmt(c.validation?.cost?.cost_usd),
-      numeric: (c) => c.validation?.cost?.cost_usd ?? null,
+      display: (c) => {
+        const cost = c.validation?.cost;
+        if (cost?.cost_usd != null) {
+          return fmt(cost.cost_usd);
+        }
+        if (cost?.estimated_cost_usd != null) {
+          return m.metrics.costEstimated(cost.estimated_cost_usd.toFixed(2));
+        }
+        return cost?.cost_source === "subscription_quota"
+          ? m.metrics.costSubscription
+          : fmt(cost?.cost_usd);
+      },
+      // The estimate takes part in "which is cheaper": it is the same
+      // dollars-per-token scale, and the cell says it is an estimate.
+      numeric: (c) =>
+        c.validation?.cost?.cost_usd ?? c.validation?.cost?.estimated_cost_usd ?? null,
       better: "low",
     },
     {

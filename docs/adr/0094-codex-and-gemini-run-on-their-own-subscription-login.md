@@ -201,3 +201,31 @@ it. Neither clock skew nor latency caused it. Three defects did:
 never reads or edits a token, only moves the file the CLI wrote, through the
 same allow-listed copy-back. The session store, the per-run private copies and
 the masks are unchanged.
+
+## Amendment (2026-11-20, later): a subscription run shows an API-price estimate beside its unknown cost
+
+A codex run's cost stays `cost_usd: null` (point 5 above). Comparing it in
+dollars with a gateway run still matters. `GET /api/runs/{id}/validation` now
+adds `estimated_cost_usd` to a run whose `cost_source` is `subscription_quota`.
+The figure is the run's own tokens priced at OpenAI's published API list price
+(`api_price_estimate.py`), and `estimate_basis` names the model, the source and
+the date of the price table.
+
+- **Beside, never instead.** `cost_usd` stays null. Rankings, statistics,
+  experiment cost deltas and the leaderboard still read only `cost_usd`, so no
+  aggregate includes a figure nobody was billed. Only the comparison table and
+  the run detail show the estimate, labelled "≈ … (estimated, API price)". The
+  comparison table also uses it to mark the cheaper column.
+- **Computed on read**, from the stored token counts and the run's configured
+  executor model (`detected_model` can be wrong; K-015 recorded `"I"`). Runs
+  validated before this change get the estimate without re-validating.
+- **Tokens are priced as recorded.** Non-cached input is billed at the input
+  rate and cache reads at the cached-input rate. Output includes reasoning and
+  is priced once. The short-context rate is always used: usage is a sum over
+  requests, so the long-context share (over 272K per request) is unknown, and
+  the estimate is a floor for runs that crossed it.
+- **A dated snapshot, not a live lookup.** The gateway's `/model/info` answers
+  403 with the lab's key, and the codex catalog carries no prices. The table
+  is read from https://developers.openai.com/api/docs/pricing (2026-11-20),
+  and a model absent from it gets no estimate, never a guess. gpt-5.6-sol's
+  price is promotional until 2026-11-30.

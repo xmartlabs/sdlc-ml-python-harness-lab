@@ -3070,10 +3070,24 @@ def create_app() -> FastAPI:
 
     @app.get("/api/runs/{run_id}/validation")
     def get_validation(run_id: str, session: Session = Depends(get_session)):
+        """The run's validation. A subscription run's cost stays unknown
+        (``cost_usd: null``, ADR-0094); beside it, ``estimated_cost_usd`` prices
+        its tokens at the provider's API list price, computed on read so runs
+        validated before the estimate existed get it too."""
+        from harness_lab_app.api_price_estimate import with_estimate
+        from harness_lab_app.models import Run, RunConfig
+
         validation = ValidationService(session).get_validation(run_id)
         if validation is None:
             raise HTTPException(status_code=404, detail="No validation for this run")
-        return validation
+        body = validation.model_dump()
+        if (validation.cost or {}).get("cost_source") == "subscription_quota":
+            run = session.exec(select(Run).where(Run.run_id == run_id)).first()
+            config = session.get(RunConfig, run.run_config_id) if run else None
+            body["cost"] = with_estimate(
+                validation.cost, config.executor_model if config else None
+            )
+        return body
 
     @app.get("/api/runs/{run_id}/attribution")
     def get_attribution(run_id: str, session: Session = Depends(get_session)):
