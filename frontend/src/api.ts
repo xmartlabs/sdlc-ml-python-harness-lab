@@ -104,6 +104,7 @@ import type {
   StagedSkillImportPreview,
   StagedSkillPromoteResult,
   StagedSkillRecord,
+  AdhocHarnessLevel,
   SuggestionRecord,
   SwebenchProInstance,
   TargetCreatePayload,
@@ -961,7 +962,15 @@ export const api = {
     }),
   launchAdhocRun: (
     taskId: string,
-    payload: { harness: string; executor_model?: string; executor_effort?: string; max_steps?: number }
+    payload: {
+      harness: string;
+      executor_model?: string;
+      executor_effort?: string;
+      max_steps?: number;
+      harness_level?: AdhocHarnessLevel;
+      trial_skill?: string;
+      invoke_trial_skill?: boolean;
+    }
   ) =>
     request<AdhocRunRecord>(`/api/adhoc/tasks/${taskId}/runs`, {
       method: "POST",

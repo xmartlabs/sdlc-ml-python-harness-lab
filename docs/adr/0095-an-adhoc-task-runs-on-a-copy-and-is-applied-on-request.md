@@ -95,7 +95,27 @@ operator presses Apply or runs the printed command.**
    what the task asked, without unrelated edits" — and the LLM judge grades
    against it when the operator presses the button (one model call, never
    automatic). The LLM audit and the skills panel are the ones every run has.
-7. **Light mode for benchmark runs.** A Storage page reports disk use by
+7. **The agent's harness is a choice per run.** `repo` (the default, and every
+   run before this choice existed) is `harness_source=native`: the agent sees
+   only what the operator's repository ships. `minimal` and `full` are
+   `harness_source=injected` at that skill profile (ADR-0085): the lab's
+   harness projected into the copy. One staged skill can be tried on top of
+   any level (`skills_extra`), and optionally required (`skills_invoke`,
+   ADR-0041). The level is stored on `AdhocRun.harness_level`, so the table
+   compares the same model with and without a harness. None of it reaches the
+   operator's folder: every projection — the injected harness and the staged
+   skill added to a `native` arm alike — is placed **before** the provisioning
+   commit, the runner records the paths it wrote (`harness_paths.json`,
+   including `*.native.bak` backups of a displaced `CLAUDE.md`), and
+   `change.patch` excludes them by literal path, so an agent's edit to a
+   projected skill or adapter file stays in the copy too. Two bugs surfaced on
+   the way, both fixed for every in-target run, not only ad hoc ones: the staged
+   skill of a `native` arm was copied *after* the baseline commit, so the
+   judge read it as the agent's work; and `metadata.json` listed the lab's
+   skills and subagents for a `native` run that could see none of them (the
+   catalog is now read from the agent's workspace), which made the audit
+   grade six subagents "no evidence" on a repository with no harness.
+8. **Light mode for benchmark runs.** A Storage page reports disk use by
    category and offers purges: expired ad hoc files, all ad hoc files, sandbox
    copies, and the workspace copies of finished benchmark runs older than N
    days. A light-purged run keeps diff, logs, steps, usage and scores and is

@@ -3634,3 +3634,12 @@ session copy.
   dir until the operator decides; the measurement is in the DB from the start.
   Attribution must be indexed *after* finalization, not by the generic
   post-run hook, which ran first.
+- Anything placed in a target clone *after* the provisioning commit is read as
+  the agent's work by every diff (judge, audit, ad hoc change.patch). The
+  `native` arm's staged skill was copied after it until 2026-11-21; all
+  in-target projections now go through the provisioning hook. For ad hoc runs
+  the projected paths are also excluded from change.patch by name
+  (`harness_paths.json`), because an agent may edit a projected skill.
+- `metadata.json` skills_bundle/subagents were read from the lab root for every
+  condition, so a `native` run "had" the lab's 6 subagents and the audit graded
+  each "no evidence". In-target runs now read the catalog from the workspace.

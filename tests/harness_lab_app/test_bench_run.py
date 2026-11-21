@@ -1533,3 +1533,68 @@ def test_from_step_reaches_the_command_only_for_a_continuing_retry() -> None:
         "K-1", RunConfigCreate(**base, resume=True, resume_from_step=4)
     )
     assert cont[cont.index("--from-step") + 1] == "4"
+
+
+def test_an_in_target_run_lists_the_catalog_of_its_workspace_not_the_labs(tmp_path):
+    """A `native` run with no harness listed the lab's 6 subagents and 25 skills.
+
+    The audit then judged each of them "no evidence" for an agent that could not
+    have seen any. The catalog is read from where the agent ran.
+    """
+    lab = tmp_path / "lab"
+    (lab / ".github" / "agents").mkdir(parents=True)
+    (lab / ".github" / "agents" / "planner.md").write_text("x")
+    (lab / ".claude" / "skills" / "lab_skill").mkdir(parents=True)
+    workspace = tmp_path / "ws"
+    (workspace / ".claude" / "agents").mkdir(parents=True)
+    (workspace / ".claude" / "agents" / "their_reviewer.md").write_text("x")
+    (workspace / ".gemini" / "skills" / "their_skill").mkdir(parents=True)
+    bare = tmp_path / "bare"
+    bare.mkdir()
+
+    original = bench_run.REPO_ROOT
+    try:
+        bench_run.REPO_ROOT = lab
+        assert bench_run.discover_skills() == ["lab_skill"]
+        assert bench_run.discover_subagents() == ["planner"]
+        assert bench_run.discover_skills(workspace) == ["their_skill"]
+        assert bench_run.discover_subagents(workspace) == ["their_reviewer"]
+        assert bench_run.discover_skills(bare) == []
+        assert bench_run.discover_subagents(bare) == []
+    finally:
+        bench_run.REPO_ROOT = original
+
+
+def test_harness_paths_name_each_projected_skill_agent_dir_and_backup():
+    from types import SimpleNamespace
+
+    claude = SimpleNamespace(
+        id="claude",
+        native_skills_dir=".claude/skills",
+        native_agents_dir=".claude/agents",
+    )
+    other = SimpleNamespace(
+        id="opencode", native_skills_dir=".opencode/skills", native_agents_dir=""
+    )
+    registry = SimpleNamespace(tools=[claude, other])
+
+    paths = bench_run.harness_paths(
+        registry,
+        "claude",
+        ["verify_changes", "writing-plans"],
+        ["CLAUDE.md", ".github/architecture.md", "CLAUDE.md.native.bak"],
+        agents=6,
+    )
+
+    assert paths == [
+        ".claude/agents",
+        ".claude/skills/verify_changes",
+        ".claude/skills/writing-plans",
+        ".github/architecture.md",
+        "CLAUDE.md",
+        "CLAUDE.md.native.bak",
+    ]
+    # Skills only, no agents: the native arm's staged skill.
+    assert bench_run.harness_paths(registry, "claude", ["tdd-lite"]) == [
+        ".claude/skills/tdd-lite"
+    ]

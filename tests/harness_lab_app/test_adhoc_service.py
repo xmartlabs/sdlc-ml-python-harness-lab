@@ -714,3 +714,97 @@ def test_an_applied_run_past_retention_keeps_only_its_patch(session, lab, monkey
     # Undo still works on a purged applied run.
     _apply(session, run_id, undo=True)
     assert AdhocService(session).run_record(run_id)["apply_state"] == "undone"
+
+
+def _config_of(session: Session, run_id: str) -> RunConfig:
+    run = session.exec(select(Run).where(Run.run_id == run_id)).one()
+    return session.get(RunConfig, run.run_config_id)
+
+
+def test_a_harness_level_becomes_the_runs_harness_condition(session, lab, monkeypatch):
+    """repo = the repository alone; minimal/full = the lab's harness projected."""
+    from harness_lab_app import skills_catalog
+
+    monkeypatch.setattr(
+        skills_catalog, "profile_disabled", lambda _name: ["brainstorming", "docs"]
+    )
+    task = _task(session, lab)
+    service = AdhocService(session)
+
+    runs = {
+        level: service.launch_run(task.task_id, harness="claude", harness_level=level)
+        for level in ("repo", "minimal", "full")
+    }
+
+    repo, minimal, full = (_config_of(session, runs[k]["run_id"]) for k in runs)
+    assert repo.harness_source == HarnessSource.native
+    assert repo.skills_disabled == []
+    assert minimal.harness_source == HarnessSource.injected
+    assert minimal.skills_disabled == ["brainstorming", "docs"]
+    assert full.harness_source == HarnessSource.injected
+    assert full.skills_disabled == []
+    # The table compares like with like, so the level is on every record.
+    assert [runs[k]["harness_level"] for k in runs] == ["repo", "minimal", "full"]
+    # Every level starts from the same commit.
+    assert {c.target_commit for c in (repo, minimal, full)} == {task.base_commit}
+
+
+def test_a_trial_skill_rides_on_any_level_and_can_be_required(session, lab):
+    task = _task(session, lab)
+    service = AdhocService(session)
+
+    offered = service.launch_run(task.task_id, harness="claude", trial_skill="tdd-lite")
+    required = service.launch_run(
+        task.task_id, harness="claude", trial_skill="tdd-lite", invoke_trial_skill=True
+    )
+
+    assert _config_of(session, offered["run_id"]).skills_extra == ["tdd-lite"]
+    assert _config_of(session, offered["run_id"]).skills_invoke == []
+    assert required["trial_skills"] == ["tdd-lite"]
+    assert required["skills_invoked"] == ["tdd-lite"]
+
+
+def test_an_unknown_level_or_an_empty_required_skill_is_refused(session, lab):
+    task = _task(session, lab)
+    service = AdhocService(session)
+
+    with pytest.raises(AdhocError, match="harness_level"):
+        service.launch_run(task.task_id, harness="claude", harness_level="huge")
+    with pytest.raises(AdhocError, match="skill to try"):
+        service.launch_run(task.task_id, harness="claude", invoke_trial_skill=True)
+    assert service.task_detail(task.task_id)["runs"] == []
+
+
+def test_the_runner_leaves_the_projected_harness_out_of_the_change(
+    session, lab, monkeypatch
+):
+    """bench_run reads harness_paths.json: the lab's skills never reach the repo."""
+    import sys
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "scripts"))
+    sys.modules.pop("bench_run", None)
+    bench_run = __import__("bench_run")
+    task = _task(session, lab)
+    run_id = _launch(session, task)
+    _simulate_run(session, lab, run_id)
+    run_dir = lab["settings"].data_runs_dir / run_id
+    workspace = run_dir / "workspace"
+    (run_dir / "provisioned_commit.txt").write_text(
+        _git(workspace, "rev-parse", "HEAD") + "\n"
+    )
+    (run_dir / "case_spec.json").write_text(
+        json.dumps({"target": {"commit": task.base_commit}})
+    )
+    # A skill the agent wrote into the projected view after the baseline.
+    skill = workspace / ".claude" / "skills" / "verify_changes"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("# edited by the agent\n")
+    (run_dir / bench_run.HARNESS_PATHS_FILE).write_text(
+        json.dumps([".claude/skills/verify_changes"])
+    )
+
+    bench_run.write_adhoc_change_patch(run_dir, workspace, run_id)
+
+    patch = (run_dir / "change.patch").read_bytes()
+    assert b"items or []" in patch
+    assert b"verify_changes" not in patch

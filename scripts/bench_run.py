@@ -381,12 +381,26 @@ def extract_cell_id(run_id: str) -> str:
     return parts[2] if len(parts) >= 4 else "?"
 
 
-def discover_skills() -> list[str]:
+def discover_skills(root: Path | None = None) -> list[str]:
+    """Skill directories visible from ``root`` (the lab root by default).
+
+    An in-target run passes its workspace: the agent's cwd is the clone, so the
+    catalog it could open is the clone's, not the lab's. Reading the lab here
+    for a `native` run listed 25 skills an agent with no harness never saw.
+    """
+    base = root or REPO_ROOT
     candidates = [
-        REPO_ROOT / ".opencode" / "skills",
-        REPO_ROOT / ".claude" / "skills",
-        REPO_ROOT / ".github" / "skills",
+        base / ".opencode" / "skills",
+        base / ".claude" / "skills",
+        base / ".github" / "skills",
     ]
+    if root is not None:
+        # Every native view a CLI auto-loads from its cwd (adapters/registry.toml).
+        candidates += [
+            base / ".agents" / "skills",
+            base / ".codex" / "skills",
+            base / ".gemini" / "skills",
+        ]
     found: list[str] = []
     for d in candidates:
         if d.is_dir():
@@ -408,6 +422,9 @@ def discover_skills() -> list[str]:
 # ---------------------------------------------------------------------------
 
 SKILLS_STAGING_DIR = REPO_ROOT / "data" / "skills_staging"
+# Workspace paths the lab's harness occupies in an in-target run, written next
+# to the run's other files (ADR-0095): the ad hoc change leaves them out.
+HARNESS_PATHS_FILE = "harness_paths.json"
 
 
 def _require_masked_lab_root() -> None:
@@ -572,7 +589,37 @@ def add_skills_to_native(workspace: Path, skills: list, tool_id: str) -> dict:
         placed = sorted(add_skills(workspace, tool, skills))
     if placed:
         print(f"  ✓ Skills added to the native workspace: {', '.join(placed)}")
-    return {"mode": "native_skills", "tool": tool_id, "skills": placed}
+    return {
+        "mode": "native_skills",
+        "tool": tool_id,
+        "skills": placed,
+        "paths": harness_paths(registry, tool_id, placed),
+    }
+
+
+def harness_paths(
+    registry: object,
+    tool_id: str,
+    skills: list[str],
+    files_written: list[str] = (),  # type: ignore[assignment]
+    agents: int = 0,
+) -> list[str]:
+    """Workspace paths a projection wrote, relative to the workspace root.
+
+    Recorded so an ad hoc change can leave them out (ADR-0095): they are the
+    lab's harness, not the operator's code. A skill is its directory; agents
+    are their whole native directory, which the projection owns once it
+    writes there.
+    """
+    paths = {str(path).strip("/") for path in files_written if str(path).strip("/")}
+    for tool in getattr(registry, "tools", ()):
+        if tool.id != tool_id:
+            continue
+        if tool.native_skills_dir:
+            paths.update(f"{tool.native_skills_dir}/{name}" for name in skills)
+        if agents and tool.native_agents_dir:
+            paths.add(tool.native_agents_dir)
+    return sorted(paths)
 
 
 def inject_harness(
@@ -631,6 +678,16 @@ def inject_harness(
         "agents": result.agents,
         "files_written": sorted(result.files_written),
         "collisions": sorted(result.collisions),
+        "paths": harness_paths(
+            registry,
+            tool_id,
+            sorted(result.skills),
+            # A displaced file of the repo's own is kept as *.native.bak in the
+            # clone; it is the lab's doing, so it stays out of the change too.
+            sorted(result.files_written)
+            + [f"{path}.native.bak" for path in result.collisions],
+            result.agents,
+        ),
     }
 
 
@@ -776,11 +833,26 @@ def staged_skill_hashes(extra: list[str]) -> dict[str, str]:
     return out
 
 
-def discover_subagents() -> list[str]:
-    d = REPO_ROOT / ".github" / "agents"
-    if not d.is_dir():
-        return []
-    return sorted(p.stem for p in d.glob("*.md") if p.stem != "README")
+def discover_subagents(root: Path | None = None) -> list[str]:
+    """Subagents visible from ``root`` (the lab root by default).
+
+    In the lab, the governed source ``.github/agents/`` is the catalog. In a
+    target workspace the native agent views count too (``.claude/agents``,
+    ``.opencode/agents``, ``.codex/agents``): that is where a projected harness
+    puts them and where a team keeps its own.
+    """
+    base = root or REPO_ROOT
+    dirs = [base / ".github" / "agents"]
+    if root is not None:
+        dirs += [base / ".claude" / "agents", base / ".opencode" / "agents"]
+    found: set[str] = set()
+    for d in dirs:
+        if d.is_dir():
+            found.update(p.stem for p in d.glob("*.md") if p.stem != "README")
+    codex = base / ".codex" / "agents"
+    if root is not None and codex.is_dir():
+        found.update(p.stem for p in codex.glob("*.toml"))
+    return sorted(found)
 
 
 def agent_workspace_path(run_id: str) -> str:
@@ -1502,13 +1574,19 @@ def write_metadata(
         # A bare run has no catalog and no subagents whatever the masked tree
         # happens to look like from here (ADR-0049): stating it explicitly keeps
         # the record right even if the masks were ever misconfigured.
-        "skills_bundle": [] if harness_source == "bare" else discover_skills(),
+        # An in-target run reads its catalog from the workspace it ran in
+        # (``harness_root``), so a `native` arm with no harness lists nothing.
+        "skills_bundle": []
+        if harness_source == "bare"
+        else discover_skills(harness_root),
         "skills_disabled": sorted(set(getattr(args, "disable_skill", []) or [])),
         "skills_experimental": sorted(set(getattr(args, "extra_skill", []) or [])),
         # Skills the prompt told the agent to invoke (ADR-0041). Part of the
         # arm, so it also enters the condition hash below.
         "skills_invoke": sorted(set(getattr(args, "invoke_skill", []) or [])),
-        "subagents": [] if harness_source == "bare" else discover_subagents(),
+        "subagents": []
+        if harness_source == "bare"
+        else discover_subagents(harness_root),
         "base_commit": task.get("base_commit", ""),
         "workspace": f"workspace/{args.run}",
         # Which external repository this run worked in, if any (ADR-0029).
@@ -1758,8 +1836,9 @@ def write_adhoc_change_patch(out_dir: Path, dest: Path, run_id: str) -> None:
     diff_from = recorded.read_text().strip() if recorded.exists() else ""
     from harness_lab_app import adhoc_git
 
+    harness = adhoc_git.read_harness_paths(out_dir)
     try:
-        patch = adhoc_git.build_change_patch(dest, base_commit, diff_from)
+        patch = adhoc_git.build_change_patch(dest, base_commit, diff_from, harness)
     except adhoc_git.AdhocGitError as exc:
         (out_dir / "change.error.txt").write_text(f"{exc}\n")
         print(f"  ❌ change.patch not written: {exc}")
@@ -3798,36 +3877,60 @@ def main(argv: list[str] | None = None) -> int:
     workspace.mkdir(parents=True, exist_ok=True)
 
     harness_projection: dict | None = None
+    harness_placed = False
 
-    def _inject(ws: Path) -> None:
-        nonlocal harness_projection
-        # The worker stages the unmasked adapter files here; absent (an
-        # unmasked lane, or an older run dir) the projection reads the repo
-        # root, which is what it always did.
-        staged = out_dir / "harness_source"
-        harness_projection = inject_harness(
-            ws, effective_skills, args.harness, staged if staged.is_dir() else None
-        )
+    def _place_harness(ws: Path) -> None:
+        """Put the run's harness in the clone, before the baseline commit.
 
+        Both in-target conditions place files here, never after provisioning:
+        anything written after the baseline commit shows up in the agent's
+        diff as though the agent had written it — the judge reads it, and an
+        ad hoc run would hand it to the operator's repository.
+        """
+        nonlocal harness_projection, harness_placed
+        harness_placed = True
+        if harness_source == "injected":
+            # The worker stages the unmasked adapter files here; absent (an
+            # unmasked lane, or an older run dir) the projection reads the
+            # repo root, which is what it always did.
+            staged_root = out_dir / "harness_source"
+            harness_projection = inject_harness(
+                ws,
+                effective_skills,
+                args.harness,
+                staged_root if staged_root.is_dir() else None,
+            )
+            return
+        # A `native` arm that stages skills has to have them placed in the
+        # workspace, or the agent — whose cwd is the clone — never sees them
+        # and the arm silently equals its own control.
+        wanted = set(args.extra_skill) | set(args.invoke_skill)
+        staged = [skill for skill in effective_skills if skill.name in wanted]
+        if staged:
+            harness_projection = add_skills_to_native(ws, staged, args.harness)
+
+    in_target = harness_source in ("native", "injected")
     if provisions_repo and case_spec is not None:
         provision_workspace(
             workspace,
             case_spec,
-            _inject if harness_source == "injected" else None,
+            _place_harness if in_target else None,
         )
     elif case_spec is not None:
         # A case that starts from files (a broken page to fix) rather than an
         # empty folder or a cloned repository (ADR-0068).
         seed_workspace(workspace, case_spec)
 
-    # A `native` arm that stages skills has to have them placed in the
-    # workspace, or the agent — whose cwd is the clone — never sees them and the
-    # arm silently equals its own control.
-    if harness_source == "native" and provisions_repo:
-        wanted = set(args.extra_skill) | set(args.invoke_skill)
-        staged = [skill for skill in effective_skills if skill.name in wanted]
-        if staged:
-            harness_projection = add_skills_to_native(workspace, staged, args.harness)
+    # A workspace provisioned earlier (a resume) skips the provisioning hook;
+    # placing the staged skills again is idempotent and keeps them recorded.
+    if harness_source == "native" and provisions_repo and not harness_placed:
+        _place_harness(workspace)
+    # What the lab put in the clone, for the ad hoc change to leave out: the
+    # operator asked for their code, not for the lab's harness (ADR-0095).
+    if harness_projection and harness_projection.get("paths"):
+        (out_dir / HARNESS_PATHS_FILE).write_text(
+            json.dumps(harness_projection["paths"], indent=2) + "\n"
+        )
 
     # Where the agent runs decides which harness it can see. Claude Code and
     # opencode auto-load their adapter file and native skills from the cwd, so

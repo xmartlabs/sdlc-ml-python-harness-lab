@@ -50,6 +50,29 @@ PROMPT_VARIANT = "task"
 DECISIONS = {"approved", "rejected", "discarded"}
 LIVE_RUN_STATES = {RunState.pending, RunState.running, RunState.scoring}
 LIVE_APPLY_STATES = {"applying", "undoing"}
+
+# The harness an ad hoc run gives the agent. "repo" is the operator's
+# repository as it is (harness_source=native): its own CLAUDE.md, skills and
+# agents if it has any, nothing from the lab. The other levels project the
+# lab's harness into the copy (harness_source=injected) at a skill profile
+# (ADR-0085). Projected before the baseline commit and excluded from
+# change.patch by path, so none of it reaches the operator's folder.
+HARNESS_LEVELS = ("repo", "minimal", "full")
+
+
+def harness_condition(level: str) -> tuple[HarnessSource, str]:
+    """(harness_source, skill_profile) for an ad hoc harness level."""
+    if level == "repo":
+        return HarnessSource.native, ""
+    if level == "full":
+        return HarnessSource.injected, ""
+    if level == "minimal":
+        return HarnessSource.injected, "minimal"
+    raise AdhocError(
+        f"harness_level must be one of {', '.join(HARNESS_LEVELS)}, not '{level}'."
+    )
+
+
 # An undecided ad hoc run keeps its whole directory: the workspace for the
 # sandbox, steps/ for the skills it used, diff.patch and logs for the LLM audit
 # and judge. Everything goes when it is rejected or discarded, or after
@@ -479,12 +502,25 @@ class AdhocService:
         executor_model: str | None = None,
         executor_effort: str = "",
         max_steps: int = 1,
+        harness_level: str = "repo",
+        trial_skill: str = "",
+        invoke_trial_skill: bool = False,
     ) -> dict[str, Any]:
-        """Queue one run of the task through the ordinary run pipeline."""
+        """Queue one run of the task through the ordinary run pipeline.
+
+        ``harness_level`` picks what the agent sees (see :data:`HARNESS_LEVELS`).
+        ``trial_skill`` adds one staged skill on top of any level — "their repo
+        plus this skill" — and ``invoke_trial_skill`` tells the agent to use it,
+        since a skill that is only available is often never opened (ADR-0041).
+        """
         from harness_lab_app.run_service import RunService
         from harness_lab_app.schemas import RunConfigCreate, RunCreate
 
         task = self.get_task(task_id)
+        source, profile = harness_condition((harness_level or "repo").strip())
+        trial = (trial_skill or "").strip()
+        if invoke_trial_skill and not trial:
+            raise AdhocError("Pick the skill to try before asking the agent to use it.")
         steps = max(1, min(int(max_steps or 1), 5))
         case = self._case(task)
         if case.max_steps < steps:
@@ -504,11 +540,20 @@ class AdhocService:
             # Empty on purpose: a pinned target resolves to its pinned commit
             # without asking any remote (ADR-0042), which is the task's base.
             target_ref="",
-            harness_source=HarnessSource.native,
+            harness_source=source,
+            skill_profile=profile,
+            skills_extra=[trial] if trial else [],
+            skills_invoke=[trial] if trial and invoke_trial_skill else [],
         )
         service = RunService(self.session, enqueue=self.enqueue)
         run = service.create_run(RunCreate(config=config))
-        self.session.add(AdhocRun(run_id=run.run_id, task_id=task.task_id))
+        self.session.add(
+            AdhocRun(
+                run_id=run.run_id,
+                task_id=task.task_id,
+                harness_level=(harness_level or "repo").strip(),
+            )
+        )
         self.session.commit()
         return self.run_record(run.run_id)
 
@@ -533,6 +578,11 @@ class AdhocService:
             "harness": config.harness if config else "",
             "executor_model": (config.executor_model or "") if config else "",
             "executor_effort": config.executor_effort if config else "",
+            # What the agent saw: the repository alone, or the lab's harness at
+            # a profile, plus any staged skill tried on top.
+            "harness_level": row.harness_level,
+            "trial_skills": list(config.skills_extra) if config else [],
+            "skills_invoked": list(config.skills_invoke) if config else [],
             "created_at": row.created_at.isoformat(),
             "started_at": run.started_at.isoformat()
             if run and run.started_at
@@ -607,7 +657,12 @@ class AdhocService:
             diff_from = recorded.read_text().strip() if recorded.exists() else ""
             try:
                 target_patch.write_bytes(
-                    adhoc_git.build_change_patch(archived, task.base_commit, diff_from)
+                    adhoc_git.build_change_patch(
+                        archived,
+                        task.base_commit,
+                        diff_from,
+                        adhoc_git.read_harness_paths(directory),
+                    )
                 )
             except Exception as exc:  # a broken change must not block cleanup
                 row.apply_error = f"Could not build the change: {exc}"[:2000]

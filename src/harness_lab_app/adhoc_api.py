@@ -48,6 +48,13 @@ class AdhocRunLaunch(BaseModel):
     executor_model: str | None = None
     executor_effort: str = ""
     max_steps: int = Field(default=1, ge=1, le=5)
+    # What the agent sees (ADR-0095): "repo" (the repository alone), or the
+    # lab's harness at a profile, "minimal" or "full".
+    harness_level: str = "repo"
+    # One staged skill to try on top of the level, and whether to tell the
+    # agent to use it.
+    trial_skill: str = ""
+    invoke_trial_skill: bool = False
 
 
 class AdhocDecision(BaseModel):
@@ -151,6 +158,9 @@ def launch_adhoc_run(
             executor_model=data.executor_model,
             executor_effort=data.executor_effort,
             max_steps=data.max_steps,
+            harness_level=data.harness_level,
+            trial_skill=data.trial_skill,
+            invoke_trial_skill=data.invoke_trial_skill,
         )
     except _EXPECTED as exc:
         raise _http(exc) from exc

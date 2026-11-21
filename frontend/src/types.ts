@@ -2579,6 +2579,9 @@ export type AdhocTaskDetail = {
 };
 
 /** One run of an ad hoc task: harness, model, metrics, decision and apply state. */
+/** What an ad hoc run's agent sees (ADR-0095): the repo alone, or the lab's harness at a profile. */
+export type AdhocHarnessLevel = "repo" | "minimal" | "full";
+
 export type AdhocRunRecord = {
   run_id: string;
   task_id: string;
@@ -2586,6 +2589,11 @@ export type AdhocRunRecord = {
   harness: string;
   executor_model: string;
   executor_effort?: string | null;
+  harness_level?: AdhocHarnessLevel;
+  /** Staged skills tried on top of the level. */
+  trial_skills?: string[];
+  /** Skills the agent was told to use. */
+  skills_invoked?: string[];
   created_at?: string | null;
   started_at?: string | null;
   ended_at?: string | null;

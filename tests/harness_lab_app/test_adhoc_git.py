@@ -464,3 +464,60 @@ def test_the_summary_survives_being_asked_from_inside_another_repository(
     files = summarize_patch(patch, inside)
 
     assert {item.path for item in files} == {"app.py", "new_module.py"}
+
+
+def test_the_lab_harness_and_the_agents_edits_to_it_stay_out_of_the_change(
+    operator, tmp_path
+):
+    """A run with the lab's harness hands the operator their code, not the lab's.
+
+    The projection sits in the provisioning commit, so it is out already; but an
+    agent that edits a projected skill or CLAUDE.md would carry that edit into
+    the operator's repository unless the harness paths are excluded by name.
+    """
+    source, base = operator
+    copy = tmp_path / "copy"
+    subprocess.run(
+        ["git", "clone", "-q", str(source), str(copy)], check=True, capture_output=True
+    )
+    skill = copy / ".claude" / "skills" / "verify_changes"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("# verify\n")
+    (copy / "CLAUDE.md").write_text("# lab harness\n")
+    _git(copy, "add", "-A")
+    _git(copy, "commit", "-q", "-m", "target: provisioned demo")
+    provisioned = _git(copy, "rev-parse", "HEAD")
+    # The agent works, and also touches the harness it was given.
+    (copy / "app.py").write_text("def greet(name):\n    return name\n")
+    (skill / "SKILL.md").write_text("# verify, edited by the agent\n")
+    (copy / "CLAUDE.md").write_text("# lab harness, edited\n")
+    (copy / ".claude" / "skills" / "verify_changes" / "notes.md").write_text("x\n")
+
+    patch = build_change_patch(
+        copy, base, provisioned, [".claude/skills/verify_changes", "CLAUDE.md"]
+    )
+
+    assert {item.path for item in summarize_patch(patch)} == {"app.py"}
+    # Without the list, the same edits would have reached the operator.
+    leaky = build_change_patch(copy, base, provisioned)
+    assert b"CLAUDE.md" in leaky and b"verify_changes" in leaky
+
+
+def test_harness_paths_are_read_relative_and_never_climb_out(tmp_path):
+    (tmp_path / adhoc_git.HARNESS_PATHS_FILE).write_text(
+        json.dumps(
+            [
+                ".claude/skills/x",
+                "/etc/passwd",
+                "../outside",
+                "a/../../b",
+                "",
+                "CLAUDE.md",
+            ]
+        )
+    )
+
+    assert adhoc_git.read_harness_paths(tmp_path) == [".claude/skills/x", "CLAUDE.md"]
+    assert adhoc_git.read_harness_paths(tmp_path / "missing") == []
+    (tmp_path / adhoc_git.HARNESS_PATHS_FILE).write_text('{"not": "a list"}')
+    assert adhoc_git.read_harness_paths(tmp_path) == []

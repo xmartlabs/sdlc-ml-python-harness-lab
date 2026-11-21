@@ -249,17 +249,53 @@ def provisioned_commit(workspace: Path, base_commit: str) -> str:
     return out.decode().strip() if code == 0 else ""
 
 
-def _pathspec_excludes() -> list[str]:
+HARNESS_PATHS_FILE = "harness_paths.json"
+
+
+def read_harness_paths(run_dir: Path) -> list[str]:
+    """The workspace paths the lab's harness occupies, as the runner recorded.
+
+    Relative, normalised paths only: anything absolute or climbing out with
+    ``..`` is dropped rather than trusted, since the list ends up in a pathspec.
+    """
+    try:
+        raw = json.loads((run_dir / HARNESS_PATHS_FILE).read_text())
+    except (OSError, ValueError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    paths: list[str] = []
+    for item in raw:
+        text = str(item).strip()
+        # Checked before normalising: stripping first turned "/etc/x" into a
+        # relative "etc/x" that looked harmless.
+        if not text or text.startswith("/") or ".." in text.split("/"):
+            continue
+        paths.append(text.rstrip("/"))
+    return sorted(set(paths))
+
+
+def _pathspec_excludes(harness_paths: list[str] = ()) -> list[str]:  # type: ignore[assignment]
     excludes: list[str] = []
     for name in NOISE_DIRS:
         excludes.append(f":(exclude,glob){name}")
         excludes.append(f":(exclude,glob){name}/**")
         excludes.append(f":(exclude,glob)**/{name}")
         excludes.append(f":(exclude,glob)**/{name}/**")
+    # The lab's harness, projected into the clone for this run: the operator
+    # asked for their code, not for the lab's skills (ADR-0095). `literal`
+    # anchors at the workspace root and reads no glob characters in a name.
+    for path in harness_paths:
+        excludes.append(f":(exclude,literal){path}")
     return excludes
 
 
-def build_change_patch(workspace: Path, base_commit: str, diff_from: str = "") -> bytes:
+def build_change_patch(
+    workspace: Path,
+    base_commit: str,
+    diff_from: str = "",
+    harness_paths: list[str] = (),  # type: ignore[assignment]
+) -> bytes:
     """The agent's change, as bytes ready for ``git apply`` on the operator's commit.
 
     Diffed against the lab's provisioning commit (``diff_from``, recorded by the
@@ -272,6 +308,11 @@ def build_change_patch(workspace: Path, base_commit: str, diff_from: str = "") -
     so nothing the agent configured rewrites the content, and the output kept as
     bytes so CRLF and non-UTF-8 files survive. Intent-to-add makes new files
     visible without staging their content; ``.gitignore`` still applies.
+
+    ``harness_paths`` are the lab harness's files in the clone (skills, agents,
+    adapter files). They sit in the provisioning commit already; excluding
+    them also drops an agent's edits to them, which belong to the lab's
+    harness and never to the operator's repository.
     """
     if not (workspace / ".git").exists():
         raise AdhocGitError(f"{workspace} is not a git repository.")
@@ -288,7 +329,7 @@ def build_change_patch(workspace: Path, base_commit: str, diff_from: str = "") -
             base,
             "--",
             ".",
-            *_pathspec_excludes(),
+            *_pathspec_excludes(harness_paths),
         ],
         workspace,
     )

@@ -958,6 +958,10 @@ class AdhocRun(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     run_id: str = Field(index=True, unique=True)
     task_id: str = Field(index=True)
+    # Which harness the agent had: "repo" (only what the operator's repository
+    # ships — every run before levels existed), or the lab's harness projected
+    # into the copy at a profile: "minimal" or "full" (ADR-0095, ADR-0085).
+    harness_level: str = "repo"
     input_tokens: int | None = None
     output_tokens: int | None = None
     cache_read_tokens: int | None = None

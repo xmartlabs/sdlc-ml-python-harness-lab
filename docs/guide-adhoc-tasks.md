@@ -34,7 +34,20 @@ Decision record: [ADR-0095](adr/0095-an-adhoc-task-runs-on-a-copy-and-is-applied
    touched.
 4. **Run with…** a harness, model and effort. The panel says where your code
    goes: a cloud model sends it to that provider; an `lmstudio/` or `ollama/`
-   model keeps it on this machine.
+   model keeps it on this machine. Then pick the **agent harness**:
+   - **Your repo** (default) — only what your repository ships: its
+     `CLAUDE.md`, skills and agents, if any. Nothing from the lab.
+   - **Lab minimal** — the lab's harness with the minimal profile (7 skills:
+     plan, debug, verify, research, review).
+   - **Lab full** — the lab's whole harness, every skill plus its subagents.
+   - **Skill to try** (optional) — one staged skill from the Skills page on
+     top of any level; tick **Tell the agent to use it** to require it.
+
+   The lab's harness goes into the copy only. If your repo has a `CLAUDE.md`,
+   the copy's is replaced (yours is kept beside it as `CLAUDE.md.native.bak`).
+   None of it is in the change you apply, not even an edit the agent makes to
+   a lab skill. Run the same task at two levels with the same model to see
+   what the harness changes.
 5. **Review.** When the run ends you get the changed files with flags worth a
    second look (lockfile, CI, deleted, binary, secret-like, large) and the diff.
    Then choose:
@@ -53,9 +66,9 @@ Decision record: [ADR-0095](adr/0095-an-adhoc-task-runs-on-a-copy-and-is-applied
    model call); **Run the LLM audit** explains how the agent worked and which
    skills it opened.
 7. **Run again with another model.** Every run of a task starts from the same
-   commit, so the table compares like with like: tokens, cost (real, estimated
-   for subscriptions, $0 for local models), minutes, files and lines changed,
-   decision, apply state.
+   commit, so the table compares like with like: agent harness (a `*` marks a
+   required skill), tokens, cost (real, estimated for subscriptions, $0 for
+   local models), minutes, files and lines changed, decision, apply state.
 
 ## What is kept, and for how long
 

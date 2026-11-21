@@ -10,7 +10,14 @@ import { armFor } from "../components/guide/guideData";
 import { HarnessModelChooser } from "../components/guide/HarnessModelChooser";
 import { formatRunDate } from "../dates";
 import { defineMessages, useMessages } from "../i18n";
-import type { AdhocRunRecord, AdhocTaskDetail as AdhocTaskDetailType } from "../types";
+import { InfoTooltip } from "../components/InfoTooltip";
+import type {
+  AdhocHarnessLevel,
+  AdhocRunRecord,
+  AdhocTaskDetail as AdhocTaskDetailType,
+  SkillProfileRecord,
+  StagedSkillRecord
+} from "../types";
 
 /**
  * One ad hoc task (ADR-0095): what it asks for, the folder it runs against,
@@ -38,9 +45,27 @@ const MESSAGES = defineMessages({
       cloud: (provider: string) => `Your code will be sent to ${provider}.`,
       local: "Runs on your local model: nothing leaves this machine."
     },
+    level: {
+      label: "Agent harness",
+      tip: "What the agent sees in the copy besides your code. The lab's harness is added to the copy only: it never reaches your folder, and the change you apply leaves it out.",
+      names: { repo: "Your repo", minimal: "Lab minimal", full: "Lab full" } as Record<AdhocHarnessLevel, string>,
+      hints: {
+        repo: "Only what your repository ships (its CLAUDE.md, skills and agents, if any). Nothing from the lab.",
+        minimal: (n: number) =>
+          `The lab's harness with the minimal profile: ${n} skills (plan, debug, verify, research, review). Replaces your CLAUDE.md in the copy if you have one.`,
+        full: (n: number) =>
+          `The lab's whole harness: ${n} skills plus its subagents. Replaces your CLAUDE.md in the copy if you have one.`
+      },
+      trial: "Skill to try (optional)",
+      trialTip: "A staged skill from the Skills page, added on top of the harness above. Useful to see whether one skill changes the result on a real task.",
+      noTrial: "None",
+      invoke: "Tell the agent to use it",
+      invokeTip: "A skill that is only available is often never opened. Ticked, the prompt asks the agent to invoke it."
+    },
     runs: {
       title: "Runs",
       colHarness: "Harness",
+      colLevel: "Agent harness",
       colModel: "Model",
       colEffort: "Effort",
       colState: "State",
@@ -89,9 +114,27 @@ const MESSAGES = defineMessages({
       cloud: (provider: string) => `Tu código se va a enviar a ${provider}.`,
       local: "Corre en tu modelo local: nada sale de esta máquina."
     },
+    level: {
+      label: "Harness del agente",
+      tip: "Lo que el agente ve en la copia además de tu código. El harness del lab se agrega solo a la copia: nunca llega a tu carpeta y el cambio que aplicás lo deja afuera.",
+      names: { repo: "Tu repo", minimal: "Lab mínimo", full: "Lab completo" } as Record<AdhocHarnessLevel, string>,
+      hints: {
+        repo: "Solo lo que trae tu repositorio (su CLAUDE.md, skills y agentes, si tiene). Nada del lab.",
+        minimal: (n: number) =>
+          `El harness del lab con el perfil mínimo: ${n} skills (planificar, depurar, verificar, investigar, revisar). Si tenés CLAUDE.md, en la copia lo reemplaza.`,
+        full: (n: number) =>
+          `El harness completo del lab: ${n} skills más sus subagentes. Si tenés CLAUDE.md, en la copia lo reemplaza.`
+      },
+      trial: "Skill a probar (opcional)",
+      trialTip: "Una skill en borrador de la página Skills, agregada encima del harness elegido. Sirve para ver si una skill cambia el resultado en una tarea real.",
+      noTrial: "Ninguna",
+      invoke: "Pedirle al agente que la use",
+      invokeTip: "Una skill que solo está disponible muchas veces ni se abre. Marcado, el prompt le pide al agente que la invoque."
+    },
     runs: {
       title: "Corridas",
       colHarness: "Arnés",
+      colLevel: "Harness del agente",
       colModel: "Modelo",
       colEffort: "Esfuerzo",
       colState: "Estado",
@@ -147,6 +190,11 @@ export function AdhocTaskDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [arm, setArm] = useState("");
+  const [level, setLevel] = useState<AdhocHarnessLevel>("repo");
+  const [trialSkill, setTrialSkill] = useState("");
+  const [invokeTrial, setInvokeTrial] = useState(false);
+  const [profiles, setProfiles] = useState<Record<string, SkillProfileRecord>>({});
+  const [staged, setStaged] = useState<StagedSkillRecord[]>([]);
   const [launching, setLaunching] = useState(false);
   const runPanelRef = useRef<HTMLDivElement | null>(null);
 
@@ -165,6 +213,18 @@ export function AdhocTaskDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // What each harness level carries, and the staged skills one can try.
+  useEffect(() => {
+    api
+      .listSkillProfiles()
+      .then(setProfiles)
+      .catch(() => setProfiles({}));
+    api
+      .listStagedSkills()
+      .then((rows) => setStaged(rows.filter((row) => row.status !== "archived")))
+      .catch(() => setStaged([]));
+  }, []);
 
   // Poll while anything on this task is still moving.
   useEffect(() => {
@@ -185,7 +245,10 @@ export function AdhocTaskDetailPage() {
       const run = await api.launchAdhocRun(taskId, {
         harness: picked.harness,
         executor_model: picked.model,
-        executor_effort: picked.effort || undefined
+        executor_effort: picked.effort || undefined,
+        harness_level: level,
+        trial_skill: trialSkill || undefined,
+        invoke_trial_skill: Boolean(trialSkill) && invokeTrial
       });
       setDetail((current) => (current ? { ...current, runs: [run, ...current.runs] } : current));
       setSelectedRunId(run.run_id);
@@ -214,6 +277,14 @@ export function AdhocTaskDetailPage() {
   const { task, runs, source } = detail;
   const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? runs[0] ?? null;
   const pickedArm = arm ? armFor(arm) : null;
+  const skillCount = (name: string) => profiles[name]?.skills.length ?? 0;
+  const levelHint =
+    level === "repo"
+      ? m.level.hints.repo
+      : level === "minimal"
+        ? m.level.hints.minimal(skillCount("minimal"))
+        : m.level.hints.full(skillCount("full"));
+  const levels: AdhocHarnessLevel[] = ["repo", "minimal", "full"];
 
   return (
     <section className="page">
@@ -242,6 +313,50 @@ export function AdhocTaskDetailPage() {
       <div className="card" ref={runPanelRef}>
         <h2>{m.runWith}</h2>
         <HarnessModelChooser onPick={setArm} value={arm} />
+        <div className="adhoc-level">
+          <span className="guide-field-label">
+            {m.level.label} <InfoTooltip text={m.level.tip} />
+          </span>
+          <div className="segmented" role="group">
+            {levels.map((name) => (
+              <button
+                aria-pressed={level === name}
+                className={level === name ? "active" : ""}
+                key={name}
+                onClick={() => setLevel(name)}
+                type="button"
+              >
+                {m.level.names[name]}
+              </button>
+            ))}
+          </div>
+          <p className="muted small">{levelHint}</p>
+          {staged.length > 0 ? (
+            <div className="adhoc-trial">
+              <label>
+                <span className="guide-field-label">
+                  {m.level.trial} <InfoTooltip text={m.level.trialTip} />
+                </span>
+                <select onChange={(event) => setTrialSkill(event.target.value)} value={trialSkill}>
+                  <option value="">{m.level.noTrial}</option>
+                  {staged.map((skill) => (
+                    <option key={skill.name} value={skill.name}>
+                      {skill.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {trialSkill ? (
+                <label className="inline-check">
+                  <input checked={invokeTrial} onChange={(event) => setInvokeTrial(event.target.checked)} type="checkbox" />
+                  <span>
+                    {m.level.invoke} <InfoTooltip text={m.level.invokeTip} />
+                  </span>
+                </label>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
         {pickedArm ? (
           <p className="muted small">
             {isCloudModel(pickedArm.model)
@@ -265,6 +380,7 @@ export function AdhocTaskDetailPage() {
             <thead>
               <tr>
                 <th>{m.runs.colHarness}</th>
+                <th>{m.runs.colLevel}</th>
                 <th>{m.runs.colModel}</th>
                 <th>{m.runs.colEffort}</th>
                 <th>{m.runs.colState}</th>
@@ -285,6 +401,11 @@ export function AdhocTaskDetailPage() {
                   style={{ cursor: "pointer" }}
                 >
                   <td>{run.harness}</td>
+                  <td className="small">
+                    {m.level.names[run.harness_level ?? "repo"]}
+                    {run.trial_skills?.length ? ` + ${run.trial_skills.join(", ")}` : ""}
+                    {run.skills_invoked?.length ? " *" : ""}
+                  </td>
                   <td className="mono small">{run.executor_model}</td>
                   <td>{run.executor_effort || m.runs.none}</td>
                   <td>

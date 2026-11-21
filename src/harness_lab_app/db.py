@@ -403,6 +403,14 @@ def _apply_sqlite_compat_migrations() -> None:
                     "NOT NULL DEFAULT '{}'"
                 )
             )
+        # Every ad hoc run before harness levels ran on the repository alone.
+        if adhoc_run_columns and "harness_level" not in adhoc_run_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE adhocrun ADD COLUMN harness_level VARCHAR "
+                    "NOT NULL DEFAULT 'repo'"
+                )
+            )
 
         _migrate_staged_skills(connection)
 

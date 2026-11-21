@@ -6081,3 +6081,26 @@ button.guide-option[aria-pressed="true"] { border-color: var(--accent); backgrou
 .diff-line--meta {
   color: var(--muted);
 }
+
+/* Ad hoc run form: which harness the agent gets (ADR-0095). */
+.adhoc-level {
+  display: grid;
+  gap: 8px;
+  margin-top: var(--space-3, 12px);
+}
+
+.adhoc-level .segmented {
+  justify-self: start;
+  flex-wrap: wrap;
+}
+
+.adhoc-trial {
+  display: grid;
+  gap: 4px;
+  max-width: 420px;
+}
+
+.adhoc-trial label {
+  display: grid;
+  gap: 4px;
+}
