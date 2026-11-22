@@ -125,6 +125,11 @@ services:
       # Host path of the repo: runner containers are siblings created through
       # the host daemon, so their bind mounts must use host paths.
       HARNESS_LAB_HOST_REPO_ROOT: ${PWD}
+      # Host path of the local sources root (ADR-0095). The worker never mounts
+      # it; it only names one folder under it to the host daemon, for the
+      # one-shot container that applies an approved ad hoc change. Same value as
+      # the API's, so a folder picked there is the folder written here.
+      HARNESS_LAB_HOST_LOCAL_SOURCES_ROOT: ${HARNESS_LAB_LOCAL_SOURCES_DIR:-${PWD}/..}
       # Subscription sessions of the codex/gemini CLIs (ADR-0094), one
       # directory per provider, outside the repository. A run never mounts the
       # store: the worker copies the run's own credential into

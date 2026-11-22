@@ -31,6 +31,12 @@ const MESSAGES = defineMessages<{ title: string; lede: string; items: Capability
         body: "One page per journey, and the long reference. Diagrams render in place.",
         status: ["ui"],
         to: "/system/guide"
+      },
+      {
+        title: "Storage",
+        body: "What is on disk, by category, and a button to purge each one.",
+        status: ["ui"],
+        to: "/system/storage"
       }
     ]
   },
@@ -61,6 +67,12 @@ const MESSAGES = defineMessages<{ title: string; lede: string; items: Capability
         body: "Una carilla por recorrido y la referencia larga. Los diagramas se ven en el lugar.",
         status: ["ui"],
         to: "/system/guide"
+      },
+      {
+        title: "Almacenamiento",
+        body: "Qué hay en disco, por categoría, y un botón para purgar cada una.",
+        status: ["ui"],
+        to: "/system/storage"
       }
     ]
   }

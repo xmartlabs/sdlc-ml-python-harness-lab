@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { api, SESSION_EXPIRED_EVENT } from "./api";
+import { AdhocTasks } from "./pages/AdhocTasks";
+import { AdhocTaskDetailPage } from "./pages/AdhocTaskDetail";
+import { Storage } from "./pages/Storage";
 import { CaseEditor } from "./components/CaseEditor";
 import { CaseSkillTrial } from "./components/CaseSkillTrial";
 import { Layout } from "./components/Layout";
@@ -356,6 +359,10 @@ export default function App() {
         <Route element={<RepoHub />} path="/your-repo" />
         <Route element={<ResultsHub />} path="/results" />
         <Route element={<SystemHub />} path="/system" />
+        {/* Ad hoc tasks (ADR-0095): run the lab against a real folder on this machine. */}
+        <Route element={<AdhocTasks />} path="/adhoc" />
+        <Route element={<AdhocTaskDetailPage />} path="/adhoc/:taskId" />
+        <Route element={<Storage />} path="/system/storage" />
         {/* Guided flows (ADR-0093): one question per step, a live diagram beside it. */}
         <Route element={<FlowPage />} path="/flows/:flow" />
         <Route element={<NewEvaluation />} path="/evaluate/new" />

@@ -72,7 +72,8 @@ def test_test_target_runs_the_full_suite_without_formatting(project: Path) -> No
     assert result.returncode == 0, result.stdout + result.stderr
     calls = (project / "calls").read_text().splitlines()
     assert len(calls) == 1, calls
-    assert calls[0].startswith("pytest tests/ --cov=src ")
+    # In parallel across cores: the suite is ~25 s with xdist, ~2 min without.
+    assert calls[0].startswith("pytest tests/ -n auto --cov=src ")
 
 
 @pytest.mark.parametrize(
@@ -137,7 +138,7 @@ def test_gate_clears_git_repository_context_before_running_checks(
 @pytest.mark.parametrize("stage", ["pre-commit", "pre-push"])
 @pytest.mark.parametrize("exit_code", [0, 1])
 @pytest.mark.parametrize("caller_context", ["clean", "git-hook"])
-def test_real_hook_runner_propagates_the_full_quality_gate(
+def test_real_hook_runner_gates_pushes_and_leaves_commits_fast(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     stage: str,
@@ -156,8 +157,11 @@ def test_real_hook_runner_propagates_the_full_quality_gate(
         for hook in repo["hooks"]
         if hook["id"] == "local-quality-gate"
     ]
-    assert len(hooks) == 1, "A local quality gate must protect commits and pushes."
+    assert len(hooks) == 1, "A local quality gate must protect pushes."
     hook = hooks[0]
+    # The full gate runs before a push only: a commit must take seconds, and
+    # nothing reaches the remote unchecked (docs/development-hooks.md).
+    assert hook["stages"] == ["pre-push"]
     assert hook["always_run"] is True
     assert hook["pass_filenames"] is False
     (tmp_path / ".pre-commit-config.yaml").write_text(
@@ -204,10 +208,74 @@ def test_real_hook_runner_propagates_the_full_quality_gate(
         capture_output=True,
         check=False,
     )
+    if stage == "pre-commit":
+        # pre-commit itself reports there is no such hook at commit time.
+        assert not (tmp_path / "calls").exists(), result.stdout + result.stderr
+        assert "No hook with id `local-quality-gate` in stage `pre-commit`" in (
+            result.stdout + result.stderr
+        )
+        return
     assert (tmp_path / "calls").read_text().splitlines() == ["ci"], (
         result.stdout + result.stderr
     )
     assert (result.returncode == 0) == (exit_code == 0), result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    [
+        (["docs/guide.md", "memory/learnings.md"], "check-sync"),
+        (["docs/guide.md", "src/app.py"], "ci"),
+        (["CLAUDE.md"], "ci"),
+        ([".github/skills/x/SKILL.md"], "ci"),
+        (["docs/diagram.png"], "ci"),
+    ],
+)
+def test_a_docs_only_push_skips_the_suite_and_anything_else_runs_it(
+    tmp_path: Path, changed: list[str], expected: str
+) -> None:
+    env = subprocess_env()
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--quiet", str(repo)], env=env, check=True)
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    (repo / "seed").write_text("seed\n")
+    subprocess.run([*git, "add", "-A"], cwd=repo, env=env, check=True)
+    subprocess.run([*git, "commit", "-qm", "seed"], cwd=repo, env=env, check=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    for name in changed:
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text("x\n")
+    subprocess.run([*git, "add", "-A"], cwd=repo, env=env, check=True)
+    subprocess.run([*git, "commit", "-qm", "change"], cwd=repo, env=env, check=True)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    make = tools / "make"
+    make.write_text('#!/bin/sh\necho "$@" > "$PWD/calls"\n')
+    make.chmod(0o755)
+
+    result = subprocess.run(
+        ["sh", str(ROOT / "scripts/check_local_quality.sh")],
+        cwd=repo,
+        env={
+            **env,
+            "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+            "PRE_COMMIT_FROM_REF": base,
+            "PRE_COMMIT_TO_REF": "HEAD",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (repo / "calls").read_text().split() == [expected]
 
 
 @pytest.mark.parametrize(

@@ -239,8 +239,13 @@ class CaseService:
         self.session = session
 
     def list_cases(self) -> list[Case]:
+        # Ad hoc cases (ADR-0095) are a task's private carrier, not benchmarks:
+        # they never appear in the case library, the run form or a suite.
         statement = (
-            select(Case).where(Case.status != CaseStatus.deleted).order_by(Case.case_id)
+            select(Case)
+            .where(Case.status != CaseStatus.deleted)
+            .where(Case.type != CaseType.adhoc)
+            .order_by(Case.case_id)
         )
         return list(self.session.exec(statement))
 
@@ -848,6 +853,8 @@ class CaseService:
                 return "swe-bench"
             case CaseType.swe_pro_instance:
                 return "swe-bench-pro"
+            case CaseType.adhoc:
+                return "adhoc"
 
     def _case_type_from_task(self, category: str) -> CaseType:
         if category == "single-prompt":

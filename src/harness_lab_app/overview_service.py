@@ -219,7 +219,12 @@ class OverviewService:
 
         experiments = list(self.session.exec(select(Experiment)).all())
         findings = list(self.session.exec(select(Finding)).all())
-        cases = list(self.session.exec(select(Case)).all())
+        # Ad hoc tasks (ADR-0095) carry a case each; none of them is a benchmark.
+        cases = [
+            case
+            for case in self.session.exec(select(Case)).all()
+            if not case.case_id.startswith("adhoc-")
+        ]
         scored_run_ids = {
             score.run_id for score in self.session.exec(select(Score)).all()
         }

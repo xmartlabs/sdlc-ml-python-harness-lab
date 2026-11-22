@@ -386,6 +386,43 @@ def _apply_sqlite_compat_migrations() -> None:
                 text("ALTER TABLE localmachine ADD COLUMN bandwidth_gbs FLOAT")
             )
 
+        # When a run's bulky files were purged (ADR-0095). Null for every run
+        # before purging existed: they still have all their files.
+        if columns and "purged_at" not in columns:
+            connection.execute(text("ALTER TABLE run ADD COLUMN purged_at DATETIME"))
+        adhoc_run_columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('adhocrun')")
+            ).fetchall()
+        }
+        if adhoc_run_columns and "applied_hashes" not in adhoc_run_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE adhocrun ADD COLUMN applied_hashes JSON "
+                    "NOT NULL DEFAULT '{}'"
+                )
+            )
+        adhoc_task_columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('adhoctask')")
+            ).fetchall()
+        }
+        # No task was kept before the operator could mark one.
+        if adhoc_task_columns and "keep" not in adhoc_task_columns:
+            connection.execute(
+                text("ALTER TABLE adhoctask ADD COLUMN keep BOOLEAN NOT NULL DEFAULT 0")
+            )
+        # Every ad hoc run before harness levels ran on the repository alone.
+        if adhoc_run_columns and "harness_level" not in adhoc_run_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE adhocrun ADD COLUMN harness_level VARCHAR "
+                    "NOT NULL DEFAULT 'repo'"
+                )
+            )
+
         _migrate_staged_skills(connection)
 
 

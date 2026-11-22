@@ -138,6 +138,33 @@ def enqueue_improve(
     )
 
 
+def enqueue_adhoc_judge(run_id: str) -> None:
+    """Publish an LLM-judge grading of an ad hoc run (ADR-0095).
+
+    Interactive lane: one model call, and the operator is looking at the page.
+    """
+    celery_app.send_task(
+        "harness_lab_app.tasks.judge_adhoc_run",
+        args=[run_id],
+        queue=INTERACTIVE_QUEUE,
+        retry=False,
+    )
+
+
+def enqueue_adhoc_apply(run_id: str, undo: bool = False) -> None:
+    """Publish an apply/undo of an ad hoc change (ADR-0095).
+
+    On the interactive lane: it takes seconds and a person is waiting, and on
+    the run lane it would queue behind a benchmark of several hours.
+    """
+    celery_app.send_task(
+        "harness_lab_app.tasks.apply_adhoc_change",
+        args=[run_id, undo],
+        queue=INTERACTIVE_QUEUE,
+        retry=False,
+    )
+
+
 def enqueue_sandbox_start(run_id: str, kind: str) -> None:
     """Publish a task to launch a validation sandbox (runs in the worker)."""
     celery_app.send_task(

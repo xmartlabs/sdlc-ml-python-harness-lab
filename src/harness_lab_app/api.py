@@ -21,6 +21,7 @@ from fastapi import (
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from harness_lab_app.adhoc_api import adhoc_router
 from harness_lab_app.artifact_service import ArtifactService
 from harness_lab_app.attribution_service import AttributionService
 from harness_lab_app.audit_service import AuditService
@@ -476,6 +477,7 @@ def create_app() -> FastAPI:
     # (ADR-0015).
     app.add_middleware(SessionMiddleware)
     app.include_router(local_router)
+    app.include_router(adhoc_router)
 
     @app.on_event("startup")
     def startup() -> None:
@@ -3378,9 +3380,16 @@ def create_app() -> FastAPI:
         # owns the docker socket), not in the API process. Enqueue and let the
         # frontend poll GET /validation.
         try:
-            RunService(session).get_run(run_id)
+            run = RunService(session).get_run(run_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if run.purged_at is not None:
+            # Light mode deleted the workspace (ADR-0095): re-validating would
+            # overwrite the recorded result with a failure about a missing tree.
+            raise HTTPException(
+                status_code=409,
+                detail="This run's workspace was purged; its recorded validation stands.",
+            )
         enqueue_validation(run_id)
         return {"status": "queued", "run_id": run_id}
 

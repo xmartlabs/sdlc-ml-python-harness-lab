@@ -24,6 +24,7 @@ from celery.worker.control import control_command
 from sqlmodel import Session, select
 
 from harness_lab_app import llm_transport, run_failures
+from harness_lab_app.adhoc_service import is_adhoc_id
 from harness_lab_app.audit_service import AuditService
 from harness_lab_app.case_profile import (
     CaseProfileError,
@@ -35,7 +36,12 @@ from harness_lab_app.case_profile import (
     slow_policy_for,
 )
 from harness_lab_app.case_service import CaseService, resolve_prompt_variant_text
-from harness_lab_app.celery_app import RUN_QUEUE, RUN_QUEUES, celery_app
+from harness_lab_app.celery_app import (
+    INTERACTIVE_QUEUE,
+    RUN_QUEUE,
+    RUN_QUEUES,
+    celery_app,
+)
 from harness_lab_app.config import get_settings
 from harness_lab_app.db import engine, init_db
 from harness_lab_app.executors import (
@@ -1093,8 +1099,11 @@ def _execute_pending_run(
             )
             if failure is None:
                 _run_objective_validation(session, run_id)
-                _autoscore_run(session, run_id)
-                _run_step_validation(session, run_id)
+                # An ad hoc run (ADR-0095) is judged by the operator, not by a
+                # rubric, and has no phased checks to grade per step.
+                if not is_adhoc_id(run_id):
+                    _autoscore_run(session, run_id)
+                    _run_step_validation(session, run_id)
         # Attribution is useful for any run that produced step logs
         # (including cancelled/failed), so index it regardless of outcome.
         _index_attribution(session, run_id)
@@ -1110,6 +1119,7 @@ def _execute_pending_run(
         # Last, and outside every branch: a failed run is exactly the one
         # an operator wants to open in Langfuse.
         _export_langfuse_traces(session, run_id)
+        _finalize_adhoc_run(session, run_id)
     except Exception as exc:
         service.mark_finished(run_id, -1, f"Executor error: {exc!r}")
 
@@ -1687,6 +1697,34 @@ def _export_langfuse_traces(session: Session, run_id: str) -> None:
         session.commit()
 
 
+def _finalize_adhoc_run(session: Session, run_id: str) -> None:
+    """Clean patch, metrics and trimmed files for an ad hoc run (ADR-0095).
+
+    After every other post-run step, because validation and the cost capture
+    read the archived workspace this deletes. Best-effort: a missing patch is
+    rebuilt on the next read while the archive still exists.
+    """
+    if not is_adhoc_id(run_id):
+        return
+    from harness_lab_app.adhoc_service import AdhocService
+
+    try:
+        AdhocService(session).finalize_run(run_id)
+        # Which skills the agent opened: indexed from steps/, which the run
+        # keeps until the operator decides.
+        _index_attribution(session, run_id)
+    except Exception as exc:  # never fail a run over its cleanup
+        session.rollback()
+        session.add(
+            RunEvent(
+                run_id=run_id,
+                level="error",
+                message=f"Ad hoc finalization failed: {exc!r}",
+            )
+        )
+        session.commit()
+
+
 def _record_scores(session: Session, run_id: str) -> None:
     """Score the run against the registry, right after validation.
 
@@ -1876,6 +1914,14 @@ def _keep_lease(
             lost.set()
             return
         last_ok = time.monotonic()
+
+
+@celery_app.task(name="harness_lab_app.tasks.judge_adhoc_run", acks_late=True)
+def judge_adhoc_run(run_id: str) -> None:
+    """Grade an ad hoc run with the LLM judge against the generic rubric."""
+    init_db()
+    with Session(engine) as session:
+        _autoscore_run(session, run_id)
 
 
 @celery_app.task(name="harness_lab_app.tasks.validate_run", acks_late=True)
@@ -2860,6 +2906,14 @@ def _own_lanes(sender: Any) -> frozenset[str]:
     return frozenset(names & set(RUN_QUEUES))
 
 
+def _consumes(sender: Any, queue: str) -> bool:
+    """Whether the booting worker consumes ``queue`` (any queue, not only runs)."""
+    try:
+        return queue in set(sender.app.amqp.queues.consume_from)
+    except Exception:
+        return False
+
+
 def reconcile_stale_runs(
     client: Any | None = None,
     db_engine: Engine | None = None,
@@ -3281,7 +3335,92 @@ def harness_facts(_state: Any) -> dict[str, Any]:
     return facts
 
 
+# acks_late=False: a lost apply is a button pressed again; a redelivered one
+# would write to the operator's folder twice.
+@celery_app.task(name="harness_lab_app.tasks.apply_adhoc_change", acks_late=False)
+def apply_adhoc_change(run_id: str, undo: bool = False) -> None:
+    """Write (or reverse) an approved ad hoc change in the operator's folder.
+
+    The API already moved the row to ``applying``/``undoing``; this task always
+    moves it out again, whatever happens, so a crash cannot leave the folder
+    looking busy forever.
+    """
+    from harness_lab_app.adhoc_apply import (
+        ApplyRefused,
+        apply_locally,
+        folder_lease,
+        run_in_container,
+    )
+    from harness_lab_app.adhoc_service import AdhocService
+
+    init_db()
+    action = "undo" if undo else "apply"
+    expected_state = "undoing" if undo else "applying"
+    with Session(engine) as session:
+        service = AdhocService(session)
+        try:
+            row = service.get_adhoc_run(run_id)
+        except Exception:
+            return
+        # Compare-and-set: a redelivered message, or one whose row a restart
+        # already released, must not write to the folder a second time.
+        if row.apply_state != expected_state:
+            return
+        hashes: dict[str, str] = {}
+        try:
+            task = service.get_task(row.task_id)
+            expected = dict(row.applied_hashes or {}) if undo else None
+            with folder_lease(task.source_path):
+                if get_settings().execution_backend == "docker":
+                    result = run_in_container(
+                        action, task.source_path, run_id, task.base_commit, expected
+                    )
+                else:
+                    result = apply_locally(
+                        action, task.source_path, run_id, task.base_commit, expected
+                    )
+            ok = bool(result.get("can_apply"))
+            hashes = dict(result.get("applied_hashes") or {})
+            error = "" if ok else "; ".join(result.get("blockers") or ["Refused."])
+        except (ApplyRefused, Exception) as exc:  # always leave applying/undoing
+            ok, error = False, str(exc)
+        service.finish_apply(
+            run_id, undo=undo, ok=ok, error=error, applied_hashes=hashes
+        )
+
+
+def _sweep_expired_adhoc_files() -> None:
+    """Delete ad hoc run files past their retention (ADR-0095). Best-effort."""
+    from harness_lab_app.storage_service import StorageService
+
+    with contextlib.suppress(Exception), Session(engine) as session:
+        StorageService(session).purge("adhoc_expired")
+
+
+def _release_stuck_adhoc_applies() -> None:
+    """An apply interrupted by a restart must not hold its folder forever."""
+    from harness_lab_app.models import AdhocRun
+
+    with contextlib.suppress(Exception), Session(engine) as session:
+        for row in session.exec(select(AdhocRun)).all():
+            if row.apply_state in ("applying", "undoing"):
+                row.apply_state = (
+                    "applied" if row.apply_state == "undoing" else "failed"
+                )
+                row.apply_error = (
+                    "Interrupted by a worker restart. Check the folder with "
+                    "`git status` before trying again."
+                )
+                session.add(row)
+        session.commit()
+
+
 @worker_ready.connect
 def _on_worker_ready(sender: Any = None, **_kwargs: Any) -> None:
     init_db()
     reconcile_stale_runs(own_lanes=_own_lanes(sender))
+    # Housekeeping belongs to one worker: the interactive one owns the ad hoc
+    # apply tasks, so it is the one that may reset them.
+    if _consumes(sender, INTERACTIVE_QUEUE):
+        _release_stuck_adhoc_applies()
+        _sweep_expired_adhoc_files()

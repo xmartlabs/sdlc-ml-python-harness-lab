@@ -41,11 +41,16 @@ repos:
   # Runs at the commit-msg stage, which `make setup-hooks` installs.
   - repo: local
     hooks:
+      # The full gate (`make ci`: lint, types, bandit, the whole suite with
+      # coverage, skill sync, frontend build) runs before a push, not before
+      # every commit: commits stay seconds, and nothing reaches the remote
+      # unchecked. The file hooks above still run on every commit, on the
+      # staged files only. See docs/development-hooks.md.
       - id: local-quality-gate
-        name: full local quality gate (including unit and integration tests)
+        name: full local quality gate (make ci, before push)
         entry: sh scripts/check_local_quality.sh
         language: system
-        stages: [pre-commit, pre-push]
+        stages: [pre-push]
         always_run: true
         pass_filenames: false
       - id: commit-authorship

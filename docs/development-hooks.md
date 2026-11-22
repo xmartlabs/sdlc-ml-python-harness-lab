@@ -13,10 +13,25 @@ Re-run it in an existing checkout to install the newly added push hook.
 
 ## What blocks a commit or push
 
-The local quality hook runs **`make ci`** before both operations, even when the
-change contains only documentation. It checks formatting, lint, security, types,
-the complete Python test suite with coverage, generated skill drift, and the
-frontend type check and production build. Failures block the operation.
+**A commit takes seconds.** Only the file hooks run, on the staged files:
+whitespace, end of file, YAML, large files, `ruff --fix`, `ruff format`,
+notebook stripping and secret scanning. They may edit files; stage their
+changes and commit again.
+
+**A push runs the full gate**, `make ci`: formatting, lint, security, types,
+the complete Python test suite with coverage (in parallel across cores with
+`pytest-xdist`, about 30 s instead of about 2.5 min), generated skill drift, and
+the frontend type check and production build. Failures block the push.
+
+A push whose commits change only `docs/**/*.md` or `memory/**/*.md` runs
+`make check-sync` instead: prose cannot break a test, a type or the build. Any
+other file, including root-level `*.md` adapters (`CLAUDE.md`, `AGENTS.md`),
+runs everything, and so does a push whose range pre-commit cannot tell (the
+first push of a new branch).
+
+The gate moved from commit to push on 2026-11-21: running the whole suite on
+every commit, and again on the push, made committing a two-to-five-minute wait
+for checks GitHub CI repeats on the pull request anyway.
 
 The gate's wrapper clears Git's repository-local environment variables before
 running checks. Tests that create temporary repositories must not inherit the
@@ -50,9 +65,9 @@ developer authorship.
   claim that all integration scenarios have been implemented.
 - `make format` and `make fix` are explicit source-editing commands.
 
-Python development tools, uv, and Node/npm must be available. This check can take
-longer than a formatting-only hook because the full suite runs for each commit
-and push. Missing dependencies or unavailable tools must be resolved before the
+Python development tools, uv, and Node/npm must be available. The push check
+takes about 30 s on a 12-core machine; run `make ci` directly before a long
+series of commits if you want the answer sooner. Missing dependencies or unavailable tools must be resolved before the
 gate can pass. Run `make ci` directly to investigate a failure.
 
 Git hooks are local, opt-in protections: Git does not install them on clone, and

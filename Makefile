@@ -145,7 +145,7 @@ fix-force:
 test:
 	@echo "🧪 Running tests with coverage..."
 	@if [ ! -d .venv ]; then make install; fi
-	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD}/src pytest tests/ --cov=src --cov-report=html --cov-report=term-missing
+	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD}/src pytest tests/ -n auto --cov=src --cov-report=html --cov-report=term-missing
 	@echo "✅ Tests completed! See report in htmlcov/index.html"
 
 # Run specific tests
@@ -785,7 +785,7 @@ check:
 	@. $(VENV_DIR)/bin/activate && ruff check src/ tests/ scripts/
 	@. $(VENV_DIR)/bin/activate && bandit -r src/ tests/ scripts/ -ll -q
 	@. $(VENV_DIR)/bin/activate && mypy src/ scripts/
-	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD}/src pytest tests/ --cov=src --cov-report=term-missing
+	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD}/src pytest tests/ -n auto --cov=src --cov-report=term-missing
 	@echo "✅ Quality gate passed (read-only)."
 
 # Read-only frontend gate: type check, then a production build.

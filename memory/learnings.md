@@ -3597,3 +3597,49 @@ dir: a fixed `run_id` lets a superseded attempt's cleanup delete the next one's
 session copy.
 
 <!-- Add new learnings above this line -->
+
+## 2026-11-21 — Git run from a subfolder of another repo, and an agent's .git, both lie or bite (ADR-0095)
+
+- `git apply --numstat` (and any git command that resolves paths) run with a cwd
+  inside `data/runs/<id>/` — a subfolder of the lab's own repository — treats
+  patch paths as relative to that subfolder and silently drops every one: an
+  empty file list, exit 0. Same family as the 2026-10-21 `git -C <dir>` entry.
+  Unit tests on `tmp_path` passed because tmp is not inside a repo; the first
+  live run showed `files_changed=None`. Run repo-independent git (numstat) in a
+  fresh empty dir with `GIT_CEILING_DIRECTORIES`, and test fixtures nested
+  inside a repo, the layout production has.
+- A patch is bytes: `subprocess.run(..., text=True)` turns CRLF into LF and dies
+  on Latin-1, so a Windows file or a legacy source yields a patch `git apply`
+  rejects (or a crash that skips cleanup). Never decode a diff you will apply.
+- An agent's workspace `.git/config` is attacker-controlled: `core.fsmonitor`,
+  a `filter.<x>.clean` + `.gitattributes`, or `diff.external` run on `git add`
+  / `git diff` in whatever process touches it (the worker holds the docker
+  socket). Build such diffs inside the runner container, and run git hardened
+  (`adhoc_git.git_untrusted`: GIT_CONFIG_NOSYSTEM, safe overrides via
+  GIT_CONFIG_COUNT, every filter name overridden, `include` refused).
+- A grep for the provisioning commit's subject is defeated by `git commit
+  --amend` (same subject, now containing the agent's work → empty patch). Record
+  the SHA before the agent starts.
+- `git apply -R --check` passes when the operator edited a hunk far from the
+  applied one; undo then silently reverts part of a file they changed. Store
+  per-file hashes at apply and compare on undo.
+- docker-py `containers.run(..., remove=True)` loses stdout on a non-zero exit;
+  run detached, `wait`, read `logs`, then remove.
+- A source edit is not a deploy (2026-09-10) bit again: the UI hot-reloaded the
+  new pages while the API answered 404 for 14 h-old code. `docker compose up -d`
+  recreates only services whose config changed; `restart api` for code.
+- Deleting an ad hoc run's workspace "to save disk" the moment its patch
+  existed blinded the sandbox, the LLM audit (reads steps/, diff.patch,
+  metadata, usage, prompt) and attribution (reads steps/). Keep the whole run
+  dir until the operator decides; the measurement is in the DB from the start.
+  Attribution must be indexed *after* finalization, not by the generic
+  post-run hook, which ran first.
+- Anything placed in a target clone *after* the provisioning commit is read as
+  the agent's work by every diff (judge, audit, ad hoc change.patch). The
+  `native` arm's staged skill was copied after it until 2026-11-21; all
+  in-target projections now go through the provisioning hook. For ad hoc runs
+  the projected paths are also excluded from change.patch by name
+  (`harness_paths.json`), because an agent may edit a projected skill.
+- `metadata.json` skills_bundle/subagents were read from the lab root for every
+  condition, so a `native` run "had" the lab's 6 subagents and the audit graded
+  each "no evidence". In-target runs now read the catalog from the workspace.

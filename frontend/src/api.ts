@@ -1,4 +1,11 @@
 import type {
+  AdhocApplyCheck,
+  AdhocPatch,
+  AdhocRunRecord,
+  AdhocSource,
+  AdhocTask,
+  AdhocTaskDetail,
+  AdhocTaskSummary,
   ArtifactRecord,
   AttentionFeed,
   AttributionRecord,
@@ -81,6 +88,9 @@ import type {
   RunValidationResult,
   SaveImprovementsResult,
   SavedProposalRecord,
+  StoragePurgeResult,
+  StoragePurgeScope,
+  StorageReport,
   SessionState,
   RunContext,
   RunEventRecord,
@@ -94,6 +104,8 @@ import type {
   StagedSkillImportPreview,
   StagedSkillPromoteResult,
   StagedSkillRecord,
+  AdhocHarnessLevel,
+  AdhocDeleteUnkeptResult,
   SuggestionRecord,
   SwebenchProInstance,
   TargetCreatePayload,
@@ -921,6 +933,77 @@ export const api = {
     request<HealResult>("/api/health/heal", {
       method: "POST",
       body: JSON.stringify({ action })
+    }),
+
+  // --- Ad hoc tasks on the operator's own repository (ADR-0095) -------------
+  getAdhocSource: (path: string) =>
+    request<AdhocSource>(`/api/adhoc/source?path=${encodeURIComponent(path)}`),
+  createAdhocTask: (payload: {
+    source: string;
+    title?: string;
+    prompt: string;
+    setup_commands?: string[];
+    validation_commands?: string[];
+  }) =>
+    request<AdhocTask>("/api/adhoc/tasks", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  listAdhocTasks: () => request<AdhocTaskSummary[]>("/api/adhoc/tasks"),
+  getAdhocTask: (taskId: string) =>
+    request<AdhocTaskDetail>(`/api/adhoc/tasks/${taskId}`),
+  updateAdhocTask: (taskId: string, changes: { title?: string; prompt?: string; keep?: boolean }) =>
+    request<AdhocTask>(`/api/adhoc/tasks/${taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify(changes)
+    }),
+  deleteUnkeptAdhocTasks: () =>
+    request<AdhocDeleteUnkeptResult>("/api/adhoc/tasks/delete-unkept", { method: "POST" }),
+  deleteAdhocTask: (taskId: string, force = false) =>
+    request<void>(`/api/adhoc/tasks/${taskId}?force=${force ? "true" : "false"}`, {
+      method: "DELETE"
+    }),
+  launchAdhocRun: (
+    taskId: string,
+    payload: {
+      harness: string;
+      executor_model?: string;
+      executor_effort?: string;
+      max_steps?: number;
+      harness_level?: AdhocHarnessLevel;
+      trial_skill?: string;
+      invoke_trial_skill?: boolean;
+    }
+  ) =>
+    request<AdhocRunRecord>(`/api/adhoc/tasks/${taskId}/runs`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  getAdhocRun: (runId: string) => request<AdhocRunRecord>(`/api/adhoc/runs/${runId}`),
+  getAdhocPatch: (runId: string) => request<AdhocPatch>(`/api/adhoc/runs/${runId}/patch`),
+  getAdhocApplyCheck: (runId: string) =>
+    request<AdhocApplyCheck>(`/api/adhoc/runs/${runId}/apply-check`),
+  applyAdhocRun: (runId: string) =>
+    request<AdhocRunRecord>(`/api/adhoc/runs/${runId}/apply`, { method: "POST" }),
+  judgeAdhocRun: (runId: string) =>
+    request<AdhocRunRecord>(`/api/adhoc/runs/${runId}/judge`, { method: "POST" }),
+  undoAdhocRun: (runId: string) =>
+    request<AdhocRunRecord>(`/api/adhoc/runs/${runId}/undo`, { method: "POST" }),
+  decideAdhocRun: (
+    runId: string,
+    payload: { decision: "approved" | "rejected" | "discarded"; reason?: string; notes?: string }
+  ) =>
+    request<AdhocRunRecord>(`/api/adhoc/runs/${runId}/decision`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+
+  // --- Storage (ADR-0095) ---------------------------------------------------
+  getStorage: () => request<StorageReport>("/api/storage"),
+  purgeStorage: (scope: StoragePurgeScope, olderThanDays?: number) =>
+    request<StoragePurgeResult>("/api/storage/purge", {
+      method: "POST",
+      body: JSON.stringify({ scope, older_than_days: olderThanDays ?? null })
     }),
 
   // --- Tune your local model (spec 2026-11-08-local-model-tuning) ----------

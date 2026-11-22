@@ -67,6 +67,8 @@ Kept for when a journey sends you there.
 | claude / opencode / codex: what each needs | [Harness adapters](harness-adapters.md), [claude & codex runbook](runbook-claude-codex.md) |
 | Small and self-hosted models | [Tune your local model](guide-local-models.md), [Small models](guide-small-models.md), [Local model runtime config](local-model-runtime-config.md), [Task sizing](task-sizing.md) |
 | Registered repositories | [Target repositories](guide-target-repositories.md), [What the lab can run](guide-runner-capabilities.md) |
+| A real task on your own repository: run, review, apply, compare cost | [Ad hoc tasks](guide-adhoc-tasks.md) |
+| Disk use and purges | [Ad hoc tasks → Storage page](guide-adhoc-tasks.md#storage-page) |
 | Skills | [Skill validation](guide-skill-validation.md), [Skills management](skills-management.md) |
 | Per-step reward and pruning the harness (RL-inspired) | [Per-step reward](guide-step-reward.md) |
 | Continuing a run | [Run continuation](guide-run-continuation.md) |

@@ -9,6 +9,15 @@ frozen task + repo/base commit + harness strategy + validation + score + cost.
 
 ## Active focus
 
+**Ad hoc tasks (ADR-0095, branch `feature/adhoc-local-tasks`, 2026-11-21).** Pick a
+folder under `HARNESS_LAB_LOCAL_SOURCES_DIR`, free prompt, any harness/model; runs
+reuse the pipeline (synthetic `Case(type=adhoc)` + `TargetRepository`, `native`,
+ids prefixed `adhoc-`). The runner builds `change.patch` (bytes, hardened git,
+vs recorded provisioning SHA); Apply/Undo run in a one-shot worker-image
+container mounting only that folder rw. `AdhocRun` keeps metrics + decision;
+files are trimmed/purged (Storage page, benchmark light mode). Verified live
+with Haiku. Deferred: including the operator's uncommitted changes in the copy.
+
 Building the Docker-first local web app for Agentic Harness Lab.
 Execution backend is now Celery + Redis (broker only) with **one Docker
 container per run** (SWE-bench style, ADR-0002): `Dockerfile.runner` bundles

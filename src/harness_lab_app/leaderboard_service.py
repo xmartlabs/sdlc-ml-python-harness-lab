@@ -93,7 +93,11 @@ class LeaderboardService:
         runs = [
             run
             for run in self.session.exec(select(Run))
-            if run.state in _TERMINAL_STATES and not is_unmeasured(run.failure_reason)
+            if run.state in _TERMINAL_STATES
+            and not is_unmeasured(run.failure_reason)
+            # Ad hoc runs are one-off work, not attempts at a benchmark case
+            # (ADR-0095): ranking them would compare different tasks.
+            and not run.run_id.startswith("adhoc-")
         ]
         # Built over *every* run, not just terminal ones: a chain can pass
         # through a run that is filtered out of the rows below, and the depth

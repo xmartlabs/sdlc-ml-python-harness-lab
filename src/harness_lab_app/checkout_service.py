@@ -395,6 +395,9 @@ def list_checkouts() -> list[dict[str, object]]:
     for entry in sorted(root.iterdir(), key=lambda item: item.name):
         if not entry.is_dir() or entry.name.startswith(".") or entry.is_symlink():
             continue
+        # An ad hoc task's private copy (ADR-0095) is not offered for audit.
+        if entry.name.startswith("adhoc-"):
+            continue
         if not (entry / ".git").exists():
             continue
         code, head = _git(["rev-parse", "HEAD"], entry)
