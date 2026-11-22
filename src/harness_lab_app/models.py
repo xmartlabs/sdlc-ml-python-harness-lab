@@ -941,6 +941,9 @@ class AdhocTask(SQLModel, table=True):
     case_id: str = Field(index=True)
     setup_commands: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     validation_commands: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    # Marked by the operator to survive "delete unkept tasks". Nothing else
+    # reads it: a kept task's run files still follow the retention rules.
+    keep: bool = False
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

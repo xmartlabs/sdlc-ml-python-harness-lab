@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { api } from "../api";
 import { AdhocRunReview } from "../components/AdhocRunReview";
@@ -11,6 +11,7 @@ import { HarnessModelChooser } from "../components/guide/HarnessModelChooser";
 import { formatRunDate } from "../dates";
 import { defineMessages, useMessages } from "../i18n";
 import { InfoTooltip } from "../components/InfoTooltip";
+import { IconStar } from "../components/icons";
 import type {
   AdhocHarnessLevel,
   AdhocRunRecord,
@@ -94,6 +95,13 @@ const MESSAGES = defineMessages({
         failed: "failed"
       }
     },
+    keep: "Keep",
+    kept: "Kept",
+    keepTip: "Kept tasks survive \"Delete unkept\" on the task list.",
+    deleteTask: "Delete task",
+    deleting: "Deleting…",
+    deleteConfirm: (name: string) =>
+      `Delete "${name}"? Its copy, runs and metrics go too. Your folder is not touched.`,
     errors: {
       load: "Could not load this task.",
       launch: "Could not launch the run."
@@ -163,6 +171,13 @@ const MESSAGES = defineMessages({
         failed: "falló"
       }
     },
+    keep: "Guardar",
+    kept: "Guardada",
+    keepTip: "Las tareas guardadas sobreviven a \"Borrar las no guardadas\" en la lista de tareas.",
+    deleteTask: "Borrar tarea",
+    deleting: "Borrando…",
+    deleteConfirm: (name: string) =>
+      `¿Borrar "${name}"? También se van su copia, sus corridas y sus métricas. Tu carpeta no se toca.`,
     errors: {
       load: "No se pudo cargar esta tarea.",
       launch: "No se pudo lanzar la corrida."
@@ -184,6 +199,8 @@ function costCell(run: AdhocRunRecord, m: (typeof MESSAGES)["en"]): string {
 
 export function AdhocTaskDetailPage() {
   const { taskId } = useParams<{ taskId: string }>();
+  const navigate = useNavigate();
+  const [deleting, setDeleting] = useState(false);
   const m = useMessages(MESSAGES);
 
   const [detail, setDetail] = useState<AdhocTaskDetailType | null>(null);
@@ -259,6 +276,32 @@ export function AdhocTaskDetailPage() {
     }
   };
 
+  const toggleKeep = async () => {
+    if (!detail) return;
+    const keep = !detail.task.keep;
+    setDetail({ ...detail, task: { ...detail.task, keep } });
+    try {
+      await api.updateAdhocTask(detail.task.task_id, { keep });
+    } catch (keepError) {
+      setDetail((current) => (current ? { ...current, task: { ...current.task, keep: !keep } } : current));
+      setError(keepError instanceof Error ? keepError.message : String(keepError));
+    }
+  };
+
+  const deleteTask = async () => {
+    if (!detail) return;
+    if (!window.confirm(m.deleteConfirm(detail.task.title || detail.task.task_id))) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await api.deleteAdhocTask(detail.task.task_id);
+      navigate("/adhoc");
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : String(deleteError));
+      setDeleting(false);
+    }
+  };
+
   const onRunChanged = (updated: AdhocRunRecord) => {
     setDetail((current) =>
       current
@@ -294,6 +337,20 @@ export function AdhocTaskDetailPage() {
           <p className="mono small">
             {m.folder}: {task.host_path} · {task.branch} · {m.baseCommit} {task.base_commit.slice(0, 8)}
           </p>
+        </div>
+        <div className="page-header-action button-row">
+          <button
+            aria-pressed={Boolean(task.keep)}
+            className={task.keep ? "ghost keep-button active" : "ghost keep-button"}
+            onClick={() => void toggleKeep()}
+            title={m.keepTip}
+            type="button"
+          >
+            <IconStar filled={Boolean(task.keep)} size={14} /> {task.keep ? m.kept : m.keep}
+          </button>
+          <button className="danger" disabled={deleting} onClick={() => void deleteTask()} type="button">
+            {deleting ? m.deleting : m.deleteTask}
+          </button>
         </div>
       </header>
 

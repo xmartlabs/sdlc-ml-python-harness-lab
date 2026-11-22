@@ -6104,3 +6104,39 @@ button.guide-option[aria-pressed="true"] { border-color: var(--accent); backgrou
   display: grid;
   gap: 4px;
 }
+
+/* Ad hoc task list: keep (star) and delete. */
+.adhoc-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2, 8px);
+  flex-wrap: wrap;
+}
+
+.keep-toggle {
+  width: auto;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  line-height: 0;
+}
+
+.keep-toggle:hover {
+  color: var(--text);
+}
+
+.keep-toggle.active {
+  color: var(--warning, #d29922);
+}
+
+.keep-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.keep-button.active {
+  color: var(--warning, #d29922);
+}

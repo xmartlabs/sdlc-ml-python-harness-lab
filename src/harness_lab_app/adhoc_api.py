@@ -41,6 +41,8 @@ class AdhocTaskCreate(BaseModel):
 class AdhocTaskUpdate(BaseModel):
     title: str | None = None
     prompt: str | None = None
+    # Survives "delete unkept tasks" when true.
+    keep: bool | None = None
 
 
 class AdhocRunLaunch(BaseModel):
@@ -130,10 +132,18 @@ def update_adhoc_task(
     task_id: str, data: AdhocTaskUpdate, session: Session = Depends(get_session)
 ):
     try:
-        task = AdhocService(session).update_task(task_id, data.title, data.prompt)
+        task = AdhocService(session).update_task(
+            task_id, data.title, data.prompt, keep=data.keep
+        )
     except _EXPECTED as exc:
         raise _http(exc) from exc
     return AdhocService._task_dict(task)
+
+
+@adhoc_router.post("/api/adhoc/tasks/delete-unkept")
+def delete_unkept_adhoc_tasks(session: Session = Depends(get_session)):
+    """Delete every task not marked kept; skips (and names) any still in use."""
+    return AdhocService(session).delete_unkept()
 
 
 @adhoc_router.delete("/api/adhoc/tasks/{task_id}", status_code=204)

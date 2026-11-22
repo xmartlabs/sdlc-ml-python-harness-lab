@@ -89,7 +89,10 @@ operator presses Apply or runs the printed command.**
    patch's file list are in the database from the moment the run ends.
    *Amended the same day:* the first version deleted the workspace as soon as
    the patch existed, which left the sandbox, the audit and the skills panel
-   with nothing to read.
+   with nothing to read. Whole tasks are the operator's to prune: a task can be
+   marked kept (`AdhocTask.keep`), and "delete unkept" removes every other
+   task with its copy, runs and metrics. It skips, and names, any task with a
+   run going or a change applied, since deleting that one would lose Undo.
 6. **Evaluation on request.** The case-specific checks do not apply to a free
    prompt, so an ad hoc case carries a generic rubric — "does the change do
    what the task asked, without unrelated edits" — and the LLM judge grades

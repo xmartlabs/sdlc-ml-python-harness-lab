@@ -2558,8 +2558,17 @@ export type AdhocTask = {
   case_id: string;
   setup_commands: string[];
   validation_commands: string[];
+  /** Survives "delete unkept tasks". */
+  keep?: boolean;
   created_at: string;
   updated_at: string;
+};
+
+/** What "delete unkept tasks" did: tasks still in use are skipped with the reason. */
+export type AdhocDeleteUnkeptResult = {
+  deleted: string[];
+  skipped: { task_id: string; reason: string }[];
+  bytes_freed: number;
 };
 
 /** A task row in the list, with the aggregates the list shows without opening it. */

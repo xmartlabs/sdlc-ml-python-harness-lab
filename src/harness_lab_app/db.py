@@ -403,6 +403,17 @@ def _apply_sqlite_compat_migrations() -> None:
                     "NOT NULL DEFAULT '{}'"
                 )
             )
+        adhoc_task_columns = {
+            row[1]
+            for row in connection.execute(
+                text("PRAGMA table_info('adhoctask')")
+            ).fetchall()
+        }
+        # No task was kept before the operator could mark one.
+        if adhoc_task_columns and "keep" not in adhoc_task_columns:
+            connection.execute(
+                text("ALTER TABLE adhoctask ADD COLUMN keep BOOLEAN NOT NULL DEFAULT 0")
+            )
         # Every ad hoc run before harness levels ran on the repository alone.
         if adhoc_run_columns and "harness_level" not in adhoc_run_columns:
             connection.execute(

@@ -79,8 +79,19 @@ Decision record: [ADR-0095](adr/0095-an-adhoc-task-runs-on-a-copy-and-is-applied
 | Applied changes past 7 days | only `change.patch` (a few KB), so Undo works |
 
 Rejected and discarded runs lose their files immediately. Change the retention
-with `HARNESS_LAB_ADHOC_RETENTION_DAYS`. Deleting a task removes its copy, its
-runs and its metrics.
+with `HARNESS_LAB_ADHOC_RETENTION_DAYS`.
+
+### Keeping only the tasks you want
+
+Star a task (in the list, or **Keep** on its page) to keep it. **Delete
+unkept** on the task list deletes every other task at once and reports the
+space freed. **Delete** on a row, or **Delete task** on its page, removes one.
+
+Deleting a task removes its copy, its runs and its metrics; your folder is
+never touched. Tasks with a run still going, or with a change applied to your
+folder, are skipped by **Delete unkept** and say why: undo the change (or let
+the run finish) first. A kept task's run files still follow the retention
+above; keeping is about the task and its measurements.
 
 ## Storage page
 

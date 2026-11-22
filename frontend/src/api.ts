@@ -105,6 +105,7 @@ import type {
   StagedSkillPromoteResult,
   StagedSkillRecord,
   AdhocHarnessLevel,
+  AdhocDeleteUnkeptResult,
   SuggestionRecord,
   SwebenchProInstance,
   TargetCreatePayload,
@@ -951,11 +952,13 @@ export const api = {
   listAdhocTasks: () => request<AdhocTaskSummary[]>("/api/adhoc/tasks"),
   getAdhocTask: (taskId: string) =>
     request<AdhocTaskDetail>(`/api/adhoc/tasks/${taskId}`),
-  updateAdhocTask: (taskId: string, changes: { title?: string; prompt?: string }) =>
+  updateAdhocTask: (taskId: string, changes: { title?: string; prompt?: string; keep?: boolean }) =>
     request<AdhocTask>(`/api/adhoc/tasks/${taskId}`, {
       method: "PATCH",
       body: JSON.stringify(changes)
     }),
+  deleteUnkeptAdhocTasks: () =>
+    request<AdhocDeleteUnkeptResult>("/api/adhoc/tasks/delete-unkept", { method: "POST" }),
   deleteAdhocTask: (taskId: string, force = false) =>
     request<void>(`/api/adhoc/tasks/${taskId}?force=${force ? "true" : "false"}`, {
       method: "DELETE"

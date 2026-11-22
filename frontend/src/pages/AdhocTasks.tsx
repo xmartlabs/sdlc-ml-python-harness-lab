@@ -6,10 +6,10 @@ import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { FolderPicker } from "../components/FolderPicker";
 import { Spinner } from "../components/Spinner";
-import { IconChecklist, IconGitBranch } from "../components/icons";
+import { IconChecklist, IconGitBranch, IconStar, IconTrash } from "../components/icons";
 import { formatRelative } from "../dates";
 import { defineMessages, useMessages } from "../i18n";
-import type { AdhocSource, AdhocTaskSummary, LocalSourceListing } from "../types";
+import type { AdhocDeleteUnkeptResult, AdhocSource, AdhocTaskSummary, LocalSourceListing } from "../types";
 
 /**
  * Ad hoc tasks (ADR-0095): run the lab against a real folder on this machine.
@@ -36,7 +36,20 @@ const MESSAGES = defineMessages({
       none: "none",
       applied: "applied",
       emptyTitle: "No ad hoc tasks yet.",
-      emptyBody: "Create one below: pick a folder, write what you want done, and run it."
+      emptyBody: "Create one below: pick a folder, write what you want done, and run it.",
+      colKeep: "Keep",
+      keep: "Keep this task",
+      unkeep: "Stop keeping this task",
+      delete: "Delete",
+      deleteConfirm: (name: string) =>
+        `Delete "${name}"? Its copy, runs and metrics go too. Your folder is not touched.`,
+      deleteUnkept: (n: number) => `Delete unkept (${n})`,
+      deleteUnkeptConfirm: (n: number) =>
+        `Delete ${n} task${n === 1 ? "" : "s"} not marked kept? Their copies, runs and metrics go too. Your folders are not touched. Tasks with a run going or a change applied are skipped.`,
+      deleting: "Deleting…",
+      keepHint: "Star the tasks you want to keep; \"Delete unkept\" clears the rest.",
+      cleaned: (n: number, size: string) => `Deleted ${n} task${n === 1 ? "" : "s"}, freed ${size}.`,
+      skipped: (n: number) => `${n} skipped:`
     },
     form: {
       step1: "1. Pick a folder",
@@ -93,7 +106,20 @@ const MESSAGES = defineMessages({
       none: "ninguna",
       applied: "aplicada",
       emptyTitle: "Todavía no hay tareas ad hoc.",
-      emptyBody: "Creá una abajo: elegí una carpeta, escribí qué querés que se haga, y correla."
+      emptyBody: "Creá una abajo: elegí una carpeta, escribí qué querés que se haga, y correla.",
+      colKeep: "Guardar",
+      keep: "Guardar esta tarea",
+      unkeep: "Dejar de guardar esta tarea",
+      delete: "Borrar",
+      deleteConfirm: (name: string) =>
+        `¿Borrar "${name}"? También se van su copia, sus corridas y sus métricas. Tu carpeta no se toca.`,
+      deleteUnkept: (n: number) => `Borrar las no guardadas (${n})`,
+      deleteUnkeptConfirm: (n: number) =>
+        `¿Borrar ${n} tarea${n === 1 ? "" : "s"} sin guardar? También se van sus copias, corridas y métricas. Tus carpetas no se tocan. Se saltean las que tienen una corrida en curso o un cambio aplicado.`,
+      deleting: "Borrando…",
+      keepHint: "Marcá con la estrella las tareas que querés conservar; \"Borrar las no guardadas\" limpia el resto.",
+      cleaned: (n: number, size: string) => `Se borraron ${n} tarea${n === 1 ? "" : "s"}, se liberaron ${size}.`,
+      skipped: (n: number) => `${n} salteada${n === 1 ? "" : "s"}:`
     },
     form: {
       step1: "1. Elegí una carpeta",
@@ -136,6 +162,13 @@ const MESSAGES = defineMessages({
   }
 });
 
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KiB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+}
+
 function linesOf(text: string): string[] {
   return text
     .split("\n")
@@ -160,15 +193,60 @@ export function AdhocTasks() {
   const [prompt, setPrompt] = useState("");
   const [setupText, setSetupText] = useState("");
   const [validationText, setValidationText] = useState("");
+  const [cleanup, setCleanup] = useState<AdhocDeleteUnkeptResult | null>(null);
 
-  useEffect(() => {
+  const loadTasks = () =>
     api
       .listAdhocTasks()
       .then(setTasks)
       .catch(() => setError(m.errors.load))
       .finally(() => setLoading(false));
+
+  useEffect(() => {
+    void loadTasks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const toggleKeep = async (task: AdhocTaskSummary) => {
+    const keep = !task.keep;
+    setTasks((rows) => rows.map((row) => (row.task_id === task.task_id ? { ...row, keep } : row)));
+    try {
+      await api.updateAdhocTask(task.task_id, { keep });
+    } catch (keepError) {
+      setTasks((rows) => rows.map((row) => (row.task_id === task.task_id ? { ...row, keep: !keep } : row)));
+      setError(keepError instanceof Error ? keepError.message : String(keepError));
+    }
+  };
+
+  const deleteTask = async (task: AdhocTaskSummary) => {
+    if (!window.confirm(m.list.deleteConfirm(task.title || task.task_id))) return;
+    setBusy(`delete:${task.task_id}`);
+    setError(null);
+    try {
+      await api.deleteAdhocTask(task.task_id);
+      setTasks((rows) => rows.filter((row) => row.task_id !== task.task_id));
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : String(deleteError));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const unkept = tasks.filter((task) => !task.keep);
+
+  const deleteUnkept = async () => {
+    if (!window.confirm(m.list.deleteUnkeptConfirm(unkept.length))) return;
+    setBusy("delete-unkept");
+    setError(null);
+    try {
+      setCleanup(await api.deleteUnkeptAdhocTasks());
+      await loadTasks();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : String(deleteError));
+    } finally {
+      setBusy("");
+    }
+  };
 
   useEffect(() => {
     if (!showForm || listing) {
@@ -363,7 +441,38 @@ export function AdhocTasks() {
       ) : null}
 
       <div className="card">
-        <h2>{m.list.title}</h2>
+        <div className="adhoc-list-head">
+          <h2>{m.list.title}</h2>
+          {unkept.length > 0 ? (
+            <button
+              className="danger"
+              disabled={busy !== ""}
+              onClick={() => void deleteUnkept()}
+              type="button"
+            >
+              {busy === "delete-unkept" ? m.list.deleting : m.list.deleteUnkept(unkept.length)}
+            </button>
+          ) : null}
+        </div>
+        {tasks.length > 0 ? <p className="muted small">{m.list.keepHint}</p> : null}
+        {cleanup ? (
+          <div className="callout" role="status">
+            <p>
+              {m.list.cleaned(cleanup.deleted.length, formatBytes(cleanup.bytes_freed))}
+              {cleanup.skipped.length > 0 ? (
+                <>
+                  {" "}
+                  {m.list.skipped(cleanup.skipped.length)}
+                  {cleanup.skipped.map((item) => (
+                    <span key={item.task_id} style={{ display: "block" }}>
+                      <code>{item.task_id}</code> — {item.reason}
+                    </span>
+                  ))}
+                </>
+              ) : null}
+            </p>
+          </div>
+        ) : null}
         {loading ? (
           <Spinner />
         ) : tasks.length === 0 ? (
@@ -372,12 +481,14 @@ export function AdhocTasks() {
           <table className="data-table">
             <thead>
               <tr>
+                <th aria-label={m.list.colKeep} />
                 <th>{m.list.colTitle}</th>
                 <th>{m.list.colFolder}</th>
                 <th>{m.list.colBranch}</th>
                 <th>{m.list.colRuns}</th>
                 <th>{m.list.colLast}</th>
                 <th>{m.list.colApplied}</th>
+                <th aria-label={m.list.delete} />
               </tr>
             </thead>
             <tbody>
@@ -388,6 +499,21 @@ export function AdhocTasks() {
                   onClick={() => navigate(`/adhoc/${task.task_id}`)}
                   style={{ cursor: "pointer" }}
                 >
+                  <td>
+                    <button
+                      aria-label={task.keep ? m.list.unkeep : m.list.keep}
+                      aria-pressed={Boolean(task.keep)}
+                      className={task.keep ? "keep-toggle active" : "keep-toggle"}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void toggleKeep(task);
+                      }}
+                      title={task.keep ? m.list.unkeep : m.list.keep}
+                      type="button"
+                    >
+                      <IconStar filled={Boolean(task.keep)} size={16} />
+                    </button>
+                  </td>
                   <td>
                     <strong>{task.title || task.task_id}</strong>
                   </td>
@@ -401,6 +527,21 @@ export function AdhocTasks() {
                     ) : (
                       m.list.none
                     )}
+                  </td>
+                  <td>
+                    <button
+                      aria-label={m.list.delete}
+                      className="ghost small"
+                      disabled={busy !== ""}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void deleteTask(task);
+                      }}
+                      title={m.list.delete}
+                      type="button"
+                    >
+                      {busy === `delete:${task.task_id}` ? m.list.deleting : <IconTrash size={14} />}
+                    </button>
                   </td>
                 </tr>
               ))}

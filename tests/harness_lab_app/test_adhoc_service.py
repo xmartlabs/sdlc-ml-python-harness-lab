@@ -808,3 +808,70 @@ def test_the_runner_leaves_the_projected_harness_out_of_the_change(
     patch = (run_dir / "change.patch").read_bytes()
     assert b"items or []" in patch
     assert b"verify_changes" not in patch
+
+
+def _second_repo(lab, name: str) -> None:
+    repo = lab["repo"].parent / name
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "main.py").write_text("print('hi')\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+
+
+def test_deleting_unkept_tasks_spares_kept_and_in_use_ones(session, lab, monkeypatch):
+    """Kept tasks stay; so does one whose change is applied (Undo needs it)."""
+    for name in ("blog", "api"):
+        _second_repo(lab, name)
+    service = AdhocService(session)
+    kept = service.create_task("shop", "Keep me.", title="kept")
+    service.update_task(kept.task_id, keep=True)
+    throwaway = service.create_task("blog", "Throw me away.")
+    throwaway_run = _launch(session, throwaway)
+    _simulate_run(session, lab, throwaway_run)
+    service.finalize_run(throwaway_run)
+    applied = service.create_task("api", "Applied change.")
+    applied_run = _launch(session, applied)
+    _simulate_run(session, lab, applied_run)
+    row = service.get_adhoc_run(applied_run)
+    row.apply_state = "applied"
+    session.add(row)
+    session.commit()
+
+    result = service.delete_unkept()
+
+    assert result["deleted"] == [throwaway.task_id]
+    assert result["bytes_freed"] > 0
+    assert [item["task_id"] for item in result["skipped"]] == [applied.task_id]
+    assert "applied to your folder" in result["skipped"][0]["reason"]
+    remaining = {task["task_id"] for task in service.list_tasks()}
+    assert remaining == {kept.task_id, applied.task_id}
+    assert not (lab["settings"].checkouts_dir / throwaway.task_id).exists()
+    assert not (lab["settings"].data_runs_dir / throwaway_run).exists()
+    assert service.get_task(kept.task_id).keep is True
+
+
+def test_keep_is_on_the_list_and_toggles_back(session, lab):
+    task = _task(session, lab)
+    service = AdhocService(session)
+
+    assert service.list_tasks()[0]["keep"] is False
+    service.update_task(task.task_id, keep=True)
+    assert service.list_tasks()[0]["keep"] is True
+    service.update_task(task.task_id, keep=False)
+    assert service.list_tasks()[0]["keep"] is False
+    # Untouched by a title edit.
+    service.update_task(task.task_id, title="renamed")
+    assert service.get_task(task.task_id).keep is False
+
+
+def test_the_delete_unkept_route_is_on_the_router():
+    from harness_lab_app.adhoc_api import adhoc_router
+
+    routes = {
+        (getattr(route, "path", ""), method)
+        for route in adhoc_router.routes
+        for method in getattr(route, "methods", ())
+    }
+    assert ("/api/adhoc/tasks/delete-unkept", "POST") in routes
+    assert ("/api/adhoc/tasks/{task_id}", "DELETE") in routes

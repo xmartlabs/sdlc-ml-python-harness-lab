@@ -23,9 +23,12 @@ import re
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlmodel import Session, desc, select
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 from harness_lab_app import adhoc_git
 from harness_lab_app.config import get_settings
@@ -210,6 +213,18 @@ def inspect_source(relative: str) -> dict[str, Any]:
     info["dirty"] = bool(dirty)
     info["dirty_files"] = dirty[:200]
     return info
+
+
+def _delete_blocker(rows: Sequence[AdhocRun], states: dict[str, RunState]) -> str:
+    """Why a task cannot be deleted without force, or "" when it can."""
+    if any(states.get(row.run_id) in LIVE_RUN_STATES for row in rows):
+        return "A run of this task is still going. Cancel it first."
+    if any(row.apply_state in ({"applied"} | LIVE_APPLY_STATES) for row in rows):
+        return (
+            "A change of this task is applied to your folder. Undo it, or "
+            "delete with force to keep the change and forget the task."
+        )
+    return ""
 
 
 def _source_state(task: AdhocTask) -> dict[str, Any]:
@@ -430,11 +445,17 @@ class AdhocService:
         }
 
     def update_task(
-        self, task_id: str, title: str | None = None, prompt: str | None = None
+        self,
+        task_id: str,
+        title: str | None = None,
+        prompt: str | None = None,
+        keep: bool | None = None,
     ) -> AdhocTask:
         task = self.get_task(task_id)
         if title is not None:
             task.title = title.strip() or task.title
+        if keep is not None:
+            task.keep = bool(keep)
         if prompt is not None and prompt.strip() != task.prompt:
             has_runs = self.session.exec(
                 select(AdhocRun).where(AdhocRun.task_id == task_id)
@@ -464,17 +485,9 @@ class AdhocService:
         ).all()
         states = self._run_states([row.run_id for row in rows])
         if not force:
-            if any(states.get(row.run_id) in LIVE_RUN_STATES for row in rows):
-                raise AdhocConflictError(
-                    "A run of this task is still going. Cancel it first."
-                )
-            if any(
-                row.apply_state in ({"applied"} | LIVE_APPLY_STATES) for row in rows
-            ):
-                raise AdhocConflictError(
-                    "A change of this task is applied to your folder. Undo it, or "
-                    "delete with force to keep the change and forget the task."
-                )
+            blocker = _delete_blocker(rows, states)
+            if blocker:
+                raise AdhocConflictError(blocker)
         service = RunService(self.session)
         for row in rows:
             if states.get(row.run_id) is not None:
@@ -492,6 +505,46 @@ class AdhocService:
         checkout = root / _checked_task_id(task_id)
         if checkout.is_dir() and checkout.resolve().parent == root.resolve():
             shutil.rmtree(checkout, ignore_errors=True)
+
+    def delete_unkept(self) -> dict[str, Any]:
+        """Delete every task not marked kept, and say what was freed.
+
+        A task with a run still going, or with a change applied to the folder,
+        is skipped and reported, never forced: deleting it would lose the run
+        or the only way to undo that change. Each task goes on its own, so one
+        that fails leaves the others deleted.
+        """
+        from harness_lab_app.storage_service import tree_bytes
+
+        settings = get_settings()
+        deleted: list[str] = []
+        skipped: list[dict[str, str]] = []
+        freed = 0
+        tasks = self.session.exec(
+            select(AdhocTask).where(AdhocTask.keep == False)  # noqa: E712 - SQL
+        ).all()
+        for task in tasks:
+            rows = self.session.exec(
+                select(AdhocRun).where(AdhocRun.task_id == task.task_id)
+            ).all()
+            blocker = _delete_blocker(
+                rows, self._run_states([row.run_id for row in rows])
+            )
+            if blocker:
+                skipped.append({"task_id": task.task_id, "reason": blocker})
+                continue
+            size = tree_bytes(settings.checkouts_dir / task.task_id) + sum(
+                tree_bytes(settings.data_runs_dir / row.run_id) for row in rows
+            )
+            try:
+                self.delete_task(task.task_id)
+            except AdhocError as exc:
+                self.session.rollback()
+                skipped.append({"task_id": task.task_id, "reason": str(exc)})
+                continue
+            deleted.append(task.task_id)
+            freed += size
+        return {"deleted": deleted, "skipped": skipped, "bytes_freed": freed}
 
     # ---- runs ----------------------------------------------------------
 

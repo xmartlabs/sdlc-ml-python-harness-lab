@@ -271,3 +271,20 @@ export const IconChecklist = (p: IconProps) => (
     <path d="m4 18 1 1 2-2" />
   </Svg>
 );
+
+/** A star; `filled` marks something kept (an ad hoc task the operator keeps). */
+export const IconStar = ({ filled = false, ...p }: IconProps & { filled?: boolean }) => (
+  <Svg {...p} fill={filled ? "currentColor" : "none"}>
+    <path d="M12 2.5l2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.8 3.1 1.1-6.5L2.5 9.4l6.6-1z" />
+  </Svg>
+);
+
+export const IconTrash = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 6h18" />
+    <path d="M8 6V4h8v2" />
+    <path d="M19 6l-1 14H6L5 6" />
+    <path d="M10 11v6" />
+    <path d="M14 11v6" />
+  </Svg>
+);
