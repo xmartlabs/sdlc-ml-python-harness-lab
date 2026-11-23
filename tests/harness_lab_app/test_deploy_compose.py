@@ -194,3 +194,31 @@ def test_only_the_api_can_see_the_operators_own_folders(services):
     ]
 
     assert holders == ["api"]
+
+
+@pytest.mark.parametrize("target", ["app-up", "app-up-prod"])
+def test_app_up_builds_a_shared_image_once(services, target):
+    """Three services, one tag: `up --build` built it three times in parallel.
+
+    The workers inherit one `build:` and one `image: harness-lab-worker:latest`.
+    Handed all three, `docker compose up --build` builds the same tag three
+    times at once and the second export fails with "image
+    docker.io/library/harness-lab-worker:latest: already exists" (2026-11-23),
+    so the stack did not start. Each image is built once, by one service, and
+    `up` then starts every service without building.
+    """
+    makefile = (REPO_ROOT / "Makefile").read_text()
+    recipe = makefile.partition(f"\n{target}:")[2].partition("\n\n")[0]
+    built: list[str] = []
+    for line in recipe.replace("\\\n", " ").splitlines():
+        words = line.split()
+        if "compose" not in words:
+            continue
+        if "build" in words:
+            built += [w for w in words[words.index("build") + 1 :] if w[0] != "-"]
+        if "up" in words:
+            assert "--build" not in words, line.strip()
+
+    tags = [services[name].get("image", name) for name in built]
+    assert len(tags) == len(set(tags)), built
+    assert {"api", "worker"} <= set(built)

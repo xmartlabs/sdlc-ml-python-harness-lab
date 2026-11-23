@@ -359,6 +359,7 @@ the security limit are in the
 | Cost | `api_price_estimate.py` | `GEMINI_PRICES` (paid tier, Standard, 2026-11-22), `estimate_gemini_api_cost`; `cost_source: api_list_price_estimate` / `api_price_unknown` |
 | Preflight | `run_service._check_agy` | Docker only, verified model required, CLI ≥ 1.5.14, key configured, third-party code refused unless `HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1` |
 | UI | `NativeClisPanel.tsx` | Antigravity CLI card: Sign in with Google (`AgyAccountSection`), the key as *Use a Gemini API key instead*, test connection, refresh models |
+| UI | `guide/agyFamilies.ts`, `HarnessModelChooser.tsx` | The guided flows' Antigravity tab: one card per model family plus an effort row; a click sends the family's slug at that level (`gemini-3.8-flash-high`), the id agy takes |
 | API | `api.py` | `PUT/GET/DELETE /api/harness/clis/antigravity_cli/api-key`, `POST/GET/DELETE …/connect`, `POST …/connect/code`, `POST/GET …/models`, `POST/GET …/test` |
 | Worker | `tasks.py` | `_connect_agy_account` (sign-in), `save_cli_api_key`, `remove_cli_api_key`, `refresh_cli_models`, `test_native_cli` (agy branch), `_redact_api_key` after a run |
 

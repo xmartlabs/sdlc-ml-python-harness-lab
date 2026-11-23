@@ -5,6 +5,7 @@ import { API_KEY_HARNESSES, harnessLabel } from "../../harnesses";
 import { defineMessages, useMessages } from "../../i18n";
 import type { ModelOption, NativeCliStatus, NativeModelRecord } from "../../types";
 import { InfoTooltip } from "../InfoTooltip";
+import { AGY_DEFAULT_LEVEL, agyFamilies, agyLevelOf, agyLevelsOffered, agySlugFor } from "./agyFamilies";
 import { armFor, encodeArm, GUIDE_HARNESSES, loadClis, loadModels, loadNative, runModelId } from "./guideData";
 import type { Harness } from "./guideData";
 
@@ -19,7 +20,8 @@ import type { Harness } from "./guideData";
  * gateway and local hosts (by where they run, then who makes them), claude,
  * codex, gemini and antigravity_cli their own CLI's models. A model the run
  * would be refused for is shown, disabled, with the reason — never silently
- * missing.
+ * missing. antigravity_cli shows one card per family and an effort selector:
+ * its effort is part of the model id (see ./agyFamilies).
  */
 
 type Status = { tone: "ok" | "warn" | "off"; text: string; detail?: string };
@@ -32,6 +34,8 @@ type Card = {
   tip?: string;
   /** claude only: the effort levels this model accepts; empty = none. */
   efforts?: string[];
+  /** React key when `id` changes with a selector (an agy family). */
+  key?: string;
 };
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -85,7 +89,13 @@ const MESSAGES = defineMessages({
     effortDefault: "Default",
     effortTip:
       "Reasoning effort, passed to Claude Code as --effort. Low is fastest and uses the fewest tokens; max is the most thorough. Default lets the CLI decide. Opus at high and Opus at low are two arms you can compare.",
-    noEffort: "no effort control"
+    noEffort: "no effort control",
+    agyAccountTip:
+      "Google Antigravity CLI on your Google sign-in: runs use your Google AI plan's quota. Its own models.",
+    agyEffortTip:
+      "Thinking level. agy has no effort flag: the level is part of the model id it runs (gemini-3.8-flash-high), so each family offers its own levels. The same family at another level is another arm you can compare.",
+    noLevel: (level: string) => `no ${level} level`,
+    levelsOffered: (levels: string) => `Offers: ${levels}`
   },
   es: {
     harnessTips: {
@@ -135,7 +145,13 @@ const MESSAGES = defineMessages({
     effortDefault: "Por defecto",
     effortTip:
       "Esfuerzo de razonamiento, pasado a Claude Code como --effort. Low es lo más rápido y gasta menos tokens; max es lo más exhaustivo. Por defecto decide la CLI. Opus en high y Opus en low son dos brazos que podés comparar.",
-    noEffort: "sin control de esfuerzo"
+    noEffort: "sin control de esfuerzo",
+    agyAccountTip:
+      "La CLI de Google Antigravity con tu cuenta de Google: las corridas usan la cuota de tu plan de Google AI. Sus propios modelos.",
+    agyEffortTip:
+      "Nivel de razonamiento. agy no tiene flag de esfuerzo: el nivel es parte del id del modelo que corre (gemini-3.8-flash-high), así que cada familia ofrece sus propios niveles. La misma familia en otro nivel es otro brazo que podés comparar.",
+    noLevel: (level: string) => `sin nivel ${level}`,
+    levelsOffered: (levels: string) => `Ofrece: ${levels}`
   }
 });
 
@@ -188,6 +204,10 @@ export function HarnessModelChooser({
   const [where, setWhere] = useState<"direct" | "gateway">("direct");
   // Chosen before the model, so one click on a card picks both.
   const [effort, setEffort] = useState(picked?.effort ?? "");
+  // agy's effort is the model id's last part: a picked one opens on its level.
+  const [agyLevel, setAgyLevel] = useState(
+    (picked?.harness === "antigravity_cli" ? agyLevelOf(picked.model) : "") || AGY_DEFAULT_LEVEL
+  );
   const [provider, setProvider] = useState("");
 
   useEffect(() => {
@@ -209,6 +229,12 @@ export function HarnessModelChooser({
   }, [gatewayModels.length]);
 
   const statusOf = (name: Harness) => cliStatus(clis?.find((cli) => cli.harness === name), clisLoaded, m);
+  // The Antigravity tip names the credential runs actually use.
+  const agyOnAccount = clis?.find((cli) => cli.harness === "antigravity_cli")?.agy_auth === "account";
+  const tipFor = (name: Harness) =>
+    name === "antigravity_cli" && agyOnAccount ? m.agyAccountTip : m.harnessTips[name];
+  const families = useMemo(() => agyFamilies(native.antigravity_cli ?? []), [native]);
+  const agyLevels = useMemo(() => agyLevelsOffered(families), [families]);
   const status = statusOf(harness);
 
   const pool = useMemo(
@@ -258,6 +284,20 @@ export function HarnessModelChooser({
           };
         });
     }
+    if (harness === "antigravity_cli") {
+      // One card per family; the selector picks which of its ids runs.
+      return families.map((family) => {
+        const slug = agySlugFor(family, agyLevel);
+        return {
+          id: slug ?? family.key,
+          key: family.key,
+          label: family.label,
+          sub: family.generation === "previous" ? m.previous : m.current,
+          disabled: slug ? undefined : m.noLevel(agyLevel),
+          tip: slug ?? m.levelsOffered(family.levels.join(", "))
+        };
+      });
+    }
     return (native[harness] ?? []).map((model) => {
       // An older API (or the offline list) does not say: offer every level and
       // let the server's preflight be the judge, as the run form does.
@@ -272,7 +312,7 @@ export function HarnessModelChooser({
         efforts
       };
     });
-  }, [harness, pool, activeProvider, native, m, effort]);
+  }, [harness, pool, activeProvider, native, m, effort, families, agyLevel]);
 
   const blocked = status.tone === "off";
   const login = harness === "codex" ? "make auth-codex" : "make auth-gemini";
@@ -296,7 +336,7 @@ export function HarnessModelChooser({
               key={name}
               onClick={() => setHarness(name)}
               role="tab"
-              title={m.harnessTips[name]}
+              title={tipFor(name)}
               type="button"
             >
               <strong>{harnessLabel(name)}</strong>
@@ -306,7 +346,7 @@ export function HarnessModelChooser({
         })}
       </div>
       <p className="muted guide-small hm-about">
-        {m.harnessTips[harness]}
+        {tipFor(harness)}
       </p>
 
       {blocked ? (
@@ -367,6 +407,26 @@ export function HarnessModelChooser({
               </div>
             </div>
           ) : null}
+          {harness === "antigravity_cli" && agyLevels.length > 0 ? (
+            <div className="hm-effort">
+              <span className="guide-field-label">
+                {m.effort} <InfoTooltip text={m.agyEffortTip} />
+              </span>
+              <div className="segmented" role="group">
+                {agyLevels.map((level) => (
+                  <button
+                    aria-pressed={agyLevel === level}
+                    className={agyLevel === level ? "active" : ""}
+                    key={level}
+                    onClick={() => setAgyLevel(level)}
+                    type="button"
+                  >
+                    {level}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {cards.length === 0 ? <p className="muted">{m.noModels}</p> : null}
           <div className="guide-options hm-models">
             {cards.map((card) => {
@@ -380,7 +440,7 @@ export function HarnessModelChooser({
                   className="guide-option"
                   data-disabled={Boolean(why) || undefined}
                   data-pressed={pressed}
-                  key={card.id}
+                  key={card.key ?? card.id}
                 >
                   <button
                     aria-pressed={pressed}

@@ -3723,3 +3723,18 @@ through the repository bind; for an API-key harness it is now masked.
 - `metadata.json` skills_bundle/subagents were read from the lab root for every
   condition, so a `native` run "had" the lab's 6 subagents and the audit graded
   each "no evidence". In-target runs now read the catalog from the workspace.
+
+## 2026-11-23 — `up --build` on services that share one image tag races itself
+
+- The three workers inherit one `build:` and one `image: harness-lab-worker:latest`.
+  `docker compose up -d --build api worker worker-parallel worker-interactive`
+  built that tag three times in parallel (Compose v2.40, containerd snapshotter),
+  and the second export failed with `image "docker.io/library/harness-lab-worker:latest":
+  already exists`, so `make app-up` stopped with the stack down. It had worked
+  for a week because a warm cache made the three exports rarely overlap.
+- `app-up`/`app-up-prod` now `build` each image once (`api worker frontend[-prod]`)
+  and `up -d` without `--build`; `test_app_up_builds_a_shared_image_once` keeps
+  it that way. Do not "fix" it with `build: !reset` in the compose file:
+  `test_deploy_compose.py` reads it with `yaml.safe_load`, which rejects the tag.
+- A Docker cleanup that frees space also deletes `harness-lab-runner-godot`
+  (not built by `app-up`); the 3D cases then need `make images-3d` again.
