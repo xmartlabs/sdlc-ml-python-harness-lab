@@ -126,6 +126,8 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0096 — Antigravity CLI runs on a Gemini API key, never on a personal sign-in](0096-antigravity-cli-runs-on-a-gemini-api-key.md)
 - [0097 — Antigravity CLI can run on the operator's own Google sign-in](0097-antigravity-cli-on-the-operators-google-sign-in.md)
 
+- [0098 — Gameplay uses text actions and a separate simulation clock](0098-gameplay-uses-text-actions-and-a-separate-simulation-clock.md)
+
 ## Why ADRs exist
 
 Decisions are the highest-value context to preserve: code shows *what*, ADRs explain
