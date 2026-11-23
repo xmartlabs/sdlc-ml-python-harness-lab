@@ -93,3 +93,5 @@ here is needed to use it.
 [Agentic scoring](agentic-scoring.md) ·
 [Harness lifecycle](harness-lifecycle/README.md) ·
 [Plans](plans/)
+
+- [Text gameplay episode contract and recorder](gameplay-episodes.md) — deterministic fixture, LM Studio actions and replay verification.

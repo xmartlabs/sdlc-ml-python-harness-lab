@@ -3,6 +3,16 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## 2026-11-23 — A bounded LM Studio reply may have no visible action
+
+The text gameplay fixture received an empty `content` with the entire output
+budget consumed (Gemma: 256 tokens; Qwen: 512). A successful HTTP completion is
+not proof that a valid action exists. Validate the returned JSON before stepping,
+retain token counts and raw visible replies, and keep the output budget in
+provenance. Native HTTP timeout causes also need preservation through the existing
+local-server wrapper, or a decision timeout is mislabeled as a generic provider
+failure. A delayed local HTTP test now guards that boundary.
+
 ## 2026-11-13 — The case assistant still drafted the cases ADR-0071 forbids
 
 - **A rule written for `task.yaml` did not reach the drafter.** ADR-0071 banned grading

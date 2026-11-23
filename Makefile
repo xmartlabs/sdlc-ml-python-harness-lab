@@ -1123,3 +1123,14 @@ clean:
 
 # Declare phony targets
 .PHONY: auth-codex auth-gemini auth-status init install setup-hooks opencode opencode-doctor build-api run-api-docker stop-docker build-fresh app-up app-down app-up-prod app-down-prod app-reset-db backup app-smoke-test app-runner-smoke app-test images-3d sandbox-build clean help generate-requirements test test-unit format lint lint-fast fix fix-force check typecheck ci template-remote-setup template-sync-preview template-sync-merge template-sync-rebase setup-claude-skills setup-antigravity-skills setup-opencode-skills sync-agents render-adapters sync-skills check-sync prompts prompts-check purge-external-skills sync-gateway-models set-password demo-check harness-check harness-export case-import app-worker-host app-api-host app-host improve harness-proposal harness-proposal-issue harness-status harness-sync-preview harness-sync-branch harness-sync-clean langfuse-check langfuse-export langfuse-backfill prune skill-census skill-profile skill-profile-experiment refine-skill add-skill-trial stage-candidate
+
+# Text gameplay contract fixture (PR1); this does not run a coding benchmark.
+# MODEL is optional and must identify an already loaded LM Studio model.
+.PHONY: gameplay-episode gameplay-verify
+gameplay-episode:
+	@[ -n "$(EPISODE)" ] || { echo "EPISODE is required (use a new id for each recording)."; exit 1; }
+	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD}/src python scripts/gameplay_episode.py --episode-id "$(EPISODE)" $(if $(MODEL),--model "$(MODEL)",) $(if $(BASE_URL),--base-url "$(BASE_URL)",) $(if $(SEED),--seed "$(SEED)",)
+
+gameplay-verify:
+	@[ -n "$(REPLAY)" ] || { echo "REPLAY is required."; exit 1; }
+	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD}/src python scripts/gameplay_episode.py --verify "$(REPLAY)"

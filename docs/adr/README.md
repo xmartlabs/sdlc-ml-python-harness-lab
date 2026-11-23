@@ -124,6 +124,8 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0094 — Codex and Gemini run on their own subscription login](0094-codex-and-gemini-run-on-their-own-subscription-login.md)
 - [0095 — An ad hoc task runs on a copy and is applied on request](0095-an-adhoc-task-runs-on-a-copy-and-is-applied-on-request.md)
 
+- [0096 — Gameplay uses text actions and a separate simulation clock](0096-gameplay-uses-text-actions-and-a-separate-simulation-clock.md)
+
 ## Why ADRs exist
 
 Decisions are the highest-value context to preserve: code shows *what*, ADRs explain
