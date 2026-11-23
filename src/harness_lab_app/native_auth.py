@@ -345,6 +345,10 @@ def billing_mode(harness: str, env: dict[str, str] | None = None) -> str:
         return "unknown"
     if harness == "opencode":
         return "gateway"
+    if harness == "antigravity_cli":
+        # A Gemini API key the operator configured (api_key_auth): per-token
+        # API billing, never a subscription's quota.
+        return "api"
     return "unknown"
 
 

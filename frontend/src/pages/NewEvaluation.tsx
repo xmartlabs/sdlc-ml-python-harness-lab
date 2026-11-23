@@ -5,9 +5,12 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, api } from "../api";
 import {
   defaultNativeModel,
+  API_KEY_HARNESSES,
   HARNESS_NATIVE_MODELS,
   HARNESS_OPTIONS,
   HOST_HARNESSES,
+  harnessCliName,
+  harnessLabel,
   useNativeModelIndex
 } from "../harnesses";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -444,6 +447,7 @@ const MESSAGES = defineMessages({
     claudeAuthHint:
       "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host).",
     hostModeHint: "Uses your plan, not an API key: sign in once with make auth-codex or make auth-gemini (Docker or host mode).",
+    apiKeyHint: "Runs on a Gemini API key, per-token API billing: configure it once in System → Agent CLIs (Docker only).",
     executorModelLabel: "Executor model",
     executorModelHeldFixed: "Held fixed across every arm — the experiment varies the factor above, never the model.",
     plannerModelLabel: "Planner model",
@@ -856,6 +860,7 @@ const MESSAGES = defineMessages({
     claudeAuthHint:
       "Funciona en Docker (CLAUDE_CODE_OAUTH_TOKEN o ANTHROPIC_API_KEY en .env) o en modo host (make app-host).",
     hostModeHint: "Usa tu plan, no una API key: iniciá sesión una vez con make auth-codex o make auth-gemini (Docker o modo host).",
+    apiKeyHint: "Corre con una API key de Gemini, facturación de la API por token: configurala una vez en Sistema → CLIs de agentes (solo Docker).",
     executorModelLabel: "Modelo ejecutor",
     executorModelHeldFixed: "Fijo en todos los brazos — el experimento varía el factor de arriba, nunca el modelo.",
     plannerModelLabel: "Modelo planificador",
@@ -2319,7 +2324,7 @@ export function NewEvaluation() {
                 >
                   {HARNESS_OPTIONS.map((item) => (
                     <option key={item} value={item}>
-                      {item}
+                      {harnessLabel(item)}
                     </option>
                   ))}
                 </select>
@@ -2332,7 +2337,7 @@ export function NewEvaluation() {
                 >
                   {HARNESS_OPTIONS.map((item) => (
                     <option key={item} value={item}>
-                      {item}
+                      {harnessLabel(item)}
                     </option>
                   ))}
                 </select>
@@ -2353,7 +2358,7 @@ export function NewEvaluation() {
             >
               {HARNESS_OPTIONS.map((item) => (
                 <option key={item} value={item}>
-                  {item}
+                  {harnessLabel(item)}
                 </option>
               ))}
             </select>
@@ -2459,14 +2464,18 @@ export function NewEvaluation() {
             >
               {HARNESS_OPTIONS.map((item) => (
                 <option key={item} value={item}>
-                  {item}
+                  {harnessLabel(item)}
                 </option>
               ))}
             </select>
             {HOST_HARNESSES.has(harness) ? (
               <span className="muted small">
-                {m.runsHarnessCli(harness)}
-                {harness === "claude" ? m.claudeAuthHint : m.hostModeHint}
+                {m.runsHarnessCli(harnessCliName(harness))}
+                {harness === "claude"
+                  ? m.claudeAuthHint
+                  : API_KEY_HARNESSES.has(harness)
+                    ? m.apiKeyHint
+                    : m.hostModeHint}
               </span>
             ) : null}
           </label>

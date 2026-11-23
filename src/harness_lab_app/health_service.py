@@ -470,7 +470,113 @@ def native_cli_status(facts: dict[str, Any] | None = None) -> list[dict[str, Any
         row.update(_connect_fields(harness))
         rows.append(row)
     rows.insert(0, _opencode_row())
+    rows.append(_agy_row(lane, facts))
     return rows
+
+
+def _agy_row(lane: str, facts: dict[str, Any] | None) -> dict[str, Any]:
+    """The Antigravity CLI card: an API key, never a subscription session.
+
+    ``session`` is ``connected`` once a key is stored — that is not proof it
+    works, which only the connection test gives (``last_test``). The key's
+    value never leaves the store: the row carries its last four characters.
+    """
+    from harness_lab_app import native_connect
+    from harness_lab_app.api_key_auth import HARNESS, key_status, untrusted_allowed
+    from harness_lab_app.native_models import (
+        AGY_TEST_MODEL,
+        MIN_NATIVE_CLI_VERSION,
+        native_cli_too_old,
+    )
+
+    version = ""
+    installed: bool | None = None
+    if lane == "docker":
+        version = str(((facts or {}).get("cli_versions") or {}).get(HARNESS) or "")
+        installed = bool(version) if facts else None
+    key = key_status()
+    return {
+        "harness": HARNESS,
+        "lane": lane,
+        # Docker only: agy's sandbox cannot start in the runner and nothing
+        # contains it on the host (run_service._check_agy).
+        "lane_supported": lane == "docker",
+        "installed": installed,
+        "version": version,
+        "min_version": MIN_NATIVE_CLI_VERSION.get(HARNESS),
+        "too_old": native_cli_too_old(HARNESS, version),
+        "sandbox": "container",
+        "session": "connected" if key["configured"] else "missing",
+        "auth_kind": "api_key" if key["configured"] else None,
+        "billing_mode": "api",
+        "auth": "api_key",
+        "provider": "gemini_api",
+        "connectable": False,
+        "configurable": True,
+        "unavailable": None,
+        "testable": True,
+        "api_key": key,
+        "key_op": native_connect.read_state(HARNESS, "key"),
+        "login": {"state": "idle"},
+        "last_test": native_connect.read_state(HARNESS, "test"),
+        "models": native_connect.read_state(HARNESS, "models"),
+        "untrusted_allowed": untrusted_allowed(),
+        "default_test_model": AGY_TEST_MODEL,
+    }
+
+
+def _check_agy(facts: dict[str, Any]) -> tuple[str, str, list[str]]:
+    """Health of the Antigravity CLI harness: image, key, last real request."""
+    row = _agy_row(
+        "host" if get_settings().execution_backend == "subprocess" else "docker", facts
+    )
+    if not row["lane_supported"]:
+        # Not applicable here, which is not a fault: an operator who never
+        # uses agy must not see host-mode health stuck below OK because of it.
+        return (
+            OK,
+            "Not applicable in host mode: antigravity_cli runs only in the Docker "
+            "runner.",
+            [],
+        )
+    if row["installed"] is None:
+        return UNKNOWN, "No worker replied, so the runner image could not be read.", []
+    if not row["installed"]:
+        return (
+            WARN,
+            "agy is not in the runner image; antigravity_cli runs are refused. "
+            "Rebuild the runner image.",
+            [],
+        )
+    if row["too_old"]:
+        return (
+            WARN,
+            f"agy {row['version']} is older than {row['too_old']}, the version the "
+            "lab verified; rebuild the runner image.",
+            [],
+        )
+    if row["session"] != "connected":
+        return (
+            OK,
+            f"agy {row['version']} installed; no Gemini API key configured "
+            "(System → Agent CLIs).",
+            [],
+        )
+    test = row["last_test"] or {}
+    if test.get("state") == "failed":
+        return (
+            WARN,
+            f"agy {row['version']}: the last connection test failed "
+            f"({test.get('reason') or 'error'}): {str(test.get('error') or '')[:200]}",
+            [],
+        )
+    verified = "verified" if test.get("state") == "ok" else "not tested yet"
+    return (
+        OK,
+        f"agy {row['version']} (docker, sandbox: container), Gemini API key "
+        f"{row['api_key']['hint']} — {verified}.",
+        [],
+    )
 
 
 def _connect_fields(harness: str) -> dict[str, Any]:
@@ -575,6 +681,7 @@ def collect_health(session: Session) -> dict:
         ),
         _timed("codex_cli", "Codex CLI", lambda: _check_native_cli("codex", facts)),
         _timed("gemini_cli", "Gemini CLI", lambda: _check_native_cli("gemini", facts)),
+        _timed("antigravity_cli", "Antigravity CLI", lambda: _check_agy(facts)),
         _timed(
             "skills_drift", "Generated skill views", _check_skills_drift, "skills_sync"
         ),

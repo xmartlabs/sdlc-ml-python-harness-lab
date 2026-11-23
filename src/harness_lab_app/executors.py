@@ -91,7 +91,91 @@ RUNNER_SKILLS_DIR_FOR_HARNESS: dict[str, str] = {
     "opencode": ".claude/skills",
     "codex": ".codex/skills",
     "gemini": ".gemini/skills",
+    # agy discovers workspace skills in `.agents/skills` and nowhere else
+    # (not `.gemini/skills`, not `.claude/skills`: verified on agy 1.5.14 by
+    # capturing the system prompt it sends), so that mirror is the one kept.
+    "antigravity_cli": ".agents/skills",
 }
+
+
+# Files in the lab tree that hold *other* providers' credentials: `.env`
+# (gateway token, Claude OAuth token, OpenAI key, Langfuse secret...) and the
+# Claude settings whose custom headers carry a gateway key. The whole repo is
+# bound at /app, so an agent can read them in any run. An API-key harness
+# (antigravity_cli) gets them masked with empty read-only binds: its own key is
+# the only secret its container holds. bench_run does not need either file in
+# that lane: the executor passes every value it reads through the environment.
+API_KEY_HARNESSES: frozenset[str] = frozenset({"antigravity_cli"})
+RUNNER_SECRET_FILES: tuple[str, ...] = (
+    ".env",
+    ".claude/settings.local.json",
+    # The lab database (run history, configs) and the SQLite sidecars.
+    "data/app/harness_lab.db",
+    "data/app/harness_lab.db-wal",
+    "data/app/harness_lab.db-shm",
+)
+# Directories holding credentials or copies of `.env`: the Settings page's
+# `.env` backups, the native-connect state (an API-key drop in flight, login
+# records) and the lab's own archives (a backup tarball contains `.env`).
+# Emptied with a tmpfs. `data/app` itself stays, because bench_run takes its
+# skill-views lock there and that lock must be the host's.
+RUNNER_SECRET_DIRS: tuple[str, ...] = (
+    "data/app/env-backups",
+    "data/app/native-connect",
+    "backups",
+)
+
+
+def runner_secret_masks(
+    harness: str, tmpfs: dict[str, str], mount_root: str = "/app"
+) -> list[tuple[str, str]]:
+    """Empty-file masks over the lab's credential files, for an API-key harness.
+
+    A file under a directory ``tmpfs`` already masks is skipped (it is gone
+    already, and Docker rejects a bind whose parent is a fresh tmpfs).
+    """
+    if harness not in API_KEY_HARNESSES:
+        return []
+    root = mount_root.rstrip("/")
+    masks: list[tuple[str, str]] = []
+    for relative in RUNNER_SECRET_FILES:
+        target = f"{root}/{relative}"
+        if any(target.startswith(f"{masked}/") for masked in tmpfs):
+            continue
+        masks.append((target, _mask_kind(relative)))
+    return masks
+
+
+def runner_secret_dirs(
+    harness: str, run_id: str, tmpfs: dict[str, str], mount_root: str = "/app"
+) -> dict[str, str]:
+    """tmpfs over the lab's credential directories, for an API-key harness.
+
+    Also covers every *other* run's private provider session that exists when
+    this container starts (``data/runs/<id>/session``, a codex/gemini run in
+    flight on the parallel lane): a copy of someone's ChatGPT or Google login
+    must not be readable by an agent holding an API key, nor the reverse.
+    Only the directories that exist are masked (Docker would otherwise create
+    them inside the operator's checkout).
+    """
+    if harness not in API_KEY_HARNESSES:
+        return {}
+    root = mount_root.rstrip("/")
+    repo = get_settings().repo_root
+    relatives = list(RUNNER_SECRET_DIRS)
+    runs = get_settings().data_runs_dir
+    with contextlib.suppress(OSError):
+        for session in sorted(runs.glob("*/session")):
+            if session.parent.name != run_id and session.is_dir():
+                relatives.append(str(session.relative_to(repo)))
+    masks: dict[str, str] = {}
+    for relative in relatives:
+        target = f"{root}/{relative}"
+        if target in tmpfs or any(target.startswith(f"{m}/") for m in tmpfs):
+            continue
+        if (repo / relative).is_dir():
+            masks[target] = ""
+    return masks
 
 
 def runner_skill_masks(mount_root: str = "/app", harness: str = "") -> dict[str, str]:
@@ -375,7 +459,10 @@ def build_run_environment(harness: str = "") -> dict[str, str]:
     ``harness`` codex/gemini: every variable that would switch the CLI from its
     subscription login to per-token billing is dropped, and the CLI is pointed
     at its provider's session mount (:mod:`harness_lab_app.native_auth`).
-    Other harnesses get exactly the environment they always had.
+    ``harness`` antigravity_cli: every foreign credential is dropped and the
+    stored Gemini API key is the only secret added
+    (:mod:`harness_lab_app.api_key_auth`). Other harnesses get exactly the
+    environment they always had.
     """
     settings = get_settings()
     # IS_SANDBOX=1: the run container is an isolated sandbox; Claude Code
@@ -423,6 +510,15 @@ def build_run_environment(harness: str = "") -> dict[str, str]:
             session_root=f"{CONTAINER_AUTH_ROOT}/{harness}",
             home=CONTAINER_AGENT_HOME,
         )
+        env["HARNESS_LAB_AGENT_HOME"] = CONTAINER_AGENT_HOME
+    elif harness in API_KEY_HARNESSES:
+        # Every other provider's credential out, the stored Gemini API key in
+        # (the only secret this container gets), and an empty home inside the
+        # container's own filesystem, which dies with it: agy writes its
+        # conversations, logs and databases there (api_key_auth).
+        from harness_lab_app.api_key_auth import agy_env, read_key
+
+        env = agy_env(env, key=read_key(), home=CONTAINER_AGENT_HOME)
         env["HARNESS_LAB_AGENT_HOME"] = CONTAINER_AGENT_HOME
     return env
 
@@ -651,12 +747,17 @@ class _DockerHandle:
         self,
         container: Any,
         session: tuple[str, Path] | None = None,
+        secret: str = "",
     ):
         self.container = container
         self._stopped = False
         # (harness, staged session dir) for a codex/gemini run: the refreshed
         # credential goes back to the store once the container is done.
         self._session = session
+        # The API key an antigravity_cli container was given: never let it
+        # through to a RunEvent, a failure reason or a progress record, even if
+        # the agent printed it (api_key_auth).
+        self._secret = secret
 
     def iter_lines(self) -> Iterator[tuple[str, str]]:
         # `logs()` does not demux stdout/stderr; bench_run.py already merges
@@ -668,10 +769,15 @@ class _DockerHandle:
                 raw, buffer = buffer.split(b"\n", 1)
                 line = raw.decode("utf-8", errors="replace").rstrip("\r")
                 if line:
-                    yield ("info", line)
+                    yield ("info", self._redact(line))
         tail = buffer.decode("utf-8", errors="replace").strip()
         if tail:
-            yield ("info", tail)
+            yield ("info", self._redact(tail))
+
+    def _redact(self, line: str) -> str:
+        if self._secret and self._secret in line:
+            return line.replace(self._secret, "***REDACTED***")
+        return line
 
     def stop(self) -> None:
         self._stopped = True
@@ -744,6 +850,14 @@ class DockerRunExecutor:
         tmpfs, mask_files = runner_masks(
             governance_mask, hidden=hidden, harness=harness
         )
+        if not hardened:
+            tmpfs.update(runner_secret_dirs(harness, run_id, tmpfs))
+            known = {target for target, _kind in mask_files}
+            mask_files.extend(
+                mask
+                for mask in runner_secret_masks(harness, tmpfs)
+                if mask[0] not in known
+            )
         extra: dict[str, Any] = {}
         mounts: list[Any] = []
         if mask_files:
@@ -799,6 +913,11 @@ class DockerRunExecutor:
             labels={"harness-lab.run-id": run_id},
             **extra,
         )
+        secret = ""
+        if harness in API_KEY_HARNESSES and not hardened:
+            from harness_lab_app.api_key_auth import read_key
+
+            secret = read_key()
         return _DockerHandle(
             container,
             session=(
@@ -806,6 +925,7 @@ class DockerRunExecutor:
                 if session is not None
                 else None
             ),
+            secret=secret,
         )
 
     @staticmethod

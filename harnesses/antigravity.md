@@ -1,12 +1,22 @@
 # Harness: antigravity (human-driven)
 
-Run the benchmark task with **Google Antigravity** (the Gemini IDE or panel) to evaluate and
+Run the benchmark task with **Google Antigravity** (the IDE or panel) to evaluate and
 improve the Google-case rules: `.agents/rules/GEMINI.md` and the skills in `.agents/skills/`.
 
-Antigravity is **human-driven** — there is no headless CLI like opencode, so execution is not
-automated and there is no step-by-step agent log. This harness prepares the workspace, lets you
-drive Antigravity by hand, and then uses an LLM to propose prescriptive edits to the `.agents`
-rules based on how the model behaved.
+This flow is **human-driven**: execution is not automated and there is no step-by-step agent
+log. It prepares the workspace, lets you drive Antigravity by hand with your own sign-in on your
+own machine, and then uses an LLM to propose prescriptive edits to the `.agents` rules based on
+how the model behaved.
+
+> **Automated runs use a different harness.** Google now ships a headless Antigravity CLI
+> (`agy`), and the lab runs it as **`antigravity_cli`** on a **Gemini API key** under the same
+> cases, containers, scoring and comparison as codex/claude/opencode
+> ([ADR-0096](../docs/adr/0096-antigravity-cli-runs-on-a-gemini-api-key.md),
+> [runbook](../docs/runbook-claude-codex.md#antigravity-cli-on-a-gemini-api-key)). It never uses a
+> personal Google AI Pro/Ultra sign-in: Google's terms do not allow wrapping `agy` in a
+> third-party application under consumer plans. Keep this manual flow for what it is for:
+> driving the IDE yourself and improving the `.agents` rules. Both read the same
+> `.agents/rules/GEMINI.md` and `.agents/skills/`.
 
 This cycle is fully separate from the opencode flow (`bench_run.py`, `opencode.json`). It writes
 no `BENCH_CONTEXT.md`, launches no tool, and creates no gateway virtual key.

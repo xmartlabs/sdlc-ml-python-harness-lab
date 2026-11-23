@@ -219,6 +219,20 @@ export type ValidationRecord = {
     } | null;
     billing_mode?: string | null;
     detected_model?: string | null;
+    // antigravity_cli (ADR-0096): the Gemini API model the slug called, and
+    // what its list-price cost rests on. cost_source is then
+    // "api_list_price_estimate" (cost_usd filled) or "api_price_unknown".
+    api_model?: string | null;
+    thinking_level?: string | null;
+    cost_basis?: {
+      kind?: string;
+      model: string | null;
+      source: string;
+      as_of: string;
+      context: string;
+      tier?: string;
+    } | null;
+    cost_unknown_reason?: string | null;
   };
   effort: { steps?: number | null; interventions?: number | null };
   subjective: {
@@ -2038,8 +2052,21 @@ export type NativeConnectState = {
     | "ok"
     | "failed";
   /** Why a login failed: the provider refused it, the lab ran out of time,
-   * the network failed, or anything else. */
-  reason?: "rejected" | "timeout" | "connection" | "error";
+   * the network failed, or anything else. An API-key CLI's test (ADR-0096)
+   * adds why the provider refused the request: the key, quota, model, network
+   * or server, no key stored, or no CLI in the runner image. */
+  reason?:
+    | "rejected"
+    | "timeout"
+    | "connection"
+    | "error"
+    | "auth"
+    | "quota"
+    | "model"
+    | "network"
+    | "server"
+    | "no_key"
+    | "not_installed";
   /** The login attempt this record belongs to (one at a time). */
   attempt?: string;
   url?: string;
@@ -2056,12 +2083,52 @@ export type NativeConnectState = {
   answer?: string;
   model?: string;
   requested_model?: string;
+  /** API-key CLI test: the Gemini API model the requested slug resolves to. */
+  api_model?: string | null;
+  /** API-key CLI test: the CLI version the request ran on. */
+  cli_version?: string;
   seconds?: number;
   updated_at?: number;
 };
 
+/** Progress of the last save or removal of an API-key CLI's key (ADR-0096). */
+export type ApiKeyOpState = {
+  state: "idle" | "queued" | "saved" | "removed" | "failed";
+  error?: string;
+  /** The key's last characters ("…ab12"); never the key. */
+  key_hint?: string;
+  saved_at?: number;
+  updated_at?: number;
+};
+
+/** Whether an API key is stored for a CLI: its masked tail, never its value. */
+export type ApiKeyStatus = {
+  configured: boolean;
+  hint: string | null;
+  saved_at: number | null;
+};
+
+/** One model slug an API-key CLI offers (`agy models`). */
+export type AgyModel = {
+  id: string;
+  label: string;
+  /** The Gemini API model the slug calls; null when the lab has not verified it. */
+  api_model: string | null;
+  thinking_level: string | null;
+};
+
+/** Progress and result of refreshing an API-key CLI's model list. */
+export type AgyModelsState = {
+  state: "idle" | "queued" | "running" | "ok" | "failed";
+  models?: AgyModel[];
+  refreshed_at?: number;
+  cli_version?: string;
+  error?: string;
+  source?: string;
+};
+
 export type NativeCliStatus = {
-  harness: "opencode" | "claude" | "codex" | "gemini";
+  harness: "opencode" | "claude" | "codex" | "gemini" | "antigravity_cli";
   lane: "docker" | "host";
   installed: boolean | null;
   version: string;
@@ -2071,12 +2138,26 @@ export type NativeCliStatus = {
   session: "connected" | "missing" | "incomplete" | "unreadable" | "api_key";
   auth_kind?: string | null;
   billing_mode: "subscription" | "api" | "gateway" | "unknown";
-  auth?: "gateway" | "token" | "subscription" | "unknown";
+  auth?: "gateway" | "token" | "subscription" | "api_key" | "unknown";
   connectable?: boolean;
   unavailable?: string | null;
   testable?: boolean;
   login?: NativeConnectState;
   last_test?: NativeConnectState;
+  // --- API-key CLIs only (antigravity_cli, ADR-0096) ---
+  /** False on a lane that refuses runs (host mode): the card says why. */
+  lane_supported?: boolean;
+  /** Who serves the requests: "gemini_api". */
+  provider?: string;
+  /** The key can be set from the UI (an API-key CLI). */
+  configurable?: boolean;
+  api_key?: ApiKeyStatus;
+  key_op?: ApiKeyOpState;
+  models?: AgyModelsState;
+  /** HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1: runs on third-party code are allowed. */
+  untrusted_allowed?: boolean;
+  /** The slug the connection test uses unless another is picked. */
+  default_test_model?: string;
 };
 
 export type HealResult = {

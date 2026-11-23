@@ -495,6 +495,82 @@ def _wall_clock() -> float:
     return time.time()
 
 
+def _redact_api_key(run_id: str, key: str, since: float = 0.0) -> int:
+    """Scrub an antigravity_cli run's Gemini API key from everything it wrote.
+
+    Covers the run directory and the agent's workspace (what diffs, the judge,
+    the audit and an ad hoc patch read), and any other file in the lab tree
+    modified since the run started: the container mounts the whole lab
+    read-write, so an agent (or code it ran) can write the key anywhere in it,
+    where the next container of any harness would read it. A hit is logged,
+    recorded in ``metadata.json`` as ``secret_exposed``, and means the key
+    should be rotated. Exact-value matching only: an encoded or compressed copy
+    is not caught (documented in ADR-0096). Never raises.
+    """
+    from harness_lab_app.api_key_auth import redact_file, redact_tree
+
+    if not key:
+        return 0
+    settings = get_settings()
+    hits = 0
+    with contextlib.suppress(Exception):
+        hits += redact_tree(settings.data_runs_dir / run_id, key)
+        hits += redact_tree(settings.workspace_dir / run_id, key)
+        if since:
+            for path in _lab_files_changed_since(settings.repo_root, since):
+                hits += redact_file(path, key)
+    if hits:
+        logger.warning(
+            "antigravity_cli run %s: the Gemini API key appeared %d time(s) in "
+            "files and was redacted; rotate the key",
+            run_id,
+            hits,
+        )
+        metadata = settings.data_runs_dir / run_id / "metadata.json"
+        with contextlib.suppress(Exception):
+            data = json.loads(metadata.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data["secret_exposed"] = {
+                    "credential": "GEMINI_API_KEY",
+                    "hits": hits,
+                }
+                metadata.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return hits
+
+
+#: Trees skipped when looking for files a run changed outside its own folders:
+#: the run's own directories are scrubbed whole, and these are large, other
+#: runs' (scrubbed by their own pass) or not text.
+_SCRUB_SKIP = (
+    ".git",
+    "node_modules",
+    ".venv",
+    "data/runs",
+    "workspace",
+    "data/pnpm-store",
+)
+
+
+def _lab_files_changed_since(root: Path, since: float) -> list[Path]:
+    """Regular files under the lab root modified after ``since`` (bounded)."""
+    found: list[Path] = []
+    skip = {root / part for part in _SCRUB_SKIP}
+    for dirpath, dirnames, filenames in os.walk(root):
+        current = Path(dirpath)
+        dirnames[:] = [d for d in dirnames if current / d not in skip]
+        for name in filenames:
+            path = current / name
+            try:
+                if path.is_symlink() or path.stat().st_mtime < since:
+                    continue
+            except OSError:
+                continue
+            found.append(path)
+            if len(found) >= 5000:
+                return found
+    return found
+
+
 def _drain(handle: RunHandle, lines: Queue[tuple[str, str] | None]) -> None:
     try:
         for item in handle.iter_lines():
@@ -952,10 +1028,19 @@ def _execute_pending_run(
         session.expire_all()
         return
     run = claimed
+    # The key an antigravity_cli run is given, read once at its start: the
+    # scrub after it must look for *this* key even if the operator rotates or
+    # removes it mid-run, and it must run whatever way the run ends.
+    agy_key = ""
+    started_at = time.time()
     try:
         # Rebuild the command at execution time; the stored Run.command is
         # only a preview and may predate config/adapter changes.
         config_payload = _config_payload(session, run)
+        if config_payload.harness == "antigravity_cli":
+            from harness_lab_app.api_key_auth import read_key
+
+            agy_key = read_key()
         command = BenchRunAdapter().build_command(run_id, config_payload)
         run.command = command
         session.add(run)
@@ -1067,6 +1152,12 @@ def _execute_pending_run(
                         deadline,
                     )
         exit_code = _wait_bounded(handle, run_timeout + 60)
+        if agy_key:
+            # Before anything reads, grades, indexes or exports the run: code
+            # the agent ran could read the Gemini API key (api_key_auth), and
+            # a file it wrote may hold it even though every line the runner
+            # streamed was already redacted.
+            _redact_api_key(run_id, agy_key, since=started_at)
         if outcome.stop_reason == "cancelled":
             service.mark_cancelled(run_id, exit_code)
             if _cut_measures_the_agent(outcome.stop_reason):
@@ -1122,6 +1213,11 @@ def _execute_pending_run(
         _finalize_adhoc_run(session, run_id)
     except Exception as exc:
         service.mark_finished(run_id, -1, f"Executor error: {exc!r}")
+    finally:
+        if agy_key:
+            # Again on every way out (an executor error skips the pass above);
+            # idempotent: a scrubbed file has nothing left to match.
+            _redact_api_key(run_id, agy_key, since=started_at)
 
 
 def _phase_supervision(
@@ -3238,6 +3334,23 @@ def test_native_cli(harness: str, model: str = "") -> dict[str, Any]:
     """
     from harness_lab_app import native_connect
 
+    agy = harness == "antigravity_cli"
+    if agy:
+        from harness_lab_app.api_key_auth import key_status
+        from harness_lab_app.native_models import AGY_TEST_MODEL
+
+        model = model or AGY_TEST_MODEL
+        if not key_status()["configured"]:
+            return native_connect.write_state(
+                harness,
+                "test",
+                {
+                    "state": "failed",
+                    "reason": "no_key",
+                    "requested_model": model,
+                    "error": "No Gemini API key is configured.",
+                },
+            )
     native_connect.write_state(harness, "test", {"state": "running", "model": model})
     started = time.monotonic()
     try:
@@ -3247,15 +3360,155 @@ def test_native_cli(harness: str, model: str = "") -> dict[str, Any]:
         output = [line for _level, line in handle.iter_lines()]
         exit_code = handle.wait()
     except Exception as exc:
-        return native_connect.write_state(
-            harness,
-            "test",
-            {"state": "failed", "error": f"{type(exc).__name__}: {exc}"},
-        )
-    summary = native_connect.summarize_test(harness, "\n".join(output), exit_code)
+        record: dict[str, Any] = {
+            "state": "failed",
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+            "requested_model": model,
+        }
+        if agy:
+            record["reason"] = (
+                "not_installed" if "ImageNotFound" in type(exc).__name__ else "error"
+            )
+        return native_connect.write_state(harness, "test", record)
+    if agy:
+        summary = native_connect.summarize_agy_test("\n".join(output), exit_code, model)
+        summary["cli_version"] = _agy_image_version()
+        if exit_code == 127 or "agy: not found" in "\n".join(output[-5:]):
+            summary.update(state="failed", reason="not_installed")
+    else:
+        summary = native_connect.summarize_test(harness, "\n".join(output), exit_code)
     summary["seconds"] = round(time.monotonic() - started, 1)
     summary["requested_model"] = model
     return native_connect.write_state(harness, "test", summary)
+
+
+def _agy_image_version() -> str:
+    """The agy version the runner image is labelled with, or ``""``."""
+    from harness_lab_app.native_models import CLI_VERSION_LABELS
+
+    with contextlib.suppress(Exception):
+        import docker  # local import: only the worker needs the socket
+
+        image = docker.from_env().images.get(get_settings().runner_image)
+        labels = image.labels or {}
+        return str(labels.get(CLI_VERSION_LABELS["antigravity_cli"], ""))
+    return ""
+
+
+@celery_app.task(
+    name="harness_lab_app.tasks.save_cli_api_key", acks_late=False, ignore_result=True
+)
+def save_cli_api_key(harness: str, drop: str = "") -> dict[str, Any]:
+    """Move an API-key harness's key from the API's drop into the store.
+
+    Worker-only: the API mounts the store read-only. The task's message holds
+    only the drop file's name (:func:`api_key_auth.write_drop`), so no worker
+    log, task event or "unregistered task" dump can show the key.
+    """
+    from harness_lab_app import native_connect
+    from harness_lab_app.api_key_auth import HARNESS, save_key, take_drop
+
+    if harness != HARNESS:
+        return native_connect.write_state(
+            harness, "key", {"state": "failed", "error": "not an API-key harness"}
+        )
+    api_key = take_drop(drop, native_connect.state_dir())
+    if not api_key:
+        return native_connect.write_state(
+            harness,
+            "key",
+            {
+                "state": "failed",
+                "error": "The key did not reach the worker (expired or missing); "
+                "save it again.",
+            },
+        )
+    try:
+        status = save_key(api_key)
+    except (ValueError, OSError) as exc:
+        return native_connect.write_state(
+            harness, "key", {"state": "failed", "error": str(exc)[:300]}
+        )
+    # A new key invalidates what the old one proved and what it listed.
+    native_connect.write_state(harness, "test", {"state": "idle"})
+    return native_connect.write_state(
+        harness,
+        "key",
+        {"state": "saved", "key_hint": status["hint"], "saved_at": status["saved_at"]},
+    )
+
+
+@celery_app.task(name="harness_lab_app.tasks.remove_cli_api_key", acks_late=False)
+def remove_cli_api_key(harness: str) -> dict[str, Any]:
+    """Forget an API-key harness's key, its last test and its model list."""
+    from harness_lab_app import native_connect
+    from harness_lab_app.api_key_auth import HARNESS, remove_key
+
+    if harness == HARNESS:
+        remove_key()
+    native_connect.write_state(harness, "test", {"state": "idle"})
+    native_connect.write_state(harness, "models", {"state": "idle"})
+    return native_connect.write_state(harness, "key", {"state": "removed"})
+
+
+@celery_app.task(name="harness_lab_app.tasks.refresh_cli_models", acks_late=False)
+def refresh_cli_models(harness: str) -> dict[str, Any]:
+    """``agy models`` in a run's exact container, env and key.
+
+    agy 1.5.14 does not consult the API for this listing, so it is the slugs
+    this CLI version offers the Gemini API provider, not a proof that the key
+    is entitled to each one: the connection test is that proof.
+    """
+    from harness_lab_app import native_connect
+    from harness_lab_app.api_key_auth import HARNESS, key_status, settings_json
+    from harness_lab_app.native_models import parse_agy_models
+
+    if harness != HARNESS:
+        return native_connect.write_state(
+            harness, "models", {"state": "failed", "error": "not supported"}
+        )
+    if not key_status()["configured"]:
+        return native_connect.write_state(
+            harness,
+            "models",
+            {"state": "failed", "error": "No Gemini API key is configured."},
+        )
+    native_connect.write_state(harness, "models", {"state": "running"})
+    try:
+        handle = _run_cli_container(
+            harness, "models", ["agy", "--settings", settings_json(), "models"]
+        )
+        output = [line for _level, line in handle.iter_lines()]
+        exit_code = handle.wait()
+    except Exception as exc:
+        return native_connect.write_state(
+            harness,
+            "models",
+            {"state": "failed", "error": f"{type(exc).__name__}: {exc}"[:400]},
+        )
+    rows = parse_agy_models("\n".join(output))
+    if exit_code != 0 or not rows:
+        return native_connect.write_state(
+            harness,
+            "models",
+            {
+                "state": "failed",
+                "error": ("\n".join(output[-4:]) or f"agy models exited {exit_code}")[
+                    :400
+                ],
+            },
+        )
+    return native_connect.write_state(
+        harness,
+        "models",
+        {
+            "state": "ok",
+            "models": rows,
+            "refreshed_at": time.time(),
+            "cli_version": _agy_image_version(),
+            "source": "agy models (Gemini API provider)",
+        },
+    )
 
 
 @celery_app.task(name="harness_lab_app.tasks.disconnect_native_cli", acks_late=False)

@@ -1,0 +1,10 @@
+{"event":"init","conversation_id":"65f3618b-ec40-4552-a97d-f2aa0d88193f","init":{"cwd":"/work","tools":["grep_search","invoke_subagent","list_dir","replace_file_content","run_command","search_web","view_file","write_to_file"],"permission_mode":"always-proceed"}}
+{"event":"step_update","step_update":{"conversation_id":"65f3618b-ec40-4552-a97d-f2aa0d88193f","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"65f3618b-ec40-4552-a97d-f2aa0d88193f","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"P1. "}}
+{"event":"step_update","step_update":{"conversation_id":"65f3618b-ec40-4552-a97d-f2aa0d88193f","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"P2. "}}
+{"event":"step_update","step_update":{"conversation_id":"65f3618b-ec40-4552-a97d-f2aa0d88193f","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"P3. "}}
+{"event":"step_update","step_update":{"conversation_id":"65f3618b-ec40-4552-a97d-f2aa0d88193f","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"P4. "}}
+{"event":"step_update","step_update":{"conversation_id":"65f3618b-ec40-4552-a97d-f2aa0d88193f","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"P5. "}}
+{"event":"step_update","step_update":{"conversation_id":"65f3618b-ec40-4552-a97d-f2aa0d88193f","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"END."}}
+{"event":"step_update","step_update":{"conversation_id":"65f3618b-ec40-4552-a97d-f2aa0d88193f","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\n","duration_seconds":7.212707295,"usage":{"input_tokens":100,"output_tokens":10,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":110}}}
+{"event":"result","result":{"conversation_id":"65f3618b-ec40-4552-a97d-f2aa0d88193f","status":"SUCCESS","response":"P1. P2. P3. P4. P5. END.\n","duration_seconds":7.229761337,"num_turns":1,"usage":{"input_tokens":100,"output_tokens":10,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":110}}}

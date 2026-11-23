@@ -380,7 +380,34 @@ def clear_login(harness: str, root: Path | None = None) -> dict[str, Any]:
 
 
 def test_command(harness: str, model: str = "") -> list[str]:
-    """One minimal headless request, with the flags a run uses in the runner."""
+    """One minimal headless request, with the flags a run uses in the runner.
+
+    antigravity_cli: the run's own builder flags (allow list, accept-edits,
+    no slash commands) with the prompt as ``-p``: it is one short line, so
+    argv carries it and no stdin is needed. The model is always explicit
+    (:data:`native_models.AGY_TEST_MODEL` by default), so the answer names
+    the slug that served and the Gemini API model it maps to.
+    """
+    if harness == "antigravity_cli":
+        from harness_lab_app.api_key_auth import settings_json
+        from harness_lab_app.native_models import AGY_TEST_MODEL
+
+        return [
+            "agy",
+            "--settings",
+            settings_json(),
+            "--mode",
+            "accept-edits",
+            "--disable-slash-commands",
+            "--model",
+            model or AGY_TEST_MODEL,
+            "--print-timeout",
+            "90s",
+            "-p",
+            TEST_PROMPT,
+            "--output-format",
+            "stream-json",
+        ]
     if harness == "codex":
         cmd = [
             "codex",
@@ -398,6 +425,119 @@ def test_command(harness: str, model: str = "") -> list[str]:
             cmd += ["-m", model]
         return [*cmd, "-p", TEST_PROMPT]
     raise ValueError(f"no connection test for {harness!r}")
+
+
+#: How the Gemini API's refusal reads in agy's ``result.error`` / ``AGY_ERROR``
+#: (agy 1.5.14), and what the card tells the operator to do about it.
+_AGY_REASONS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "no_key",
+        re.compile(r"GEMINI_API_KEY environment variable is not set"),
+    ),
+    (
+        "auth",
+        re.compile(
+            r"API_KEY_INVALID|API key not valid|reported as leaked|PERMISSION_DENIED"
+            r"|UNAUTHENTICATED|Error 40[13]\b"
+        ),
+    ),
+    ("quota", re.compile(r"RESOURCE_EXHAUSTED|Error 429\b|[Qq]uota exceeded|billing")),
+    (
+        "model",
+        re.compile(
+            r"is not recognized as a known model|is not found for API version"
+            r"|NOT_FOUND|Error 404\b|not supported for"
+        ),
+    ),
+    ("timeout", re.compile(r"DEADLINE_EXCEEDED|print timeout")),
+    (
+        "network",
+        re.compile(
+            r"network issue connecting|error sending request|dial tcp|no such host"
+            r"|connection refused|i/o timeout|TLS handshake"
+        ),
+    ),
+    ("server", re.compile(r"Error 5\d\d\b|INTERNAL|UNAVAILABLE")),
+)
+
+
+def agy_failure_reason(text: str) -> str:
+    """One of ``auth|quota|model|timeout|network|server|no_key|error``."""
+    for reason, pattern in _AGY_REASONS:
+        if pattern.search(text):
+            return reason
+    return "error"
+
+
+def summarize_agy_test(output: str, exit_code: int, model: str) -> dict[str, Any]:
+    """An agy connection test: ok only when the model really answered.
+
+    Reads the stream-json ``init``/``step_update``/``result`` events; the
+    provider's refusal is kept in its own words, with a ``reason`` the card
+    turns into the fix. ``api_model`` is the Gemini API model the slug calls
+    (no event names it), from the lab's verified map.
+    """
+    from harness_lab_app.native_models import agy_api_model
+
+    clean = _ANSI.sub("", output)
+    answer = ""
+    detected = ""
+    error = ""
+    status = ""
+    usage: dict[str, Any] = {}
+    stray: list[str] = []
+    for line in clean.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if not line.startswith("{"):
+            stray.append(line)
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        kind = event.get("event")
+        if kind == "init":
+            detected = str((event.get("init") or {}).get("model") or "") or detected
+        elif kind == "result":
+            body = event.get("result") or {}
+            status = str(body.get("status") or "")
+            answer = str(body.get("response") or "")
+            error = str(body.get("error") or "")
+            raw_usage = body.get("usage")
+            usage = raw_usage if isinstance(raw_usage, dict) else {}
+    requested = model or detected
+    api_model, thinking = agy_api_model(requested)
+    ok = exit_code == 0 and status == "SUCCESS" and bool(answer.strip())
+    summary: dict[str, Any] = {
+        "state": "ok" if ok else "failed",
+        "answer": answer.strip()[:200],
+        "model": detected or requested,
+        "api_model": api_model,
+        "thinking_level": thinking,
+        "usage": usage or None,
+    }
+    if not ok:
+        words = (
+            error
+            or next(
+                (
+                    line
+                    for line in reversed(stray)
+                    if line.startswith(("error:", "Error"))
+                ),
+                "",
+            )
+            or "\n".join(stray[-3:])
+        )
+        if not words and status == "SUCCESS":
+            words = "The model returned an empty answer."
+        summary["reason"] = agy_failure_reason(f"{error}\n" + "\n".join(stray))
+        summary["error"] = (words or f"agy exited {exit_code}")[:500]
+    else:
+        summary["error"] = ""
+    return summary
 
 
 def summarize_test(harness: str, output: str, exit_code: int) -> dict[str, Any]:

@@ -14,6 +14,7 @@ import { RunProgressPanel } from "../components/RunProgressPanel";
 import { SandboxPanel } from "../components/SandboxPanel";
 import { StateBadge } from "../components/StateBadge";
 import { formatDuration, formatRunDate } from "../dates";
+import { harnessLabel } from "../harnesses";
 import { defineMessages, useMessages } from "../i18n";
 import type {
   AttributionRecord,
@@ -57,10 +58,10 @@ const CONTINUE_STEP_OPTIONS = [1, 3, 6, 10];
 
 // Harnesses whose CLI emitted final summaries, not per-tool logs, in older
 // runs — so file/tool/governance attribution can't be parsed from them. claude,
-// codex and gemini runs now capture JSON event streams (first-class tool calls,
-// ADR-0094), so they only fall back to the summary-only note when their
-// attribution carries no signals (runs from before the streams).
-const SUMMARY_ONLY_HARNESSES = new Set(["claude", "codex", "gemini"]);
+// codex, gemini and antigravity_cli runs now capture JSON event streams
+// (first-class tool calls, ADR-0094, ADR-0096), so they only fall back to the
+// summary-only note when their attribution carries no signals.
+const SUMMARY_ONLY_HARNESSES = new Set(["claude", "codex", "gemini", "antigravity_cli"]);
 
 const MESSAGES = defineMessages({
   en: {
@@ -183,6 +184,12 @@ const MESSAGES = defineMessages({
       subscriptionCost: "(subscription quota — no per-token price)",
       estimatedCost: (value: number, model: string, asOf: string) =>
         `≈ ${value.toFixed(2)} estimated at the API list price of ${model} (short context, ${asOf}); a subscription run has no real bill.`,
+      apiListPriceEstimate: (model: string, asOf: string) =>
+        `(estimated at the Gemini API list price${model ? ` of ${model}` : ""}${asOf ? `, ${asOf}` : ""} — agy reports tokens, not a bill)`,
+      // The backend says why when it knows: no tokens reported, a slug outside
+      // the verified catalog, or a model with no published price.
+      apiPriceUnknown: (reason: string) =>
+        reason ? `(cost unknown: ${reason})` : "(no published price for this model)",
       steps: "Steps",
       interventions: "Interventions",
       timeMin: "Time (min)",
@@ -479,6 +486,12 @@ const MESSAGES = defineMessages({
       subscriptionCost: "(cuota de suscripción — sin precio por token)",
       estimatedCost: (value: number, model: string, asOf: string) =>
         `≈ ${value.toFixed(2)} estimado al precio de lista de la API de ${model} (contexto corto, ${asOf}); una corrida con suscripción no tiene cobro real.`,
+      apiListPriceEstimate: (model: string, asOf: string) =>
+        `(estimado al precio de lista de la API de Gemini${model ? ` de ${model}` : ""}${asOf ? `, ${asOf}` : ""} — agy informa tokens, no una factura)`,
+      // The backend says why when it knows: no tokens reported, a slug outside
+      // the verified catalog, or a model with no published price.
+      apiPriceUnknown: (reason: string) =>
+        reason ? `(costo desconocido: ${reason})` : "(no hay precio publicado para este modelo)",
       steps: "Pasos",
       interventions: "Intervenciones",
       timeMin: "Tiempo (min)",
@@ -712,7 +725,7 @@ function RunConditionStrip({
         </div>
         <div>
           <span>{m.condition.harness}</span>
-          <strong>{context.harness}</strong>
+          <strong>{harnessLabel(context.harness)}</strong>
         </div>
         <div>
           <span>{m.condition.governance}</span>
@@ -1616,7 +1629,25 @@ export function RunDetail({
               <div>
                 <span>{m.validation.costUsd}</span>
                 <strong>
-                  {validation.cost?.cost_usd ?? "—"}
+                  {validation.cost?.cost_usd != null &&
+                  validation.cost.cost_source === "api_list_price_estimate"
+                    ? `≈ ${validation.cost.cost_usd}`
+                    : (validation.cost?.cost_usd ?? "—")}
+                  {validation.cost?.cost_source === "api_list_price_estimate" ? (
+                    <span className="muted small">
+                      {" "}
+                      {m.validation.apiListPriceEstimate(
+                        validation.cost.cost_basis?.model ?? validation.cost.api_model ?? "",
+                        validation.cost.cost_basis?.as_of ?? ""
+                      )}
+                    </span>
+                  ) : null}
+                  {validation.cost?.cost_source === "api_price_unknown" ? (
+                    <span className="muted small">
+                      {" "}
+                      {m.validation.apiPriceUnknown(validation.cost.cost_unknown_reason ?? "")}
+                    </span>
+                  ) : null}
                   {validation.cost?.cost_usd == null &&
                   validation.cost?.cost_source === "subscription_quota" ? (
                     <span className="muted small"> {m.validation.subscriptionCost}</span>

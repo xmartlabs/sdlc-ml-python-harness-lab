@@ -3596,6 +3596,46 @@ to be closed by the worker. Give each attempt its own container name and staging
 dir: a fixed `run_id` lets a superseded attempt's cleanup delete the next one's
 session copy.
 
+## 2026-11-22 — A CLI with no flag to show its model can be read through a mock of its API (ADR-0096)
+
+Wiring `agy` (Antigravity CLI 1.5.14) without a real key: the docs gave the
+event names, but not what the fields mean, which tools it really calls, which
+files it loads, or which API model a slug calls. All of that came from pointing
+the official binary at a 30-line local mock of the Gemini API through its
+documented base-URL override (`GOOGLE_GEMINI_BASE_URL`) and reading the
+requests it sent. That showed:
+
+- **Token semantics:** with known `usageMetadata` in the mock, `input_tokens`
+  already excluded the cache and `output_tokens` included thinking.
+- **Slug → model:** taken from the request path (`/v1beta/models/<id>:…`);
+  no event names it.
+- **What was loaded:** the system prompt it sent showed the skills
+  (`.agents/skills` only, plus builtins under `$HOME`) and the rule files
+  (`AGENTS.md`, `GEMINI.md`, `.agents/rules/`).
+- **Real tool names on the wire:** `read_file`/`write_file`/`edit_file`.
+  `init.tools` lists different aliases.
+- **Failure shapes:** a mock that answers 403/404/429/500 with Google's error
+  body.
+
+**Traps found this way, none of them in the docs:**
+
+1. In headless mode a soft-denied tool **ends the turn with exit 0, SUCCESS
+   and no answer**, so a narrow allow list silently cuts an arm short and gets
+   scored as the model's work.
+2. `run_command` children inherit `GEMINI_API_KEY`, with no scrub option.
+3. `--sandbox` cannot start inside a container.
+4. The default model with a key is `gemini-3.1-pro-preview`.
+5. `agy models` never calls the API.
+
+**How to apply:** for any new agent CLI, run the official binary in a
+throwaway `python:3.11-slim` container, first with no credential, then with a
+fake key against a local mock of its provider API. Keep the captures as test
+fixtures (`tests/harness_lab_app/fixtures/agy/`). Probe the permission model
+in headless mode explicitly: "denied" may not mean "error". Check whether
+agent-run commands can read the credential (`${#VAR}` in a scripted
+`run_command`). Also check `/app/.env`, which every runner container can read
+through the repository bind; for an API-key harness it is now masked.
+
 <!-- Add new learnings above this line -->
 
 ## 2026-11-21 — Git run from a subfolder of another repo, and an agent's .git, both lie or bite (ADR-0095)

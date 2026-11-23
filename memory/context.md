@@ -9,6 +9,14 @@ frozen task + repo/base commit + harness strategy + validation + score + cost.
 
 ## Active focus
 
+**Antigravity CLI as `antigravity_cli` (ADR-0096, uncommitted on `main`,
+2026-11-22).** `agy` 1.5.14 pinned in `Dockerfile.runner` (sha512), Docker only,
+Gemini API key in `<auth>/antigravity_cli/` (UI: System → Agent CLIs). Key
+reaches agent-run code (no scrub in agy): third-party code refused unless
+`HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1`, redaction + masks. Cost = list price on
+the run's date in `cost_usd`. Pending: authenticated run with a real key;
+rebuild `harness-lab-runner:latest`.
+
 **Ad hoc tasks (ADR-0095, branch `feature/adhoc-local-tasks`, 2026-11-21).** Pick a
 folder under `HARNESS_LAB_LOCAL_SOURCES_DIR`, free prompt, any harness/model; runs
 reuse the pipeline (synthetic `Case(type=adhoc)` + `TargetRepository`, `native`,

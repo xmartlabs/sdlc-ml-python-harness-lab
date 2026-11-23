@@ -213,7 +213,13 @@ def enqueue_native_cli(task: str, harness: str, **kwargs: str) -> None:
     A device login waits for a person for up to fifteen minutes; on a run lane
     it would hold every run behind it. Raises if the broker is unreachable.
     """
-    if task not in {"connect_native_cli", "test_native_cli", "disconnect_native_cli"}:
+    if task not in {
+        "connect_native_cli",
+        "test_native_cli",
+        "disconnect_native_cli",
+        "remove_cli_api_key",
+        "refresh_cli_models",
+    }:
         raise ValueError(task)
     celery_app.send_task(
         f"harness_lab_app.tasks.{task}",
@@ -221,6 +227,23 @@ def enqueue_native_cli(task: str, harness: str, **kwargs: str) -> None:
         kwargs=kwargs,
         queue=INTERACTIVE_QUEUE,
         retry=False,
+    )
+
+
+def enqueue_save_api_key(harness: str, drop: str) -> None:
+    """Ask the worker, which alone may write the store, to collect a key.
+
+    The message carries only the name of the 0600 drop file the API wrote
+    (:func:`harness_lab_app.api_key_auth.write_drop`), never the key: a worker
+    that does not know the task logs the whole message body.
+    """
+    celery_app.send_task(
+        "harness_lab_app.tasks.save_cli_api_key",
+        args=[harness],
+        kwargs={"drop": drop},
+        queue=INTERACTIVE_QUEUE,
+        retry=False,
+        ignore_result=True,
     )
 
 

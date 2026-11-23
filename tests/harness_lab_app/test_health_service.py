@@ -77,6 +77,7 @@ def test_every_check_reports_even_with_nothing_running(isolated):
         "docker",
         "codex_cli",
         "gemini_cli",
+        "antigravity_cli",
         "skills_drift",
         "git_tree",
         "staging",

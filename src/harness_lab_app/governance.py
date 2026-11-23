@@ -36,6 +36,9 @@ HARNESS_RULES_FILE: dict[str, str] = {
     "codex": "AGENTS.md",
     "antigravity": ".agents/rules/GEMINI.md",
     "gemini": "GEMINI.md",
+    # agy reads AGENTS.md, GEMINI.md *and* `.agents/rules/*.md` (verified on
+    # 1.5.14); the Antigravity rule is the one written for it.
+    "antigravity_cli": ".agents/rules/GEMINI.md",
     "local": "LOCAL_AGENT.md",
 }
 

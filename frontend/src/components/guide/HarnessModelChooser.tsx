@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { API_KEY_HARNESSES, harnessLabel } from "../../harnesses";
 import { defineMessages, useMessages } from "../../i18n";
 import type { ModelOption, NativeCliStatus, NativeModelRecord } from "../../types";
 import { InfoTooltip } from "../InfoTooltip";
@@ -16,8 +17,9 @@ import type { Harness } from "./guideData";
  * back. Here the harness is a tab that says whether it can run right now, and
  * the cards under it are only what that harness can drive: opencode the
  * gateway and local hosts (by where they run, then who makes them), claude,
- * codex and gemini their own CLI's models. A model the run would be refused
- * for is shown, disabled, with the reason — never silently missing.
+ * codex, gemini and antigravity_cli their own CLI's models. A model the run
+ * would be refused for is shown, disabled, with the reason — never silently
+ * missing.
  */
 
 type Status = { tone: "ok" | "warn" | "off"; text: string; detail?: string };
@@ -41,7 +43,9 @@ const MESSAGES = defineMessages({
         "Open-source agent. Drives any model behind the lab's AI gateway (cloud cards) or straight on a local host (LM Studio, Ollama).",
       claude: "Claude Code, the CLI, signed in with the lab's Claude token. Its own models.",
       codex: "OpenAI Codex CLI on your ChatGPT plan (make auth-codex). Its own models.",
-      gemini: "Google Gemini CLI on your Google sign-in (make auth-gemini). Its own models."
+      gemini: "Google Gemini CLI on your Google sign-in (make auth-gemini). Its own models.",
+      antigravity_cli:
+        "Google Antigravity CLI on a Gemini API key (per-token API billing). Its own models."
     } as Record<Harness, string>,
     ready: "ready",
     gateway: "gateway",
@@ -66,6 +70,11 @@ const MESSAGES = defineMessages({
     unreachable: "host not serving it",
     signInBody: (harness: string, command: string) =>
       `${harness} runs on your own subscription and is not signed in yet. Sign in once (${command}, or the button in System → Agent CLIs); every run reuses the session.`,
+    configureKey: "configure a key",
+    configureKeyBody: (harness: string) =>
+      `${harness} runs on a Gemini API key and none is stored yet. Configure a Gemini API key in System → Agent CLIs; every run reuses it.`,
+    hostLaneBody: (harness: string) =>
+      `${harness} runs are Docker-only: the runner container is the sandbox. Switch to the Docker backend.`,
     openClis: "Open Agent CLIs",
     unavailableBody: (reason: string) => `${reason}`,
     noModels: "No models from this source right now.",
@@ -84,7 +93,9 @@ const MESSAGES = defineMessages({
         "Agente open source. Maneja cualquier modelo detrás del AI gateway del lab (cards en la nube) o directo en un host local (LM Studio, Ollama).",
       claude: "Claude Code, la CLI, con el token de Claude del lab. Sus propios modelos.",
       codex: "La CLI de OpenAI Codex con tu plan de ChatGPT (make auth-codex). Sus propios modelos.",
-      gemini: "La CLI de Google Gemini con tu cuenta de Google (make auth-gemini). Sus propios modelos."
+      gemini: "La CLI de Google Gemini con tu cuenta de Google (make auth-gemini). Sus propios modelos.",
+      antigravity_cli:
+        "La CLI de Google Antigravity con una API key de Gemini (facturación de la API por token). Sus propios modelos."
     } as Record<Harness, string>,
     ready: "lista",
     gateway: "gateway",
@@ -109,6 +120,11 @@ const MESSAGES = defineMessages({
     unreachable: "el host no lo sirve",
     signInBody: (harness: string, command: string) =>
       `${harness} corre con tu propia suscripción y todavía no inició sesión. Iniciala una vez (${command}, o el botón en Sistema → CLIs de agentes); todas las corridas reusan la sesión.`,
+    configureKey: "falta configurar la clave",
+    configureKeyBody: (harness: string) =>
+      `${harness} corre con una API key de Gemini y todavía no hay ninguna guardada. Configurá una API key de Gemini en Sistema → CLIs de agentes; todas las corridas la reusan.`,
+    hostLaneBody: (harness: string) =>
+      `Las corridas de ${harness} son solo en Docker: el contenedor runner es el sandbox. Cambiá al backend Docker.`,
     openClis: "Abrir CLIs de agentes",
     unavailableBody: (reason: string) => `${reason}`,
     noModels: "No hay modelos de esta fuente ahora.",
@@ -140,6 +156,13 @@ function cliStatus(
   if (cli.installed === false) return { tone: "off", text: m.notInstalled };
   if (cli.unavailable) return { tone: "warn", text: m.unavailable, detail: cli.unavailable };
   if (cli.billing_mode === "gateway") return { tone: "ok", text: m.gateway };
+  // An API-key CLI (ADR-0096): no key, or a lane that refuses its runs.
+  if (cli.auth === "api_key") {
+    if (cli.lane_supported === false) {
+      return { tone: "off", text: m.unavailable, detail: m.hostLaneBody(harnessLabel(cli.harness)) };
+    }
+    if (cli.session !== "connected") return { tone: "off", text: m.configureKey };
+  }
   if (cli.session !== "connected") return { tone: "off", text: m.signIn };
   return { tone: "ok", text: m.ready };
 }
@@ -253,6 +276,13 @@ export function HarnessModelChooser({
 
   const blocked = status.tone === "off";
   const login = harness === "codex" ? "make auth-codex" : "make auth-gemini";
+  // Why a blocked harness cannot run: no login, no key, or the reason itself.
+  const blockedBody =
+    status.text === m.configureKey || (status.text === m.signIn && API_KEY_HARNESSES.has(harness))
+      ? m.configureKeyBody(harnessLabel(harness))
+      : status.text === m.signIn
+        ? m.signInBody(harness, login)
+        : (status.detail ?? status.text);
 
   return (
     <div className="hm-chooser">
@@ -269,7 +299,7 @@ export function HarnessModelChooser({
               title={m.harnessTips[name]}
               type="button"
             >
-              <strong>{name}</strong>
+              <strong>{harnessLabel(name)}</strong>
               <span className={`hm-dot hm-dot--${s.tone}`}>{s.text}</span>
             </button>
           );
@@ -281,9 +311,7 @@ export function HarnessModelChooser({
 
       {blocked ? (
         <div className="callout callout--warning">
-          <p>
-            {status.text === m.signIn ? m.signInBody(harness, login) : status.text}
-          </p>
+          <p>{blockedBody}</p>
           <Link to="/system/agent-clis">{m.openClis}</Link>
         </div>
       ) : (
@@ -391,5 +419,5 @@ export function armLabel(value: string, models: ModelOption[], native: Record<st
   }
   const row = (native[arm.harness] ?? []).find((model) => model.id === arm.model);
   const name = row?.label.replace(/ \(previous\)$/, "") ?? arm.model;
-  return `${arm.harness} · ${name}${arm.effort ? ` · ${arm.effort}` : ""}`;
+  return `${harnessLabel(arm.harness)} · ${name}${arm.effort ? ` · ${arm.effort}` : ""}`;
 }

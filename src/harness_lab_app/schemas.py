@@ -1,7 +1,7 @@
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 
 from harness_lab_app.models import (
     CaseProvenance,
@@ -196,7 +196,9 @@ class SkillTrialCreate(BaseModel):
     repetitions: int = Field(default=3, ge=1, le=10)
     # Pinned in both arms, so launching from the shared form cannot swap in its
     # own default model or harness (ADR-0090).
-    harness: str = Field(default="claude", pattern="^(claude|opencode|codex|gemini)$")
+    harness: str = Field(
+        default="claude", pattern="^(claude|opencode|codex|gemini|antigravity_cli)$"
+    )
     # Reasoning effort (ADR-0081), pinned in every arm like the model. Empty
     # keeps the CLI default, so an older request builds exactly what it did.
     effort: str = Field(default="", pattern="^(|low|medium|high|xhigh|max)$")
@@ -222,7 +224,9 @@ class HarnessLevelsCreate(BaseModel):
     model: str = Field(min_length=1)
     levels: list[str] = Field(min_length=2)
     repetitions: int = Field(default=1, ge=1, le=10)
-    harness: str = Field(default="claude", pattern="^(claude|opencode|codex|gemini)$")
+    harness: str = Field(
+        default="claude", pattern="^(claude|opencode|codex|gemini|antigravity_cli)$"
+    )
     # Reasoning effort (ADR-0081), pinned in every arm like the model. Empty
     # keeps the CLI default, so an older request builds exactly what it did.
     effort: str = Field(default="", pattern="^(|low|medium|high|xhigh|max)$")
@@ -242,7 +246,9 @@ class SkillRefineCreate(BaseModel):
     case_ids: list[str] = Field(min_length=1)
     base: str = Field(default="full", pattern="^(minimal|full)$")
     repetitions: int = Field(default=3, ge=1, le=10)
-    harness: str = Field(default="claude", pattern="^(claude|opencode|codex|gemini)$")
+    harness: str = Field(
+        default="claude", pattern="^(claude|opencode|codex|gemini|antigravity_cli)$"
+    )
     # Reasoning effort (ADR-0081), pinned in every arm like the model. Empty
     # keeps the CLI default, so an older request builds exactly what it did.
     effort: str = Field(default="", pattern="^(|low|medium|high|xhigh|max)$")
@@ -727,3 +733,13 @@ class CaseDraftResponse(BaseModel):
     # here rather than after the runs have spent their budget.
     dropped_commands: list[DroppedCommand] = Field(default_factory=list)
     attempts: int = 1
+
+
+class CliApiKeyUpdate(BaseModel):
+    """A Gemini API key for an API-key harness (antigravity_cli).
+
+    ``repr=False`` keeps the value out of any repr, and the field is a
+    ``SecretStr`` so a validation error or a log line can never print it.
+    """
+
+    api_key: SecretStr = Field(repr=False)

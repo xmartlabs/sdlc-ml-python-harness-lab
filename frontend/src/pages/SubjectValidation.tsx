@@ -20,7 +20,14 @@ import {
   IconX
 } from "../components/icons";
 import { defineMessages, useMessages } from "../i18n";
-import { HARNESS_NATIVE_MODELS, HARNESS_OPTIONS, HOST_HARNESSES } from "../harnesses";
+import {
+  API_KEY_HARNESSES,
+  HARNESS_NATIVE_MODELS,
+  HARNESS_OPTIONS,
+  HOST_HARNESSES,
+  harnessCliName,
+  harnessLabel
+} from "../harnesses";
 import type {
   CaseRecord,
   DroppedCommand,
@@ -236,6 +243,7 @@ const MESSAGES = defineMessages({
         "host mode (make app-host).",
       hostModeNote:
         "Uses your plan, not an API key: sign in once with make auth-codex or make auth-gemini (Docker or host mode).",
+      apiKeyNote: "Runs on a Gemini API key, per-token API billing: configure it once in System → Agent CLIs (Docker only).",
       executorModel: "Executor model",
       remove: "Remove",
       addArm: "Add an arm",
@@ -510,6 +518,7 @@ const MESSAGES = defineMessages({
         "o en modo host (make app-host).",
       hostModeNote:
         "Usa tu plan, no una API key: iniciá sesión una vez con make auth-codex o make auth-gemini (Docker o modo host).",
+      apiKeyNote: "Corre con una API key de Gemini, facturación de la API por token: configurala una vez en Sistema → CLIs de agentes (solo Docker).",
       executorModel: "Modelo ejecutor",
       remove: "Quitar",
       addArm: "Agregar un brazo",
@@ -1757,16 +1766,18 @@ export function SubjectValidation() {
                     >
                       {HARNESS_OPTIONS.map((option) => (
                         <option key={option} value={option}>
-                          {option}
+                          {harnessLabel(option)}
                         </option>
                       ))}
                     </select>
                     {HOST_HARNESSES.has(arm.harness) ? (
                       <span className="muted small">
-                        {m.armsPanel.runsNativeAuth(arm.harness)}
+                        {m.armsPanel.runsNativeAuth(harnessCliName(arm.harness))}
                         {arm.harness === "claude"
                           ? m.armsPanel.claudeAuthNote
-                          : m.armsPanel.hostModeNote}
+                          : API_KEY_HARNESSES.has(arm.harness)
+                            ? m.armsPanel.apiKeyNote
+                            : m.armsPanel.hostModeNote}
                       </span>
                     ) : null}
                   </label>

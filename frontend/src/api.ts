@@ -41,6 +41,8 @@ import type {
   HealthReport,
   NativeCliStatus,
   NativeConnectState,
+  ApiKeyOpState,
+  AgyModelsState,
   LangfuseExport,
   LangfuseStatus,
   LMStudioCatalog,
@@ -425,7 +427,7 @@ export const api = {
     case_ids: string[];
     profile?: string;
     repetitions?: number;
-    harness?: "claude" | "opencode" | "codex" | "gemini";
+    harness?: "claude" | "opencode" | "codex" | "gemini" | "antigravity_cli";
     /** Reasoning effort pinned in every arm (ADR-0081); "" = the CLI default. */
     effort?: string;
     /** "catalog": profile vs profile + skill. "staged": no skill vs a staged one (ADR-0091). */
@@ -447,7 +449,7 @@ export const api = {
     source: "catalog" | "staged";
     base: "minimal" | "full" | "both";
     repetitions: number;
-    harness?: "claude" | "opencode" | "codex" | "gemini";
+    harness?: "claude" | "opencode" | "codex" | "gemini" | "antigravity_cli";
     /** Reasoning effort pinned in every arm (ADR-0081); "" = the CLI default. */
     effort?: string;
     reuse_measured?: boolean;
@@ -465,7 +467,7 @@ export const api = {
     model: string;
     levels: string[];
     repetitions: number;
-    harness?: "claude" | "opencode" | "codex" | "gemini";
+    harness?: "claude" | "opencode" | "codex" | "gemini" | "antigravity_cli";
     /** Reasoning effort pinned in every arm (ADR-0081); "" = the CLI default. */
     effort?: string;
   }) =>
@@ -481,7 +483,7 @@ export const api = {
     case_ids: string[];
     base?: "minimal" | "full";
     repetitions: number;
-    harness?: "claude" | "opencode" | "codex" | "gemini";
+    harness?: "claude" | "opencode" | "codex" | "gemini" | "antigravity_cli";
     /** Reasoning effort pinned in every arm (ADR-0081); "" = the CLI default. */
     effort?: string;
   }) =>
@@ -929,6 +931,25 @@ export const api = {
     ),
   readNativeCliTest: (harness: string) =>
     request<NativeConnectState>(`/api/harness/clis/${harness}/test`),
+  /**
+   * Store an API-key CLI's key (ADR-0096). The worker writes it; poll
+   * `readCliApiKeyOp` until "saved" or "failed". Never echoed back.
+   */
+  saveCliApiKey: (harness: string, apiKey: string) =>
+    request<ApiKeyOpState>(`/api/harness/clis/${harness}/api-key`, {
+      method: "PUT",
+      body: JSON.stringify({ api_key: apiKey })
+    }),
+  readCliApiKeyOp: (harness: string) =>
+    request<ApiKeyOpState>(`/api/harness/clis/${harness}/api-key`),
+  /** Forget the key, its last test and its model list. */
+  removeCliApiKey: (harness: string) =>
+    request<ApiKeyOpState>(`/api/harness/clis/${harness}/api-key`, { method: "DELETE" }),
+  /** Ask the CLI which model slugs it offers with this key; poll `readCliModels`. */
+  refreshCliModels: (harness: string) =>
+    request<AgyModelsState>(`/api/harness/clis/${harness}/models`, { method: "POST" }),
+  readCliModels: (harness: string) =>
+    request<AgyModelsState>(`/api/harness/clis/${harness}/models`),
   heal: (action: string) =>
     request<HealResult>("/api/health/heal", {
       method: "POST",

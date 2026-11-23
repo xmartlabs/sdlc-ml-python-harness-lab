@@ -111,6 +111,7 @@ from harness_lab_app.schemas import (
     CaseDraftResponse,
     CheckoutAttachRequest,
     CheckoutFromLocalRequest,
+    CliApiKeyUpdate,
     EnvUpdateRequest,
     ExperimentCreate,
     ExperimentLaunch,
@@ -669,12 +670,102 @@ def create_app() -> FastAPI:
 
         return {"clis": native_cli_status()}
 
-    def _native_cli_or_404(harness: str) -> str:
+    def _native_cli_or_404(harness: str, *, api_key: bool = False) -> str:
+        """A subscription CLI (codex/gemini), or — where ``api_key`` — also an
+        API-key one (antigravity_cli). The device-login endpoints never accept
+        the latter: it has no login, only a key."""
+        from harness_lab_app.api_key_auth import HARNESS as API_KEY_HARNESS
         from harness_lab_app.native_auth import NATIVE_SESSION_HARNESSES
 
-        if harness not in NATIVE_SESSION_HARNESSES:
-            raise HTTPException(status_code=404, detail=f"unknown CLI {harness!r}")
+        if harness in NATIVE_SESSION_HARNESSES or (
+            api_key and harness == API_KEY_HARNESS
+        ):
+            return harness
+        raise HTTPException(status_code=404, detail=f"unknown CLI {harness!r}")
+
+    def _api_key_cli_or_404(harness: str) -> str:
+        from harness_lab_app.api_key_auth import HARNESS as API_KEY_HARNESS
+
+        if harness != API_KEY_HARNESS:
+            raise HTTPException(
+                status_code=404, detail=f"{harness!r} is not configured by API key"
+            )
         return harness
+
+    @app.put("/api/harness/clis/{harness}/api-key")
+    def save_cli_api_key(harness: str, body: CliApiKeyUpdate):
+        """Store a Gemini API key for the Antigravity CLI harness.
+
+        Validated here, written by the worker (the API mounts the store
+        read-only), and never echoed back: the response is the operation's
+        state, poll ``GET …/api-key``. The key is not logged, not stored in
+        the database and not written to ``.env``."""
+        from harness_lab_app import native_connect
+        from harness_lab_app.api_key_auth import take_drop, validate_key, write_drop
+        from harness_lab_app.celery_app import enqueue_save_api_key
+
+        harness = _api_key_cli_or_404(harness)
+        try:
+            key = validate_key(body.api_key.get_secret_value())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        directory = native_connect.state_dir()
+        drop = write_drop(key, directory)
+        try:
+            enqueue_save_api_key(harness, drop)
+        except Exception as exc:
+            take_drop(drop, directory)  # nobody will collect it
+            raise HTTPException(
+                status_code=503,
+                detail=f"Worker queue unreachable: {type(exc).__name__}",
+            ) from exc
+        return native_connect.write_state(harness, "key", {"state": "queued"})
+
+    @app.get("/api/harness/clis/{harness}/api-key")
+    def read_cli_api_key(harness: str):
+        """The last save/remove of the key, and whether one is stored (its
+        last four characters, never the key)."""
+        from harness_lab_app import native_connect
+        from harness_lab_app.api_key_auth import key_status
+
+        harness = _api_key_cli_or_404(harness)
+        return {**native_connect.read_state(harness, "key"), "api_key": key_status()}
+
+    @app.delete("/api/harness/clis/{harness}/api-key")
+    def remove_cli_api_key(harness: str):
+        """Forget the key (and its last test and model list)."""
+        from harness_lab_app import native_connect
+        from harness_lab_app.celery_app import enqueue_native_cli
+
+        harness = _api_key_cli_or_404(harness)
+        try:
+            enqueue_native_cli("remove_cli_api_key", harness)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail=f"Worker queue unreachable: {exc}"
+            ) from exc
+        return native_connect.write_state(harness, "key", {"state": "queued"})
+
+    @app.post("/api/harness/clis/{harness}/models")
+    def refresh_cli_models(harness: str):
+        """Ask the CLI which models it offers with this key (``agy models``)."""
+        from harness_lab_app import native_connect
+        from harness_lab_app.celery_app import enqueue_native_cli
+
+        harness = _api_key_cli_or_404(harness)
+        try:
+            enqueue_native_cli("refresh_cli_models", harness)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail=f"Worker queue unreachable: {exc}"
+            ) from exc
+        return native_connect.write_state(harness, "models", {"state": "queued"})
+
+    @app.get("/api/harness/clis/{harness}/models")
+    def read_cli_models(harness: str):
+        from harness_lab_app import native_connect
+
+        return native_connect.read_state(_api_key_cli_or_404(harness), "models")
 
     @app.post("/api/harness/clis/{harness}/connect")
     def connect_native_cli(harness: str, regenerate: bool = False):
@@ -733,7 +824,7 @@ def create_app() -> FastAPI:
         from harness_lab_app import native_connect
         from harness_lab_app.celery_app import enqueue_native_cli
 
-        harness = _native_cli_or_404(harness)
+        harness = _native_cli_or_404(harness, api_key=True)
         try:
             enqueue_native_cli("test_native_cli", harness, model=model)
         except Exception as exc:
@@ -748,7 +839,9 @@ def create_app() -> FastAPI:
     def test_native_cli_state(harness: str):
         from harness_lab_app import native_connect
 
-        return native_connect.read_state(_native_cli_or_404(harness), "test")
+        return native_connect.read_state(
+            _native_cli_or_404(harness, api_key=True), "test"
+        )
 
     @app.delete("/api/harness/clis/{harness}/connect")
     def disconnect_native_cli(harness: str):
@@ -3480,6 +3573,8 @@ def create_app() -> FastAPI:
             return service.retry_run(run_id, mode)
         except RunRetryError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RunPreflightError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/runs/{run_id}/continue")
     def continue_run(

@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent } from "react";
 
 import { api } from "../api";
+import { formatRunDate } from "../dates";
+import { HARNESS_NATIVE_MODELS } from "../harnesses";
 import { defineMessages, useMessages } from "../i18n";
-import type { NativeCliStatus, NativeConnectState } from "../types";
+import type {
+  AgyModelsState,
+  ApiKeyOpState,
+  ModelOption,
+  NativeCliStatus,
+  NativeConnectState
+} from "../types";
 
 /**
  * The agent CLIs a run can drive, as cards (System → Agent CLIs, ADR-0094).
@@ -14,6 +23,10 @@ import type { NativeCliStatus, NativeConnectState } from "../types";
  * a guided "Enable": for a subscription CLI the worker starts the CLI's own
  * device login and this card shows the URL and the one-time code to approve in
  * the operator's browser. The lab never sees a password or a token value.
+ *
+ * An API-key CLI (`auth === "api_key"`, the Antigravity CLI, ADR-0096) has no
+ * login: its card takes a Gemini API key the operator pastes, which the worker
+ * stores outside the repository and never sends back (only its last characters).
  */
 const MESSAGES = defineMessages({
   en: {
@@ -28,7 +41,8 @@ const MESSAGES = defineMessages({
       opencode: "OpenCode",
       claude: "Claude Code",
       codex: "Codex CLI",
-      gemini: "Gemini CLI"
+      gemini: "Gemini CLI",
+      antigravity_cli: "Antigravity CLI"
     } as Record<string, string>,
     authLabel: {
       gateway: "through your gateway",
@@ -100,7 +114,8 @@ const MESSAGES = defineMessages({
       opencode: "OpenCode",
       claude: "Claude Code",
       codex: "Codex CLI",
-      gemini: "Gemini CLI"
+      gemini: "Gemini CLI",
+      antigravity_cli: "Antigravity CLI"
     } as Record<string, string>,
     authLabel: {
       gateway: "por tu gateway",
@@ -203,8 +218,19 @@ function useNow(active: boolean): number {
   return now;
 }
 
+// An API-key CLI reads "connected" once a key is stored — not yet proof that
+// it works, which only its connection test gives — so it groups as enabled.
 function isEnabled(cli: NativeCliStatus): boolean {
   return cli.session === "connected" && !cli.unavailable;
+}
+
+/** The card for one CLI: an API-key CLI has its own; every other keeps CliCard. */
+function cardFor(cli: NativeCliStatus, onChange: () => Promise<void>) {
+  return cli.auth === "api_key" ? (
+    <ApiKeyCliCard cli={cli} key={cli.harness} onChange={onChange} />
+  ) : (
+    <CliCard cli={cli} key={cli.harness} onChange={onChange} />
+  );
 }
 
 export function NativeClisPanel() {
@@ -244,9 +270,7 @@ export function NativeClisPanel() {
         <>
           <h4 className="native-clis__group">{m.enabledTitle}</h4>
           <div className="native-clis__grid">
-            {enabled.map((cli) => (
-              <CliCard cli={cli} key={cli.harness} onChange={load} />
-            ))}
+            {enabled.map((cli) => cardFor(cli, load))}
           </div>
         </>
       ) : null}
@@ -254,9 +278,7 @@ export function NativeClisPanel() {
         <>
           <h4 className="native-clis__group">{m.availableTitle}</h4>
           <div className="native-clis__grid">
-            {available.map((cli) => (
-              <CliCard cli={cli} key={cli.harness} onChange={load} />
-            ))}
+            {available.map((cli) => cardFor(cli, load))}
           </div>
         </>
       ) : null}
@@ -264,9 +286,7 @@ export function NativeClisPanel() {
         <>
           <h4 className="native-clis__group">{m.unavailableTitle}</h4>
           <div className="native-clis__grid">
-            {unavailable.map((cli) => (
-              <CliCard cli={cli} key={cli.harness} onChange={load} />
-            ))}
+            {unavailable.map((cli) => cardFor(cli, load))}
           </div>
         </>
       ) : null}
@@ -511,6 +531,572 @@ function CliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () => Prom
       ) : null}
 
       {actionError ? <p className="error small">{actionError}</p> : null}
+    </article>
+  );
+}
+
+/**
+ * Strings of the API-key card (ADR-0096). The failure labels and hints are
+ * keyed by the test record's `reason`, so each refusal says what to change.
+ */
+const KEY_MESSAGES = defineMessages({
+  en: {
+    status: {
+      notConfigured: "Not configured",
+      untested: "Configured — not tested yet",
+      verified: "Verified",
+      failed: "Test failed"
+    },
+    authLabel: "Gemini API key",
+    provider: "Gemini API",
+    billing: "API usage (per token)",
+    sandbox: (value: string) => `sandbox: ${value}`,
+    keyLine: (hint: string, when: string) => `Key ${hint}${when ? ` · saved ${when}` : ""}`,
+    hostLane:
+      "Runs are Docker-only: the runner container is the sandbox. Switch to the Docker backend.",
+    tooOld: (have: string, need: string) =>
+      `CLI v${have} is older than the verified v${need} — rebuild the runner image (Health).`,
+    configure: "Configure API key",
+    replace: "Replace key",
+    keyLabel: "Gemini API key",
+    keyHelp:
+      "Use a dedicated, budget-capped key from Google AI Studio (or a Gemini Enterprise key). " +
+      "The key is stored on the lab's backend, outside the repository; it is never shown again.",
+    save: "Save",
+    cancel: "Cancel",
+    saving: "Saving the key…",
+    keySaved: "Key saved. Testing the connection…",
+    keyFailed: "The key was not saved:",
+    remove: "Remove credentials",
+    removing: "Removing the credentials…",
+    removeConfirm:
+      "Remove the Gemini API key from the lab? Its last test and model list go with it, " +
+      "and runs on this harness are refused until a new key is saved.",
+    model: "Model",
+    test: "Test connection",
+    testing: "Testing…",
+    testCost: "Sends one real request to the Gemini API (billed to this key).",
+    testOk: (answer: string, requested: string, apiModel: string | null, seconds: number) =>
+      `Answered “${answer}” — requested ${requested || "?"}, API model ${apiModel ?? "unknown"}, ${seconds}s.`,
+    failure: {
+      auth: "Google rejected the API key.",
+      quota: "Quota or billing exhausted, or the key is rate-limited.",
+      model: "This model is not available to this key.",
+      network: "The runner could not reach the Gemini API.",
+      timeout: "The request took too long.",
+      server: "Google's servers answered with an error (5xx).",
+      no_key: "No API key is configured.",
+      not_installed: "The runner image has no Antigravity CLI.",
+      error: "The request did not complete."
+    } as Record<string, string>,
+    failureHint: {
+      auth:
+        "Check that the key is valid, has not been revoked as leaked, and belongs to a project " +
+        "with the Generative Language API enabled — then Replace key.",
+      quota:
+        "Check billing and rate limits for the key's project in Google AI Studio, then retry later.",
+      model: "Pick another model, or Refresh models to see the slugs this CLI version offers.",
+      network: "Check that the runner containers can reach generativelanguage.googleapis.com.",
+      timeout: "Retry; if it keeps timing out, check the runner's network or pick a lighter model.",
+      server: "A problem on Google's side: retry later.",
+      no_key: "Configure a key first.",
+      not_installed: "Rebuild the runner image (Health).",
+      error: "Retry; if it fails again, check the worker (Health)."
+    } as Record<string, string>,
+    providerSaid: "The provider said:",
+    refresh: "Refresh models",
+    refreshing: "Refreshing…",
+    modelsCount: (count: number, version: string, when: string) =>
+      `${count} models${version ? ` on v${version}` : ""}${when ? ` · refreshed ${when}` : ""}`,
+    modelsList: "Model slugs",
+    modelsNote:
+      "Slugs this CLI version offers for the Gemini API; whether your key can use one is proven by a request.",
+    modelsFailed: "Could not list the models:",
+    warning:
+      "Commands the agent runs can read this key: agy passes its environment to them and offers " +
+      "no way to scrub it. Runs on third-party code (SWE-bench instances, external target " +
+      "repositories) are refused unless HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1.",
+    untrustedAllowed: "Untrusted code: allowed"
+  },
+  es: {
+    status: {
+      notConfigured: "Sin configurar",
+      untested: "Configurado — sin probar todavía",
+      verified: "Verificado",
+      failed: "La prueba falló"
+    },
+    authLabel: "clave de la API de Gemini",
+    provider: "API de Gemini",
+    billing: "uso de la API (por token)",
+    sandbox: (value: string) => `sandbox: ${value}`,
+    keyLine: (hint: string, when: string) => `Clave ${hint}${when ? ` · guardada ${when}` : ""}`,
+    hostLane:
+      "Las corridas son solo en Docker: el contenedor runner es el sandbox. Cambiá al backend Docker.",
+    tooOld: (have: string, need: string) =>
+      `El CLI v${have} es anterior a la v${need} verificada — reconstruí la imagen del runner (Estado).`,
+    configure: "Configurar API key",
+    replace: "Reemplazar clave",
+    keyLabel: "Clave de la API de Gemini",
+    keyHelp:
+      "Usá una clave dedicada y con tope de presupuesto de Google AI Studio (o una clave de Gemini Enterprise). " +
+      "La clave se guarda en el backend del lab, fuera del repositorio; nunca se vuelve a mostrar.",
+    save: "Guardar",
+    cancel: "Cancelar",
+    saving: "Guardando la clave…",
+    keySaved: "Clave guardada. Probando la conexión…",
+    keyFailed: "La clave no se guardó:",
+    remove: "Quitar credenciales",
+    removing: "Quitando las credenciales…",
+    removeConfirm:
+      "¿Quitar la clave de la API de Gemini del lab? Se van también su última prueba y su lista de modelos, " +
+      "y las corridas con este arnés se rechazan hasta que se guarde una clave nueva.",
+    model: "Modelo",
+    test: "Probar conexión",
+    testing: "Probando…",
+    testCost: "Envía un pedido real a la API de Gemini (se factura a esta clave).",
+    testOk: (answer: string, requested: string, apiModel: string | null, seconds: number) =>
+      `Respondió “${answer}” — pedido ${requested || "?"}, modelo de la API ${apiModel ?? "desconocido"}, ${seconds}s.`,
+    failure: {
+      auth: "Google rechazó la API key.",
+      quota: "Cuota o facturación agotada, o la clave tiene límite de tasa.",
+      model: "Este modelo no está disponible para esta clave.",
+      network: "El runner no pudo conectarse con la API de Gemini.",
+      timeout: "El pedido tardó demasiado.",
+      server: "Los servidores de Google respondieron con un error (5xx).",
+      no_key: "No hay una API key configurada.",
+      not_installed: "La imagen del runner no tiene el Antigravity CLI.",
+      error: "El pedido no se completó."
+    } as Record<string, string>,
+    failureHint: {
+      auth:
+        "Verificá que la clave sea válida, que no haya sido revocada por filtrada y que pertenezca a un proyecto " +
+        "con la Generative Language API habilitada — después, Reemplazar clave.",
+      quota:
+        "Revisá la facturación y los límites de tasa del proyecto de la clave en Google AI Studio, y reintentá más tarde.",
+      model: "Elegí otro modelo, o Actualizar modelos para ver los slugs que ofrece esta versión del CLI.",
+      network: "Verificá que los contenedores runner lleguen a generativelanguage.googleapis.com.",
+      timeout: "Reintentá; si sigue tardando, revisá la red del runner o elegí un modelo más liviano.",
+      server: "Un problema del lado de Google: reintentá más tarde.",
+      no_key: "Primero configurá una clave.",
+      not_installed: "Reconstruí la imagen del runner (Estado).",
+      error: "Reintentá; si vuelve a fallar, revisá el worker (Estado)."
+    } as Record<string, string>,
+    providerSaid: "El proveedor dijo:",
+    refresh: "Actualizar modelos",
+    refreshing: "Actualizando…",
+    modelsCount: (count: number, version: string, when: string) =>
+      `${count} modelos${version ? ` en v${version}` : ""}${when ? ` · actualizados ${when}` : ""}`,
+    modelsList: "Slugs de modelos",
+    modelsNote:
+      "Slugs que esta versión del CLI ofrece para la API de Gemini; si tu clave puede usar uno lo prueba un pedido.",
+    modelsFailed: "No se pudo listar los modelos:",
+    warning:
+      "Los comandos que corre el agente pueden leer esta clave: agy les pasa su entorno y no ofrece " +
+      "forma de limpiarlo. Las corridas sobre código de terceros (instancias de SWE-bench, repositorios " +
+      "destino externos) se rechazan salvo que HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1.",
+    untrustedAllowed: "Código no confiable: permitido"
+  }
+});
+
+const BUSY_MODELS = new Set(["queued", "running"]);
+const SETTLED_TEST = new Set(["ok", "failed"]);
+
+/** "2026-11-22 10:15" for an epoch-seconds timestamp; "" when there is none. */
+function formatEpoch(seconds: number | null | undefined): string {
+  if (!seconds) {
+    return "";
+  }
+  return formatRunDate(new Date(seconds * 1000).toISOString());
+}
+
+/**
+ * An API-key CLI (ADR-0096): Not configured → Configured → Verified / Test
+ * failed. The key is read from an uncontrolled password field at submit and
+ * cleared at once, so it never lives in React state; the worker stores it and
+ * the card only ever sees its masked tail.
+ */
+function ApiKeyCliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () => Promise<void> }) {
+  const shared = useMessages(MESSAGES);
+  const m = useMessages(KEY_MESSAGES);
+  const configured = cli.api_key?.configured ?? cli.session === "connected";
+  const [keyOp, setKeyOp] = useState<ApiKeyOpState>(cli.key_op ?? { state: "idle" });
+  const [test, setTest] = useState<NativeConnectState>(cli.last_test ?? { state: "idle" });
+  // The last test that finished, so a re-test does not blank the status.
+  const [settled, setSettled] = useState<NativeConnectState | null>(
+    cli.last_test && SETTLED_TEST.has(cli.last_test.state) ? cli.last_test : null
+  );
+  const [models, setModels] = useState<AgyModelsState>(cli.models ?? { state: "idle" });
+  const [editing, setEditing] = useState(false);
+  // Which key operation is in flight, for its progress line.
+  const [pendingOp, setPendingOp] = useState<"save" | "remove" | null>(null);
+  // This card saved a key and is testing it: says so until the test settles.
+  const [savedNow, setSavedNow] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const keyInput = useRef<HTMLInputElement>(null);
+  // Set when this card saved a key: once the worker stores it, test it once.
+  const autoTest = useRef(false);
+
+  const options: ModelOption[] = useMemo(() => {
+    const live = models.models ?? [];
+    return live.length > 0
+      ? live.map((row) => ({ id: row.id, label: row.label }))
+      : (HARNESS_NATIVE_MODELS[cli.harness] ?? []);
+  }, [models.models, cli.harness]);
+  const [testModel, setTestModel] = useState(
+    () => cli.default_test_model || options[0]?.id || ""
+  );
+  // The picked slug always renders, even when a refreshed list dropped it.
+  const shownOptions =
+    testModel && !options.some((option) => option.id === testModel)
+      ? [...options, { id: testModel, label: testModel }]
+      : options;
+
+  useEffect(() => {
+    if (SETTLED_TEST.has(test.state)) {
+      setSettled(test);
+      setSavedNow(false);
+    }
+  }, [test]);
+
+  const runTest = useCallback(
+    (model: string) => {
+      setActionError("");
+      setTest({ state: "queued" });
+      return api
+        .testNativeCli(cli.harness, model)
+        .then(setTest)
+        .catch((exc: Error) => {
+          setTest({ state: "idle" });
+          setActionError(exc.message);
+        });
+    },
+    [cli.harness]
+  );
+
+  // A save or removal is the worker's job: poll it, then refresh the list. A
+  // key this card just saved is tested once before the list reloads, so a
+  // card that moves to "Enabled" remounts with that test already in flight.
+  useEffect(() => {
+    if (keyOp.state !== "queued") {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      api
+        .readCliApiKeyOp(cli.harness)
+        .then((next) => {
+          setKeyOp(next);
+          if (next.state === "queued") {
+            return;
+          }
+          setPendingOp(null);
+          if (next.state === "saved" && autoTest.current) {
+            autoTest.current = false;
+            setSavedNow(true);
+            void runTest(testModel).finally(() => void onChange());
+            return;
+          }
+          autoTest.current = false;
+          if (next.state === "removed") {
+            setTest({ state: "idle" });
+            setSettled(null);
+            setModels({ state: "idle" });
+          }
+          void onChange();
+        })
+        .catch(() => undefined);
+    }, POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [keyOp.state, cli.harness, onChange, runTest, testModel]);
+
+  useEffect(() => {
+    if (!BUSY_TEST.has(test.state)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      api
+        .readNativeCliTest(cli.harness)
+        .then(setTest)
+        .catch(() => undefined);
+    }, POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [test.state, cli.harness]);
+
+  useEffect(() => {
+    if (!BUSY_MODELS.has(models.state)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      api
+        .readCliModels(cli.harness)
+        .then(setModels)
+        .catch(() => undefined);
+    }, POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [models.state, cli.harness]);
+
+  const submitKey = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const input = keyInput.current;
+    const value = input?.value.trim() ?? "";
+    if (input) {
+      input.value = "";
+    }
+    if (!value) {
+      return;
+    }
+    setFormError("");
+    setActionError("");
+    autoTest.current = true;
+    // The previous key's verdict says nothing about this one.
+    setSettled(null);
+    setTest({ state: "idle" });
+    setEditing(false);
+    setPendingOp("save");
+    setKeyOp({ state: "queued" });
+    api
+      .saveCliApiKey(cli.harness, value)
+      .then(setKeyOp)
+      .catch((exc: Error) => {
+        autoTest.current = false;
+        setPendingOp(null);
+        setKeyOp({ state: "idle" });
+        setEditing(true);
+        setFormError(exc.message);
+      });
+  };
+
+  const cancelEdit = () => {
+    if (keyInput.current) {
+      keyInput.current.value = "";
+    }
+    setFormError("");
+    setEditing(false);
+  };
+
+  const removeKey = () => {
+    if (!window.confirm(m.removeConfirm)) {
+      return;
+    }
+    setActionError("");
+    autoTest.current = false;
+    setPendingOp("remove");
+    setKeyOp({ state: "queued" });
+    api
+      .removeCliApiKey(cli.harness)
+      .then(setKeyOp)
+      .catch((exc: Error) => {
+        setPendingOp(null);
+        setKeyOp({ state: "idle" });
+        setActionError(exc.message);
+      });
+  };
+
+  const refreshModels = () => {
+    setActionError("");
+    setModels({ state: "queued" });
+    api
+      .refreshCliModels(cli.harness)
+      .then(setModels)
+      .catch((exc: Error) => {
+        setModels({ state: "idle" });
+        setActionError(exc.message);
+      });
+  };
+
+  const verdict = settled?.state;
+  const status = !configured
+    ? m.status.notConfigured
+    : verdict === "ok"
+      ? m.status.verified
+      : verdict === "failed"
+        ? m.status.failed
+        : m.status.untested;
+  const dot = !configured ? "idle" : verdict === "ok" ? "on" : verdict === "failed" ? "off" : "warn";
+  const keyBusy = keyOp.state === "queued";
+  const testBusy = BUSY_TEST.has(test.state);
+  const modelsBusy = BUSY_MODELS.has(models.state);
+  const failureKey = test.reason ?? "error";
+  const liveModels = models.models ?? [];
+
+  return (
+    <article className={`native-cli-card native-cli-card--${verdict === "ok" && configured ? "on" : "idle"}`}>
+      <header className="native-cli-card__head">
+        <span className={`native-cli-card__dot native-cli-card__dot--${dot}`} />
+        <strong>{shared.harnessLabel[cli.harness] ?? cli.harness}</strong>
+        <code className="muted small">{cli.harness}</code>
+      </header>
+      <p className="native-cli-card__status small" role="status">
+        {status}
+      </p>
+      <p className="muted small">
+        {m.authLabel} · {shared.laneLabel[cli.lane] ?? cli.lane} ·{" "}
+        {cli.version ? shared.version(cli.version) : shared.noVersion}
+        {cli.sandbox ? ` · ${m.sandbox(cli.sandbox)}` : ""} · {m.provider} · {m.billing}
+      </p>
+      {configured && cli.api_key?.hint ? (
+        <p className="muted small">
+          {m.keyLine(cli.api_key.hint, formatEpoch(cli.api_key.saved_at))}
+        </p>
+      ) : null}
+
+      {cli.lane_supported === false ? <p className="error error-text small">{m.hostLane}</p> : null}
+      {cli.installed === false ? <p className="error error-text small">{shared.notInstalled}</p> : null}
+      {cli.installed !== false && cli.too_old && cli.version ? (
+        <p className="error error-text small">{m.tooOld(cli.version, cli.too_old)}</p>
+      ) : null}
+
+      {/* The key: configure, replace, remove. */}
+      {editing ? (
+        <form autoComplete="off" className="native-cli-card__key-form" onSubmit={submitKey}>
+          <label>
+            <span>{m.keyLabel}</span>
+            <input
+              autoComplete="off"
+              autoFocus
+              name="gemini-api-key"
+              ref={keyInput}
+              spellCheck={false}
+              type="password"
+            />
+          </label>
+          <p className="muted small">{m.keyHelp}</p>
+          {formError ? <p className="error error-text small">{formError}</p> : null}
+          <div className="native-cli-card__actions">
+            <button className="primary" type="submit">
+              {m.save}
+            </button>
+            <button onClick={cancelEdit} type="button">
+              {m.cancel}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div className="native-cli-card__actions">
+          <button
+            className={configured ? undefined : "primary"}
+            disabled={keyBusy}
+            onClick={() => {
+              setFormError("");
+              setEditing(true);
+            }}
+            type="button"
+          >
+            {configured ? m.replace : m.configure}
+          </button>
+          {configured ? (
+            <button className="danger" disabled={keyBusy} onClick={removeKey} type="button">
+              {m.remove}
+            </button>
+          ) : null}
+        </div>
+      )}
+      {keyBusy ? (
+        <p className="muted small">{pendingOp === "remove" ? m.removing : m.saving}</p>
+      ) : null}
+      {savedNow && testBusy ? <p className="small">{m.keySaved}</p> : null}
+      {keyOp.state === "failed" ? (
+        <p className="error error-text small">
+          {m.keyFailed} {keyOp.error}
+        </p>
+      ) : null}
+
+      {/* Configured: one real request proves the key serves the model. */}
+      {configured ? (
+        <>
+          <div className="native-cli-card__actions">
+            <select
+              aria-label={m.model}
+              className="native-cli-card__model"
+              disabled={testBusy}
+              onChange={(event) => setTestModel(event.target.value)}
+              value={testModel}
+            >
+              {shownOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <button disabled={testBusy || keyBusy} onClick={() => void runTest(testModel)} type="button">
+              {testBusy ? m.testing : m.test}
+            </button>
+          </div>
+          <span className="muted small">{m.testCost}</span>
+        </>
+      ) : null}
+      {test.state === "ok" ? (
+        <p className="native-cli-card__ok small">
+          {m.testOk(
+            test.answer ?? "",
+            test.requested_model ?? test.model ?? "",
+            test.api_model ?? null,
+            test.seconds ?? 0
+          )}
+        </p>
+      ) : null}
+      {test.state === "failed" ? (
+        <div className="native-cli-card__failure small" role="status">
+          <p className="error-text">
+            <strong>{m.failure[failureKey] ?? m.failure.error}</strong>
+          </p>
+          <p className="muted">{m.failureHint[failureKey] ?? m.failureHint.error}</p>
+          {test.error ? (
+            <p className="muted">
+              {m.providerSaid} <span className="mono">{test.error}</span>
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* The CLI's own model list for this key. */}
+      {configured ? (
+        <div className="native-cli-card__models">
+          <div className="native-cli-card__actions">
+            <button disabled={modelsBusy || keyBusy} onClick={refreshModels} type="button">
+              {modelsBusy ? m.refreshing : m.refresh}
+            </button>
+            {models.state === "ok" && liveModels.length > 0 ? (
+              <span className="muted small">
+                {m.modelsCount(
+                  liveModels.length,
+                  models.cli_version ?? "",
+                  formatEpoch(models.refreshed_at)
+                )}
+              </span>
+            ) : null}
+          </div>
+          {models.state === "failed" ? (
+            <p className="error error-text small">
+              {m.modelsFailed} {models.error}
+            </p>
+          ) : null}
+          {liveModels.length > 0 ? (
+            <details>
+              <summary className="small">{m.modelsList}</summary>
+              <ul className="small">
+                {liveModels.map((row) => (
+                  <li key={row.id}>
+                    <code>{row.id}</code> — {row.label} → <code>{row.api_model ?? "?"}</code>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+          {liveModels.length > 0 ? <p className="muted small">{m.modelsNote}</p> : null}
+        </div>
+      ) : null}
+
+      <div className="callout callout--warning native-cli-card__warning small">
+        <p>{m.warning}</p>
+        {cli.untrusted_allowed ? (
+          <p>
+            <strong>{m.untrustedAllowed}</strong> (HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1)
+          </p>
+        ) : null}
+      </div>
+
+      {actionError ? <p className="error error-text small">{actionError}</p> : null}
     </article>
   );
 }
