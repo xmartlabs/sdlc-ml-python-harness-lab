@@ -9,12 +9,13 @@ own machine, and then uses an LLM to propose prescriptive edits to the `.agents`
 how the model behaved.
 
 > **Automated runs use a different harness.** Google now ships a headless Antigravity CLI
-> (`agy`), and the lab runs it as **`antigravity_cli`** on a **Gemini API key** under the same
-> cases, containers, scoring and comparison as codex/claude/opencode
-> ([ADR-0096](../docs/adr/0096-antigravity-cli-runs-on-a-gemini-api-key.md),
-> [runbook](../docs/runbook-claude-codex.md#antigravity-cli-on-a-gemini-api-key)). It never uses a
-> personal Google AI Pro/Ultra sign-in: Google's terms do not allow wrapping `agy` in a
-> third-party application under consumer plans. Keep this manual flow for what it is for:
+> (`agy`), and the lab runs it as **`antigravity_cli`** under the same cases, containers,
+> scoring and comparison as codex/claude/opencode. It runs on your Google sign-in, made by
+> `agy` itself from System → Agent CLIs, on your plan's quota
+> ([ADR-0097](../docs/adr/0097-antigravity-cli-on-the-operators-google-sign-in.md)), or on a
+> Gemini API key ([ADR-0096](../docs/adr/0096-antigravity-cli-runs-on-a-gemini-api-key.md)).
+> See the [runbook](../docs/runbook-claude-codex.md#antigravity-cli-on-your-google-plan),
+> including Google's note on consumer plans. Keep this manual flow for what it is for:
 > driving the IDE yourself and improving the `.agents` rules. Both read the same
 > `.agents/rules/GEMINI.md` and `.agents/skills/`.
 

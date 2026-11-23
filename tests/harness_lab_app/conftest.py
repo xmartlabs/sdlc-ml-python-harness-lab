@@ -41,6 +41,21 @@ def _isolated_env_file(monkeypatch, tmp_path_factory) -> Path:
 
 
 @pytest.fixture(autouse=True)
+def _isolated_auth_store(monkeypatch, tmp_path_factory) -> None:
+    """Never read the developer's real provider sessions or keys.
+
+    ``HARNESS_LAB_AUTH_DIR`` defaults to ``~/.harness-lab/auth``, where the
+    operator's codex login, Antigravity Google sign-in and Gemini API key live.
+    A test that did not set it read them: one passed on a fresh clone and
+    failed once the operator had signed in to Antigravity (2026-11-23). Tests
+    that need a store set their own, which overrides this one.
+    """
+    monkeypatch.setenv(
+        "HARNESS_LAB_AUTH_DIR", str(tmp_path_factory.mktemp("auth-store"))
+    )
+
+
+@pytest.fixture(autouse=True)
 def _no_gateway_probe(monkeypatch) -> None:
     """Preflight must never make network calls from the test suite.
 

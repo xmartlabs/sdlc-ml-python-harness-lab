@@ -782,7 +782,11 @@ def test_a_failed_connection_test_says_why(
     assert summary["error"]
 
 
-def test_the_test_command_is_a_real_request_with_an_explicit_model() -> None:
+def test_the_test_command_is_a_real_request_with_an_explicit_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On a key (an empty store): the operator's own sign-in must not decide it.
+    monkeypatch.setenv("HARNESS_LAB_AUTH_DIR", str(tmp_path / "auth"))
     cmd = native_connect.test_command("antigravity_cli")
 
     assert cmd[cmd.index("--model") + 1] == "gemini-3.8-flash-low"
@@ -885,7 +889,7 @@ def test_preflight_accepts_a_configured_key_and_a_verified_model(
             "not a model slug the lab verified",
         ),
         ({}, {"executor_model": "gateway/gemini-2.5-pro"}, "gateway"),
-        ({"key": False}, {}, "No Gemini API key"),
+        ({"key": False}, {}, "has no credential"),
         (
             {"facts": {"runner_image_present": True, "cli_versions": {}}},
             {},
@@ -1018,7 +1022,7 @@ def test_the_api_queues_the_key_masked_and_never_echoes_it(
 
     import harness_lab_app.celery_app as celery_module
     from harness_lab_app.api import create_app
-    from harness_lab_app.schemas import CliApiKeyUpdate
+    from harness_lab_app.schemas import CliApiKeyUpdate, CliAuthCodeSubmit
 
     monkeypatch.setenv("HARNESS_LAB_AUTH_DIR", str(tmp_path / "auth"))
     monkeypatch.setattr(
@@ -1058,11 +1062,12 @@ def test_the_api_queues_the_key_masked_and_never_echoes_it(
     with pytest.raises(HTTPException) as other:
         save("codex", body)
     assert other.value.status_code == 404
-    # No device login for an API-key harness.
-    connect = _endpoint(app, "/api/harness/clis/{harness}/connect", "POST")
-    with pytest.raises(HTTPException) as login:
-        connect("antigravity_cli")
-    assert login.value.status_code == 404
+    # The Google sign-in (ADR-0097) is a separate flow: no code is accepted
+    # while no sign-in is waiting for one.
+    submit = _endpoint(app, "/api/harness/clis/{harness}/connect/code", "POST")
+    with pytest.raises(HTTPException) as early:
+        submit("antigravity_cli", CliAuthCodeSubmit(code="4/0AbCdEfGhIjK"))
+    assert early.value.status_code == 409
     assert read("antigravity_cli")["api_key"]["configured"] is False
 
 
@@ -1113,7 +1118,9 @@ def test_the_card_row_reports_the_key_by_its_tail_only(
     assert row["auth"] == "api_key" and row["provider"] == "gemini_api"
     assert row["api_key"]["hint"] == "…1234"
     assert row["version"] == "1.5.14" and row["lane_supported"] is True
-    assert row["unavailable"] is None and row["connectable"] is False
+    # Connectable: the Google sign-in can be started from the same card.
+    assert row["unavailable"] is None and row["connectable"] is True
+    assert row["agy_auth"] == "api_key" and row["account"]["connected"] is False
     assert KEY not in json.dumps(row)
     assert health_service._agy_row("host", None)["lane_supported"] is False
 

@@ -1,6 +1,7 @@
 # ADR-0096: Antigravity CLI runs on a Gemini API key, never on a personal sign-in
 
-- **Status:** Accepted
+- **Status:** Accepted; its "never on a personal sign-in" rule is amended by
+  [ADR-0097](0097-antigravity-cli-on-the-operators-google-sign-in.md)
 - **Date:** 2026-11-22
 - **Deciders:** Marcos Soto
 - **Related:** [ADR-0049](0049-a-bare-arm-is-a-masked-runner-not-a-lab-root-run.md),

@@ -578,6 +578,8 @@ const KEY_MESSAGES = defineMessages({
     testCost: "Sends one real request to the Gemini API (billed to this key).",
     testOk: (answer: string, requested: string, apiModel: string | null, seconds: number) =>
       `Answered “${answer}” — requested ${requested || "?"}, API model ${apiModel ?? "unknown"}, ${seconds}s.`,
+    testOkPlan: (answer: string, model: string, seconds: number) =>
+      `Answered “${answer}” on ${model || "your plan's default model"} in ${seconds}s.`,
     failure: {
       auth: "Google rejected the API key.",
       quota: "Quota or billing exhausted, or the key is rate-limited.",
@@ -616,7 +618,56 @@ const KEY_MESSAGES = defineMessages({
       "Commands the agent runs can read this key: agy passes its environment to them and offers " +
       "no way to scrub it. Runs on third-party code (SWE-bench instances, external target " +
       "repositories) are refused unless HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1.",
-    untrustedAllowed: "Untrusted code: allowed"
+    untrustedAllowed: "Untrusted code: allowed",
+    // --- Google sign-in (ADR-0097) ---
+    accountTitle: "Your Google plan",
+    accountIntro:
+      "Sign in with the Google account that has your Google AI plan. Runs then use the plan's " +
+      "Antigravity quota, like the IDE — no API key, no per-token bill.",
+    signIn: "Sign in with Google",
+    signingIn: "Starting the CLI's sign-in…",
+    accountStep1:
+      "Open this page and sign in with the account that has your plan:",
+    openSignIn: "Open Google sign-in",
+    accountStep2: "Google then shows an authorization code. Paste it here:",
+    codeLabel: "Authorization code",
+    codePlaceholder: "4/0A…  (or the whole page address)",
+    submitCode: "Connect",
+    exchanging: "Checking the code with Google…",
+    signInExpiresIn: (clock: string) => `This sign-in closes in ${clock}.`,
+    restartSignIn: "Start over",
+    accountConnected: (email: string) =>
+      email ? `Signed in as ${email}` : "Signed in with Google",
+    accountSaved: (when: string) => (when ? `since ${when}` : ""),
+    accountBilling: "your plan's quota",
+    accountProvider: "Google account",
+    signOut: "Sign out",
+    signOutConfirm:
+      "Sign the Antigravity CLI out of the lab? The lab's copy of the sign-in is deleted; " +
+      "your Google account and the IDE are not touched.",
+    signInFailed: "The sign-in did not complete:",
+    signInHint: {
+      rejected:
+        "Google refused the code: paste the code from this sign-in (each one works once, " +
+        "for a few minutes), or Start over.",
+      timeout:
+        "Start over; if it happens again, check the interactive worker (Health).",
+      error: "Start over; if it happens again, check the runner image (Health)."
+    } as Record<string, string>,
+    signInExpired: "The sign-in closed before a code arrived. Start over.",
+    tosNote:
+      "Google's Antigravity FAQ says wrapping agy in third-party applications is not supported " +
+      "under consumer plans; the lab runs agy's own headless mode (agy -p) with the sign-in agy " +
+      "itself performs. You decide whether to use your account for it.",
+    accountWarning:
+      "Commands the agent runs can read this sign-in's token in the run's home. Runs on " +
+      "third-party code are refused unless HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1.",
+    useKeyInstead: "Use a Gemini API key instead",
+    keyFallbackNote:
+      "Runs use your Google sign-in while it is connected; the key is the fallback.",
+    planModelsNote: "Models your plan offers (agy models, signed in).",
+    testCostAccount: "Sends one real request on your plan's quota.",
+    planDefault: "Plan default"
   },
   es: {
     status: {
@@ -656,6 +707,8 @@ const KEY_MESSAGES = defineMessages({
     testCost: "Envía un pedido real a la API de Gemini (se factura a esta clave).",
     testOk: (answer: string, requested: string, apiModel: string | null, seconds: number) =>
       `Respondió “${answer}” — pedido ${requested || "?"}, modelo de la API ${apiModel ?? "desconocido"}, ${seconds}s.`,
+    testOkPlan: (answer: string, model: string, seconds: number) =>
+      `Respondió “${answer}” con ${model || "el modelo predeterminado de tu plan"} en ${seconds}s.`,
     failure: {
       auth: "Google rechazó la API key.",
       quota: "Cuota o facturación agotada, o la clave tiene límite de tasa.",
@@ -694,7 +747,62 @@ const KEY_MESSAGES = defineMessages({
       "Los comandos que corre el agente pueden leer esta clave: agy les pasa su entorno y no ofrece " +
       "forma de limpiarlo. Las corridas sobre código de terceros (instancias de SWE-bench, repositorios " +
       "destino externos) se rechazan salvo que HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1.",
-    untrustedAllowed: "Código no confiable: permitido"
+    untrustedAllowed: "Código no confiable: permitido",
+    // --- Inicio de sesión con Google (ADR-0097) ---
+    accountTitle: "Tu plan de Google",
+    accountIntro:
+      "Iniciá sesión con la cuenta de Google que tiene tu plan de Google AI. Las corridas usan la " +
+      "cuota de Antigravity de tu plan, como el IDE — sin API key y sin cobro por token.",
+    signIn: "Iniciar sesión con Google",
+    signingIn: "Iniciando el login del CLI…",
+    accountStep1:
+      "Abrí esta página e iniciá sesión con la cuenta que tiene tu plan:",
+    openSignIn: "Abrir el login de Google",
+    accountStep2:
+      "Después Google te muestra un código de autorización. Pegalo acá:",
+    codeLabel: "Código de autorización",
+    codePlaceholder: "4/0A…  (o la dirección completa de la página)",
+    submitCode: "Conectar",
+    exchanging: "Verificando el código con Google…",
+    signInExpiresIn: (clock: string) =>
+      `Este inicio de sesión se cierra en ${clock}.`,
+    restartSignIn: "Empezar de nuevo",
+    accountConnected: (email: string) =>
+      email
+        ? `Sesión iniciada como ${email}`
+        : "Sesión iniciada con Google",
+    accountSaved: (when: string) => (when ? `desde ${when}` : ""),
+    accountBilling: "cuota de tu plan",
+    accountProvider: "cuenta de Google",
+    signOut: "Cerrar sesión",
+    signOutConfirm:
+      "¿Cerrar la sesión del Antigravity CLI en el lab? Se borra la copia del lab; tu cuenta de " +
+      "Google y el IDE no se tocan.",
+    signInFailed: "El inicio de sesión no se completó:",
+    signInHint: {
+      rejected:
+        "Google rechazó el código: pegá el código de este inicio de sesión (cada uno sirve una vez, " +
+        "por unos minutos), o Empezar de nuevo.",
+      timeout:
+        "Empezá de nuevo; si se repite, revisá el worker interactivo (Estado).",
+      error: "Empezá de nuevo; si se repite, revisá la imagen del runner (Estado)."
+    } as Record<string, string>,
+    signInExpired:
+      "El inicio de sesión se cerró antes de recibir un código. Empezá de nuevo.",
+    tosNote:
+      "La FAQ de Antigravity de Google dice que envolver agy en aplicaciones de terceros no está " +
+      "soportado en planes de consumo; el lab usa el modo headless propio de agy (agy -p) con el " +
+      "login que hace el mismo agy. Vos decidís si usar tu cuenta para esto.",
+    accountWarning:
+      "Los comandos que corre el agente pueden leer el token de esta sesión en el home de la corrida. " +
+      "Las corridas sobre código de terceros se rechazan salvo que HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1.",
+    useKeyInstead: "Usar una API key de Gemini en su lugar",
+    keyFallbackNote:
+      "Mientras la sesión de Google esté conectada, las corridas la usan; la clave queda de respaldo.",
+    planModelsNote:
+      "Modelos que ofrece tu plan (agy models, con sesión iniciada).",
+    testCostAccount: "Envía un pedido real con la cuota de tu plan.",
+    planDefault: "Predeterminado del plan"
   }
 });
 
@@ -710,6 +818,223 @@ function formatEpoch(seconds: number | null | undefined): string {
 }
 
 /**
+ * The Antigravity CLI's own Google sign-in (ADR-0097), driven from the card.
+ *
+ * The worker starts agy's interactive sign-in in a runner container and
+ * publishes the Google URL; the operator signs in there and pastes the code
+ * Google shows. The code is read from an uncontrolled field at submit and
+ * cleared at once, so it never lives in React state.
+ */
+function AgyAccountSection({
+  cli,
+  onConnected,
+  onChange
+}: {
+  cli: NativeCliStatus;
+  onConnected: () => void;
+  onChange: () => Promise<void>;
+}) {
+  const m = useMessages(KEY_MESSAGES);
+  const account = cli.account;
+  const connected = Boolean(account?.connected);
+  const [login, setLoginState] = useState<NativeConnectState>(cli.login ?? { state: "idle" });
+  const [receivedAt, setReceivedAt] = useState(() => Date.now());
+  const setLogin = useCallback((next: NativeConnectState) => {
+    setLoginState(next);
+    setReceivedAt(Date.now());
+  }, []);
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const codeInput = useRef<HTMLInputElement>(null);
+  const notified = useRef(false);
+  // Set once a code is handed over, until the worker reports on it: a poll
+  // that lands first must not bring the form back for a second submit.
+  const [codeSent, setCodeSent] = useState(false);
+
+  const busy = BUSY_LOGIN.has(login.state);
+  useEffect(() => {
+    if (!busy) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      api
+        .readNativeCliLogin(cli.harness)
+        .then((next) => {
+          setLogin(next);
+          if (next.exchanging || next.state !== "waiting") {
+            setCodeSent(false);
+          }
+          if (next.state === "connected" && !notified.current) {
+            notified.current = true;
+            onConnected();
+          }
+          if (!BUSY_LOGIN.has(next.state)) {
+            void onChange();
+          }
+        })
+        .catch(() => undefined);
+    }, POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [busy, cli.harness, onChange, onConnected, setLogin]);
+
+  const start = (regenerate = false) => {
+    setError("");
+    notified.current = false;
+    setCodeSent(false);
+    setLogin({ state: "queued" });
+    api
+      .connectNativeCli(cli.harness, regenerate)
+      .then(setLogin)
+      .catch((exc: Error) => {
+        setLogin({ state: "idle" });
+        setError(exc.message);
+      });
+  };
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const input = codeInput.current;
+    const value = input?.value.trim() ?? "";
+    if (input) {
+      input.value = "";
+    }
+    if (!value) {
+      return;
+    }
+    setError("");
+    setSubmitting(true);
+    api
+      .submitNativeCliCode(cli.harness, value)
+      .then(() => setCodeSent(true))
+      .catch((exc: Error) => setError(exc.message))
+      .finally(() => setSubmitting(false));
+  };
+
+  const signOut = () => {
+    if (!window.confirm(m.signOutConfirm)) {
+      return;
+    }
+    setError("");
+    api
+      .disconnectNativeCli(cli.harness)
+      .then(() => {
+        setLogin({ state: "idle" });
+        window.setTimeout(() => void onChange(), 1500);
+      })
+      .catch((exc: Error) => setError(exc.message));
+  };
+
+  const waiting = login.state === "waiting" && Boolean(login.url);
+  const now = useNow(waiting);
+  const deadline = waiting ? localDeadline(login, receivedAt) : null;
+  const secondsLeft = deadline === null ? null : (deadline - now) / 1000;
+  const ended = login.state === "failed" || login.state === "expired";
+
+  if (connected && !busy) {
+    return (
+      <div className="native-cli-card__account">
+        <p className="native-cli-card__ok small">
+          {m.accountConnected(account?.email ?? "")}{" "}
+          <span className="muted">{m.accountSaved(formatEpoch(account?.saved_at))}</span>
+        </p>
+        <div className="native-cli-card__actions">
+          <button className="link" onClick={signOut} type="button">
+            {m.signOut}
+          </button>
+        </div>
+        {error ? <p className="error error-text small">{error}</p> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="native-cli-card__account native-cli-card__guide">
+      <p className="small">
+        <strong>{m.accountTitle}</strong> — {m.accountIntro}
+      </p>
+      {login.state === "idle" || login.state === "connected" ? (
+        <button
+          className="primary"
+          disabled={cli.lane_supported === false || cli.installed === false}
+          onClick={() => start()}
+          type="button"
+        >
+          {m.signIn}
+        </button>
+      ) : null}
+      {login.state === "queued" || login.state === "starting" ? (
+        <p className="muted small">{m.signingIn}</p>
+      ) : null}
+      {waiting ? (
+        <ol className="native-cli-card__steps">
+          <li>
+            {m.accountStep1}{" "}
+            <a href={login.url} rel="noreferrer noopener" target="_blank">
+              {m.openSignIn}
+            </a>
+          </li>
+          <li>
+            {m.accountStep2}
+            {login.exchanging || codeSent ? (
+              <p className="muted small" role="status">
+                {m.exchanging}
+              </p>
+            ) : (
+              <form autoComplete="off" className="native-cli-card__key-form" onSubmit={submit}>
+                <label>
+                  <span>{m.codeLabel}</span>
+                  <input
+                    autoComplete="off"
+                    name="google-auth-code"
+                    placeholder={m.codePlaceholder}
+                    ref={codeInput}
+                    spellCheck={false}
+                    type="password"
+                  />
+                </label>
+                <div className="native-cli-card__actions">
+                  <button className="primary" disabled={submitting} type="submit">
+                    {m.submitCode}
+                  </button>
+                </div>
+              </form>
+            )}
+          </li>
+          <li className="muted small">
+            {secondsLeft !== null && secondsLeft > 0
+              ? m.signInExpiresIn(formatClock(secondsLeft))
+              : null}{" "}
+            <button onClick={() => start(true)} type="button">
+              {m.restartSignIn}
+            </button>
+          </li>
+        </ol>
+      ) : null}
+      {login.state === "failed" ? (
+        <div className="error small" role="status">
+          <p>
+            <strong>{m.signInFailed}</strong> {login.error ?? ""}
+          </p>
+          <p className="muted">{m.signInHint[login.reason ?? "error"] ?? m.signInHint.error}</p>
+        </div>
+      ) : null}
+      {login.state === "expired" ? (
+        <p className="error small" role="status">
+          {m.signInExpired}
+        </p>
+      ) : null}
+      {ended ? (
+        <button className="primary" onClick={() => start(true)} type="button">
+          {m.restartSignIn}
+        </button>
+      ) : null}
+      <p className="muted small">{m.tosNote}</p>
+      {error ? <p className="error error-text small">{error}</p> : null}
+    </div>
+  );
+}
+
+/**
  * An API-key CLI (ADR-0096): Not configured → Configured → Verified / Test
  * failed. The key is read from an uncontrolled password field at submit and
  * cleared at once, so it never lives in React state; the worker stores it and
@@ -718,7 +1043,10 @@ function formatEpoch(seconds: number | null | undefined): string {
 function ApiKeyCliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () => Promise<void> }) {
   const shared = useMessages(MESSAGES);
   const m = useMessages(KEY_MESSAGES);
-  const configured = cli.api_key?.configured ?? cli.session === "connected";
+  const onAccount = cli.agy_auth === "account";
+  const keyConfigured = cli.api_key?.configured ?? false;
+  // Configured: a Google sign-in or a key is stored (the sign-in wins).
+  const configured = onAccount || keyConfigured || cli.session === "connected";
   const [keyOp, setKeyOp] = useState<ApiKeyOpState>(cli.key_op ?? { state: "idle" });
   const [test, setTest] = useState<NativeConnectState>(cli.last_test ?? { state: "idle" });
   // The last test that finished, so a re-test does not blank the status.
@@ -743,14 +1071,16 @@ function ApiKeyCliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () =
       ? live.map((row) => ({ id: row.id, label: row.label }))
       : (HARNESS_NATIVE_MODELS[cli.harness] ?? []);
   }, [models.models, cli.harness]);
-  const [testModel, setTestModel] = useState(
-    () => cli.default_test_model || options[0]?.id || ""
+  // On the Google sign-in "" is the plan's default model.
+  const [testModel, setTestModel] = useState(() =>
+    onAccount ? (cli.default_test_model ?? "") : cli.default_test_model || options[0]?.id || ""
   );
   // The picked slug always renders, even when a refreshed list dropped it.
-  const shownOptions =
+  const withPicked =
     testModel && !options.some((option) => option.id === testModel)
       ? [...options, { id: testModel, label: testModel }]
       : options;
+  const shownOptions = onAccount ? [{ id: "", label: m.planDefault }, ...withPicked] : withPicked;
 
   useEffect(() => {
     if (SETTLED_TEST.has(test.state)) {
@@ -892,6 +1222,11 @@ function ApiKeyCliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () =
       });
   };
 
+  const onSignedIn = useCallback(() => {
+    setSettled(null);
+    void runTest("").finally(() => void onChange());
+  }, [runTest, onChange]);
+
   const refreshModels = () => {
     setActionError("");
     setModels({ state: "queued" });
@@ -930,11 +1265,15 @@ function ApiKeyCliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () =
         {status}
       </p>
       <p className="muted small">
-        {m.authLabel} · {shared.laneLabel[cli.lane] ?? cli.lane} ·{" "}
+        {onAccount ? m.accountProvider : m.authLabel} · {shared.laneLabel[cli.lane] ?? cli.lane} ·{" "}
         {cli.version ? shared.version(cli.version) : shared.noVersion}
-        {cli.sandbox ? ` · ${m.sandbox(cli.sandbox)}` : ""} · {m.provider} · {m.billing}
+        {cli.sandbox ? ` · ${m.sandbox(cli.sandbox)}` : ""} ·{" "}
+        {onAccount ? m.accountBilling : `${m.provider} · ${m.billing}`}
       </p>
-      {configured && cli.api_key?.hint ? (
+
+      <AgyAccountSection cli={cli} onChange={onChange} onConnected={onSignedIn} />
+
+      {!onAccount && keyConfigured && cli.api_key?.hint ? (
         <p className="muted small">
           {m.keyLine(cli.api_key.hint, formatEpoch(cli.api_key.saved_at))}
         </p>
@@ -946,60 +1285,63 @@ function ApiKeyCliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () =
         <p className="error error-text small">{m.tooOld(cli.version, cli.too_old)}</p>
       ) : null}
 
-      {/* The key: configure, replace, remove. */}
-      {editing ? (
-        <form autoComplete="off" className="native-cli-card__key-form" onSubmit={submitKey}>
-          <label>
-            <span>{m.keyLabel}</span>
-            <input
-              autoComplete="off"
-              autoFocus
-              name="gemini-api-key"
-              ref={keyInput}
-              spellCheck={false}
-              type="password"
-            />
-          </label>
-          <p className="muted small">{m.keyHelp}</p>
-          {formError ? <p className="error error-text small">{formError}</p> : null}
+      {/* The key: configure, replace, remove — the alternative to the sign-in. */}
+      <details className="native-cli-card__alt" open={!onAccount && (keyConfigured || editing)}>
+        <summary className="small">{m.useKeyInstead}</summary>
+        {onAccount && keyConfigured ? <p className="muted small">{m.keyFallbackNote}</p> : null}
+        {editing ? (
+          <form autoComplete="off" className="native-cli-card__key-form" onSubmit={submitKey}>
+            <label>
+              <span>{m.keyLabel}</span>
+              <input
+                autoComplete="off"
+                autoFocus
+                name="gemini-api-key"
+                ref={keyInput}
+                spellCheck={false}
+                type="password"
+              />
+            </label>
+            <p className="muted small">{m.keyHelp}</p>
+            {formError ? <p className="error error-text small">{formError}</p> : null}
+            <div className="native-cli-card__actions">
+              <button className="primary" type="submit">
+                {m.save}
+              </button>
+              <button onClick={cancelEdit} type="button">
+                {m.cancel}
+              </button>
+            </div>
+          </form>
+        ) : (
           <div className="native-cli-card__actions">
-            <button className="primary" type="submit">
-              {m.save}
+            <button
+              disabled={keyBusy}
+              onClick={() => {
+                setFormError("");
+                setEditing(true);
+              }}
+              type="button"
+            >
+              {keyConfigured ? m.replace : m.configure}
             </button>
-            <button onClick={cancelEdit} type="button">
-              {m.cancel}
-            </button>
+            {keyConfigured ? (
+              <button className="danger" disabled={keyBusy} onClick={removeKey} type="button">
+                {m.remove}
+              </button>
+            ) : null}
           </div>
-        </form>
-      ) : (
-        <div className="native-cli-card__actions">
-          <button
-            className={configured ? undefined : "primary"}
-            disabled={keyBusy}
-            onClick={() => {
-              setFormError("");
-              setEditing(true);
-            }}
-            type="button"
-          >
-            {configured ? m.replace : m.configure}
-          </button>
-          {configured ? (
-            <button className="danger" disabled={keyBusy} onClick={removeKey} type="button">
-              {m.remove}
-            </button>
-          ) : null}
-        </div>
-      )}
-      {keyBusy ? (
-        <p className="muted small">{pendingOp === "remove" ? m.removing : m.saving}</p>
-      ) : null}
-      {savedNow && testBusy ? <p className="small">{m.keySaved}</p> : null}
-      {keyOp.state === "failed" ? (
-        <p className="error error-text small">
-          {m.keyFailed} {keyOp.error}
-        </p>
-      ) : null}
+        )}
+        {keyBusy ? (
+          <p className="muted small">{pendingOp === "remove" ? m.removing : m.saving}</p>
+        ) : null}
+        {savedNow && testBusy ? <p className="small">{m.keySaved}</p> : null}
+        {keyOp.state === "failed" ? (
+          <p className="error error-text small">
+            {m.keyFailed} {keyOp.error}
+          </p>
+        ) : null}
+      </details>
 
       {/* Configured: one real request proves the key serves the model. */}
       {configured ? (
@@ -1022,17 +1364,19 @@ function ApiKeyCliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () =
               {testBusy ? m.testing : m.test}
             </button>
           </div>
-          <span className="muted small">{m.testCost}</span>
+          <span className="muted small">{onAccount ? m.testCostAccount : m.testCost}</span>
         </>
       ) : null}
       {test.state === "ok" ? (
         <p className="native-cli-card__ok small">
-          {m.testOk(
-            test.answer ?? "",
-            test.requested_model ?? test.model ?? "",
-            test.api_model ?? null,
-            test.seconds ?? 0
-          )}
+          {test.auth === "account"
+            ? m.testOkPlan(test.answer ?? "", test.requested_model || test.model || "", test.seconds ?? 0)
+            : m.testOk(
+                test.answer ?? "",
+                test.requested_model ?? test.model ?? "",
+                test.api_model ?? null,
+                test.seconds ?? 0
+              )}
         </p>
       ) : null}
       {test.state === "failed" ? (
@@ -1083,12 +1427,14 @@ function ApiKeyCliCard({ cli, onChange }: { cli: NativeCliStatus; onChange: () =
               </ul>
             </details>
           ) : null}
-          {liveModels.length > 0 ? <p className="muted small">{m.modelsNote}</p> : null}
+          {liveModels.length > 0 ? (
+            <p className="muted small">{onAccount ? m.planModelsNote : m.modelsNote}</p>
+          ) : null}
         </div>
       ) : null}
 
       <div className="callout callout--warning native-cli-card__warning small">
-        <p>{m.warning}</p>
+        <p>{onAccount ? m.accountWarning : m.warning}</p>
         {cli.untrusted_allowed ? (
           <p>
             <strong>{m.untrustedAllowed}</strong> (HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1)

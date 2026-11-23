@@ -919,6 +919,12 @@ export const api = {
     ),
   readNativeCliLogin: (harness: string) =>
     request<NativeConnectState>(`/api/harness/clis/${harness}/connect`),
+  /** The code Google showed after an Antigravity sign-in (ADR-0097). */
+  submitNativeCliCode: (harness: string, code: string) =>
+    request<NativeConnectState>(`/api/harness/clis/${harness}/connect/code`, {
+      method: "POST",
+      body: JSON.stringify({ code })
+    }),
   disconnectNativeCli: (harness: string) =>
     request<{ harness: string; state: string }>(
       `/api/harness/clis/${harness}/connect`,

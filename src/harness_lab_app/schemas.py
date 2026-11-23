@@ -743,3 +743,13 @@ class CliApiKeyUpdate(BaseModel):
     """
 
     api_key: SecretStr = Field(repr=False)
+
+
+class CliAuthCodeSubmit(BaseModel):
+    """The authorization code Google showed after an Antigravity sign-in.
+
+    One-time and short-lived, but still a credential while it lives: a
+    ``SecretStr`` kept out of every repr, validation error and log line.
+    """
+
+    code: SecretStr = Field(repr=False)

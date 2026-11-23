@@ -112,6 +112,7 @@ from harness_lab_app.schemas import (
     CheckoutAttachRequest,
     CheckoutFromLocalRequest,
     CliApiKeyUpdate,
+    CliAuthCodeSubmit,
     EnvUpdateRequest,
     ExperimentCreate,
     ExperimentLaunch,
@@ -779,12 +780,13 @@ def create_app() -> FastAPI:
         from harness_lab_app import native_connect
         from harness_lab_app.celery_app import enqueue_native_cli
 
-        harness = _native_cli_or_404(harness)
+        harness = _native_cli_or_404(harness, api_key=True)
         if harness in native_connect.UNAVAILABLE:
             raise HTTPException(
                 status_code=409, detail=native_connect.UNAVAILABLE[harness]
             )
-        if harness not in native_connect.CONNECTABLE:
+        # antigravity_cli: the CLI's own Google sign-in (ADR-0097).
+        if harness not in native_connect.CONNECTABLE and harness != "antigravity_cli":
             raise HTTPException(status_code=409, detail="not connectable from the UI")
         current = native_connect.read_login(harness)
         if not regenerate and native_connect.login_in_flight(current):
@@ -815,7 +817,36 @@ def create_app() -> FastAPI:
         lifetime reads ``expired`` and ``server_time`` anchors the countdown."""
         from harness_lab_app import native_connect
 
-        return native_connect.read_login(_native_cli_or_404(harness))
+        return native_connect.read_login(_native_cli_or_404(harness, api_key=True))
+
+    @app.post("/api/harness/clis/{harness}/connect/code")
+    def submit_native_cli_code(harness: str, body: CliAuthCodeSubmit):
+        """The authorization code Google showed after an Antigravity sign-in
+        (ADR-0097). Handed to the attempt's worker as a 0600 file, never
+        through the broker, never logged; the worker types it into agy."""
+        from harness_lab_app import native_connect
+        from harness_lab_app.agy_account import validate_code
+
+        if harness != "antigravity_cli":
+            raise HTTPException(status_code=404, detail="no code sign-in for this CLI")
+        current = native_connect.read_login(harness)
+        if current.get("state") != "waiting" or current.get("exchanging"):
+            raise HTTPException(
+                status_code=409,
+                detail="No sign-in is waiting for a code. Start one with Sign in.",
+            )
+        try:
+            code = validate_code(body.code.get_secret_value())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        attempt = str(current.get("attempt") or "")
+        try:
+            native_connect.write_code_drop(harness, attempt, code)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(
+                status_code=409, detail="The sign-in changed; start it again."
+            ) from exc
+        return {**current, "code_submitted": True}
 
     @app.post("/api/harness/clis/{harness}/test")
     def test_native_cli(harness: str, model: str = ""):
@@ -850,7 +881,7 @@ def create_app() -> FastAPI:
         The worker does it: the API mounts the store read-only."""
         from harness_lab_app.celery_app import enqueue_native_cli
 
-        harness = _native_cli_or_404(harness)
+        harness = _native_cli_or_404(harness, api_key=True)
         try:
             enqueue_native_cli("disconnect_native_cli", harness)
         except Exception as exc:

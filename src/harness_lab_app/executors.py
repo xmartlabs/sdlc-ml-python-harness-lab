@@ -165,6 +165,9 @@ def runner_secret_dirs(
     relatives = list(RUNNER_SECRET_DIRS)
     runs = get_settings().data_runs_dir
     with contextlib.suppress(OSError):
+        # Another run's provider session. Another antigravity_cli run's copy
+        # of the Google sign-in is masked for every harness alike
+        # (agy_account_copy_masks).
         for session in sorted(runs.glob("*/session")):
             if session.parent.name != run_id and session.is_dir():
                 relatives.append(str(session.relative_to(repo)))
@@ -175,6 +178,33 @@ def runner_secret_dirs(
             continue
         if (repo / relative).is_dir():
             masks[target] = ""
+    return masks
+
+
+def agy_account_copy_masks(
+    run_id: str, tmpfs: dict[str, str], mount_root: str = "/app"
+) -> dict[str, str]:
+    """tmpfs over every *other* run's copy of the Antigravity Google sign-in.
+
+    An antigravity_cli run on the operator's sign-in (ADR-0097) works on a
+    private copy under ``data/runs/<id>/agy-home``, inside the repo bind every
+    run container shares; a sign-in in progress keeps its home and its code
+    exchange there too. No other container — of any harness — may read them,
+    so each one that exists when a container starts is emptied in it.
+    """
+    root = mount_root.rstrip("/")
+    repo = get_settings().repo_root
+    runs = get_settings().data_runs_dir
+    masks: dict[str, str] = {}
+    with contextlib.suppress(OSError):
+        for pattern in ("*/agy-home", "*/agy-exchange"):
+            for copy in sorted(runs.glob(pattern)):
+                if copy.parent.name == run_id or not copy.is_dir():
+                    continue
+                target = f"{root}/{copy.relative_to(repo).as_posix()}"
+                if target in tmpfs or any(target.startswith(f"{m}/") for m in tmpfs):
+                    continue
+                masks[target] = ""
     return masks
 
 
@@ -512,15 +542,119 @@ def build_run_environment(harness: str = "") -> dict[str, str]:
         )
         env["HARNESS_LAB_AGENT_HOME"] = CONTAINER_AGENT_HOME
     elif harness in API_KEY_HARNESSES:
-        # Every other provider's credential out, the stored Gemini API key in
-        # (the only secret this container gets), and an empty home inside the
-        # container's own filesystem, which dies with it: agy writes its
-        # conversations, logs and databases there (api_key_auth).
+        # Every other provider's credential out. On the operator's Google
+        # sign-in (ADR-0097) no key at all: agy reads its token from the run's
+        # private copy of the account home, mounted at CONTAINER_ACCOUNT_HOME.
+        # On a Gemini API key (ADR-0096) the stored key is the only secret
+        # added, with an empty home inside the container's own filesystem,
+        # which dies with it: agy writes its conversations, logs and databases
+        # there (api_key_auth).
+        from harness_lab_app.agy_account import (
+            AUTH_ACCOUNT,
+            CONTAINER_ACCOUNT_HOME,
+            auth_mode,
+        )
         from harness_lab_app.api_key_auth import agy_env, read_key
 
-        env = agy_env(env, key=read_key(), home=CONTAINER_AGENT_HOME)
-        env["HARNESS_LAB_AGENT_HOME"] = CONTAINER_AGENT_HOME
+        if auth_mode() == AUTH_ACCOUNT:
+            env = agy_env(env, key="", home=CONTAINER_ACCOUNT_HOME)
+            env.pop("GEMINI_API_KEY", None)
+            env["HARNESS_LAB_AGENT_HOME"] = CONTAINER_ACCOUNT_HOME
+            env["HARNESS_LAB_AGY_AUTH"] = AUTH_ACCOUNT
+        else:
+            env = agy_env(env, key=read_key(), home=CONTAINER_AGENT_HOME)
+            env["HARNESS_LAB_AGENT_HOME"] = CONTAINER_AGENT_HOME
     return env
+
+
+#: Executor labels of the Antigravity sign-in container (``connect-<h>-login-*``).
+AGY_LOGIN_PREFIX = "connect-antigravity_cli-login"
+
+
+def agy_login_environment(env: dict[str, str]) -> dict[str, str]:
+    """The sign-in container's environment: no key, an empty home, the exchange.
+
+    Built from a run's (no foreign credential, auto-update off). The Gemini API
+    key is removed: with it agy would not offer the Google sign-in at all.
+    """
+    from harness_lab_app.agy_account import (
+        CODE_LIFETIME_SECONDS,
+        CONTAINER_ACCOUNT_HOME,
+        CONTAINER_EXCHANGE_DIR,
+        URL_WAIT_SECONDS,
+    )
+
+    out = {k: v for k, v in env.items() if k != "GEMINI_API_KEY"}
+    out.update(
+        HOME=CONTAINER_ACCOUNT_HOME,
+        HARNESS_LAB_AGENT_HOME=CONTAINER_ACCOUNT_HOME,
+        AGY_LOGIN_EXCHANGE=CONTAINER_EXCHANGE_DIR,
+        AGY_LOGIN_WORKDIR=f"{CONTAINER_ACCOUNT_HOME}/work",
+        AGY_LOGIN_URL_WAIT=str(URL_WAIT_SECONDS),
+        AGY_LOGIN_CODE_WAIT=str(CODE_LIFETIME_SECONDS),
+        TERM="xterm-256color",
+    )
+    return out
+
+
+def agy_account_mounts(run_id: str, host_repo_root: str) -> list[Any]:
+    """The account home of an antigravity_cli container on the Google sign-in.
+
+    * A run, a test or a model listing: a private copy of the stored sign-in
+      (:func:`agy_account.stage_run_home`) under ``data/runs/<id>/agy-home``,
+      bound read-write at ``CONTAINER_ACCOUNT_HOME``. :class:`_DockerHandle`
+      returns a refreshed token to the store and deletes the copy on ``wait``.
+    * The sign-in itself (``run_id`` starts with :data:`AGY_LOGIN_PREFIX`): an
+      empty home, plus the exchange directory the worker drops the pasted
+      code into. The worker keeps what the sign-in wrote
+      (:func:`agy_account.save_account`).
+
+    Empty when no sign-in is stored and this is not the sign-in: the run is
+    on an API key.
+    """
+    from docker.types import Mount
+
+    from harness_lab_app.agy_account import (
+        CONTAINER_ACCOUNT_HOME,
+        CONTAINER_EXCHANGE_DIR,
+        account_status,
+        stage_run_home,
+    )
+
+    settings = get_settings()
+    base = settings.data_runs_dir / run_id
+    home = base / "agy-home"
+    mounts: list[Any] = []
+    if run_id.startswith(AGY_LOGIN_PREFIX):
+        import shutil
+
+        shutil.rmtree(home, ignore_errors=True)
+        home.mkdir(parents=True)
+        home.chmod(0o700)
+        exchange = base / "agy-exchange"
+        exchange.mkdir(parents=True, exist_ok=True)
+        exchange.chmod(0o700)
+        mounts.append(
+            Mount(
+                target=CONTAINER_EXCHANGE_DIR,
+                source=_host_path(exchange, settings.repo_root, host_repo_root),
+                type="bind",
+                read_only=False,
+            )
+        )
+    elif account_status()["connected"]:
+        stage_run_home(home)
+    else:
+        return []
+    mounts.append(
+        Mount(
+            target=CONTAINER_ACCOUNT_HOME,
+            source=_host_path(home, settings.repo_root, host_repo_root),
+            type="bind",
+            read_only=False,
+        )
+    )
+    return mounts
 
 
 def native_session_mount(harness: str, run_id: str, host_repo_root: str) -> Any | None:
@@ -748,12 +882,16 @@ class _DockerHandle:
         container: Any,
         session: tuple[str, Path] | None = None,
         secret: str = "",
+        agy_home: Path | None = None,
     ):
         self.container = container
         self._stopped = False
         # (harness, staged session dir) for a codex/gemini run: the refreshed
         # credential goes back to the store once the container is done.
         self._session = session
+        # An antigravity_cli run on the Google sign-in: its private home, whose
+        # refreshed token returns to the store (agy_account.return_run_home).
+        self._agy_home = agy_home
         # The API key an antigravity_cli container was given: never let it
         # through to a RunEvent, a failure reason or a progress record, even if
         # the agent printed it (api_key_auth).
@@ -795,6 +933,11 @@ class _DockerHandle:
                 harness, staged = self._session
                 self._session = None
                 return_run_session(harness, staged)
+            if self._agy_home is not None:
+                from harness_lab_app.agy_account import return_run_home
+
+                home, self._agy_home = self._agy_home, None
+                return_run_home(home)
 
 
 def container_name_for_run(run_id: str) -> str:
@@ -850,6 +993,10 @@ class DockerRunExecutor:
         tmpfs, mask_files = runner_masks(
             governance_mask, hidden=hidden, harness=harness
         )
+        # Every container, the validation lane included (it runs an audited
+        # repository's own code with /app bound): another run's copy of the
+        # Antigravity sign-in or its code exchange is never readable.
+        tmpfs.update(agy_account_copy_masks(run_id, tmpfs))
         if not hardened:
             tmpfs.update(runner_secret_dirs(harness, run_id, tmpfs))
             known = {target for target, _kind in mask_files}
@@ -888,6 +1035,16 @@ class DockerRunExecutor:
         )
         if session is not None:
             mounts.append(session)
+        # antigravity_cli on the operator's Google sign-in (ADR-0097): the
+        # run's private copy of the account home, or the sign-in's own empty
+        # home and code exchange. Nothing on the hardened lane.
+        agy_mounts = (
+            agy_account_mounts(run_id, host_repo_root)
+            if harness in API_KEY_HARNESSES and not hardened
+            else []
+        )
+        mounts.extend(agy_mounts)
+        agy_login = harness in API_KEY_HARNESSES and run_id.startswith(AGY_LOGIN_PREFIX)
         if mounts:
             extra["mounts"] = mounts
         # The agent lane is unchanged: full `.env`, the gateway alias, its
@@ -896,6 +1053,11 @@ class DockerRunExecutor:
         # network.
         if hardened:
             extra.update(hardened_container_options(phase))
+        environment = (
+            sanitized_run_environment() if hardened else build_run_environment(harness)
+        )
+        if agy_login:
+            environment = agy_login_environment(environment)
         container = client.containers.run(
             image=image,
             command=command,
@@ -904,20 +1066,27 @@ class DockerRunExecutor:
             working_dir="/app",
             volumes={host_repo_root: {"bind": "/app", "mode": "rw"}},
             tmpfs=tmpfs,
-            environment=(
-                sanitized_run_environment()
-                if hardened
-                else build_run_environment(harness)
-            ),
+            environment=environment,
             extra_hosts={settings.docker_host_alias: "host-gateway"},
             labels={"harness-lab.run-id": run_id},
             **extra,
         )
         secret = ""
-        if harness in API_KEY_HARNESSES and not hardened:
+        if (
+            harness in API_KEY_HARNESSES
+            and not hardened
+            and environment.get("GEMINI_API_KEY")
+        ):
             from harness_lab_app.api_key_auth import read_key
 
             secret = read_key()
+        # A run on the Google sign-in hands a refreshed token back to the
+        # store; the sign-in container's home is the worker's to collect.
+        agy_home = (
+            settings.data_runs_dir / run_id / "agy-home"
+            if agy_mounts and not agy_login
+            else None
+        )
         return _DockerHandle(
             container,
             session=(
@@ -926,6 +1095,7 @@ class DockerRunExecutor:
                 else None
             ),
             secret=secret,
+            agy_home=agy_home,
         )
 
     @staticmethod

@@ -23,7 +23,13 @@ if TYPE_CHECKING:
 #
 # Skipping them is what keeps a run's index the handful of files it is meant to
 # be — metadata.json, prompt.md, report.md, audit.md, diff.patch, steps/.
-EXCLUDED_ARTIFACT_DIRS = ("workspace",)
+#
+# `agy-home` / `agy-exchange` and `session` are credentials, never artifacts: a
+# run's private copy of the operator's Antigravity Google sign-in (ADR-0097) or
+# a sign-in's code exchange, and a codex/gemini run's provider session
+# (ADR-0094). They live there only while the run does, but an index taken
+# meanwhile would serve the token through the artifacts API.
+EXCLUDED_ARTIFACT_DIRS = ("workspace", "agy-home", "agy-exchange", "session")
 EXCLUDED_ARTIFACT_DIR_PREFIXES = ("sandbox-",)
 
 

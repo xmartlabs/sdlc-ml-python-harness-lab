@@ -124,6 +124,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0094 — Codex and Gemini run on their own subscription login](0094-codex-and-gemini-run-on-their-own-subscription-login.md)
 - [0095 — An ad hoc task runs on a copy and is applied on request](0095-an-adhoc-task-runs-on-a-copy-and-is-applied-on-request.md)
 - [0096 — Antigravity CLI runs on a Gemini API key, never on a personal sign-in](0096-antigravity-cli-runs-on-a-gemini-api-key.md)
+- [0097 — Antigravity CLI can run on the operator's own Google sign-in](0097-antigravity-cli-on-the-operators-google-sign-in.md)
 
 ## Why ADRs exist
 

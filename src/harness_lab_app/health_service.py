@@ -475,13 +475,17 @@ def native_cli_status(facts: dict[str, Any] | None = None) -> list[dict[str, Any
 
 
 def _agy_row(lane: str, facts: dict[str, Any] | None) -> dict[str, Any]:
-    """The Antigravity CLI card: an API key, never a subscription session.
+    """The Antigravity CLI card: the Google sign-in, or a Gemini API key.
 
-    ``session`` is ``connected`` once a key is stored — that is not proof it
-    works, which only the connection test gives (``last_test``). The key's
-    value never leaves the store: the row carries its last four characters.
+    Two credentials, one harness. The operator's own Google sign-in (ADR-0097)
+    runs on their plan's quota; a Gemini API key (ADR-0096) is billed per
+    token. When both exist the sign-in is used (``auth``). ``session`` is
+    ``connected`` once either is stored — not proof it works, which only the
+    connection test gives (``last_test``). No credential value is in the row:
+    the key's last four characters and the account's email at most.
     """
     from harness_lab_app import native_connect
+    from harness_lab_app.agy_account import AUTH_ACCOUNT, account_status, auth_mode
     from harness_lab_app.api_key_auth import HARNESS, key_status, untrusted_allowed
     from harness_lab_app.native_models import (
         AGY_TEST_MODEL,
@@ -495,6 +499,9 @@ def _agy_row(lane: str, facts: dict[str, Any] | None) -> dict[str, Any]:
         version = str(((facts or {}).get("cli_versions") or {}).get(HARNESS) or "")
         installed = bool(version) if facts else None
     key = key_status()
+    account = account_status()
+    mode = auth_mode(key_configured=bool(key["configured"]))
+    on_account = mode == AUTH_ACCOUNT
     return {
         "harness": HARNESS,
         "lane": lane,
@@ -506,22 +513,26 @@ def _agy_row(lane: str, facts: dict[str, Any] | None) -> dict[str, Any]:
         "min_version": MIN_NATIVE_CLI_VERSION.get(HARNESS),
         "too_old": native_cli_too_old(HARNESS, version),
         "sandbox": "container",
-        "session": "connected" if key["configured"] else "missing",
-        "auth_kind": "api_key" if key["configured"] else None,
-        "billing_mode": "api",
+        "session": "connected" if mode else "missing",
+        "auth_kind": mode or None,
+        "billing_mode": "subscription" if on_account else "api",
+        # The card kind stays "api_key" (its own component); `agy_auth` says
+        # which credential runs use.
         "auth": "api_key",
-        "provider": "gemini_api",
-        "connectable": False,
+        "agy_auth": mode or None,
+        "provider": "google_account" if on_account else "gemini_api",
+        "connectable": True,
         "configurable": True,
         "unavailable": None,
         "testable": True,
+        "account": account,
         "api_key": key,
         "key_op": native_connect.read_state(HARNESS, "key"),
-        "login": {"state": "idle"},
+        "login": native_connect.read_login(HARNESS),
         "last_test": native_connect.read_state(HARNESS, "test"),
         "models": native_connect.read_state(HARNESS, "models"),
         "untrusted_allowed": untrusted_allowed(),
-        "default_test_model": AGY_TEST_MODEL,
+        "default_test_model": "" if on_account else AGY_TEST_MODEL,
     }
 
 
@@ -558,7 +569,7 @@ def _check_agy(facts: dict[str, Any]) -> tuple[str, str, list[str]]:
     if row["session"] != "connected":
         return (
             OK,
-            f"agy {row['version']} installed; no Gemini API key configured "
+            f"agy {row['version']} installed; not signed in and no Gemini API key "
             "(System → Agent CLIs).",
             [],
         )
@@ -571,10 +582,15 @@ def _check_agy(facts: dict[str, Any]) -> tuple[str, str, list[str]]:
             [],
         )
     verified = "verified" if test.get("state") == "ok" else "not tested yet"
+    credential = (
+        "Google sign-in (plan quota)"
+        if row["agy_auth"] == "account"
+        else f"Gemini API key {row['api_key']['hint']}"
+    )
     return (
         OK,
-        f"agy {row['version']} (docker, sandbox: container), Gemini API key "
-        f"{row['api_key']['hint']} — {verified}.",
+        f"agy {row['version']} (docker, sandbox: container), {credential} — "
+        f"{verified}.",
         [],
     )
 

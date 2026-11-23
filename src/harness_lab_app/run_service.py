@@ -403,6 +403,35 @@ class RunService:
                 "`make app-up` builds only the shared runner image), then launch "
                 "again."
             )
+        self._check_case_image_cli(config, image, facts)
+
+    @staticmethod
+    def _check_case_image_cli(config: RunConfigCreate, image: str, facts: dict) -> None:
+        """Refuse a native-CLI run whose case image predates that CLI.
+
+        A case image (ADR-0078) is built FROM the shared runner once and is not
+        rebuilt when the shared one gains a CLI. The run then died with "CLI
+        not found on PATH" (opencity3d-v1-K-003, 2026-11-23: the Godot image
+        predated agy). Read from the image's inherited version label; a worker
+        that does not report labels per image is not second-guessed.
+        """
+        from harness_lab_app.native_models import CLI_VERSION_LABELS
+
+        if not image or config.harness not in CLI_VERSION_LABELS:
+            return
+        if config.harness == "claude":
+            return  # claude predates every case image
+        per_image = facts.get("case_image_cli_versions")
+        if not isinstance(per_image, dict) or image not in per_image:
+            return
+        if not str((per_image.get(image) or {}).get(config.harness) or ""):
+            raise RunPreflightError(
+                f"Case '{config.case_id}' runs in its own image, {image!r}, which "
+                f"was built before the '{config.harness}' CLI was added to the "
+                "runner, so the run would fail with 'CLI not found'. Rebuild it: "
+                "`docker compose build runner-godot` (or `make images-3d`), then "
+                "launch again."
+            )
 
     def preflight(self, config: RunConfigCreate) -> None:
         """Reject configs that cannot possibly run, before persisting/enqueuing.
@@ -880,9 +909,9 @@ class RunService:
         lab can map to a Gemini API model), the runner's CLI, the API key, and
         third-party code the agent would run with that key in its environment.
         """
+        from harness_lab_app.agy_account import AUTH_ACCOUNT, auth_mode
         from harness_lab_app.api_key_auth import (
             ALLOW_UNTRUSTED_ENV,
-            key_status,
             untrusted_allowed,
         )
         from harness_lab_app.health_service import worker_facts
@@ -907,13 +936,28 @@ class RunService:
                 "would ignore it. Pick one of its models (System → Agent CLIs → "
                 "Refresh models)."
             )
+        mode = auth_mode()
+        if not mode:
+            raise RunPreflightError(
+                "The 'antigravity_cli' harness has no credential: sign in with "
+                "Google (your plan) or configure a Gemini API key in System → "
+                "Agent CLIs → Antigravity CLI."
+            )
         if not model:
             raise RunPreflightError(
                 "Pick a model for the 'antigravity_cli' harness. agy's stream "
                 "never names the model that answered, so a run on the CLI's "
                 "default would be filed under a model nobody chose."
             )
-        if agy_api_model(model)[0] is None:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.\-]*", model.lower()):
+            raise RunPreflightError(
+                f"'{model}' is not an agy model slug. Pick one from System → "
+                "Agent CLIs → Refresh models."
+            )
+        # On a key the slug must map to a Gemini API model the lab can price.
+        # On the Google sign-in the plan decides what is served (agy itself
+        # refuses a slug the plan lacks) and the cost is the plan's quota.
+        if mode != AUTH_ACCOUNT and agy_api_model(model)[0] is None:
             raise RunPreflightError(
                 f"'{model}' is not a model slug the lab verified for agy (it "
                 "cannot tell which Gemini API model it calls, nor price it). "
@@ -935,18 +979,17 @@ class RunService:
                 f"The runner image has agy {version}; the lab's integration was "
                 f"verified on {required} or newer. Rebuild the runner image."
             )
-        if not key_status()["configured"]:
-            raise RunPreflightError(
-                "No Gemini API key is configured for the 'antigravity_cli' "
-                "harness. Add one in System → Agent CLIs → Antigravity CLI."
-            )
         untrusted = self._untrusted_code_reason(config)
         if untrusted and not untrusted_allowed():
+            exposed = (
+                "the commands agy runs can read your Google sign-in's token in its home"
+                if mode == AUTH_ACCOUNT
+                else "every command agy runs inherits the Gemini API key (agy "
+                "offers no way to scrub it)"
+            )
             raise RunPreflightError(
-                f"Refused: this run would execute {untrusted}, and every command "
-                "agy runs inherits the Gemini API key (agy offers no way to "
-                "scrub it). Use a dedicated, budget-capped key and set "
-                f"{ALLOW_UNTRUSTED_ENV}=1 on the API and worker to allow it."
+                f"Refused: this run would execute {untrusted}, and {exposed}. "
+                f"Set {ALLOW_UNTRUSTED_ENV}=1 on the API and worker to allow it."
             )
 
     def _untrusted_code_reason(self, config: RunConfigCreate) -> str:

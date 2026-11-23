@@ -346,9 +346,18 @@ def billing_mode(harness: str, env: dict[str, str] | None = None) -> str:
     if harness == "opencode":
         return "gateway"
     if harness == "antigravity_cli":
-        # A Gemini API key the operator configured (api_key_auth): per-token
-        # API billing, never a subscription's quota.
-        return "api"
+        # The operator's Google sign-in (agy_account, ADR-0097) spends the
+        # plan's quota; a Gemini API key (api_key_auth, ADR-0096) is billed per
+        # token. Inside the runner the executor already decided which one this
+        # run has (HARNESS_LAB_AGY_AUTH); elsewhere the store says.
+        values = env if env is not None else dict(os.environ)
+        if values.get("HARNESS_LAB_AGY_AUTH") == "account":
+            return "subscription"
+        if values.get("HARNESS_LAB_IN_RUNNER") == "1":
+            return "api"
+        from harness_lab_app.agy_account import AUTH_ACCOUNT, auth_mode
+
+        return "subscription" if auth_mode() == AUTH_ACCOUNT else "api"
     return "unknown"
 
 

@@ -13,7 +13,7 @@ independent variable. Five are wired today:
 | `codex` | `codex exec --json` (prompt on stdin) | **container** or **host** | ChatGPT plan login, lab session store (`make auth-codex`) | native menu → `-m` |
 | `claude` | `claude -p` | **container** (Docker) or **host** | native (Anthropic) — env token in Docker, your login on host | native menu → `--model` |
 | `gemini` | `gemini -p "" --output-format stream-json` (prompt on stdin) | **container** or **host** | Code Assist Standard/Enterprise login only — personal Google plans retired 2026-06-18 ([runbook](runbook-claude-codex.md#gemini-cli-and-personal-google-plans)) | native menu → `-m` |
-| `antigravity_cli` | `agy --settings … --mode accept-edits --input-format stream-json --output-format stream-json` (prompt on stdin) | **container only** | Gemini API key in the lab store (System → Agent CLIs), never a personal sign-in ([ADR-0096](adr/0096-antigravity-cli-runs-on-a-gemini-api-key.md)) | `agy models` slugs → `--model` (required) |
+| `antigravity_cli` | `agy --settings … --mode accept-edits --input-format stream-json --output-format stream-json` (prompt on stdin) | **container only** | The operator's Google sign-in made by agy itself, on the plan's quota ([ADR-0097](adr/0097-antigravity-cli-on-the-operators-google-sign-in.md)), else a Gemini API key ([ADR-0096](adr/0096-antigravity-cli-runs-on-a-gemini-api-key.md)) | `agy models` slugs → `--model` (required) |
 
 (`antigravity` — no suffix — remains the separate human-driven IDE flow, not
 executed by the runner. `antigravity_cli` is the automated one.)
@@ -344,9 +344,10 @@ live in `data/app/native-connect/` and never hold a credential.
 
 `antigravity_cli` runs Google's Antigravity CLI (`agy`, pinned 1.5.14 in
 `Dockerfile.runner`, sha512-verified per architecture) in the runner
-container, authenticated **only** by a Gemini API key. Operator steps, the
-failure table and the security limit are in the
-[runbook](runbook-claude-codex.md#antigravity-cli-on-a-gemini-api-key).
+container. It is authenticated by a Gemini API key, or by the operator's
+Google sign-in (next section, ADR-0097). Operator steps, the failure table and
+the security limit are in the
+[runbook](runbook-claude-codex.md#antigravity-cli-on-your-google-plan).
 
 | Concern | Where | What |
 |---|---|---|
@@ -357,9 +358,22 @@ failure table and the security limit are in the
 | Models | `native_models.py` | `NATIVE_MODELS["antigravity_cli"]` (agy 1.5.14 slugs), `AGY_SLUG_MAP` slug → (Gemini API model, thinking level), `parse_agy_models` |
 | Cost | `api_price_estimate.py` | `GEMINI_PRICES` (paid tier, Standard, 2026-11-22), `estimate_gemini_api_cost`; `cost_source: api_list_price_estimate` / `api_price_unknown` |
 | Preflight | `run_service._check_agy` | Docker only, verified model required, CLI ≥ 1.5.14, key configured, third-party code refused unless `HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1` |
-| UI | `NativeClisPanel.tsx` | Antigravity CLI card: configure/replace key, test connection, refresh models, remove credentials |
-| API | `api.py` | `PUT/GET/DELETE /api/harness/clis/antigravity_cli/api-key`, `POST/GET …/models`, `POST/GET …/test` |
-| Worker | `tasks.py` | `save_cli_api_key`, `remove_cli_api_key`, `refresh_cli_models`, `test_native_cli` (agy branch), `_redact_api_key` after a run |
+| UI | `NativeClisPanel.tsx` | Antigravity CLI card: Sign in with Google (`AgyAccountSection`), the key as *Use a Gemini API key instead*, test connection, refresh models |
+| API | `api.py` | `PUT/GET/DELETE /api/harness/clis/antigravity_cli/api-key`, `POST/GET/DELETE …/connect`, `POST …/connect/code`, `POST/GET …/models`, `POST/GET …/test` |
+| Worker | `tasks.py` | `_connect_agy_account` (sign-in), `save_cli_api_key`, `remove_cli_api_key`, `refresh_cli_models`, `test_native_cli` (agy branch), `_redact_api_key` after a run |
+
+### On the operator's Google sign-in (ADR-0097)
+
+When a sign-in is stored it wins over the key (`agy_account.auth_mode`).
+
+| Concern | Where | What |
+|---|---|---|
+| Sign-in | `scripts/agy_login.py` | In the login container: `agy` on a pty, picks *Google OAuth*, publishes the URL (OSC 8 target), types the pasted code from `$AGY_LOGIN_EXCHANGE/code`, reports `connected` when `~/.gemini/antigravity-cli/antigravity-oauth-token` exists; prints only `@@agy-login {json}` records |
+| Session | `agy_account.py` | Allow-list of the files agy wrote outside its work dirs, stored at `<HARNESS_LAB_AUTH_DIR>/antigravity_cli/account/` with a manifest; `stage_run_home` / `return_run_home` (only manifest files, regular and non-empty, while still signed in) |
+| Code hand-off | `native_connect.py` | `write_code_drop` (API, 0600, per attempt) → `take_code_drop` (worker) → the container's exchange dir; never the broker |
+| Container | `executors.py` | `agy_account_mounts` (run copy at `data/runs/<id>/agy-home` → `HOME`), `agy_login_environment`, no `GEMINI_API_KEY`, `HARNESS_LAB_AGY_AUTH=account`; `agy_account_copy_masks` empties other runs' copies in **every** container |
+| Billing | `bench_run.assemble_usage`, `native_auth.billing_mode` | `subscription` / `subscription_quota`, `cost_usd: null` (like codex) |
+| Preflight | `run_service._check_agy` | A well-formed slug is enough (the plan serves it); the untrusted-code guard still applies |
 
 **Event mapping.** `step_update` text deltas (`ACTIVE` chunks, closed by a
 `DONE` carrying only the tail) become one assistant text block per step. A

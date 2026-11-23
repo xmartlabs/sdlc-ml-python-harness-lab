@@ -372,10 +372,65 @@ def printed_lifetime(text: str) -> int | None:
     return int(match.group(1)) * 60 if match else None
 
 
+#: The authorization code the operator pasted for an Antigravity sign-in
+#: (ADR-0097), handed from the API to the worker as a 0600 file named after the
+#: attempt, never through the broker. Short-lived: the code itself expires
+#: within minutes on Google's side.
+_CODE_DROP_TTL_SECONDS = 15 * 60
+
+
+def _code_drop_path(harness: str, attempt: str, root: Path | None = None) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{8}", attempt or ""):
+        raise ValueError("invalid attempt id")
+    return state_dir(root) / f"{harness}.code.{attempt}"
+
+
+def write_code_drop(
+    harness: str, attempt: str, code: str, root: Path | None = None
+) -> None:
+    """The API's half: store the pasted code for the attempt's worker (0600)."""
+    import os
+
+    directory = state_dir(root)
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    path = _code_drop_path(harness, attempt, root)
+    temporary = path.with_name(path.name + f".{secrets.token_hex(4)}.tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, code.encode("utf-8"))
+    finally:
+        os.close(fd)
+    temporary.replace(path)
+
+
+def take_code_drop(harness: str, attempt: str, root: Path | None = None) -> str:
+    """The worker's half: the code, read once and deleted; ``""`` if none."""
+    try:
+        path = _code_drop_path(harness, attempt, root)
+    except ValueError:
+        return ""
+    try:
+        fresh = time.time() - path.stat().st_mtime < _CODE_DROP_TTL_SECONDS
+        code = path.read_text(encoding="utf-8").strip() if fresh else ""
+    except OSError:
+        return ""
+    finally:
+        path.unlink(missing_ok=True)
+    return code
+
+
+def purge_code_drops(harness: str, root: Path | None = None) -> None:
+    """Delete every code drop of ``harness`` (a sign-in ended or restarted)."""
+    for leftover in state_dir(root).glob(f"{harness}.code.*"):
+        leftover.unlink(missing_ok=True)
+
+
 def clear_login(harness: str, root: Path | None = None) -> dict[str, Any]:
     """Back to ``idle``: drop every attempt, so a running one stops itself."""
     for old in state_dir(root).glob(f"{harness}.login.*.json"):
         old.unlink(missing_ok=True)
+    purge_code_drops(harness, root)
     return write_state(harness, "login", {"state": "idle"}, root)
 
 
@@ -389,18 +444,22 @@ def test_command(harness: str, model: str = "") -> list[str]:
     the slug that served and the Gemini API model it maps to.
     """
     if harness == "antigravity_cli":
+        from harness_lab_app.agy_account import AUTH_ACCOUNT, auth_mode
         from harness_lab_app.api_key_auth import settings_json
         from harness_lab_app.native_models import AGY_TEST_MODEL
 
+        account = auth_mode() == AUTH_ACCOUNT
+        # On the Google sign-in (ADR-0097) no provider is forced: agy uses the
+        # sign-in, and the plan's default model when none is picked.
+        cmd = ["agy"]
+        if not account:
+            cmd += ["--settings", settings_json()]
+        cmd += ["--mode", "accept-edits", "--disable-slash-commands"]
+        chosen = model or ("" if account else AGY_TEST_MODEL)
+        if chosen:
+            cmd += ["--model", chosen]
         return [
-            "agy",
-            "--settings",
-            settings_json(),
-            "--mode",
-            "accept-edits",
-            "--disable-slash-commands",
-            "--model",
-            model or AGY_TEST_MODEL,
+            *cmd,
             "--print-timeout",
             "90s",
             "-p",

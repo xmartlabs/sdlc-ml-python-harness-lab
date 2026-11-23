@@ -482,7 +482,9 @@ backup:
 	@paths=""; for p in $(BACKUP_PATHS); do [ -e "$$p" ] && paths="$$paths $$p"; done; \
 		[ -n "$$paths" ] || { echo "nothing to back up"; exit 1; }; \
 		archive=$(BACKUP_DIR)/harness-lab-$$(date +%Y%m%d-%H%M%S).tar.gz; \
-		tar czf "$$archive" --exclude='data/runs/*/workspace' $$paths; \
+		tar czf "$$archive" --exclude='data/runs/*/workspace' \
+			--exclude='data/runs/*/agy-home' --exclude='data/runs/*/agy-exchange' \
+			--exclude='data/runs/*/session' $$paths; \
 		echo "✅ $$archive ($$(du -h "$$archive" | cut -f1))"
 
 # Host mode: run the worker/API on the HOST with the subprocess backend so the

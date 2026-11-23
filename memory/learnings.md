@@ -3636,6 +3636,46 @@ agent-run commands can read the credential (`${#VAR}` in a scripted
 `run_command`). Also check `/app/.env`, which every runner container can read
 through the repository bind; for an API-key harness it is now masked.
 
+## 2026-11-23 — A CLI's TTY-only sign-in can be driven in a container, and its URL is in the OSC 8 target (ADR-0097)
+
+- **Context.** The operator wanted `antigravity_cli` on their own Google AI Pro
+  plan, as codex works. `agy` 1.5.14 has no `login` subcommand. Its sign-in
+  appears only when it runs on a TTY with no saved session.
+- **How it was driven.** A stdlib helper (`scripts/agy_login.py`) runs `agy`
+  under `pty.fork()`, presses Enter on the menu, and publishes the URL. It then
+  types the code the operator pastes in the UI.
+- **Facts found by experiment, not docs** (empty container, no account):
+  - The interactive sign-in has no wait limit; `-p` print mode gives up after
+    60 s.
+  - The URL is an OSC 8 terminal hyperlink. The visible text is wrapped to the
+    screen width, and chunked reads split the escape sequences. Read the URL
+    from the hyperlink *target* in the raw bytes. Cleaning the screen first
+    gave a URL with glued, duplicated parameters.
+  - With no D-Bus, the token goes to a file. `strace` of a fresh start named
+    the two files agy reads: `~/.gemini/antigravity-cli/antigravity-oauth-token`
+    and `~/.config/antigravity/credential-user-scope`. Grepping the binary
+    found neither, because the name is built at runtime.
+  - A wrong code prints `token exchange failed: oauth2: "invalid_grant"`, which
+    gives a cheap end-to-end test with no account.
+- **Traps hit while doing it:**
+  - **A case image built FROM the runner keeps its old CLIs.** The Godot image
+    predated agy, so the first real run failed with "CLI not found on PATH"
+    (opencity3d-v1-K-003). Preflight now reads each case image's CLI labels.
+  - **Tests read `~/.harness-lab/auth` unless isolated.** One test failed once
+    the operator had signed in. An autouse fixture in `tests/harness_lab_app/
+    conftest.py` now points `HARNESS_LAB_AUTH_DIR` at a temporary directory.
+  - **`npx prettier --write` on a frontend file rewrote all of it** (2 → 4
+    spaces, +2,400 lines). The frontend has no prettier config; never run it
+    over a whole file.
+- **Review findings worth remembering:**
+  - A per-run credential copy under `data/runs/<id>/` must be excluded from
+    the artifact index and from `make backup`.
+  - Its write-back must be bound to the sign-in generation it was copied
+    from.
+- **How to apply.** For a CLI with a browser-only sign-in, drive its own login
+  on a pty in a lab container. Use `strace` to find what it stores and keep only
+  that.
+
 <!-- Add new learnings above this line -->
 
 ## 2026-11-21 — Git run from a subfolder of another repo, and an agent's .git, both lie or bite (ADR-0095)

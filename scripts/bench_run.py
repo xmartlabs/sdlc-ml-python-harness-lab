@@ -2406,17 +2406,30 @@ AGY_ALLOW_RULES: tuple[str, ...] = (
 )
 
 
-def agy_settings(extra: dict | None = None) -> str:
-    """The ``--settings`` JSON of a run: Gemini API provider + the allow list.
+def agy_on_account(env: dict[str, str] | None = None) -> bool:
+    """True when this run uses the operator's Google sign-in (ADR-0097).
 
-    Passed per session (``--settings``: "never saved"), so nothing is written
-    into the run's home and nothing carries over to the next run.
+    The executor decides it and says so in ``HARNESS_LAB_AGY_AUTH``; the run
+    never re-reads the store (the runner cannot see it).
+    """
+    values = env if env is not None else os.environ
+    return values.get("HARNESS_LAB_AGY_AUTH") == "account"
+
+
+def agy_settings(extra: dict | None = None, *, account: bool | None = None) -> str:
+    """The ``--settings`` JSON of a run: the allow list, plus the provider.
+
+    On a Gemini API key the provider is forced to ``gemini`` (ADR-0096); on
+    the Google sign-in it is left to agy, which then uses the sign-in. Passed
+    per session (``--settings``: "never saved"), so nothing is written into
+    the run's home and nothing carries over to the next run.
     """
     from harness_lab_app.api_key_auth import settings_json
 
-    return settings_json(
-        {"permissions": {"allow": list(AGY_ALLOW_RULES)}, **(extra or {})}
-    )
+    merged = {"permissions": {"allow": list(AGY_ALLOW_RULES)}, **(extra or {})}
+    if agy_on_account() if account is None else account:
+        return json.dumps(merged, separators=(",", ":"))
+    return settings_json(merged)
 
 
 def build_agy_cmd(executor_model: str | None) -> list[str]:
@@ -2457,10 +2470,12 @@ def agy_stdin_message(prompt: str) -> str:
 def agy_run_env() -> dict[str, str]:
     """The process environment of an antigravity_cli step.
 
-    Inside the runner the executor already built it (no foreign credential,
-    the stored key, a private ``HOME``); this keeps it and only makes sure the
-    home exists. ``.env`` is never consulted for the key: the CLI ignores
-    ``.env`` files and ``GOOGLE_API_KEY`` by design.
+    Inside the runner the executor already built it (no foreign credential, a
+    private ``HOME``, and either the stored key or the run's copy of the Google
+    sign-in); this keeps it and only makes sure the home exists. ``.env`` is
+    never consulted for the key: the CLI ignores ``.env`` files and
+    ``GOOGLE_API_KEY`` by design. On the sign-in no key is passed at all: with
+    one agy would bill the key instead of the plan.
     """
     from harness_lab_app.api_key_auth import agy_env
     from harness_lab_app.native_auth import CONTAINER_AGENT_HOME
@@ -2470,6 +2485,10 @@ def agy_run_env() -> dict[str, str]:
         env.get("HARNESS_LAB_AGENT_HOME") or env.get("HOME") or CONTAINER_AGENT_HOME
     )
     home.mkdir(parents=True, exist_ok=True)
+    if agy_on_account(env):
+        out = agy_env(env, key="", home=home)
+        out.pop("GEMINI_API_KEY", None)
+        return out
     return agy_env(env, key=env.get("GEMINI_API_KEY", ""), home=home)
 
 
@@ -2832,7 +2851,15 @@ def write_normalized_events(
 
     try:
         lines = raw_path.read_text(errors="replace").splitlines()
-        translated = translate(harness, lines, model=model)
+        if harness == "antigravity_cli":
+            translated = translate(
+                harness,
+                lines,
+                model=model,
+                billing_mode="subscription" if agy_on_account() else "api",
+            )
+        else:
+            translated = translate(harness, lines, model=model)
     except OSError:
         translated = []
     events_path.write_text("".join(f"{line}\n" for line in translated))
@@ -3562,6 +3589,12 @@ def assemble_usage(
         # codex/gemini spend a subscription plan's quota, never a per-token
         # bill: the cost is unknown, recorded as such, and never filled with 0
         # or with a figure some other source attributed to this run id.
+        usage["cost_usd"] = None
+        usage["billing_mode"] = "subscription"
+        usage["cost_source"] = "subscription_quota"
+    elif harness == "antigravity_cli" and agy_on_account():
+        # The operator's Google sign-in (ADR-0097) spends the plan's quota,
+        # exactly like codex/gemini: no per-token bill, recorded as unknown.
         usage["cost_usd"] = None
         usage["billing_mode"] = "subscription"
         usage["cost_source"] = "subscription_quota"

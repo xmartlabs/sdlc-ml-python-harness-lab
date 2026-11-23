@@ -2089,6 +2089,22 @@ export type NativeConnectState = {
   cli_version?: string;
   seconds?: number;
   updated_at?: number;
+  /** Antigravity sign-in (ADR-0097): the operator pastes Google's code. */
+  flow?: "paste_code";
+  /** Antigravity sign-in: the code was handed to agy, which is exchanging it. */
+  exchanging?: boolean;
+  /** Antigravity sign-in: the account agy reported, when it printed one. */
+  email?: string;
+  /** antigravity_cli test: which credential it ran on. */
+  auth?: "account" | "api_key" | "";
+};
+
+/** The Antigravity CLI's stored Google sign-in (ADR-0097): never a token. */
+export type AgyAccountStatus = {
+  connected: boolean;
+  email: string;
+  saved_at: number | null;
+  files: number;
 };
 
 /** Progress of the last save or removal of an API-key CLI's key (ADR-0096). */
@@ -2158,6 +2174,10 @@ export type NativeCliStatus = {
   untrusted_allowed?: boolean;
   /** The slug the connection test uses unless another is picked. */
   default_test_model?: string;
+  /** antigravity_cli: which credential runs use — the Google sign-in wins. */
+  agy_auth?: "account" | "api_key" | null;
+  /** antigravity_cli: the stored Google sign-in (ADR-0097). */
+  account?: AgyAccountStatus;
 };
 
 export type HealResult = {

@@ -766,16 +766,22 @@ def translate(
     harness: str,
     lines: list[str],
     *,
-    billing_mode: str = "subscription",
+    billing_mode: str = "",
     model: str = "",
 ) -> list[str]:
-    """The claude-shaped view of one step's raw stream, for ``harness``."""
+    """The claude-shaped view of one step's raw stream, for ``harness``.
+
+    ``billing_mode`` empty keeps each harness's own default: codex and gemini
+    run on a subscription, antigravity_cli on a Gemini API key unless the
+    caller says the run used the Google sign-in (ADR-0097).
+    """
     if harness == "codex":
-        return codex_to_claude(lines, billing_mode=billing_mode)
+        return codex_to_claude(lines, billing_mode=billing_mode or "subscription")
     if harness == "gemini":
-        return gemini_to_claude(lines, billing_mode=billing_mode)
+        return gemini_to_claude(lines, billing_mode=billing_mode or "subscription")
     if harness == "antigravity_cli":
-        return antigravity_to_claude(lines, billing_mode="api", model=model)
+        mode = billing_mode if billing_mode in {"api", "subscription"} else "api"
+        return antigravity_to_claude(lines, billing_mode=mode, model=model)
     return list(lines)
 
 
