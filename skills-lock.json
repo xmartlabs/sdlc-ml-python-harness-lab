@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-03T22:10:12Z",
+  "generatedAt": "2026-11-23T19:29:32Z",
   "skills": {
     "brainstorming": {
       "source": "synced-local",
@@ -87,8 +87,8 @@
       "sourceType": "directory",
       "path": ".github/skills-external/xmartlabs-branding",
       "skillFile": ".github/skills-external/xmartlabs-branding/SKILL.md",
-      "computedHash": "06f0dd5cfd4e297e4c7e357da903bdf4685d31defe86abec43cde4dcb59d263b",
-      "syncedAt": "2026-09-03T22:10:12Z"
+      "computedHash": "3524a138599828dbdf748723ccad73d3c438c385b5b61077e13e23f88cbd7881",
+      "syncedAt": "2026-11-23T19:29:32Z"
     }
   }
 }
