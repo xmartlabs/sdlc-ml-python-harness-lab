@@ -195,11 +195,196 @@ classifies such a run as "measured the connection, not the subject", and
 System → Agent CLIs lists Gemini as not available. The harness stays for
 organizations with a Code Assist Standard/Enterprise license.
 
-The official replacement is **Antigravity CLI** (`agy`, headless with
-`agy -p … --output-format stream-json`). It is not wired into the lab yet: on
-macOS it keeps its login in the Keychain, which a runner container cannot read,
-and inside a Linux container it falls back to a file whose layout still has to
-be confirmed with a real login.
+The official replacement is **Antigravity CLI** (`agy`). The lab runs it as
+the `antigravity_cli` harness on a **Gemini API key**, the credential Google
+documents for headless and third-party use. It never uses a personal Antigravity
+sign-in. See the next section.
+
+## Antigravity CLI on your Google plan
+
+`antigravity_cli` drives Google's Antigravity CLI (`agy` 1.5.14, pinned in the
+runner image) headless, under the same cases, containers, conditions, scoring
+and comparison as every other harness. It runs on one of two credentials:
+
+- **Your Google sign-in** (Google AI Pro/Ultra), on the plan's Antigravity
+  quota like the IDE ([ADR-0097](adr/0097-antigravity-cli-on-the-operators-google-sign-in.md)).
+  Used whenever it is connected.
+- **A Gemini API key**, billed per token ([ADR-0096](adr/0096-antigravity-cli-runs-on-a-gemini-api-key.md)).
+  The fallback (below).
+
+**Before you sign in.** Google's Antigravity FAQ says headless mode (`agy -p`)
+"is intended for direct scripting and CI workflows". It also says "wrapping
+`agy` inside third-party coding agents or applications, or automating account
+rotation, is not supported under consumer plans", and its Terms allow account
+suspension for third-party access. The lab runs `agy -p` itself, with the
+sign-in `agy` itself performs, on one account and with no rotation. Google does
+not say whether that counts. Using your account for it is your decision.
+
+The lab never reads your macOS keychain, your own `~/.gemini`, or the IDE's
+session.
+
+### Sign in with Google (no terminal)
+
+1. Rebuild the runner image once so it has `agy`: **Health → Build runner
+   image** (or `docker compose build runner`). Then restart the API and the
+   workers (`docker compose restart api worker worker-interactive`).
+2. **System → Agent CLIs → Antigravity CLI → Sign in with Google.** The worker
+   starts `agy`'s own sign-in in a runner container. A few seconds later the
+   card shows **Open Google sign-in**.
+3. Open it, sign in with the account that has your plan, and allow access.
+   Google's page (`antigravity.google/oauth-callback`) then shows an
+   **authorization code**.
+4. Paste the code (or the whole page address) into the card and press
+   **Connect**. The card says "Signed in" and sends one test request on your
+   plan.
+
+   If Google refuses the code, the card shows `invalid_grant`: each code works
+   once, for a few minutes. Press **Start over**. The sign-in window closes
+   after 15 minutes.
+5. **Refresh models** lists the models your plan offers (`agy models`, signed
+   in).
+
+What is stored: only the files `agy` wrote for the sign-in, under
+`~/.harness-lab/auth/antigravity_cli/account/` (0700/0600). Nothing goes in
+`.env` or the database.
+
+- Each run gets a private copy as its home and no API key. When it ends, a
+  refreshed token returns to the store and everything else is deleted.
+- Other containers never see another run's copy.
+- **Sign out** deletes only the lab's copy; your account and the IDE are
+  untouched.
+
+Runs on the sign-in record `billing_mode: subscription` and
+`cost_source: subscription_quota`, with `cost_usd` empty, like codex.
+
+## Antigravity CLI on a Gemini API key
+
+The fallback when no Google sign-in is connected, or for an organization's key
+([ADR-0096](adr/0096-antigravity-cli-runs-on-a-gemini-api-key.md)). With a
+key, `agy` calls the Gemini API directly and never opens an account session.
+Note that **Google AI Pro adds no API quota**: its higher limits apply only in
+the AI Studio web app. A free AI Studio key serves only the Flash and Hydrogen
+models, and Google uses its prompts to improve its products.
+
+### Set it up from the UI (no terminal)
+
+1. Create a **dedicated** key in [Google AI Studio](https://aistudio.google.com/apikey)
+   (or use a Gemini Enterprise key). Restrict it to the Generative Language API
+   and set a budget cap on its project: commands the agent runs can read it
+   (see *Security* below).
+2. Rebuild the runner image once so it has `agy`: **Health → Build runner
+   image** (or `docker compose build runner`). The Antigravity CLI card shows
+   `v1.5.14` when it is there.
+3. **System → Agent CLIs → Antigravity CLI → Use a Gemini API key instead →
+   Configure API key.** Paste the key
+   and save. The worker writes it to
+   `~/.harness-lab/auth/antigravity_cli/gemini_api_key` (0600). It is never
+   written to `.env` or the database, and never shown again; the card shows
+   only its last four characters. The card then runs a test by itself.
+4. **Test connection** sends one real request (billed to the key, a few
+   hundred tokens on `gemini-3.8-flash-low` by default; you can pick another
+   model). It shows the answer, the slug you asked for, the Gemini API model it
+   calls, and the time. On failure it says which kind and what to do:
+
+   | Card says | Cause | Fix |
+   |---|---|---|
+   | API key rejected | `API_KEY_INVALID`, leaked key, API not enabled (400/401/403) | Replace the key; enable the Generative Language API on its project |
+   | Quota or billing | `RESOURCE_EXHAUSTED` (429), after agy's own ~2 min of retries | Check the project's billing and rate limits in AI Studio; retry later |
+   | Model not available | unknown slug, or `NOT_FOUND` for this key | Pick another model; *Refresh models* |
+   | Network | the runner cannot reach `generativelanguage.googleapis.com` | Check the runner containers' network/proxy |
+   | Timeout / Server | `DEADLINE_EXCEEDED` / 5xx | Retry |
+   | Not installed | the runner image has no `agy` | Rebuild the runner image (step 2) |
+
+5. **Refresh models** lists the slugs this `agy` offers for the Gemini API
+   (`agy models`). The command does not ask the API, so only a request proves
+   your key may use a slug.
+6. **Remove credentials** deletes the key, the last test and the model list.
+
+### Run a case and compare it with Codex
+
+1. **New evaluation** (or the guided flow): pick the case, harness
+   **antigravity_cli**, and a model, for example `gemini-3.8-flash-medium` or
+   `gemini-4-neon-high`. A model is required: `agy`'s stream never names the
+   model that answered, so the run is filed under the slug you chose.
+2. Run the same case with **codex** (and/or claude/opencode) with the same
+   prompt variant, harness condition and repetitions.
+3. **Compare** both runs. Score, validation, tokens, time, tool calls, files
+   read and edited, and skills consulted come from the same readers. Cost:
+   - antigravity_cli: `cost_usd` = its tokens × Google's paid-tier list price
+     for the API model, at the rate in effect on the run's date (table read
+     2026-11-22; Carbon/Argon change on 2026-12-01, the Flash models on
+     2027-01-01). The whole table stops answering after 2027-05-22 until it
+     is read again. It is labelled "estimated at the Gemini API list price"
+     (`cost_source: api_list_price_estimate`).
+   - codex: `cost_usd` is null (subscription quota), with an API-price
+     estimate beside it.
+
+### What a run is given
+
+- The command is `agy --settings '{"modelProvider":"gemini","permissions":{"allow":["command(*)","read_file(*)","write_file(*)","read_url(*)"]}}' --mode accept-edits --disable-slash-commands --model <slug> --input-format stream-json --output-format stream-json`.
+  The prompt goes in as one stdin message.
+- The tool grants are explicit, not `--dangerously-skip-permissions`. In
+  headless mode an action `agy` would have to ask about is denied, and **the
+  turn ends with SUCCESS and no answer**. The allow list therefore covers what
+  a coding agent does in the container (the same reach claude/codex have
+  there). MCP tools and browser execution are not granted.
+- The environment holds `GEMINI_API_KEY` from the lab store and no other
+  provider's credential. These are masked inside `/app`:
+  - `.env`, `.claude/settings.local.json` and the lab database;
+  - the `.env` backups and the native-connect state;
+  - `backups/`;
+  - other runs' provider sessions.
+
+  `HOME` is private to the container, so `agy`'s conversations, logs and
+  databases die with it. The self-updater is off.
+- Skills: `agy` reads `.agents/skills` (the Antigravity mirror) and nothing
+  else, so that mirror is the one the runner keeps for this harness. Rules:
+  `AGENTS.md`, `GEMINI.md` and `.agents/rules/GEMINI.md`.
+- **Docker only.** A host-mode run is refused: `agy`'s `--sandbox` cannot
+  start in a container, so the container is the sandbox, and on the host
+  nothing would contain the agent.
+
+### Security: the key is readable by code the agent runs
+
+`agy` passes its environment to every command it runs, and has no setting to
+scrub a variable. The lab cannot hide the key from the agent. What the lab does:
+
+- **Third-party code is refused by default:** SWE-bench / SWE Pro instances
+  and external target repositories. Lab cases and your own ad hoc folders run.
+  To allow third-party code, set `HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1` on the API
+  and the worker, and use a throwaway key.
+- Every line the run streams has the key's exact value replaced with
+  `***REDACTED***`, in the runner and again in the worker. After the run,
+  whatever way it ends, the worker also scrubs the run directory, the
+  workspace and every file in the lab tree modified during the run. A hit is
+  logged and recorded as `secret_exposed` in `metadata.json`. **Rotate the
+  key** if you see it. Redaction matches the exact value only, so an encoded,
+  split or compressed copy would pass. The container has network access, so
+  an agent could also send the key out.
+- Saving a key never sends it through the task queue. The API writes it to a
+  0600 drop file that the worker collects and deletes (a drop expires after
+  15 minutes), so no worker log can contain it.
+- The key is the only secret in that container, and it never reaches another
+  harness's container.
+
+### Gemini options compared
+
+| Option | Agent under test | Credential | Billing in the lab | When to use |
+|---|---|---|---|---|
+| `gemini` harness (legacy Gemini CLI) | Gemini CLI 0.70 | Code Assist Standard/Enterprise sign-in | `subscription_quota` (cost null) | Organizations with a Code Assist license; personal plans no longer work |
+| `antigravity_cli` harness | Antigravity CLI (`agy`) | Gemini API key (AI Studio or Enterprise), in the lab store | per-token list-price estimate in `cost_usd` | Benchmarking Google's own agent |
+| `opencode` + a Gemini model through LiteLLM | opencode | the gateway's Gemini key | whatever the gateway reports | Comparing *models* under one agent |
+| Antigravity by hand (`antigravity` flow) | Antigravity IDE/CLI, driven by a person | your own sign-in, on your machine | none (manual) | Improving the `.agents` rules; never automated |
+
+### Not verified yet
+
+Everything above was checked against the `agy` 1.5.14 binary with no real
+credential: flags, failure shapes (invalid key against the real API; 403, 404,
+429, 500, network and timeout against a local mock), the event schema, token
+usage, the slug→model map, skill discovery and the env leak. The test fixtures
+are those captures (`tests/harness_lab_app/fixtures/agy/`). Still pending with a
+real key: one authenticated request end to end, which slugs a given key may
+use, and real usage numbers.
 
 ## Gotchas / limits
 
@@ -228,6 +413,8 @@ be confirmed with a real login.
 |---|---|---|---|
 | Claude Code (your account) | `make app-up` (token in `.env`) or `make app-host` | `claude` | native menu (the Claude 5.5 family and Fable 5.2) |
 | Codex (your ChatGPT plan) | `make auth-codex`, then `make app-up` or `make app-host` | `codex` | native menu (codex-cli catalog) |
+| Antigravity CLI (your Google plan) | `make app-up`, then System → Agent CLIs → Antigravity CLI → Sign in with Google, paste the code | `antigravity_cli` | native menu (`agy models`, your plan) |
+| Antigravity CLI (Gemini API key) | System → Agent CLIs → Antigravity CLI → Use a Gemini API key instead → Configure API key | `antigravity_cli` | native menu (`agy models` slugs) |
 | Gemini CLI | Code Assist Standard/Enterprise license only (personal plans retired 2026-06-18) | `gemini` | native menu (gemini-cli list) |
 | opencode + gateway model | `make app-up` | `opencode` | live LiteLLM list |
 | SWE-bench objective | `make app-up` | `opencode` | live LiteLLM list |

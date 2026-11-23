@@ -121,6 +121,37 @@ RUN npm install -g "@openai/codex@${CODEX_VERSION}" "@google/gemini-cli@${GEMINI
     && codex --version && gemini --version
 LABEL codex.version="${CODEX_VERSION}" gemini-cli.version="${GEMINI_CLI_VERSION}"
 
+# Antigravity CLI (`agy`) for the API-key `antigravity_cli` harness. Google's
+# installer (https://antigravity.google/cli/install.sh) always fetches the
+# latest build from a release manifest; this layer pins one release instead:
+# the same versioned GCS tarball that manifest named for 1.5.14
+# (…/manifests/linux_{amd64,arm64}.json, read 2026-11-22), verified against
+# the manifest's sha512. The tarball holds one static binary, `antigravity`.
+# No credential is baked in: a run gets the Gemini API key from the lab's
+# store in its environment (api_key_auth). The self-updater is disabled so
+# the instrument cannot change under an experiment. Bump the ARGs together
+# with native_models.MIN_NATIVE_CLI_VERSION["antigravity_cli"].
+ARG AGY_VERSION=1.5.14
+ARG AGY_BUILD=1.5.14-5302690847260672
+ARG AGY_SHA512_AMD64=83311d3f354567612dc16c1ae2ea9b503d6f6833aa4e138d39aa229da3f3bb99b0e4d7cca0bce4796b0060d6a51d8113eb7449ed5dc0e7900bf217107ea5bff9
+ARG AGY_SHA512_ARM64=c9b29bba475f63a1a80161ae93ba72b221c7a586d9851e4d0061546704bab66d6b2760b25d716d191724fc7564f3246456ee151e28aa37af48dbcd72bdc6c463
+ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) dir=linux-x64; file=cli_linux_x64.tar.gz; sum="${AGY_SHA512_AMD64}" ;; \
+      arm64) dir=linux-arm; file=cli_linux_arm64.tar.gz; sum="${AGY_SHA512_ARM64}" ;; \
+      *) echo "agy: unsupported architecture $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac; \
+    tmp="$(mktemp -d)"; \
+    curl -fsSL -o "${tmp}/agy.tar.gz" \
+      "https://storage.googleapis.com/antigravity-public/antigravity-cli/${AGY_BUILD}/${dir}/${file}"; \
+    echo "${sum}  ${tmp}/agy.tar.gz" | sha512sum -c -; \
+    tar -xzf "${tmp}/agy.tar.gz" -C "${tmp}" antigravity; \
+    install -m 0755 "${tmp}/antigravity" /usr/local/bin/agy; \
+    rm -rf "${tmp}"; \
+    test "$(agy --version)" = "${AGY_VERSION}"
+LABEL antigravity-cli.version="${AGY_VERSION}"
+
 # Fallback copy of the repo; at runtime the host repo is bind-mounted over /app
 # so runs.yaml/workspace/data land on the host filesystem.
 COPY . .

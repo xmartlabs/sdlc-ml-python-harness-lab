@@ -11,7 +11,14 @@ import { ModelPicker } from "../components/ModelPicker";
 import { ReadinessReportView } from "../components/ReadinessReportView";
 import { Spinner } from "../components/Spinner";
 import { IconAlert, IconArrowRight, IconCheck, IconSparkles } from "../components/icons";
-import { HARNESS_NATIVE_MODELS, HARNESS_OPTIONS, HOST_HARNESSES } from "../harnesses";
+import {
+  API_KEY_HARNESSES,
+  HARNESS_NATIVE_MODELS,
+  HARNESS_OPTIONS,
+  HOST_HARNESSES,
+  harnessCliName,
+  harnessLabel
+} from "../harnesses";
 import { defineMessages, pickMessages, useMessages } from "../i18n";
 import type {
   CaseCandidate,
@@ -561,10 +568,13 @@ const MESSAGES = defineMessages({
       hostHarnessHintClaude:
         "Works in Docker (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host).",
       hostHarnessHintOther: "Uses your plan, not an API key: sign in once with make auth-codex or make auth-gemini (Docker or host mode).",
+      hostHarnessHintApiKey: "Runs on a Gemini API key, per-token API billing: configure it once in System → Agent CLIs (Docker only).",
       hostHarnessHintPrefix: (harness: string) => `Runs the ${harness} CLI with its native auth. `,
       executorModel: "Executor model",
       cliDefault: "CLI default",
       pickModelHint: (harness: string) => `Pick a model the ${harness} CLI accepts, or leave it on its own default.`,
+      pickModelRequiredHint: (harness: string) =>
+        `Pick a model the ${harness} CLI accepts: it has no default the lab can name, so a run needs one.`,
       noDefaultHint: "opencode has no default of its own — this run needs a model named here.",
       maxSteps: "Max steps",
       queueing: "Queueing…",
@@ -1019,10 +1029,13 @@ const MESSAGES = defineMessages({
       hostHarnessHintClaude:
         "Funciona en Docker (CLAUDE_CODE_OAUTH_TOKEN o ANTHROPIC_API_KEY en .env) o en modo host (make app-host).",
       hostHarnessHintOther: "Usa tu plan, no una API key: iniciá sesión una vez con make auth-codex o make auth-gemini (Docker o modo host).",
+      hostHarnessHintApiKey: "Corre con una API key de Gemini, facturación de la API por token: configurala una vez en Sistema → CLIs de agentes (solo Docker).",
       hostHarnessHintPrefix: (harness: string) => `Corre la CLI de ${harness} con su propia autenticación. `,
       executorModel: "Modelo ejecutor",
       cliDefault: "Default de la CLI",
       pickModelHint: (harness: string) => `Elegí un modelo que la CLI de ${harness} acepte, o dejalo en su propio default.`,
+      pickModelRequiredHint: (harness: string) =>
+        `Elegí un modelo que la CLI de ${harness} acepte: no tiene un default que el lab pueda nombrar, así que la corrida necesita uno.`,
       noDefaultHint: "opencode no tiene un default propio — esta corrida necesita un modelo nombrado acá.",
       maxSteps: "Pasos máximos",
       queueing: "Encolando…",
@@ -1194,7 +1207,11 @@ export function Audit() {
    */
   const chooseHarness = (next: (typeof HARNESS_OPTIONS)[number]) => {
     setHarness(next);
-    setExecutorModel("");
+    // An API-key CLI (antigravity_cli) has no default the lab can name: the
+    // run is refused without a model, so it starts on the first of its menu.
+    setExecutorModel(
+      API_KEY_HARNESSES.has(next) ? (HARNESS_NATIVE_MODELS[next]?.[0]?.id ?? "") : ""
+    );
   };
 
   /**
@@ -3335,22 +3352,24 @@ export function Audit() {
               >
                 {HARNESS_OPTIONS.map((option) => (
                   <option key={option} value={option}>
-                    {option}
+                    {harnessLabel(option)}
                   </option>
                 ))}
               </select>
               {HOST_HARNESSES.has(harness) ? (
                 <span className="muted small">
-                  {m.experiment.hostHarnessHintPrefix(harness)}
+                  {m.experiment.hostHarnessHintPrefix(harnessCliName(harness))}
                   {harness === "claude"
                     ? m.experiment.hostHarnessHintClaude
-                    : m.experiment.hostHarnessHintOther}
+                    : API_KEY_HARNESSES.has(harness)
+                      ? m.experiment.hostHarnessHintApiKey
+                      : m.experiment.hostHarnessHintOther}
                 </span>
               ) : null}
             </label>
             <div className="field">
               <ModelPicker
-                allowNone={HOST_HARNESSES.has(harness)}
+                allowNone={HOST_HARNESSES.has(harness) && !API_KEY_HARNESSES.has(harness)}
                 directErrors={directErrors}
                 label={m.experiment.executorModel}
                 nativeOptions={HARNESS_NATIVE_MODELS[harness]}
@@ -3364,9 +3383,11 @@ export function Audit() {
                 value={executorModel}
               >
                 <small className="muted">
-                  {HOST_HARNESSES.has(harness)
-                    ? m.experiment.pickModelHint(harness)
-                    : m.experiment.noDefaultHint}
+                  {API_KEY_HARNESSES.has(harness)
+                    ? m.experiment.pickModelRequiredHint(harnessCliName(harness))
+                    : HOST_HARNESSES.has(harness)
+                      ? m.experiment.pickModelHint(harness)
+                      : m.experiment.noDefaultHint}
                 </small>
               </ModelPicker>
             </div>
@@ -3392,7 +3413,8 @@ export function Audit() {
                 busy !== "" ||
                 caseIds.length === 0 ||
                 !pinnedCommit ||
-                (harness === "opencode" && executorModel.trim() === "")
+                ((harness === "opencode" || API_KEY_HARNESSES.has(harness)) &&
+                  executorModel.trim() === "")
               }
               onClick={() => void runExperiment()}
               type="button"

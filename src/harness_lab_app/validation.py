@@ -325,6 +325,19 @@ def collect_cost(run_dir: Path) -> dict[str, Any]:
         # a plan's quota with no per-token price — unknown, never $0.
         "billing_mode": usage.get("billing_mode"),
         "detected_model": usage.get("detected_model"),
+        # What a list-price cost rests on (antigravity_cli, ADR-0096): the API
+        # model the slug called, the dated price table, and why a cost is
+        # unknown when it is. Absent for every other harness.
+        **{
+            key: usage[key]
+            for key in (
+                "api_model",
+                "thinking_level",
+                "cost_basis",
+                "cost_unknown_reason",
+            )
+            if usage.get(key) is not None
+        },
     }
 
 

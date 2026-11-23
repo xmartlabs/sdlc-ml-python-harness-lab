@@ -5934,12 +5934,65 @@ button.danger:hover {
   margin: 0 0 4px;
 }
 
+/* API-key CLI card (ADR-0096): a key is stored but not yet proven. */
+.native-cli-card__dot--warn {
+  background: var(--warning);
+}
+
+.native-cli-card__status {
+  margin: 0;
+  font-weight: 600;
+}
+
+.native-cli-card__key-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.native-cli-card__key-form p,
+.native-cli-card__failure p,
+.native-cli-card__models p {
+  margin: 0;
+}
+
+.native-cli-card__model {
+  width: auto;
+  flex: 1 1 180px;
+  min-width: 0;
+  padding: 6px 10px;
+}
+
+.native-cli-card__failure {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.native-cli-card__models {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.native-cli-card__models ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+
+.native-cli-card__warning {
+  flex-direction: column;
+  gap: 4px;
+}
+
 /* Harness → model chooser of the guided flows (ADR-0093, amended 2026-11-20):
    one tab per agent CLI with its readiness, then only that agent's models. */
 .hm-chooser { display: grid; gap: var(--space-3); }
 .hm-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--space-2);
 }
 .hm-tab {

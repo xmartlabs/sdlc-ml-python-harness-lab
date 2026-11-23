@@ -267,7 +267,7 @@ def _harness_git_dirty(root: Path, exclude: tuple[str, ...] = ()) -> bool | None
 
 # Harnesses whose name enters the condition hash (ADR-0094). Additive only:
 # adding a harness here re-bins nothing that was recorded before it existed.
-_HASHED_HARNESSES = frozenset({"codex", "gemini"})
+_HASHED_HARNESSES = frozenset({"codex", "gemini", "antigravity_cli"})
 
 
 def compute_condition_hash(

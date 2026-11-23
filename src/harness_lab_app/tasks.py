@@ -495,6 +495,82 @@ def _wall_clock() -> float:
     return time.time()
 
 
+def _redact_api_key(run_id: str, key: str, since: float = 0.0) -> int:
+    """Scrub an antigravity_cli run's Gemini API key from everything it wrote.
+
+    Covers the run directory and the agent's workspace (what diffs, the judge,
+    the audit and an ad hoc patch read), and any other file in the lab tree
+    modified since the run started: the container mounts the whole lab
+    read-write, so an agent (or code it ran) can write the key anywhere in it,
+    where the next container of any harness would read it. A hit is logged,
+    recorded in ``metadata.json`` as ``secret_exposed``, and means the key
+    should be rotated. Exact-value matching only: an encoded or compressed copy
+    is not caught (documented in ADR-0096). Never raises.
+    """
+    from harness_lab_app.api_key_auth import redact_file, redact_tree
+
+    if not key:
+        return 0
+    settings = get_settings()
+    hits = 0
+    with contextlib.suppress(Exception):
+        hits += redact_tree(settings.data_runs_dir / run_id, key)
+        hits += redact_tree(settings.workspace_dir / run_id, key)
+        if since:
+            for path in _lab_files_changed_since(settings.repo_root, since):
+                hits += redact_file(path, key)
+    if hits:
+        logger.warning(
+            "antigravity_cli run %s: the Gemini API key appeared %d time(s) in "
+            "files and was redacted; rotate the key",
+            run_id,
+            hits,
+        )
+        metadata = settings.data_runs_dir / run_id / "metadata.json"
+        with contextlib.suppress(Exception):
+            data = json.loads(metadata.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                data["secret_exposed"] = {
+                    "credential": "GEMINI_API_KEY",
+                    "hits": hits,
+                }
+                metadata.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return hits
+
+
+#: Trees skipped when looking for files a run changed outside its own folders:
+#: the run's own directories are scrubbed whole, and these are large, other
+#: runs' (scrubbed by their own pass) or not text.
+_SCRUB_SKIP = (
+    ".git",
+    "node_modules",
+    ".venv",
+    "data/runs",
+    "workspace",
+    "data/pnpm-store",
+)
+
+
+def _lab_files_changed_since(root: Path, since: float) -> list[Path]:
+    """Regular files under the lab root modified after ``since`` (bounded)."""
+    found: list[Path] = []
+    skip = {root / part for part in _SCRUB_SKIP}
+    for dirpath, dirnames, filenames in os.walk(root):
+        current = Path(dirpath)
+        dirnames[:] = [d for d in dirnames if current / d not in skip]
+        for name in filenames:
+            path = current / name
+            try:
+                if path.is_symlink() or path.stat().st_mtime < since:
+                    continue
+            except OSError:
+                continue
+            found.append(path)
+            if len(found) >= 5000:
+                return found
+    return found
+
+
 def _drain(handle: RunHandle, lines: Queue[tuple[str, str] | None]) -> None:
     try:
         for item in handle.iter_lines():
@@ -931,8 +1007,46 @@ def _execute_run_body(
             _execute_pending_run(session, run, executor, lane, lease_lost=lost)
         finally:
             stop.set()
+            if exclusive:
+                _heal_ablated_tree(session, run_id)
             with contextlib.suppress(Exception):
                 leases.release(run_id, exclusive)
+
+
+def _restore_skill_views() -> None:
+    """Every native skill view back to the full governed set (`make sync-skills`)."""
+    from ml_python_base.skills_sync.cli import main as skills_sync_main
+
+    code = skills_sync_main(["--root", str(get_settings().repo_root), "sync"])
+    if code != 0:
+        raise RuntimeError(f"skills_sync sync exited {code}")
+
+
+def _heal_ablated_tree(session: Session, run_id: str) -> None:
+    """Undo a skill ablation the runner could not, before the tree is shared again.
+
+    ``bench_run.py`` restores the lab's skill views from ``atexit``, which does
+    not run when the runner is killed (a stalled run ends in SIGKILL, exit
+    137). The views then stayed ablated until the next run started: the tree
+    showed ~30 deleted skill files and trimmed CLAUDE.md/AGENTS.md, and a
+    commit made in between carried them (2026-11-23). Idempotent after a clean
+    exit. Never raises: the lease must still be given back.
+    """
+    try:
+        _restore_skill_views()
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            session.rollback()
+            session.add(
+                RunEvent(
+                    run_id=run_id,
+                    level="warning",
+                    message="The run's skill ablation could not be undone, so the "
+                    "lab's skill views may still be ablated. Run `make "
+                    f"sync-skills` before committing: {exc!r}",
+                )
+            )
+            session.commit()
 
 
 def _execute_pending_run(
@@ -952,10 +1066,19 @@ def _execute_pending_run(
         session.expire_all()
         return
     run = claimed
+    # The key an antigravity_cli run is given, read once at its start: the
+    # scrub after it must look for *this* key even if the operator rotates or
+    # removes it mid-run, and it must run whatever way the run ends.
+    agy_key = ""
+    started_at = time.time()
     try:
         # Rebuild the command at execution time; the stored Run.command is
         # only a preview and may predate config/adapter changes.
         config_payload = _config_payload(session, run)
+        if config_payload.harness == "antigravity_cli":
+            from harness_lab_app.api_key_auth import read_key
+
+            agy_key = read_key()
         command = BenchRunAdapter().build_command(run_id, config_payload)
         run.command = command
         session.add(run)
@@ -1067,6 +1190,12 @@ def _execute_pending_run(
                         deadline,
                     )
         exit_code = _wait_bounded(handle, run_timeout + 60)
+        if agy_key:
+            # Before anything reads, grades, indexes or exports the run: code
+            # the agent ran could read the Gemini API key (api_key_auth), and
+            # a file it wrote may hold it even though every line the runner
+            # streamed was already redacted.
+            _redact_api_key(run_id, agy_key, since=started_at)
         if outcome.stop_reason == "cancelled":
             service.mark_cancelled(run_id, exit_code)
             if _cut_measures_the_agent(outcome.stop_reason):
@@ -1122,6 +1251,11 @@ def _execute_pending_run(
         _finalize_adhoc_run(session, run_id)
     except Exception as exc:
         service.mark_finished(run_id, -1, f"Executor error: {exc!r}")
+    finally:
+        if agy_key:
+            # Again on every way out (an executor error skips the pass above);
+            # idempotent: a scrubbed file has nothing left to match.
+            _redact_api_key(run_id, agy_key, since=started_at)
 
 
 def _phase_supervision(
@@ -3099,6 +3233,8 @@ def connect_native_cli(harness: str, attempt: str = "") -> dict[str, Any]:
     from harness_lab_app import native_connect
     from harness_lab_app.native_auth import ensure_session_dir, session_status
 
+    if harness == "antigravity_cli":
+        return _connect_agy_account(attempt)
     spec = native_connect.CONNECTABLE.get(harness)
     if spec is None:
         return native_connect.write_state(
@@ -3228,6 +3364,185 @@ def connect_native_cli(harness: str, attempt: str = "") -> dict[str, Any]:
     )
 
 
+def _connect_agy_account(attempt: str) -> dict[str, Any]:
+    """The Antigravity CLI's own Google sign-in, driven for the UI (ADR-0097).
+
+    The container runs ``scripts/agy_login.py``, which starts ``agy`` on a
+    pseudo-terminal, picks "Google OAuth" and reports the sign-in URL. The
+    operator signs in in their browser and pastes the code Google shows into
+    the card; the API drops it (0600) under ``native-connect`` and this task
+    moves it into the container's exchange directory, where the helper types
+    it into agy. When agy has written its token, only the sign-in's files are
+    kept (:func:`agy_account.save_account`); the container and its home go.
+
+    The code never crosses the broker, and neither the token nor agy's screen
+    reaches a log: the helper prints only its own one-line records.
+    """
+    from harness_lab_app import agy_account, native_connect
+    from harness_lab_app.executors import AGY_LOGIN_PREFIX
+
+    harness = "antigravity_cli"
+    if not attempt:
+        attempt = str(native_connect.begin_login(harness)["attempt"])
+    if not native_connect.is_current(harness, attempt):
+        return {"harness": harness, "attempt": attempt, "state": "superseded"}
+
+    def finish(state: dict[str, Any]) -> dict[str, Any]:
+        if not native_connect.is_current(harness, attempt):
+            return {**state, "harness": harness, "state": "superseded"}
+        return native_connect.write_login(harness, attempt, state)
+
+    label = native_connect.login_label(attempt)
+    run_id = f"connect-{harness}-{label}"
+    run_dir = get_settings().data_runs_dir / run_id
+    lifetime = agy_account.CODE_LIFETIME_SECONDS
+    url_wait = agy_account.URL_WAIT_SECONDS
+    _sweep_login_leftovers(
+        harness,
+        keep=run_id,
+        older_than=url_wait + lifetime + agy_account.GRACE_SECONDS + 5 * 60,
+    )
+    native_connect.purge_code_drops(harness)
+    anchor = _wall_clock()
+    native_connect.write_login(
+        harness,
+        attempt,
+        {"state": "starting", "worker_deadline": anchor + url_wait + 60},
+    )
+    assert run_id.startswith(AGY_LOGIN_PREFIX)  # nosec B101 - executor contract
+    try:
+        handle = _run_cli_container(
+            harness, label, ["python3", "/app/scripts/agy_login.py"]
+        )
+    except Exception as exc:  # docker down, image missing: the UI says so
+        shutil.rmtree(run_dir, ignore_errors=True)
+        return finish(
+            {
+                "state": "failed",
+                "reason": "error",
+                "error": f"{type(exc).__name__}: {exc}"[:400],
+            }
+        )
+
+    lines: Queue[tuple[str, str] | None] = Queue()
+    threading.Thread(target=_drain, args=(handle, lines), daemon=True).start()
+    exchange = run_dir / "agy-exchange"
+    deadline = anchor + url_wait
+    final: dict[str, Any] | None = None
+    published = False
+    superseded = False
+    try:
+        while True:
+            try:
+                item = lines.get(timeout=_LOGIN_POLL_SECONDS)
+            except Empty:
+                item = ("", "")
+            if item is None:
+                break
+            record = agy_account.parse_helper_line(item[1]) if item[1] else None
+            if record:
+                state = str(record.get("state") or "")
+                if state == "waiting" and record.get("url"):
+                    expires = _wall_clock() + float(
+                        record.get("expires_in") or lifetime
+                    )
+                    deadline = expires + agy_account.GRACE_SECONDS
+                    native_connect.write_login(
+                        harness,
+                        attempt,
+                        {
+                            "state": "waiting",
+                            "flow": "paste_code",
+                            "url": str(record["url"]),
+                            "issued_at": anchor,
+                            "expires_at": expires,
+                            "worker_deadline": deadline,
+                        },
+                    )
+                    published = True
+                elif state == "exchanging":
+                    current = native_connect.read_login(harness)
+                    native_connect.write_login(
+                        harness,
+                        attempt,
+                        {
+                            **{
+                                k: current[k]
+                                for k in ("url", "issued_at", "expires_at", "flow")
+                                if k in current
+                            },
+                            "state": "waiting",
+                            "exchanging": True,
+                            "worker_deadline": deadline,
+                        },
+                    )
+                elif state in {"connected", "failed", "expired"}:
+                    final = record
+            if published and final is None:
+                code = native_connect.take_code_drop(harness, attempt)
+                if code:
+                    exchange.mkdir(parents=True, exist_ok=True)
+                    target = exchange / "code"
+                    temporary = exchange / ".code.tmp"
+                    temporary.write_text(code, encoding="utf-8")
+                    temporary.chmod(0o600)
+                    temporary.replace(target)
+            if not native_connect.is_current(harness, attempt):
+                superseded = True
+                break
+            if _wall_clock() >= deadline:
+                final = final or (
+                    {
+                        "state": "expired",
+                        "error": "The sign-in was not completed in time.",
+                    }
+                    if published
+                    else {
+                        "state": "failed",
+                        "reason": "timeout",
+                        "error": "agy printed no sign-in URL in time.",
+                    }
+                )
+                break
+    except Exception as exc:  # never leave the record on "waiting"
+        final = {
+            "state": "failed",
+            "reason": "error",
+            "error": f"{type(exc).__name__}: {exc}"[:400],
+        }
+    finally:
+        with contextlib.suppress(Exception):
+            handle.stop()
+        with contextlib.suppress(Exception):
+            handle.wait()
+        native_connect.purge_code_drops(harness)
+
+    try:
+        if superseded:
+            return {"harness": harness, "attempt": attempt, "state": "superseded"}
+        if final and final.get("state") == "connected":
+            try:
+                status = agy_account.save_account(
+                    run_dir / "agy-home", email=str(final.get("email") or "")
+                )
+            except (ValueError, OSError) as exc:
+                return finish({"state": "failed", "reason": "error", "error": str(exc)})
+            # A new sign-in invalidates what the last test and listing proved.
+            native_connect.write_state(harness, "test", {"state": "idle"})
+            native_connect.write_state(harness, "models", {"state": "idle"})
+            return finish({"state": "connected", "email": status.get("email") or ""})
+        record = dict(final or {})
+        record.setdefault("state", "failed")
+        if record["state"] == "failed":
+            record.setdefault("reason", "error")
+            record.setdefault("error", "The sign-in did not complete.")
+        return finish(
+            {k: record[k] for k in ("state", "reason", "error") if k in record}
+        )
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
 @celery_app.task(name="harness_lab_app.tasks.test_native_cli", acks_late=False)
 def test_native_cli(harness: str, model: str = "") -> dict[str, Any]:
     """Send one minimal prompt with a run's exact credential and environment.
@@ -3238,6 +3553,27 @@ def test_native_cli(harness: str, model: str = "") -> dict[str, Any]:
     """
     from harness_lab_app import native_connect
 
+    agy = harness == "antigravity_cli"
+    agy_auth = ""
+    if agy:
+        from harness_lab_app.agy_account import AUTH_ACCOUNT, auth_mode
+        from harness_lab_app.native_models import AGY_TEST_MODEL
+
+        agy_auth = auth_mode()
+        # On the Google sign-in the plan decides the models: with no model
+        # picked, agy answers on its default and the stream names it.
+        model = model or ("" if agy_auth == AUTH_ACCOUNT else AGY_TEST_MODEL)
+        if not agy_auth:
+            return native_connect.write_state(
+                harness,
+                "test",
+                {
+                    "state": "failed",
+                    "reason": "no_key",
+                    "requested_model": model,
+                    "error": "Sign in with Google or configure a Gemini API key first.",
+                },
+            )
     native_connect.write_state(harness, "test", {"state": "running", "model": model})
     started = time.monotonic()
     try:
@@ -3247,15 +3583,171 @@ def test_native_cli(harness: str, model: str = "") -> dict[str, Any]:
         output = [line for _level, line in handle.iter_lines()]
         exit_code = handle.wait()
     except Exception as exc:
-        return native_connect.write_state(
-            harness,
-            "test",
-            {"state": "failed", "error": f"{type(exc).__name__}: {exc}"},
-        )
-    summary = native_connect.summarize_test(harness, "\n".join(output), exit_code)
+        record: dict[str, Any] = {
+            "state": "failed",
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+            "requested_model": model,
+        }
+        if agy:
+            record["reason"] = (
+                "not_installed" if "ImageNotFound" in type(exc).__name__ else "error"
+            )
+        return native_connect.write_state(harness, "test", record)
+    if agy:
+        summary = native_connect.summarize_agy_test("\n".join(output), exit_code, model)
+        summary["cli_version"] = _agy_image_version()
+        summary["auth"] = agy_auth
+        if exit_code == 127 or "agy: not found" in "\n".join(output[-5:]):
+            summary.update(state="failed", reason="not_installed")
+    else:
+        summary = native_connect.summarize_test(harness, "\n".join(output), exit_code)
     summary["seconds"] = round(time.monotonic() - started, 1)
     summary["requested_model"] = model
     return native_connect.write_state(harness, "test", summary)
+
+
+def _agy_image_version() -> str:
+    """The agy version the runner image is labelled with, or ``""``."""
+    from harness_lab_app.native_models import CLI_VERSION_LABELS
+
+    with contextlib.suppress(Exception):
+        import docker  # local import: only the worker needs the socket
+
+        image = docker.from_env().images.get(get_settings().runner_image)
+        labels = image.labels or {}
+        return str(labels.get(CLI_VERSION_LABELS["antigravity_cli"], ""))
+    return ""
+
+
+@celery_app.task(
+    name="harness_lab_app.tasks.save_cli_api_key", acks_late=False, ignore_result=True
+)
+def save_cli_api_key(harness: str, drop: str = "") -> dict[str, Any]:
+    """Move an API-key harness's key from the API's drop into the store.
+
+    Worker-only: the API mounts the store read-only. The task's message holds
+    only the drop file's name (:func:`api_key_auth.write_drop`), so no worker
+    log, task event or "unregistered task" dump can show the key.
+    """
+    from harness_lab_app import native_connect
+    from harness_lab_app.api_key_auth import HARNESS, save_key, take_drop
+
+    if harness != HARNESS:
+        return native_connect.write_state(
+            harness, "key", {"state": "failed", "error": "not an API-key harness"}
+        )
+    api_key = take_drop(drop, native_connect.state_dir())
+    if not api_key:
+        return native_connect.write_state(
+            harness,
+            "key",
+            {
+                "state": "failed",
+                "error": "The key did not reach the worker (expired or missing); "
+                "save it again.",
+            },
+        )
+    try:
+        status = save_key(api_key)
+    except (ValueError, OSError) as exc:
+        return native_connect.write_state(
+            harness, "key", {"state": "failed", "error": str(exc)[:300]}
+        )
+    # A new key invalidates what the old one proved and what it listed.
+    native_connect.write_state(harness, "test", {"state": "idle"})
+    return native_connect.write_state(
+        harness,
+        "key",
+        {"state": "saved", "key_hint": status["hint"], "saved_at": status["saved_at"]},
+    )
+
+
+@celery_app.task(name="harness_lab_app.tasks.remove_cli_api_key", acks_late=False)
+def remove_cli_api_key(harness: str) -> dict[str, Any]:
+    """Forget an API-key harness's key, its last test and its model list."""
+    from harness_lab_app import native_connect
+    from harness_lab_app.api_key_auth import HARNESS, remove_key
+
+    if harness == HARNESS:
+        remove_key()
+    native_connect.write_state(harness, "test", {"state": "idle"})
+    native_connect.write_state(harness, "models", {"state": "idle"})
+    return native_connect.write_state(harness, "key", {"state": "removed"})
+
+
+@celery_app.task(name="harness_lab_app.tasks.refresh_cli_models", acks_late=False)
+def refresh_cli_models(harness: str) -> dict[str, Any]:
+    """``agy models`` in a run's exact container, env and key.
+
+    agy 1.5.14 does not consult the API for this listing, so it is the slugs
+    this CLI version offers the Gemini API provider, not a proof that the key
+    is entitled to each one: the connection test is that proof.
+    """
+    from harness_lab_app import native_connect
+    from harness_lab_app.agy_account import AUTH_ACCOUNT, auth_mode
+    from harness_lab_app.api_key_auth import HARNESS, settings_json
+    from harness_lab_app.native_models import parse_agy_models
+
+    if harness != HARNESS:
+        return native_connect.write_state(
+            harness, "models", {"state": "failed", "error": "not supported"}
+        )
+    mode = auth_mode()
+    if not mode:
+        return native_connect.write_state(
+            harness,
+            "models",
+            {
+                "state": "failed",
+                "error": "Sign in with Google or configure a Gemini API key first.",
+            },
+        )
+    native_connect.write_state(harness, "models", {"state": "running"})
+    # On the Google sign-in agy asks the service which models the plan offers;
+    # on a key it lists the slugs this version offers the Gemini API.
+    command = (
+        ["agy", "models"]
+        if mode == AUTH_ACCOUNT
+        else ["agy", "--settings", settings_json(), "models"]
+    )
+    try:
+        handle = _run_cli_container(harness, "models", command)
+        output = [line for _level, line in handle.iter_lines()]
+        exit_code = handle.wait()
+    except Exception as exc:
+        return native_connect.write_state(
+            harness,
+            "models",
+            {"state": "failed", "error": f"{type(exc).__name__}: {exc}"[:400]},
+        )
+    rows = parse_agy_models("\n".join(output))
+    if exit_code != 0 or not rows:
+        return native_connect.write_state(
+            harness,
+            "models",
+            {
+                "state": "failed",
+                "error": ("\n".join(output[-4:]) or f"agy models exited {exit_code}")[
+                    :400
+                ],
+            },
+        )
+    return native_connect.write_state(
+        harness,
+        "models",
+        {
+            "state": "ok",
+            "models": rows,
+            "refreshed_at": time.time(),
+            "cli_version": _agy_image_version(),
+            "auth": mode,
+            "source": (
+                "agy models (Google sign-in)"
+                if mode == AUTH_ACCOUNT
+                else "agy models (Gemini API provider)"
+            ),
+        },
+    )
 
 
 @celery_app.task(name="harness_lab_app.tasks.disconnect_native_cli", acks_late=False)
@@ -3269,6 +3761,13 @@ def disconnect_native_cli(harness: str) -> dict[str, Any]:
 
     if harness in NATIVE_SESSION_HARNESSES:
         credential_file(harness).unlink(missing_ok=True)
+    if harness == "antigravity_cli":
+        from harness_lab_app.agy_account import remove_account
+
+        # The lab's copy of the Google sign-in only; the API key, if any,
+        # stays (it has its own Remove).
+        remove_account()
+        native_connect.write_state(harness, "models", {"state": "idle"})
     native_connect.write_state(harness, "test", {"state": "idle"})
     # Drops every attempt too: a login still running stops itself.
     return native_connect.clear_login(harness)
@@ -3312,13 +3811,32 @@ def harness_facts(_state: Any) -> dict[str, Any]:
         facts["docker_ok"] = True
         with contextlib.suppress(Exception):
             from harness_lab_app.case_profile import image_is_allowed
+            from harness_lab_app.native_models import CLI_VERSION_LABELS
 
+            listed = client.images.list(name="harness-lab-*")
             facts["case_images_present"] = sorted(
                 tag
-                for image in client.images.list(name="harness-lab-*")
+                for image in listed
                 for tag in (getattr(image, "tags", None) or [])
                 if image_is_allowed(tag)
             )
+            # Each case image's CLI versions, from its labels: a case image is
+            # built FROM the shared runner and inherits them, so one built
+            # before a CLI was added has no label for it (opencity3d-v1-K-003,
+            # 2026-11-23: the Godot image predated agy).
+            facts["case_image_cli_versions"] = {
+                tag: {
+                    harness: str(
+                        ((image.labels or {}) if hasattr(image, "labels") else {}).get(
+                            label, ""
+                        )
+                    )
+                    for harness, label in CLI_VERSION_LABELS.items()
+                }
+                for image in listed
+                for tag in (getattr(image, "tags", None) or [])
+                if image_is_allowed(tag)
+            }
         with contextlib.suppress(Exception):
             image = client.images.get(settings.runner_image)
             facts["runner_image_present"] = True

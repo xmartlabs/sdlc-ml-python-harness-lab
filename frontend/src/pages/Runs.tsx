@@ -11,9 +11,12 @@ import { ModelPicker } from "../components/ModelPicker";
 import { defineMessages, useMessages } from "../i18n";
 import {
   defaultNativeModel,
+  API_KEY_HARNESSES,
   HARNESS_NATIVE_MODELS,
   HARNESS_OPTIONS,
   HOST_HARNESSES,
+  harnessCliName,
+  harnessLabel,
   useNativeModelIndex
 } from "../harnesses";
 import { RunTable } from "../components/RunTable";
@@ -154,6 +157,7 @@ const MESSAGES = defineMessages({
       claudeAuthHelp:
         "Works in Docker (put CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env) or host mode (make app-host).",
       otherHostHelp: "Uses your plan, not an API key: sign in once with make auth-codex or make auth-gemini (Docker or host mode).",
+      apiKeyHelp: "Runs on a Gemini API key, per-token API billing: configure it once in System → Agent CLIs (Docker only).",
       plannerModel: "Planner model",
       executorModel: "Executor model",
       nativeModelsHint: (harness: string) =>
@@ -343,6 +347,7 @@ const MESSAGES = defineMessages({
       claudeAuthHelp:
         "Funciona en Docker (poné CLAUDE_CODE_OAUTH_TOKEN o ANTHROPIC_API_KEY en .env) o en modo host (make app-host).",
       otherHostHelp: "Usa tu plan, no una API key: iniciá sesión una vez con make auth-codex o make auth-gemini (Docker o modo host).",
+      apiKeyHelp: "Corre con una API key de Gemini, facturación de la API por token: configurala una vez en Sistema → CLIs de agentes (solo Docker).",
       plannerModel: "Modelo planificador",
       executorModel: "Modelo ejecutor",
       nativeModelsHint: (harness: string) =>
@@ -1032,7 +1037,7 @@ export function Runs({
                         }
                         type="checkbox"
                       />
-                      <span>{item}</span>
+                      <span>{harnessLabel(item)}</span>
                     </label>
                   ))}
                 </div>
@@ -1181,15 +1186,19 @@ export function Runs({
             <select value={harness} onChange={(event) => handleHarnessChange(event.target.value)}>
               {HARNESS_OPTIONS.map((item) => (
                 <option key={item} value={item}>
-                  {item}
+                  {harnessLabel(item)}
                 </option>
               ))}
             </select>
             {HOST_HARNESSES.has(harness) ? (
               <small className="muted">
                 {m.fields.hostHarnessHelp(
-                  harness,
-                  harness === "claude" ? m.fields.claudeAuthHelp : m.fields.otherHostHelp
+                  harnessCliName(harness),
+                  harness === "claude"
+                    ? m.fields.claudeAuthHelp
+                    : API_KEY_HARNESSES.has(harness)
+                      ? m.fields.apiKeyHelp
+                      : m.fields.otherHostHelp
                 )}
               </small>
             ) : null}
@@ -1214,7 +1223,7 @@ export function Runs({
           >
             <small className="muted">
               {HARNESS_NATIVE_MODELS[harness]
-                ? m.fields.nativeModelsHint(harness)
+                ? m.fields.nativeModelsHint(harnessCliName(harness))
                 : modelSource === "opencode.json"
                   ? m.fields.gatewayUnreachable
                   : modelSource === "gateway"

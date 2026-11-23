@@ -141,6 +141,15 @@ the model, so one click picks both.
 - **Effort is never sent in a launch's shared config.** An opencode arm would inherit a
   claude-only flag, and the preflight would refuse it.
 - **A model with no effort control** (Haiku 4.5) runs at Default and says so.
+- **The Antigravity CLI tab has the same row** (amended 2026-11-23). agy has no effort
+  flag: the thinking level is the model id's last part (`gemini-3.8-flash-high`), and
+  `agy models` lists each level as its own model, so one family took three or four
+  cards. The tab shows one card per family and a *low · medium · high · xhigh* row
+  (default high, which every family offers). A click picks the family's id at that
+  level, so the answer is still `antigravity_cli|<model id>` and the run, its condition
+  hash and the preflight are unchanged. A family without the chosen level (3.1 Pro has
+  no medium) is shown disabled with the reason. The grouping is
+  `components/guide/agyFamilies.ts`.
 
 **The review offers "Create and launch" first, and "Create only" second.** Launch sends
 the settings every arm shares: the case's own steps, its `default` prompt, and manual

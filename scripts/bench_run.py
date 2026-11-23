@@ -171,14 +171,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--harness",
         default=None,
-        choices=["opencode", "codex", "claude", "gemini"],
+        choices=["opencode", "codex", "claude", "gemini", "antigravity_cli"],
         help=f"Agent CLI that drives the run (default: {DEFAULT_HARNESS}). All harnesses (opencode, codex, "
-        "claude, gemini) run inside the Docker runner under `make app-up`; claude "
+        "claude, gemini, antigravity_cli) run inside the Docker runner under `make app-up`; claude "
         "auth comes from .env (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY), "
         "codex and gemini use their own subscription login kept per provider in "
-        "HARNESS_LAB_AUTH_DIR (`make auth-codex` / `make auth-gemini`). Host mode "
-        "(`make app-host`, subprocess backend) is an alternative. See "
-        "docs/harness-adapters.md.",
+        "HARNESS_LAB_AUTH_DIR (`make auth-codex` / `make auth-gemini`), "
+        "antigravity_cli uses the Gemini API key configured in System → Agent "
+        "CLIs (Docker only). Host mode (`make app-host`, subprocess backend) is "
+        "an alternative for the others. See docs/harness-adapters.md.",
     )
     p.add_argument(
         "--score-mode",
@@ -318,6 +319,15 @@ _CAUSE_MARKERS = (
     "RESOURCE_EXHAUSTED",
     "model_not_supported",
     "not supported when using Codex with a ChatGPT account",
+    # antigravity_cli (agy on a Gemini API key): the Gemini API's own status
+    # words, as agy prints them in its `result.error` (agy 1.5.14).
+    "API_KEY_INVALID",
+    "PERMISSION_DENIED",
+    "INVALID_ARGUMENT",
+    "NOT_FOUND",
+    "DEADLINE_EXCEEDED",
+    "is not recognized as a known model",
+    "network issue connecting to the server",
 )
 _CAUSE_MAX = 300
 
@@ -337,6 +347,20 @@ _GEMINI_EXIT_CAUSES = {
     42: "Cause: gemini rejected its input (invalid prompt or arguments)",
     53: "Cause: gemini turn limit exceeded",
 }
+
+
+# agy writes a fatal setup error to stderr only, with no JSON (exit 1): the
+# runner merges stderr into the step log, so the sentence is matched there.
+_AGY_SETUP_CAUSES = (
+    (
+        "GEMINI_API_KEY environment variable is not set",
+        "Cause: antigravity_cli has no Gemini API key — configure it in System → Agent CLIs",
+    ),
+    (
+        "is not recognized as a known model",
+        "Cause: antigravity_cli does not know this model slug — pick one `agy models` lists",
+    ),
+)
 
 
 def harness_error_cause(
@@ -360,6 +384,10 @@ def harness_error_cause(
     if not line:
         if harness == "gemini" and exit_code in _GEMINI_EXIT_CAUSES:
             return _GEMINI_EXIT_CAUSES[exit_code]
+        if harness == "antigravity_cli":
+            for marker, cause in _AGY_SETUP_CAUSES:
+                if marker in text:
+                    return cause
         return None
     code = next((marker for marker in _CAUSE_MARKERS if _has_marker(line, marker)), "")
     message = ""
@@ -562,6 +590,18 @@ def apply_skill_views(skills: list) -> None:
             if tool.needs_manifest and tool.manifest_path:
                 write_manifest(REPO_ROOT / tool.manifest_path, hashes)
             render_tool(REPO_ROOT, registry, tool, skills=skills)
+
+
+# The adapter-registry tool whose files a harness reads, where the two names
+# differ. agy reads `.agents/skills` + `.agents/rules/` — the registry's
+# `antigravity` tool (the IDE's), which is what an `injected` antigravity_cli
+# arm must get projected. Every other harness id is its own tool id.
+_REGISTRY_TOOL_FOR_HARNESS = {"antigravity_cli": "antigravity"}
+
+
+def registry_tool_id(harness: str) -> str:
+    """The ``adapters/registry.toml`` tool id a harness's projection uses."""
+    return _REGISTRY_TOOL_FOR_HARNESS.get(harness, harness)
 
 
 def add_skills_to_native(workspace: Path, skills: list, tool_id: str) -> dict:
@@ -2267,7 +2307,13 @@ def _native_model(model: str | None) -> str | None:
 
 # Harnesses whose CLI takes the prompt on stdin (the `-` / empty `-p` forms):
 # a case prompt can be tens of KB, and argv has a limit stdin does not.
-STDIN_PROMPT_HARNESSES = frozenset({"codex", "gemini"})
+# antigravity_cli reads it as one `--input-format stream-json` message
+# (:func:`agy_stdin_message`): `agy -p ""` refuses an empty prompt, and argv
+# fails at ~150 KB (verified, agy 1.5.14).
+STDIN_PROMPT_HARNESSES = frozenset({"codex", "gemini", "antigravity_cli"})
+
+# Harnesses that run on a subscription's quota (cost unknown, never 0).
+SUBSCRIPTION_PROMPT_HARNESSES = frozenset({"codex", "gemini"})
 
 # Codex's `workspace-write` sandbox needs bubblewrap to create a namespace, and
 # the runner container cannot (verified on harness-lab-runner, codex-cli
@@ -2297,6 +2343,11 @@ def harness_sandbox(harness: str, *, in_container: bool | None = None) -> str:
         return CODEX_SANDBOX_CONTAINER if container else CODEX_SANDBOX_HOST
     if harness == "gemini":
         return CODEX_SANDBOX_CONTAINER if container else "seatbelt"
+    if harness == "antigravity_cli":
+        # Docker only (the preflight refuses the host lane): agy's own
+        # `--sandbox` cannot start in the runner (`fork/exec … operation not
+        # permitted`), so the per-run container is the sandbox.
+        return CODEX_SANDBOX_CONTAINER if container else "none"
     if harness == "claude" and container:
         return CODEX_SANDBOX_CONTAINER
     return ""
@@ -2309,11 +2360,17 @@ def harness_cli_version(harness: str) -> str:
     Recorded in metadata.json so a run names the instrument that drove it
     (ADR-0073). opencode's version is already in the harness fingerprint.
     """
-    if harness not in {"codex", "claude", "gemini"} or not shutil.which(harness):
+    binary = AGY_BINARY if harness == "antigravity_cli" else harness
+    if harness not in {
+        "codex",
+        "claude",
+        "gemini",
+        "antigravity_cli",
+    } or not shutil.which(binary):
         return ""
     try:
         result = subprocess.run(
-            [harness, "--version"], capture_output=True, text=True, timeout=20
+            [binary, "--version"], capture_output=True, text=True, timeout=20
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -2326,6 +2383,113 @@ def run_billing_mode(harness: str) -> str:
     from harness_lab_app.native_auth import billing_mode
 
     return billing_mode(harness)
+
+
+# --- antigravity_cli (agy on a Gemini API key) -----------------------------
+
+#: The Antigravity CLI's executable (antigravity.google/docs/getting-started).
+AGY_BINARY = "agy"
+
+#: Tool permissions an antigravity_cli run is granted, explicitly. In headless
+#: mode agy cannot ask, and a tool it would ask about is soft-denied **and the
+#: turn ends** with SUCCESS, exit 0 and no answer (verified, agy 1.5.14): an
+#: arm cut short by a prompt nobody could answer would be scored as the
+#: model's work. Inside the runner the container is the sandbox (ADR-0094 §3),
+#: so commands, file reads/writes anywhere in it and URL reads are allowed,
+#: the same reach claude/codex have there. MCP tools and browser execution stay
+#: unlisted (denied): the lab configures neither for any harness.
+AGY_ALLOW_RULES: tuple[str, ...] = (
+    "command(*)",
+    "read_file(*)",
+    "write_file(*)",
+    "read_url(*)",
+)
+
+
+def agy_on_account(env: dict[str, str] | None = None) -> bool:
+    """True when this run uses the operator's Google sign-in (ADR-0097).
+
+    The executor decides it and says so in ``HARNESS_LAB_AGY_AUTH``; the run
+    never re-reads the store (the runner cannot see it).
+    """
+    values = env if env is not None else os.environ
+    return values.get("HARNESS_LAB_AGY_AUTH") == "account"
+
+
+def agy_settings(extra: dict | None = None, *, account: bool | None = None) -> str:
+    """The ``--settings`` JSON of a run: the allow list, plus the provider.
+
+    On a Gemini API key the provider is forced to ``gemini`` (ADR-0096); on
+    the Google sign-in it is left to agy, which then uses the sign-in. Passed
+    per session (``--settings``: "never saved"), so nothing is written into
+    the run's home and nothing carries over to the next run.
+    """
+    from harness_lab_app.api_key_auth import settings_json
+
+    merged = {"permissions": {"allow": list(AGY_ALLOW_RULES)}, **(extra or {})}
+    if agy_on_account() if account is None else account:
+        return json.dumps(merged, separators=(",", ":"))
+    return settings_json(merged)
+
+
+def build_agy_cmd(executor_model: str | None) -> list[str]:
+    """Assemble a headless ``agy`` command (Antigravity CLI 1.5.14).
+
+    ``--mode accept-edits`` approves file edits without a diff review, and the
+    allow list in ``--settings`` covers commands and reads/writes, so no action
+    a coding agent takes is soft-denied. ``--dangerously-skip-permissions`` is
+    not used: it would also approve MCP and browser execution, which no other
+    arm gets. ``--disable-slash-commands``: a case prompt that starts with ``/``
+    is text for the model, not a CLI command. The prompt goes on stdin as one
+    ``--input-format stream-json`` message (:func:`agy_stdin_message`).
+    ``--print-timeout`` is not set: the lab's watchdog owns every arm's time
+    budget, and a CLI-side cut would make this arm stop differently.
+    """
+    cmd = [
+        AGY_BINARY,
+        "--settings",
+        agy_settings(),
+        "--mode",
+        "accept-edits",
+        "--disable-slash-commands",
+    ]
+    native = _native_model(executor_model)
+    if native:
+        # agy slugs are lowercase; the preflight matched this one
+        # case-insensitively, so the run must send what it checked.
+        cmd += ["--model", native.strip().lower()]
+    cmd += ["--input-format", "stream-json", "--output-format", "stream-json"]
+    return cmd
+
+
+def agy_stdin_message(prompt: str) -> str:
+    """One ``--input-format stream-json`` user message carrying ``prompt``."""
+    return json.dumps({"event": "user", "message": {"content": prompt}}) + "\n"
+
+
+def agy_run_env() -> dict[str, str]:
+    """The process environment of an antigravity_cli step.
+
+    Inside the runner the executor already built it (no foreign credential, a
+    private ``HOME``, and either the stored key or the run's copy of the Google
+    sign-in); this keeps it and only makes sure the home exists. ``.env`` is
+    never consulted for the key: the CLI ignores ``.env`` files and
+    ``GOOGLE_API_KEY`` by design. On the sign-in no key is passed at all: with
+    one agy would bill the key instead of the plan.
+    """
+    from harness_lab_app.api_key_auth import agy_env
+    from harness_lab_app.native_auth import CONTAINER_AGENT_HOME
+
+    env = dict(os.environ)
+    home = Path(
+        env.get("HARNESS_LAB_AGENT_HOME") or env.get("HOME") or CONTAINER_AGENT_HOME
+    )
+    home.mkdir(parents=True, exist_ok=True)
+    if agy_on_account(env):
+        out = agy_env(env, key="", home=home)
+        out.pop("GEMINI_API_KEY", None)
+        return out
+    return agy_env(env, key=env.get("GEMINI_API_KEY", ""), home=home)
 
 
 def harness_run_env(harness: str) -> dict[str, str] | None:
@@ -2346,6 +2510,8 @@ def harness_run_env(harness: str) -> dict[str, str] | None:
         prune_session_dir,
     )
 
+    if harness == "antigravity_cli":
+        return agy_run_env()
     if harness not in NATIVE_SESSION_HARNESSES:
         return None
     env = dict(os.environ)
@@ -2540,6 +2706,8 @@ def build_harness_cmd(
         return build_codex_cmd(executor_model)
     if harness == "gemini":
         return build_gemini_cmd(executor_model)
+    if harness == "antigravity_cli":
+        return build_agy_cmd(executor_model)
     if harness == "claude":
         return build_claude_cmd(
             executor_model, message, add_dirs=add_dirs, effort=effort
@@ -2668,7 +2836,9 @@ def raw_events_path(events_path: Path) -> Path:
     )
 
 
-def write_normalized_events(harness: str, raw_path: Path, events_path: Path) -> int:
+def write_normalized_events(
+    harness: str, raw_path: Path, events_path: Path, model: str = ""
+) -> int:
     """Translate a step's raw codex/gemini stream into the claude-shaped sidecar.
 
     Every reader the lab has (attribution, trajectory, scoring, progress, the
@@ -2681,7 +2851,15 @@ def write_normalized_events(harness: str, raw_path: Path, events_path: Path) -> 
 
     try:
         lines = raw_path.read_text(errors="replace").splitlines()
-        translated = translate(harness, lines)
+        if harness == "antigravity_cli":
+            translated = translate(
+                harness,
+                lines,
+                model=model,
+                billing_mode="subscription" if agy_on_account() else "api",
+            )
+        else:
+            translated = translate(harness, lines, model=model)
     except OSError:
         translated = []
     events_path.write_text("".join(f"{line}\n" for line in translated))
@@ -2697,6 +2875,7 @@ def run_opencode(
     events_path: Path | None = None,
     stdin_text: str | None = None,
     env: dict[str, str] | None = None,
+    model: str = "",
 ) -> int:
     """Run the harness CLI, streaming output to terminal and capturing to log_path.
 
@@ -2711,6 +2890,13 @@ def run_opencode(
     `stdin_text`, when given, is written to the CLI's stdin and closed (codex
     and gemini take their prompt there). `env` replaces the process
     environment (codex/gemini: the provider session, scrubbed of API keys).
+    `model` is the run's configured model, for a stream that never names the
+    model itself (antigravity_cli without ``init.model``).
+
+    A credential the process was given (``GEMINI_API_KEY`` for
+    antigravity_cli) is redacted from every line before it reaches the log,
+    the raw stream or stdout: code the agent runs can read that key and print
+    it (api_key_auth), and none of those files may carry it.
     """
     import datetime as _dt
 
@@ -2758,7 +2944,12 @@ def run_opencode(
                     proc.stdin.close()
         assert proc.stdout is not None
         last_refresh = 0.0
+        secret = (
+            (env or {}).get("GEMINI_API_KEY", "") if label == "antigravity_cli" else ""
+        )
         for line in proc.stdout:
+            if secret and secret in line:
+                line = line.replace(secret, "***REDACTED***")
             if events_fh is not None:
                 events_fh.write(stamp_event_line(line))
                 events_fh.flush()
@@ -2771,9 +2962,15 @@ def run_opencode(
                     and tee_path is not None
                     and events_path is not None
                     and time.monotonic() - last_refresh >= _EVENTS_REFRESH_SECONDS
-                    and ('"item.completed"' in line or '"tool_result"' in line)
+                    and (
+                        '"item.completed"' in line
+                        or '"tool_result"' in line
+                        # agy: a finished step (tool or answer) carries its
+                        # own usage, so a step the watchdog kills keeps it.
+                        or '"state":"DONE"' in line
+                    )
                 ):
-                    write_normalized_events(label, tee_path, events_path)
+                    write_normalized_events(label, tee_path, events_path, model=model)
                     last_refresh = time.monotonic()
                 rendered = (
                     render_event(label, line)
@@ -2795,7 +2992,7 @@ def run_opencode(
     if append_fh:
         append_fh.close()
     if translated and tee_path is not None and events_path is not None:
-        write_normalized_events(label, tee_path, events_path)
+        write_normalized_events(label, tee_path, events_path, model=model)
 
     return proc.returncode
 
@@ -3285,6 +3482,59 @@ def self_hosted_cost(harness: str, models: Sequence[str]) -> float | None:
     return 0.0 if all(is_self_hosted_model(m) for m in models) else None
 
 
+def agy_cost(usage: dict, models: Sequence[str]) -> dict:
+    """The cost fields of an antigravity_cli run (Gemini API key, per token).
+
+    agy reports tokens and no price, so the cost is the run's own tokens at
+    Google's published list price for the Gemini API model its slug calls
+    (``api_price_estimate.GEMINI_PRICES``), recorded with the basis it rests
+    on. It is a real per-token bill priced by the lab, not a subscription's
+    quota, so it fills ``cost_usd`` and is compared like any measured cost.
+    Unknown — ``null``, never 0 — when the slug or its price is not known, or
+    the run reported no tokens. Nothing another source attributed to this run
+    id (a gateway, Langfuse) is kept: agy never talks to either.
+    """
+    import datetime as _dt
+
+    from harness_lab_app.api_price_estimate import (
+        estimate_gemini_api_cost,
+        gemini_cost_basis,
+    )
+    from harness_lab_app.native_models import agy_api_model
+
+    slug = usage.get("detected_model") or next((m for m in models if m), "")
+    api_model, thinking = agy_api_model(_native_model(slug) or "")
+    # Priced at the rates in effect on the day the run ran (Google moves some
+    # of them on announced dates), never at a table's latest row.
+    today = _dt.date.today().isoformat()
+    cost = estimate_gemini_api_cost(
+        api_model,
+        usage.get("input_tokens"),
+        usage.get("cache_read_tokens"),
+        usage.get("output_tokens"),
+        on=today,
+    )
+    fields: dict = {
+        "billing_mode": "api",
+        "api_model": api_model,
+        "thinking_level": thinking,
+        "cost_usd": cost,
+        "cost_basis": gemini_cost_basis(api_model, on=today),
+    }
+    if cost is not None:
+        fields["cost_source"] = "api_list_price_estimate"
+    else:
+        fields["cost_source"] = "api_price_unknown"
+        fields["cost_unknown_reason"] = (
+            "no token usage reported"
+            if usage.get("input_tokens") is None and usage.get("output_tokens") is None
+            else f"no Gemini API price known for {api_model} on {today}"
+            if api_model
+            else f"model slug {slug or '(CLI default)'} is not in the verified agy catalog"
+        )
+    return fields
+
+
 def assemble_usage(
     out_dir: Path,
     opencode_log: Path,
@@ -3335,13 +3585,21 @@ def assemble_usage(
     if free is not None and usage.get("cost_usd") in (None, "", 0, 0.0):
         usage["cost_usd"] = free
         usage["cost_source"] = "self_hosted"
-    if harness in STDIN_PROMPT_HARNESSES:
+    if harness in SUBSCRIPTION_PROMPT_HARNESSES:
         # codex/gemini spend a subscription plan's quota, never a per-token
         # bill: the cost is unknown, recorded as such, and never filled with 0
         # or with a figure some other source attributed to this run id.
         usage["cost_usd"] = None
         usage["billing_mode"] = "subscription"
         usage["cost_source"] = "subscription_quota"
+    elif harness == "antigravity_cli" and agy_on_account():
+        # The operator's Google sign-in (ADR-0097) spends the plan's quota,
+        # exactly like codex/gemini: no per-token bill, recorded as unknown.
+        usage["cost_usd"] = None
+        usage["billing_mode"] = "subscription"
+        usage["cost_source"] = "subscription_quota"
+    elif harness == "antigravity_cli":
+        usage.update(agy_cost(usage, models))
     if stop_reason:
         usage["stop_reason"] = stop_reason
     if prompt_kinds:
@@ -3897,7 +4155,7 @@ def main(argv: list[str] | None = None) -> int:
             harness_projection = inject_harness(
                 ws,
                 effective_skills,
-                args.harness,
+                registry_tool_id(args.harness),
                 staged_root if staged_root.is_dir() else None,
             )
             return
@@ -3907,7 +4165,9 @@ def main(argv: list[str] | None = None) -> int:
         wanted = set(args.extra_skill) | set(args.invoke_skill)
         staged = [skill for skill in effective_skills if skill.name in wanted]
         if staged:
-            harness_projection = add_skills_to_native(ws, staged, args.harness)
+            harness_projection = add_skills_to_native(
+                ws, staged, registry_tool_id(args.harness)
+            )
 
     in_target = harness_source in ("native", "injected")
     if provisions_repo and case_spec is not None:
@@ -4070,7 +4330,12 @@ def main(argv: list[str] | None = None) -> int:
         has_run_cmd = detect_run_subcommand()
     else:
         # codex/claude/gemini are native CLIs; availability = the binary is on PATH.
-        has_run_cmd = shutil.which(args.harness) is not None
+        has_run_cmd = (
+            shutil.which(
+                AGY_BINARY if args.harness == "antigravity_cli" else args.harness
+            )
+            is not None
+        )
     # codex/claude/gemini can run against their CLI's default model, so a
     # missing executor model is only fatal for opencode (gateway-routed).
     needs_model = args.harness == "opencode"
@@ -4257,9 +4522,14 @@ def main(argv: list[str] | None = None) -> int:
                 cwd=agent_cwd,
                 events_path=events_path,
                 stdin_text=(
-                    prompt_text if args.harness in STDIN_PROMPT_HARNESSES else None
+                    agy_stdin_message(prompt_text)
+                    if args.harness == "antigravity_cli"
+                    else prompt_text
+                    if args.harness in STDIN_PROMPT_HARNESSES
+                    else None
                 ),
                 env=harness_run_env(args.harness),
+                model=executor_model or "",
             )
             step_seconds = step_clock() - step_started
             harness_seconds += step_seconds

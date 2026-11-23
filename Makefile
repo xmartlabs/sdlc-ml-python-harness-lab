@@ -429,7 +429,11 @@ app-up:
 	@echo "🚀 Starting local web app stack..."
 	@mkdir -p "$(AUTH_DIR)" && chmod 700 "$(AUTH_DIR)"
 	@docker compose build runner sandbox
-	@docker compose --profile dev up -d --build api worker worker-parallel worker-interactive redis frontend
+	@# The three workers share one image (harness-lab-worker:latest). `up --build`
+	@# built it once per worker, in parallel, and the second export failed with
+	@# "already exists". Build each image once, then start without building.
+	@docker compose --profile dev build api worker frontend
+	@docker compose --profile dev up -d api worker worker-parallel worker-interactive redis frontend
 	@if [ "$$HARNESS_LAB_API_BIND_ADDR" = "0.0.0.0" ] \
 		&& ! grep -qs '^HARNESS_LAB_ADMIN_PASSWORD_HASH=.\+' .env; then \
 		echo "⚠️  API published on 0.0.0.0:$${HARNESS_LAB_API_PORT:-8009} with NO authentication —"; \
@@ -465,8 +469,9 @@ app-up-prod:
 	@grep -qs '^HARNESS_LAB_ADMIN_PASSWORD_HASH=.\+' .env \
 		|| echo "⚠️  No admin password set — the UI is open. Run: make set-password"
 	@docker compose build runner sandbox
+	@docker compose --profile prod build api worker frontend-prod
 	@HARNESS_LAB_API_BIND_ADDR=127.0.0.1 \
-		docker compose --profile prod up -d --build api worker worker-parallel worker-interactive redis frontend-prod
+		docker compose --profile prod up -d api worker worker-parallel worker-interactive redis frontend-prod
 	@echo "✅ http://localhost:8080 (set HARNESS_LAB_BIND_ADDR=0.0.0.0 for LAN access)"
 
 app-down-prod:
@@ -482,7 +487,9 @@ backup:
 	@paths=""; for p in $(BACKUP_PATHS); do [ -e "$$p" ] && paths="$$paths $$p"; done; \
 		[ -n "$$paths" ] || { echo "nothing to back up"; exit 1; }; \
 		archive=$(BACKUP_DIR)/harness-lab-$$(date +%Y%m%d-%H%M%S).tar.gz; \
-		tar czf "$$archive" --exclude='data/runs/*/workspace' $$paths; \
+		tar czf "$$archive" --exclude='data/runs/*/workspace' \
+			--exclude='data/runs/*/agy-home' --exclude='data/runs/*/agy-exchange' \
+			--exclude='data/runs/*/session' $$paths; \
 		echo "✅ $$archive ($$(du -h "$$archive" | cut -f1))"
 
 # Host mode: run the worker/API on the HOST with the subprocess backend so the

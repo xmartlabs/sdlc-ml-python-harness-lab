@@ -11,6 +11,8 @@ dialect:
   ``turn.failed{error}``, ``item.started|updated|completed{item}``, ``error``.
 * ``gemini -p --output-format stream-json`` (gemini-cli 0.70.0): ``init``,
   ``message``, ``tool_use``, ``tool_result``, ``error``, ``result{stats}``.
+* ``agy -p --output-format stream-json`` (Antigravity CLI 1.5.14): ``init``,
+  ``step_update`` (text deltas, tool steps), ``result{usage}``.
 
 Every reader the lab already has (attribution, trajectory, score evaluators,
 run progress, the Langfuse exporter, the per-step reward) speaks the claude
@@ -35,10 +37,11 @@ Pure functions only: no I/O, so the runner and the tests share one code path.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 #: Harnesses whose step stream is translated (claude's is already the shape).
-TRANSLATED_HARNESSES: frozenset[str] = frozenset({"codex", "gemini"})
+TRANSLATED_HARNESSES: frozenset[str] = frozenset({"codex", "gemini", "antigravity_cli"})
 
 #: Suffix of the untouched per-step CLI stream, beside ``step-N.events.jsonl``.
 RAW_EVENTS_SUFFIX = ".raw.jsonl"
@@ -70,6 +73,11 @@ def _loads(raw: str) -> dict[str, Any] | None:
     except (json.JSONDecodeError, TypeError):
         return None
     return event if isinstance(event, dict) else None
+
+
+def _obj(value: Any) -> dict[str, Any]:
+    """``value`` when it is a JSON object, else an empty one (typed for mypy)."""
+    return value if isinstance(value, dict) else {}
 
 
 def _dump(event: dict[str, Any]) -> str:
@@ -464,14 +472,316 @@ def gemini_to_claude(
     return out
 
 
-def translate(
-    harness: str, lines: list[str], *, billing_mode: str = "subscription"
+# ---------------------------------------------------------------------------
+# agy -p --output-format stream-json (Antigravity CLI, antigravity_cli)
+# ---------------------------------------------------------------------------
+
+# agy 1.5.14 tool names → the claude vocabulary. The wire names (what the model
+# calls, what `tool_name` reports) were read from a captured request body and
+# stream; the `init.tools` aliases (`view_file`, `write_to_file`, ...) are
+# mapped too, since a later CLI may report those instead. Anything else keeps
+# its own name under an `agy:` prefix: counted as a tool call, never mistaken
+# for an edit or a read it is not.
+_AGY_TOOLS: dict[str, str] = {
+    "read_file": "Read",
+    "view_file": "Read",
+    "write_file": "Write",
+    "write_to_file": "Write",
+    "edit_file": "Edit",
+    "replace_file_content": "Edit",
+    "multi_replace_file_content": "MultiEdit",
+    "sed_file": "Edit",
+    "notebook_edit": "NotebookEdit",
+    "run_command": "Bash",
+    "grep_search": "Grep",
+    "find_by_name": "Glob",
+    "list_dir": "LS",
+    "search_web": "WebSearch",
+    "read_url_content": "WebFetch",
+    "invoke_subagent": "Agent",
+    "browser_subagent": "Agent",
+}
+
+# `run_command` reports a failed command inside a DONE step, in its output:
+# "Command exited with code 1." (agy 1.5.14).
+_AGY_EXIT = re.compile(r"Command exited with code (-?\d+)")
+
+
+def _agy_input(tool: str, parameters: dict[str, Any]) -> dict[str, Any]:
+    """agy parameters, plus the keys the claude parsers read.
+
+    agy echoes only the path (``Path``) or the command line (``CommandLine``)
+    of a call in ``tool_info.parameters``; contents never reach the stream.
+    """
+    payload = dict(parameters)
+    path = payload.get("Path") or payload.get("AbsolutePath") or payload.get("File")
+    if path:
+        payload.setdefault("file_path", str(path))
+        payload.setdefault("path", str(path))
+    command = payload.get("CommandLine")
+    if command:
+        payload.setdefault("command", str(command))
+    if tool in {"invoke_subagent", "browser_subagent"}:
+        payload.setdefault(
+            "subagent_type", str(payload.get("TypeName") or payload.get("Role") or tool)
+        )
+    if tool == "search_web" and "query" in payload:
+        payload.setdefault("query", payload["query"])
+    return payload
+
+
+def _agy_tool_failed(state: str, info: dict[str, Any]) -> tuple[bool, str]:
+    """(failed, content) for one finished agy tool step."""
+    error = info.get("error")
+    output = str(info.get("output") or "")
+    if state == "ERROR" or (isinstance(error, dict) and error):
+        message = (
+            str((error or {}).get("message") or "") if isinstance(error, dict) else ""
+        )
+        return True, message or output
+    exit_code = _AGY_EXIT.search(output)
+    if exit_code and int(exit_code.group(1)) != 0:
+        return True, output
+    return False, output
+
+
+def agy_usage(raw: Any) -> dict[str, int] | None:
+    """An agy ``usage`` block in the claude meaning of each field.
+
+    Verified against a mock with known token counts (agy 1.5.14):
+    ``input_tokens`` already excludes the cached prompt (claude's meaning),
+    ``cache_read_tokens`` is the cached part, and ``output_tokens`` includes
+    ``thinking_tokens`` — so thinking is recorded beside output, never added.
+    """
+    if not isinstance(raw, dict):
+        return None
+    numbers = {k: v for k, v in raw.items() if isinstance(v, int)}
+    if not numbers:
+        return None
+    return {
+        "input_tokens": numbers.get("input_tokens", 0),
+        "cache_read_input_tokens": numbers.get("cache_read_tokens", 0),
+        "output_tokens": numbers.get("output_tokens", 0),
+        "reasoning_output_tokens": numbers.get("thinking_tokens", 0),
+    }
+
+
+def antigravity_to_claude(
+    lines: list[str], *, billing_mode: str = "api", model: str = ""
 ) -> list[str]:
-    """The claude-shaped view of one step's raw stream, for ``harness``."""
+    """Translate one step's ``agy --output-format stream-json`` into claude events.
+
+    The stream is ``init``, then ``step_update`` events, then one ``result``
+    (antigravity.google/docs/cli/headless, verified on agy 1.5.14):
+
+    * Assistant text arrives as ``ACTIVE`` ``text_delta`` chunks closed by a
+      ``DONE`` that carries only the tail (often ``"\\n"``); chunks are joined
+      per ``step_index``.
+    * A tool step reports ``ACTIVE`` then ``DONE`` (or ``ERROR``); only the
+      finished one is translated, as a ``tool_use`` plus its ``tool_result``.
+    * ``result.usage`` is the session's total (the sum of the steps'), so it is
+      the only usage carried into the translated ``result``.
+
+    No agy event names the Gemini API model that served the turn; ``init``
+    names the requested slug when ``--model`` was passed, and ``model`` (the
+    run's configured slug) is the fallback. A field agy does not emit stays
+    absent.
+    """
+    out: list[str] = []
+    conversation = ""
+    detected = model
+    texts: dict[int, list[str]] = {}
+    text_stamps: dict[int, dict[str, Any]] = {}
+    final_text = ""
+    saw_any = False
+    result_seen = False
+    # Per-step usage, summed: the session's total when no `result` arrives
+    # (the watchdog killed the step), so its tokens are not lost.
+    step_usage: dict[str, int] = {}
+    steps_with_usage = 0
+    last_event: dict[str, Any] = {}
+
+    def flush(index: int) -> None:
+        nonlocal final_text
+        text = "".join(texts.pop(index, [])).strip()
+        stamp = text_stamps.pop(index, {})
+        if not text:
+            return
+        final_text = text
+        out.append(
+            _dump(
+                _stamp(
+                    _assistant([{"type": "text", "text": text}], f"agy-msg-{index}"),
+                    stamp,
+                )
+            )
+        )
+
+    for raw in lines:
+        event = _loads(raw)
+        if event is None:
+            continue
+        saw_any = True
+        kind = event.get("event")
+        if kind == "init":
+            body = _obj(event.get("init"))
+            conversation = str(event.get("conversation_id") or "")
+            detected = str(body.get("model") or "") or detected
+            init: dict[str, Any] = {
+                "type": "system",
+                "subtype": "init",
+                "session_id": conversation,
+                "harness": "antigravity_cli",
+                "permission_mode": str(body.get("permission_mode") or ""),
+            }
+            if detected:
+                init["model"] = detected
+            out.append(_dump(_stamp(init, event)))
+        elif kind == "step_update":
+            step = event.get("step_update")
+            if not isinstance(step, dict):
+                continue
+            last_event = event
+            index = int(step.get("step_index") or 0)
+            if str(step.get("state") or "") == "DONE":
+                partial = agy_usage(step.get("usage"))
+                if partial is not None:
+                    steps_with_usage += 1
+                    for name, value in partial.items():
+                        step_usage[name] = step_usage.get(name, 0) + value
+            state = str(step.get("state") or "")
+            step_type = str(step.get("step_type") or "")
+            if step_type == "agent_response":
+                delta = step.get("text_delta")
+                if isinstance(delta, str) and delta:
+                    if index not in texts:
+                        text_stamps[index] = event
+                    texts.setdefault(index, []).append(delta)
+                if state in {"DONE", "ERROR"}:
+                    flush(index)
+            elif step_type in {"tool", "subagent"} and state in {"DONE", "ERROR"}:
+                info = _obj(step.get("tool_info"))
+                tool = str(step.get("tool_name") or info.get("name") or "")
+                if not tool and step_type == "subagent":
+                    tool = "invoke_subagent"
+                if not tool:
+                    continue
+                parameters = info.get("parameters")
+                if step_type == "subagent":
+                    # A subagent step reports `subagent_info` (type, role,
+                    # conversation), not `tool_info`.
+                    sub = _obj(step.get("subagent_info"))
+                    first = next(
+                        (s for s in sub.get("subagents") or [] if isinstance(s, dict)),
+                        {},
+                    )
+                    parameters = {
+                        **_obj(parameters),
+                        **{
+                            key: first[key]
+                            for key in ("type_name", "role")
+                            if first.get(key)
+                        },
+                    }
+                    if first.get("type_name"):
+                        parameters.setdefault("TypeName", first["type_name"])
+                tool_id = f"agy-{conversation[:8]}-{index}"
+                name = _AGY_TOOLS.get(tool, f"agy:{tool}")
+                block = {
+                    "type": "tool_use",
+                    "id": tool_id,
+                    "name": name,
+                    "input": _agy_input(
+                        tool, parameters if isinstance(parameters, dict) else {}
+                    ),
+                }
+                failed, content = _agy_tool_failed(state, info)
+                out.append(_dump(_stamp(_assistant([block], tool_id), event)))
+                out.append(_dump(_stamp(_tool_result(tool_id, content, failed), event)))
+        elif kind == "result":
+            for index in sorted(texts):
+                flush(index)
+            body = _obj(event.get("result"))
+            status = str(body.get("status") or "")
+            failed = status != "SUCCESS"
+            response = str(body.get("response") or "").strip()
+            result: dict[str, Any] = {
+                "type": "result",
+                "subtype": "success" if not failed else "error",
+                "is_error": failed,
+                "session_id": str(body.get("conversation_id") or conversation),
+                "num_turns": int(body.get("num_turns") or 0),
+                "result": str(body.get("error") or status)
+                if failed
+                else (response or final_text),
+                "total_cost_usd": None,
+                "billing_mode": billing_mode,
+                "harness": "antigravity_cli",
+                "status": status,
+            }
+            if detected:
+                result["model"] = detected
+            seconds = body.get("duration_seconds")
+            if isinstance(seconds, (int, float)):
+                result["duration_ms"] = round(float(seconds) * 1000)
+            usage = agy_usage(body.get("usage"))
+            if usage is not None:
+                result["usage"] = usage
+                if detected:
+                    result["modelUsage"] = {
+                        detected: {
+                            "inputTokens": usage["input_tokens"],
+                            "outputTokens": usage["output_tokens"],
+                            "cacheReadInputTokens": usage["cache_read_input_tokens"],
+                        }
+                    }
+            result_seen = True
+            out.append(_dump(_stamp(result, event)))
+    if saw_any and not result_seen:
+        for index in sorted(texts):
+            flush(index)
+        if steps_with_usage:
+            # No `result`: the step was cut. What it spent is still known,
+            # step by step; the outcome is not, so it is an error result.
+            partial_result: dict[str, Any] = {
+                "type": "result",
+                "subtype": "error",
+                "is_error": True,
+                "session_id": conversation,
+                "num_turns": 0,
+                "result": "agy stream ended without a result (step interrupted)",
+                "total_cost_usd": None,
+                "billing_mode": billing_mode,
+                "harness": "antigravity_cli",
+                "usage": step_usage,
+                "usage_partial": True,
+            }
+            if detected:
+                partial_result["model"] = detected
+            out.append(_dump(_stamp(partial_result, last_event)))
+    return out
+
+
+def translate(
+    harness: str,
+    lines: list[str],
+    *,
+    billing_mode: str = "",
+    model: str = "",
+) -> list[str]:
+    """The claude-shaped view of one step's raw stream, for ``harness``.
+
+    ``billing_mode`` empty keeps each harness's own default: codex and gemini
+    run on a subscription, antigravity_cli on a Gemini API key unless the
+    caller says the run used the Google sign-in (ADR-0097).
+    """
     if harness == "codex":
-        return codex_to_claude(lines, billing_mode=billing_mode)
+        return codex_to_claude(lines, billing_mode=billing_mode or "subscription")
     if harness == "gemini":
-        return gemini_to_claude(lines, billing_mode=billing_mode)
+        return gemini_to_claude(lines, billing_mode=billing_mode or "subscription")
+    if harness == "antigravity_cli":
+        mode = billing_mode if billing_mode in {"api", "subscription"} else "api"
+        return antigravity_to_claude(lines, billing_mode=mode, model=model)
     return list(lines)
 
 
@@ -583,10 +893,70 @@ def render_gemini_event(raw_line: str) -> str | None:
     return None
 
 
+def render_antigravity_event(raw_line: str) -> str | None:
+    """One readable line for an agy stream-json event (``None`` = drop).
+
+    Non-JSON lines (agy's ``error: …`` and ``AGY_ERROR: {…}`` on stderr, merged
+    into the step log by the runner) pass through: they are the provider's own
+    words for a failure, and ``harness_error_cause`` reads the ``API Error``
+    line rendered from the ``result`` below.
+    """
+    event = _loads(raw_line)
+    if event is None:
+        return raw_line.rstrip("\n") + "\n"
+    kind = event.get("event")
+    if kind == "init":
+        body = _obj(event.get("init"))
+        return (
+            f"# antigravity_cli session init (model {body.get('model') or 'CLI default'}, "
+            f"permissions {body.get('permission_mode', '?')})\n{AWAITING_MARKER}\n"
+        )
+    if kind == "step_update":
+        step = _obj(event.get("step_update"))
+        state = step.get("state")
+        step_type = step.get("step_type")
+        if step_type == "agent_response":
+            delta = step.get("text_delta")
+            return delta if isinstance(delta, str) and delta else None
+        if step_type in {"tool", "subagent"}:
+            info = _obj(step.get("tool_info"))
+            tool = str(step.get("tool_name") or info.get("name") or "")
+            params = _obj(info.get("parameters"))
+            arg = str(params.get("Path") or params.get("CommandLine") or "")
+            arg = arg.replace("\n", " ")[:160]
+            name = _AGY_TOOLS.get(tool, tool)
+            if state == "ACTIVE":
+                return f"\n→ {name}({arg})\n"
+            if state == "ERROR":
+                error = _obj(info.get("error"))
+                return f"# tool error: {str(error.get('message') or '')[:300]}\n{AWAITING_MARKER}\n"
+            return f"{AWAITING_MARKER}\n"
+        if step_type == "error_message":
+            return "# stream error: the agent reported an error step\n"
+        return None
+    if kind == "result":
+        body = _obj(event.get("result"))
+        status = body.get("status", "?")
+        usage = _obj(body.get("usage"))
+        if status != "SUCCESS":
+            return f"# result: {status} API Error: {body.get('error', '')}\n"
+        return (
+            f"# result: {status} turns={body.get('num_turns', '?')} "
+            f"input={usage.get('input_tokens', '?')} "
+            f"cache_read={usage.get('cache_read_tokens', '?')} "
+            f"output={usage.get('output_tokens', '?')} "
+            f"thinking={usage.get('thinking_tokens', '?')} "
+            f"duration_s={body.get('duration_seconds', '?')}\n"
+        )
+    return None
+
+
 def render_event(harness: str, raw_line: str) -> str | None:
-    """Dispatch to the per-harness renderer (codex | gemini)."""
+    """Dispatch to the per-harness renderer (codex | gemini | antigravity_cli)."""
     if harness == "codex":
         return render_codex_event(raw_line)
     if harness == "gemini":
         return render_gemini_event(raw_line)
+    if harness == "antigravity_cli":
+        return render_antigravity_event(raw_line)
     return raw_line

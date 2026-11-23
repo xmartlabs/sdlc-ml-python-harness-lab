@@ -74,8 +74,28 @@ UNMEASURED_KINDS = frozenset({"lab"})
 _SERVER_ERROR_RE = re.compile(r"API Error: 5\d\d\b")
 
 
+# The Gemini API refusing an antigravity_cli run's credential, quota or model
+# (agy 1.5.14 `result.error`, ADR-0096): the model was never reached. Applied
+# only to a reason agy itself produced, so no other harness's history or
+# classification moves (a gemini 429 keeps reading as it always did).
+_AGY_CONTEXT = ("agent executor error", "antigravity_cli")
+_AGY_LAB_MARKERS: tuple[tuple[str, str], ...] = (
+    ("api_key_invalid", "API key rejected"),
+    ("api key not valid", "API key rejected"),
+    ("your api key was reported as leaked", "API key rejected"),
+    ("resource_exhausted", "quota exhausted"),
+    ("is not recognized as a known model", "model not served"),
+    ("is not found for api version", "model not served"),
+    ("has no gemini api key", "API key missing"),
+)
+
+
 def _lab_marker(text: str) -> str | None:
     lowered = text.lower()
+    if any(context in lowered for context in _AGY_CONTEXT):
+        for marker, label in _AGY_LAB_MARKERS:
+            if marker in lowered:
+                return label
     for marker, label in _LAB_MARKERS:
         if marker in lowered:
             # A server-side outage outranks the generic harness_error verdict
@@ -222,6 +242,14 @@ _HARNESS_SIGNALS: dict[str, HarnessSignals] = {
         wait=(CLAUDE_AWAITING_MARKER, "# gemini session init"),
         stream_error=("# stream error",),
         retry_noise=(CLAUDE_AWAITING_MARKER, "# gemini session init"),
+    ),
+    # antigravity_cli (agy) step logs are rendered by harness_events the same
+    # way: `# awaiting model` after init and after each finished tool step.
+    "antigravity_cli": HarnessSignals(
+        request=(CLAUDE_AWAITING_MARKER,),
+        wait=(CLAUDE_AWAITING_MARKER, "# antigravity_cli session init"),
+        stream_error=("# stream error",),
+        retry_noise=(CLAUDE_AWAITING_MARKER, "# antigravity_cli session init"),
     ),
 }
 

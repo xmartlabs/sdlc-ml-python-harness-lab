@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { API_KEY_HARNESSES, harnessLabel } from "../../harnesses";
 import { defineMessages, useMessages } from "../../i18n";
 import type { ModelOption, NativeCliStatus, NativeModelRecord } from "../../types";
 import { InfoTooltip } from "../InfoTooltip";
+import { AGY_DEFAULT_LEVEL, agyFamilies, agyLevelOf, agyLevelsOffered, agySlugFor } from "./agyFamilies";
 import { armFor, encodeArm, GUIDE_HARNESSES, loadClis, loadModels, loadNative, runModelId } from "./guideData";
 import type { Harness } from "./guideData";
 
@@ -16,8 +18,10 @@ import type { Harness } from "./guideData";
  * back. Here the harness is a tab that says whether it can run right now, and
  * the cards under it are only what that harness can drive: opencode the
  * gateway and local hosts (by where they run, then who makes them), claude,
- * codex and gemini their own CLI's models. A model the run would be refused
- * for is shown, disabled, with the reason — never silently missing.
+ * codex, gemini and antigravity_cli their own CLI's models. A model the run
+ * would be refused for is shown, disabled, with the reason — never silently
+ * missing. antigravity_cli shows one card per family and an effort selector:
+ * its effort is part of the model id (see ./agyFamilies).
  */
 
 type Status = { tone: "ok" | "warn" | "off"; text: string; detail?: string };
@@ -30,6 +34,8 @@ type Card = {
   tip?: string;
   /** claude only: the effort levels this model accepts; empty = none. */
   efforts?: string[];
+  /** React key when `id` changes with a selector (an agy family). */
+  key?: string;
 };
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -41,7 +47,9 @@ const MESSAGES = defineMessages({
         "Open-source agent. Drives any model behind the lab's AI gateway (cloud cards) or straight on a local host (LM Studio, Ollama).",
       claude: "Claude Code, the CLI, signed in with the lab's Claude token. Its own models.",
       codex: "OpenAI Codex CLI on your ChatGPT plan (make auth-codex). Its own models.",
-      gemini: "Google Gemini CLI on your Google sign-in (make auth-gemini). Its own models."
+      gemini: "Google Gemini CLI on your Google sign-in (make auth-gemini). Its own models.",
+      antigravity_cli:
+        "Google Antigravity CLI on a Gemini API key (per-token API billing). Its own models."
     } as Record<Harness, string>,
     ready: "ready",
     gateway: "gateway",
@@ -66,6 +74,11 @@ const MESSAGES = defineMessages({
     unreachable: "host not serving it",
     signInBody: (harness: string, command: string) =>
       `${harness} runs on your own subscription and is not signed in yet. Sign in once (${command}, or the button in System → Agent CLIs); every run reuses the session.`,
+    configureKey: "configure a key",
+    configureKeyBody: (harness: string) =>
+      `${harness} runs on a Gemini API key and none is stored yet. Configure a Gemini API key in System → Agent CLIs; every run reuses it.`,
+    hostLaneBody: (harness: string) =>
+      `${harness} runs are Docker-only: the runner container is the sandbox. Switch to the Docker backend.`,
     openClis: "Open Agent CLIs",
     unavailableBody: (reason: string) => `${reason}`,
     noModels: "No models from this source right now.",
@@ -76,7 +89,13 @@ const MESSAGES = defineMessages({
     effortDefault: "Default",
     effortTip:
       "Reasoning effort, passed to Claude Code as --effort. Low is fastest and uses the fewest tokens; max is the most thorough. Default lets the CLI decide. Opus at high and Opus at low are two arms you can compare.",
-    noEffort: "no effort control"
+    noEffort: "no effort control",
+    agyAccountTip:
+      "Google Antigravity CLI on your Google sign-in: runs use your Google AI plan's quota. Its own models.",
+    agyEffortTip:
+      "Thinking level. agy has no effort flag: the level is part of the model id it runs (gemini-3.8-flash-high), so each family offers its own levels. The same family at another level is another arm you can compare.",
+    noLevel: (level: string) => `no ${level} level`,
+    levelsOffered: (levels: string) => `Offers: ${levels}`
   },
   es: {
     harnessTips: {
@@ -84,7 +103,9 @@ const MESSAGES = defineMessages({
         "Agente open source. Maneja cualquier modelo detrás del AI gateway del lab (cards en la nube) o directo en un host local (LM Studio, Ollama).",
       claude: "Claude Code, la CLI, con el token de Claude del lab. Sus propios modelos.",
       codex: "La CLI de OpenAI Codex con tu plan de ChatGPT (make auth-codex). Sus propios modelos.",
-      gemini: "La CLI de Google Gemini con tu cuenta de Google (make auth-gemini). Sus propios modelos."
+      gemini: "La CLI de Google Gemini con tu cuenta de Google (make auth-gemini). Sus propios modelos.",
+      antigravity_cli:
+        "La CLI de Google Antigravity con una API key de Gemini (facturación de la API por token). Sus propios modelos."
     } as Record<Harness, string>,
     ready: "lista",
     gateway: "gateway",
@@ -109,6 +130,11 @@ const MESSAGES = defineMessages({
     unreachable: "el host no lo sirve",
     signInBody: (harness: string, command: string) =>
       `${harness} corre con tu propia suscripción y todavía no inició sesión. Iniciala una vez (${command}, o el botón en Sistema → CLIs de agentes); todas las corridas reusan la sesión.`,
+    configureKey: "falta configurar la clave",
+    configureKeyBody: (harness: string) =>
+      `${harness} corre con una API key de Gemini y todavía no hay ninguna guardada. Configurá una API key de Gemini en Sistema → CLIs de agentes; todas las corridas la reusan.`,
+    hostLaneBody: (harness: string) =>
+      `Las corridas de ${harness} son solo en Docker: el contenedor runner es el sandbox. Cambiá al backend Docker.`,
     openClis: "Abrir CLIs de agentes",
     unavailableBody: (reason: string) => `${reason}`,
     noModels: "No hay modelos de esta fuente ahora.",
@@ -119,7 +145,13 @@ const MESSAGES = defineMessages({
     effortDefault: "Por defecto",
     effortTip:
       "Esfuerzo de razonamiento, pasado a Claude Code como --effort. Low es lo más rápido y gasta menos tokens; max es lo más exhaustivo. Por defecto decide la CLI. Opus en high y Opus en low son dos brazos que podés comparar.",
-    noEffort: "sin control de esfuerzo"
+    noEffort: "sin control de esfuerzo",
+    agyAccountTip:
+      "La CLI de Google Antigravity con tu cuenta de Google: las corridas usan la cuota de tu plan de Google AI. Sus propios modelos.",
+    agyEffortTip:
+      "Nivel de razonamiento. agy no tiene flag de esfuerzo: el nivel es parte del id del modelo que corre (gemini-3.8-flash-high), así que cada familia ofrece sus propios niveles. La misma familia en otro nivel es otro brazo que podés comparar.",
+    noLevel: (level: string) => `sin nivel ${level}`,
+    levelsOffered: (levels: string) => `Ofrece: ${levels}`
   }
 });
 
@@ -140,6 +172,13 @@ function cliStatus(
   if (cli.installed === false) return { tone: "off", text: m.notInstalled };
   if (cli.unavailable) return { tone: "warn", text: m.unavailable, detail: cli.unavailable };
   if (cli.billing_mode === "gateway") return { tone: "ok", text: m.gateway };
+  // An API-key CLI (ADR-0096): no key, or a lane that refuses its runs.
+  if (cli.auth === "api_key") {
+    if (cli.lane_supported === false) {
+      return { tone: "off", text: m.unavailable, detail: m.hostLaneBody(harnessLabel(cli.harness)) };
+    }
+    if (cli.session !== "connected") return { tone: "off", text: m.configureKey };
+  }
   if (cli.session !== "connected") return { tone: "off", text: m.signIn };
   return { tone: "ok", text: m.ready };
 }
@@ -165,6 +204,10 @@ export function HarnessModelChooser({
   const [where, setWhere] = useState<"direct" | "gateway">("direct");
   // Chosen before the model, so one click on a card picks both.
   const [effort, setEffort] = useState(picked?.effort ?? "");
+  // agy's effort is the model id's last part: a picked one opens on its level.
+  const [agyLevel, setAgyLevel] = useState(
+    (picked?.harness === "antigravity_cli" ? agyLevelOf(picked.model) : "") || AGY_DEFAULT_LEVEL
+  );
   const [provider, setProvider] = useState("");
 
   useEffect(() => {
@@ -186,6 +229,12 @@ export function HarnessModelChooser({
   }, [gatewayModels.length]);
 
   const statusOf = (name: Harness) => cliStatus(clis?.find((cli) => cli.harness === name), clisLoaded, m);
+  // The Antigravity tip names the credential runs actually use.
+  const agyOnAccount = clis?.find((cli) => cli.harness === "antigravity_cli")?.agy_auth === "account";
+  const tipFor = (name: Harness) =>
+    name === "antigravity_cli" && agyOnAccount ? m.agyAccountTip : m.harnessTips[name];
+  const families = useMemo(() => agyFamilies(native.antigravity_cli ?? []), [native]);
+  const agyLevels = useMemo(() => agyLevelsOffered(families), [families]);
   const status = statusOf(harness);
 
   const pool = useMemo(
@@ -235,6 +284,20 @@ export function HarnessModelChooser({
           };
         });
     }
+    if (harness === "antigravity_cli") {
+      // One card per family; the selector picks which of its ids runs.
+      return families.map((family) => {
+        const slug = agySlugFor(family, agyLevel);
+        return {
+          id: slug ?? family.key,
+          key: family.key,
+          label: family.label,
+          sub: family.generation === "previous" ? m.previous : m.current,
+          disabled: slug ? undefined : m.noLevel(agyLevel),
+          tip: slug ?? m.levelsOffered(family.levels.join(", "))
+        };
+      });
+    }
     return (native[harness] ?? []).map((model) => {
       // An older API (or the offline list) does not say: offer every level and
       // let the server's preflight be the judge, as the run form does.
@@ -249,10 +312,17 @@ export function HarnessModelChooser({
         efforts
       };
     });
-  }, [harness, pool, activeProvider, native, m, effort]);
+  }, [harness, pool, activeProvider, native, m, effort, families, agyLevel]);
 
   const blocked = status.tone === "off";
   const login = harness === "codex" ? "make auth-codex" : "make auth-gemini";
+  // Why a blocked harness cannot run: no login, no key, or the reason itself.
+  const blockedBody =
+    status.text === m.configureKey || (status.text === m.signIn && API_KEY_HARNESSES.has(harness))
+      ? m.configureKeyBody(harnessLabel(harness))
+      : status.text === m.signIn
+        ? m.signInBody(harness, login)
+        : (status.detail ?? status.text);
 
   return (
     <div className="hm-chooser">
@@ -266,24 +336,22 @@ export function HarnessModelChooser({
               key={name}
               onClick={() => setHarness(name)}
               role="tab"
-              title={m.harnessTips[name]}
+              title={tipFor(name)}
               type="button"
             >
-              <strong>{name}</strong>
+              <strong>{harnessLabel(name)}</strong>
               <span className={`hm-dot hm-dot--${s.tone}`}>{s.text}</span>
             </button>
           );
         })}
       </div>
       <p className="muted guide-small hm-about">
-        {m.harnessTips[harness]}
+        {tipFor(harness)}
       </p>
 
       {blocked ? (
         <div className="callout callout--warning">
-          <p>
-            {status.text === m.signIn ? m.signInBody(harness, login) : status.text}
-          </p>
+          <p>{blockedBody}</p>
           <Link to="/system/agent-clis">{m.openClis}</Link>
         </div>
       ) : (
@@ -339,6 +407,26 @@ export function HarnessModelChooser({
               </div>
             </div>
           ) : null}
+          {harness === "antigravity_cli" && agyLevels.length > 0 ? (
+            <div className="hm-effort">
+              <span className="guide-field-label">
+                {m.effort} <InfoTooltip text={m.agyEffortTip} />
+              </span>
+              <div className="segmented" role="group">
+                {agyLevels.map((level) => (
+                  <button
+                    aria-pressed={agyLevel === level}
+                    className={agyLevel === level ? "active" : ""}
+                    key={level}
+                    onClick={() => setAgyLevel(level)}
+                    type="button"
+                  >
+                    {level}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {cards.length === 0 ? <p className="muted">{m.noModels}</p> : null}
           <div className="guide-options hm-models">
             {cards.map((card) => {
@@ -352,7 +440,7 @@ export function HarnessModelChooser({
                   className="guide-option"
                   data-disabled={Boolean(why) || undefined}
                   data-pressed={pressed}
-                  key={card.id}
+                  key={card.key ?? card.id}
                 >
                   <button
                     aria-pressed={pressed}
@@ -391,5 +479,5 @@ export function armLabel(value: string, models: ModelOption[], native: Record<st
   }
   const row = (native[arm.harness] ?? []).find((model) => model.id === arm.model);
   const name = row?.label.replace(/ \(previous\)$/, "") ?? arm.model;
-  return `${arm.harness} · ${name}${arm.effort ? ` · ${arm.effort}` : ""}`;
+  return `${harnessLabel(arm.harness)} · ${name}${arm.effort ? ` · ${arm.effort}` : ""}`;
 }

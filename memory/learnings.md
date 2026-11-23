@@ -3596,6 +3596,86 @@ to be closed by the worker. Give each attempt its own container name and staging
 dir: a fixed `run_id` lets a superseded attempt's cleanup delete the next one's
 session copy.
 
+## 2026-11-22 — A CLI with no flag to show its model can be read through a mock of its API (ADR-0096)
+
+Wiring `agy` (Antigravity CLI 1.5.14) without a real key: the docs gave the
+event names, but not what the fields mean, which tools it really calls, which
+files it loads, or which API model a slug calls. All of that came from pointing
+the official binary at a 30-line local mock of the Gemini API through its
+documented base-URL override (`GOOGLE_GEMINI_BASE_URL`) and reading the
+requests it sent. That showed:
+
+- **Token semantics:** with known `usageMetadata` in the mock, `input_tokens`
+  already excluded the cache and `output_tokens` included thinking.
+- **Slug → model:** taken from the request path (`/v1beta/models/<id>:…`);
+  no event names it.
+- **What was loaded:** the system prompt it sent showed the skills
+  (`.agents/skills` only, plus builtins under `$HOME`) and the rule files
+  (`AGENTS.md`, `GEMINI.md`, `.agents/rules/`).
+- **Real tool names on the wire:** `read_file`/`write_file`/`edit_file`.
+  `init.tools` lists different aliases.
+- **Failure shapes:** a mock that answers 403/404/429/500 with Google's error
+  body.
+
+**Traps found this way, none of them in the docs:**
+
+1. In headless mode a soft-denied tool **ends the turn with exit 0, SUCCESS
+   and no answer**, so a narrow allow list silently cuts an arm short and gets
+   scored as the model's work.
+2. `run_command` children inherit `GEMINI_API_KEY`, with no scrub option.
+3. `--sandbox` cannot start inside a container.
+4. The default model with a key is `gemini-3.1-pro-preview`.
+5. `agy models` never calls the API.
+
+**How to apply:** for any new agent CLI, run the official binary in a
+throwaway `python:3.11-slim` container, first with no credential, then with a
+fake key against a local mock of its provider API. Keep the captures as test
+fixtures (`tests/harness_lab_app/fixtures/agy/`). Probe the permission model
+in headless mode explicitly: "denied" may not mean "error". Check whether
+agent-run commands can read the credential (`${#VAR}` in a scripted
+`run_command`). Also check `/app/.env`, which every runner container can read
+through the repository bind; for an API-key harness it is now masked.
+
+## 2026-11-23 — A CLI's TTY-only sign-in can be driven in a container, and its URL is in the OSC 8 target (ADR-0097)
+
+- **Context.** The operator wanted `antigravity_cli` on their own Google AI Pro
+  plan, as codex works. `agy` 1.5.14 has no `login` subcommand. Its sign-in
+  appears only when it runs on a TTY with no saved session.
+- **How it was driven.** A stdlib helper (`scripts/agy_login.py`) runs `agy`
+  under `pty.fork()`, presses Enter on the menu, and publishes the URL. It then
+  types the code the operator pastes in the UI.
+- **Facts found by experiment, not docs** (empty container, no account):
+  - The interactive sign-in has no wait limit; `-p` print mode gives up after
+    60 s.
+  - The URL is an OSC 8 terminal hyperlink. The visible text is wrapped to the
+    screen width, and chunked reads split the escape sequences. Read the URL
+    from the hyperlink *target* in the raw bytes. Cleaning the screen first
+    gave a URL with glued, duplicated parameters.
+  - With no D-Bus, the token goes to a file. `strace` of a fresh start named
+    the two files agy reads: `~/.gemini/antigravity-cli/antigravity-oauth-token`
+    and `~/.config/antigravity/credential-user-scope`. Grepping the binary
+    found neither, because the name is built at runtime.
+  - A wrong code prints `token exchange failed: oauth2: "invalid_grant"`, which
+    gives a cheap end-to-end test with no account.
+- **Traps hit while doing it:**
+  - **A case image built FROM the runner keeps its old CLIs.** The Godot image
+    predated agy, so the first real run failed with "CLI not found on PATH"
+    (opencity3d-v1-K-003). Preflight now reads each case image's CLI labels.
+  - **Tests read `~/.harness-lab/auth` unless isolated.** One test failed once
+    the operator had signed in. An autouse fixture in `tests/harness_lab_app/
+    conftest.py` now points `HARNESS_LAB_AUTH_DIR` at a temporary directory.
+  - **`npx prettier --write` on a frontend file rewrote all of it** (2 → 4
+    spaces, +2,400 lines). The frontend has no prettier config; never run it
+    over a whole file.
+- **Review findings worth remembering:**
+  - A per-run credential copy under `data/runs/<id>/` must be excluded from
+    the artifact index and from `make backup`.
+  - Its write-back must be bound to the sign-in generation it was copied
+    from.
+- **How to apply.** For a CLI with a browser-only sign-in, drive its own login
+  on a pty in a lab container. Use `strace` to find what it stores and keep only
+  that.
+
 <!-- Add new learnings above this line -->
 
 ## 2026-11-21 — Git run from a subfolder of another repo, and an agent's .git, both lie or bite (ADR-0095)
@@ -3643,3 +3723,34 @@ session copy.
 - `metadata.json` skills_bundle/subagents were read from the lab root for every
   condition, so a `native` run "had" the lab's 6 subagents and the audit graded
   each "no evidence". In-target runs now read the catalog from the workspace.
+
+## 2026-11-23 — `up --build` on services that share one image tag races itself
+
+- The three workers inherit one `build:` and one `image: harness-lab-worker:latest`.
+  `docker compose up -d --build api worker worker-parallel worker-interactive`
+  built that tag three times in parallel (Compose v2.40, containerd snapshotter),
+  and the second export failed with `image "docker.io/library/harness-lab-worker:latest":
+  already exists`, so `make app-up` stopped with the stack down. It had worked
+  for a week because a warm cache made the three exports rarely overlap.
+- `app-up`/`app-up-prod` now `build` each image once (`api worker frontend[-prod]`)
+  and `up -d` without `--build`; `test_app_up_builds_a_shared_image_once` keeps
+  it that way. Do not "fix" it with `build: !reset` in the compose file:
+  `test_deploy_compose.py` reads it with `yaml.safe_load`, which rejects the tag.
+- A Docker cleanup that frees space also deletes `harness-lab-runner-godot`
+  (not built by `app-up`); the 3D cases then need `make images-3d` again.
+
+## 2026-11-23 — A killed ablation run leaves the lab's skill views ablated until the worker heals them
+
+- `bench_run.py` restored the full skill views from `atexit`. A stalled run is
+  ended with SIGKILL (exit 137), and `atexit` never runs, so chess3d-v1-K-016
+  (antigravity_cli, minimal profile) left `.agents/skills` (31 files),
+  CLAUDE.md, AGENTS.md, GEMINI.md, OPENCODE.md and copilot-instructions at the
+  ablated set. The "restore at the next run's start" heal came too late: a
+  commit made in between carried 5.6k deleted lines, and only `make ci`'s
+  `check-sync` in the pre-push hook stopped it.
+- The worker now runs `skills_sync sync` (`tasks._heal_ablated_tree`) after
+  every run that held the tree exclusively, before releasing the lease; a
+  failure leaves a run event naming `make sync-skills`.
+- When `git status` shows `.agents/skills/*` deleted and the CLAUDE.md skill
+  list trimmed, check for a running or just-killed ablation before treating it
+  as a change: `make sync-skills` restores it byte for byte.

@@ -1312,6 +1312,84 @@ def test_an_ablation_waits_for_the_other_lane_and_stays_pending(monkeypatch):
     assert any("waits for the lab's shared tree" in m for m in messages)
 
 
+def test_an_ablation_the_runner_could_not_undo_is_restored_by_the_worker(monkeypatch):
+    """A killed runner leaves the lab's skill views ablated; the worker heals them.
+
+    `bench_run.py` restores the full views from `atexit`, which never runs when
+    the runner dies by SIGKILL (a stalled run, exit 137). chess3d-v1-K-016 left
+    `.agents/skills`, CLAUDE.md and AGENTS.md at the minimal profile, and a
+    commit made before the next run carried the deletions (2026-11-23). The
+    worker restores them before it hands the tree back, on every way out.
+    """
+    from harness_lab_app import tasks
+
+    engine = make_engine()
+    create_pending_run(engine, "lease-killed-ablation", command=["true"])
+    leases = MemoryLeases()
+    monkeypatch.setattr(tasks, "rewrites_shared_tree", lambda _config: True)
+    order: list[str] = []
+    monkeypatch.setattr(tasks, "_restore_skill_views", lambda: order.append("restore"))
+    release = leases.release
+    monkeypatch.setattr(
+        leases,
+        "release",
+        lambda run_id, exclusive: (order.append("release"), release(run_id, exclusive)),
+    )
+
+    tasks._execute_run_body(
+        "lease-killed-ablation",
+        FakeExecutor(FakeHandle([], 137)),
+        db_engine=engine,
+        leases=leases,
+    )
+
+    assert order == ["restore", "release"]
+
+
+def test_a_failed_restore_still_gives_the_tree_back(monkeypatch):
+    from harness_lab_app import tasks
+
+    engine = make_engine()
+    create_pending_run(engine, "lease-restore-fails", command=["true"])
+    leases = MemoryLeases()
+    monkeypatch.setattr(tasks, "rewrites_shared_tree", lambda _config: True)
+
+    def broken() -> None:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(tasks, "_restore_skill_views", broken)
+
+    tasks._execute_run_body(
+        "lease-restore-fails",
+        FakeExecutor(FakeHandle([], 0)),
+        db_engine=engine,
+        leases=leases,
+    )
+
+    assert leases.writer is None
+    with Session(engine) as session:
+        messages = [e.message for e in session.exec(select(RunEvent)).all()]
+    assert any("make sync-skills" in m for m in messages)
+
+
+def test_a_shared_run_never_rewrites_the_skill_views(monkeypatch):
+    from harness_lab_app import tasks
+
+    engine = make_engine()
+    create_pending_run(engine, "lease-shared-no-restore", command=["true"])
+    calls: list[str] = []
+    monkeypatch.setattr(tasks, "_restore_skill_views", lambda: calls.append("x"))
+
+    tasks._execute_run_body(
+        "lease-shared-no-restore",
+        FakeExecutor(FakeHandle([], 0)),
+        db_engine=engine,
+        leases=MemoryLeases(),
+    )
+
+    assert calls == []
+
+
 def test_a_run_cancelled_while_it_waits_never_starts(monkeypatch):
     from harness_lab_app import tasks
 

@@ -241,6 +241,11 @@ def _preflight_key(config: RunConfigCreate) -> tuple:
         tuple(sorted(set(config.skills_invoke))),
         config.target_repo_id,
         config.harness_source,
+        # antigravity_cli refuses third-party cases (a SWE instance), which is
+        # decided per case: without it, a batch whose first arm is a lab case
+        # would let a SWE arm of the same model through unchecked. Empty for
+        # every other harness, so their cache is not fragmented.
+        config.case_id if config.harness == "antigravity_cli" else "",
     )
 
 
@@ -398,6 +403,35 @@ class RunService:
                 "`make app-up` builds only the shared runner image), then launch "
                 "again."
             )
+        self._check_case_image_cli(config, image, facts)
+
+    @staticmethod
+    def _check_case_image_cli(config: RunConfigCreate, image: str, facts: dict) -> None:
+        """Refuse a native-CLI run whose case image predates that CLI.
+
+        A case image (ADR-0078) is built FROM the shared runner once and is not
+        rebuilt when the shared one gains a CLI. The run then died with "CLI
+        not found on PATH" (opencity3d-v1-K-003, 2026-11-23: the Godot image
+        predated agy). Read from the image's inherited version label; a worker
+        that does not report labels per image is not second-guessed.
+        """
+        from harness_lab_app.native_models import CLI_VERSION_LABELS
+
+        if not image or config.harness not in CLI_VERSION_LABELS:
+            return
+        if config.harness == "claude":
+            return  # claude predates every case image
+        per_image = facts.get("case_image_cli_versions")
+        if not isinstance(per_image, dict) or image not in per_image:
+            return
+        if not str((per_image.get(image) or {}).get(config.harness) or ""):
+            raise RunPreflightError(
+                f"Case '{config.case_id}' runs in its own image, {image!r}, which "
+                f"was built before the '{config.harness}' CLI was added to the "
+                "runner, so the run would fail with 'CLI not found'. Rebuild it: "
+                "`docker compose build runner-godot` (or `make images-3d`), then "
+                "launch again."
+            )
 
     def preflight(self, config: RunConfigCreate) -> None:
         """Reject configs that cannot possibly run, before persisting/enqueuing.
@@ -433,6 +467,12 @@ class RunService:
             # Subscription-backed CLIs (ADR-0094): the provider's own login,
             # kept per provider outside the repository, on either lane.
             self._check_native_session(config)
+            return
+        if config.harness == "antigravity_cli":
+            # Antigravity CLI on a Gemini API key (api_key_auth): Docker only,
+            # an explicit verified model, a configured key, and no third-party
+            # code unless the operator accepted that it can read the key.
+            self._check_agy(config)
             return
         if config.harness == "claude":
             # claude drives its own CLI with native auth (no gateway
@@ -858,6 +898,128 @@ class RunService:
                 "the session is kept outside the repository and reused by every "
                 "run."
             )
+
+    def _check_agy(self, config: RunConfigCreate) -> None:
+        """Refuse an antigravity_cli run that cannot run, or should not.
+
+        In order: the host lane (agy's sandbox cannot start in the runner and
+        nothing would contain it on the host; the container is the sandbox), a
+        missing or unverified model (no agy event names the model that served,
+        so the run is filed under the slug it was given — it has to be one the
+        lab can map to a Gemini API model), the runner's CLI, the API key, and
+        third-party code the agent would run with that key in its environment.
+        """
+        from harness_lab_app.agy_account import AUTH_ACCOUNT, auth_mode
+        from harness_lab_app.api_key_auth import (
+            ALLOW_UNTRUSTED_ENV,
+            untrusted_allowed,
+        )
+        from harness_lab_app.health_service import worker_facts
+        from harness_lab_app.native_models import (
+            CLI_VERSION_LABELS,
+            agy_api_model,
+            native_cli_too_old,
+        )
+
+        if get_settings().execution_backend != "docker":
+            raise RunPreflightError(
+                "The 'antigravity_cli' harness runs only in the Docker runner: "
+                "agy's own sandbox cannot start there, so the per-run container "
+                "is the sandbox, and on the host nothing would contain it. Use "
+                "the docker backend (make app-up)."
+            )
+        model = (config.executor_model or "").strip()
+        if model.startswith(("gateway/", "lmstudio/", "ollama/")) or "/" in model:
+            raise RunPreflightError(
+                f"'{model}' is a gateway/self-hosted model id; the "
+                "'antigravity_cli' harness calls the Gemini API directly and "
+                "would ignore it. Pick one of its models (System → Agent CLIs → "
+                "Refresh models)."
+            )
+        mode = auth_mode()
+        if not mode:
+            raise RunPreflightError(
+                "The 'antigravity_cli' harness has no credential: sign in with "
+                "Google (your plan) or configure a Gemini API key in System → "
+                "Agent CLIs → Antigravity CLI."
+            )
+        if not model:
+            raise RunPreflightError(
+                "Pick a model for the 'antigravity_cli' harness. agy's stream "
+                "never names the model that answered, so a run on the CLI's "
+                "default would be filed under a model nobody chose."
+            )
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.\-]*", model.lower()):
+            raise RunPreflightError(
+                f"'{model}' is not an agy model slug. Pick one from System → "
+                "Agent CLIs → Refresh models."
+            )
+        # On a key the slug must map to a Gemini API model the lab can price.
+        # On the Google sign-in the plan decides what is served (agy itself
+        # refuses a slug the plan lacks) and the cost is the plan's quota.
+        if mode != AUTH_ACCOUNT and agy_api_model(model)[0] is None:
+            raise RunPreflightError(
+                f"'{model}' is not a model slug the lab verified for agy (it "
+                "cannot tell which Gemini API model it calls, nor price it). "
+                "Pick one from System → Agent CLIs → Refresh models."
+            )
+        facts = worker_facts()
+        version = ""
+        if facts:
+            version = str((facts.get("cli_versions") or {}).get(config.harness) or "")
+        if facts and facts.get("runner_image_present") and not version:
+            raise RunPreflightError(
+                "The runner image has no Antigravity CLI (no "
+                f"'{CLI_VERSION_LABELS['antigravity_cli']}' label). Rebuild it: "
+                "Health → Build runner image, or `docker compose build runner`."
+            )
+        required = native_cli_too_old(config.harness, version)
+        if required:
+            raise RunPreflightError(
+                f"The runner image has agy {version}; the lab's integration was "
+                f"verified on {required} or newer. Rebuild the runner image."
+            )
+        untrusted = self._untrusted_code_reason(config)
+        if untrusted and not untrusted_allowed():
+            exposed = (
+                "the commands agy runs can read your Google sign-in's token in its home"
+                if mode == AUTH_ACCOUNT
+                else "every command agy runs inherits the Gemini API key (agy "
+                "offers no way to scrub it)"
+            )
+            raise RunPreflightError(
+                f"Refused: this run would execute {untrusted}, and {exposed}. "
+                f"Set {ALLOW_UNTRUSTED_ENV}=1 on the API and worker to allow it."
+            )
+
+    def _untrusted_code_reason(self, config: RunConfigCreate) -> str:
+        """What third-party code a run would execute, or ``""`` when none.
+
+        Lab-authored cases and the operator's own ad hoc folders are the lab's
+        (or the operator's) code. A SWE-bench / SWE Pro instance and any
+        external target repository are someone else's.
+        """
+        from harness_lab_app.models import AdhocTask, Case, CaseType
+
+        target = (config.target_repo_id or "").strip()
+        if target:
+            # The operator's own folder is exempt only when it *is* one: an ad
+            # hoc task the lab created (ADR-0095), not any target whose free-text
+            # id happens to start with "adhoc-".
+            own = self.session.exec(
+                select(AdhocTask).where(AdhocTask.target_id == target)
+            ).first()
+            if own is None:
+                return f"code from the target repository '{target}'"
+        case = self.session.exec(
+            select(Case).where(Case.case_id == config.case_id)
+        ).first()
+        if case is not None and case.type in {
+            CaseType.swe_bench_instance,
+            CaseType.swe_pro_instance,
+        }:
+            return f"the third-party repository of {case.type.value} '{case.case_id}'"
+        return ""
 
     def _check_claude_cli_version(self, executor_model: str | None) -> None:
         """Refuse a model the runner image's Claude Code is too old to address.
@@ -1554,6 +1716,11 @@ class RunService:
                 "run is retried."
             )
         config = self.get_run_config(run.run_config_id)
+        if config.harness == "antigravity_cli":
+            # A retry re-runs without the full preflight. For this harness the
+            # key and the third-party-code opt-in are re-checked: both are
+            # operator decisions that may have changed since the run was made.
+            self._check_agy(self._config_create(config))
         settings = get_settings()
         run_dir = settings.data_runs_dir / run_id
         workspace = settings.workspace_dir / run_id

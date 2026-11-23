@@ -15,8 +15,8 @@ let casesPromise: Promise<CaseRecord[]> | null = null;
 let nativePromise: Promise<Record<string, NativeModelRecord[]>> | null = null;
 let clisPromise: Promise<NativeCliStatus[] | null> | null = null;
 
-/** The four agent CLIs a guided run can use, in the order the picker shows them. */
-export const GUIDE_HARNESSES = ["opencode", "claude", "codex", "gemini"] as const;
+/** The agent CLIs a guided run can use, in the order the picker shows them. */
+export const GUIDE_HARNESSES = ["opencode", "claude", "codex", "gemini", "antigravity_cli"] as const;
 export type Harness = (typeof GUIDE_HARNESSES)[number];
 
 export function loadModels(): Promise<ModelOption[]> {
@@ -46,8 +46,9 @@ export function loadCases(): Promise<CaseRecord[]> {
 }
 
 /**
- * The native model menus of claude, codex and gemini (ADR-0069), with their raw
- * labels; the offline fallback is the list the run form ships with.
+ * The native model menus of claude, codex, gemini and antigravity_cli
+ * (ADR-0069, ADR-0096), with their raw labels; the offline fallback is the list
+ * the run form ships with.
  */
 export function loadNative(): Promise<Record<string, NativeModelRecord[]>> {
   if (!nativePromise) {

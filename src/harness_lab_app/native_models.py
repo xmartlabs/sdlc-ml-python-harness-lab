@@ -202,12 +202,147 @@ NATIVE_MODELS: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
-# The CLI versions the codex/gemini integration was verified against (flags,
-# event schema, skill discovery, auth storage). An older CLI is refused at
-# preflight: `codex --full-auto` is how a schema change looks when it is not.
+# Antigravity CLI on a Gemini API key (`antigravity_cli`). Not the old gemini
+# catalog: these are the slugs `agy models` prints for the Gemini API provider
+# on agy 1.5.14 (2026-11-22), and `--model` refuses anything else ("is not
+# recognized as a known model"). A slug is a model *and* a thinking level; the
+# Gemini API model each one calls was read off the request path the CLI sends
+# (`/v1beta/models/<api_model>:streamGenerateContent`), because no event of its
+# stream names it. `agy models` does not consult the API, so a slug listed here
+# is one the CLI offers, not one a given key is entitled to: the connection
+# test is what proves that. `size_rank` orders the families smallest first.
+_AGY_SOURCE = "agy 1.5.14 `agy models` (Gemini API provider)"
+_AGY_FAMILIES: tuple[tuple[str, str, str, int, tuple[str, ...]], ...] = (
+    # (slug prefix, label prefix, Gemini API model, size_rank, thinking levels)
+    (
+        "gemini-3.8-flash",
+        "Gemini 3.8 Flash",
+        "gemini-3.8-flash",
+        1,
+        ("high", "medium", "low"),
+    ),
+    (
+        "gemini-4-hydrogen",
+        "Gemini 4 Hydrogen",
+        "gemini-4-hydrogen",
+        2,
+        ("xhigh", "high", "medium", "low"),
+    ),
+    (
+        "gemini-4-argon",
+        "Gemini 4 Argon",
+        "gemini-4-argon",
+        3,
+        ("high", "medium", "low"),
+    ),
+    (
+        "gemini-4-carbon",
+        "Gemini 4 Carbon",
+        "gemini-4-carbon",
+        3,
+        ("high", "medium", "low"),
+    ),
+    (
+        "gemini-4-neon",
+        "Gemini 4 Neon",
+        "gemini-4-neon",
+        4,
+        ("xhigh", "high", "medium", "low"),
+    ),
+    ("gemini-3.1-pro", "Gemini 3.1 Pro", "gemini-3.1-pro-preview", 4, ("high", "low")),
+    (
+        "gemini-3.7-flash",
+        "Gemini 3.7 Flash",
+        "gemini-3.7-flash",
+        1,
+        ("high", "medium", "low"),
+    ),
+    (
+        "gemini-3.6-flash",
+        "Gemini 3.6 Flash",
+        "gemini-3.6-flash",
+        1,
+        ("high", "medium", "low"),
+    ),
+)
+# Families the models page calls previous-generation or that Google marks for
+# enterprise plans only; kept so a run can still address them.
+_AGY_PREVIOUS = {"gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-pro"}
+
+#: slug → (Gemini API model, thinking level), for every slug agy 1.5.14 offers.
+AGY_SLUG_MAP: dict[str, tuple[str, str]] = {
+    f"{prefix}-{level}": (api_model, level)
+    for prefix, _label, api_model, _rank, levels in _AGY_FAMILIES
+    for level in levels
+}
+
+NATIVE_MODELS["antigravity_cli"] = [
+    {
+        "id": f"{prefix}-{level}",
+        "label": f"{label} ({'XHigh' if level == 'xhigh' else level.title()})",
+        "generation": "previous" if prefix in _AGY_PREVIOUS else "current",
+        "size_rank": rank,
+        # Thinking is part of the slug, not a separate flag the lab passes:
+        # ADR-0081 keeps the effort selector a claude setting.
+        "effort_levels": [],
+        "api_model": api_model,
+        "thinking_level": level,
+        "source": _AGY_SOURCE,
+    }
+    for prefix, label, api_model, rank, levels in _AGY_FAMILIES
+    for level in levels
+]
+
+#: The connection test's default: the smallest current family at its lowest
+#: thinking level, so the one real request it sends costs as little as any can.
+AGY_TEST_MODEL = "gemini-3.8-flash-low"
+
+
+def agy_api_model(slug: str | None) -> tuple[str | None, str | None]:
+    """(Gemini API model, thinking level) a slug calls, or ``(None, None)``.
+
+    ``None`` for a slug this lab has not verified (a newer CLI), never a guess
+    from its spelling: the cost and the comparison are keyed on this value.
+    """
+    return AGY_SLUG_MAP.get((slug or "").strip().lower(), (None, None))
+
+
+def parse_agy_models(text: str) -> list[dict[str, Any]]:
+    """The ``agy models`` listing (``slug<TAB>label`` per line) as catalog rows.
+
+    Lines that are not a slug and a label (the CLI's "Fetching available
+    models..." on stderr, blank lines) are skipped. Each row carries the API
+    model when the slug is one the lab verified.
+    """
+    rows: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            parts = re.split(r"\s{2,}", line.strip(), maxsplit=1)
+        if len(parts) < 2:
+            continue
+        slug, label = parts[0].strip(), parts[1].strip()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.\-]*", slug):
+            continue
+        api_model, level = agy_api_model(slug)
+        rows.append(
+            {
+                "id": slug,
+                "label": label,
+                "api_model": api_model,
+                "thinking_level": level,
+            }
+        )
+    return rows
+
+
+# The CLI versions the codex/gemini/agy integration was verified against
+# (flags, event schema, skill discovery, auth storage). An older CLI is refused
+# at preflight: `codex --full-auto` is how a schema change looks when it is not.
 MIN_NATIVE_CLI_VERSION: dict[str, str] = {
     "codex": "0.171.0",
     "gemini": "0.70.0",
+    "antigravity_cli": "1.5.14",
 }
 
 # The image label each runner CLI's pinned version is recorded under
@@ -216,6 +351,7 @@ CLI_VERSION_LABELS: dict[str, str] = {
     "claude": "claude-code.version",
     "codex": "codex.version",
     "gemini": "gemini-cli.version",
+    "antigravity_cli": "antigravity-cli.version",
 }
 
 

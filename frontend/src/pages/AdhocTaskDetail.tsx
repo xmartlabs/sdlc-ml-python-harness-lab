@@ -9,6 +9,7 @@ import { Spinner } from "../components/Spinner";
 import { armFor } from "../components/guide/guideData";
 import { HarnessModelChooser } from "../components/guide/HarnessModelChooser";
 import { formatRunDate } from "../dates";
+import { harnessLabel } from "../harnesses";
 import { defineMessages, useMessages } from "../i18n";
 import { InfoTooltip } from "../components/InfoTooltip";
 import { IconStar } from "../components/icons";
@@ -190,6 +191,10 @@ function isCloudModel(model: string): boolean {
 }
 
 function costCell(run: AdhocRunRecord, m: (typeof MESSAGES)["en"]): string {
+  // antigravity_cli (ADR-0096): tokens at the Gemini API list price, priced by the lab.
+  if (run.cost_usd != null && run.cost_source === "api_list_price_estimate") {
+    return m.runs.estimated(run.cost_usd.toFixed(4));
+  }
   if (run.cost_usd != null) return `$${run.cost_usd.toFixed(4)}`;
   if (run.estimated_cost_usd != null) return m.runs.estimated(run.estimated_cost_usd.toFixed(2));
   if (run.billing_mode === "subscription") return m.runs.unknownCost;
@@ -417,7 +422,7 @@ export function AdhocTaskDetailPage() {
         {pickedArm ? (
           <p className="muted small">
             {isCloudModel(pickedArm.model)
-              ? m.egress.cloud(pickedArm.harness)
+              ? m.egress.cloud(harnessLabel(pickedArm.harness))
               : m.egress.local}
           </p>
         ) : null}
@@ -457,7 +462,7 @@ export function AdhocTaskDetailPage() {
                   onClick={() => setSelectedRunId(run.run_id)}
                   style={{ cursor: "pointer" }}
                 >
-                  <td>{run.harness}</td>
+                  <td>{harnessLabel(run.harness)}</td>
                   <td className="small">
                     {m.level.names[run.harness_level ?? "repo"]}
                     {run.trial_skills?.length ? ` + ${run.trial_skills.join(", ")}` : ""}

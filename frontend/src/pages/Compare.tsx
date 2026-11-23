@@ -118,6 +118,7 @@ const MESSAGES = defineMessages({
       tokens: "Tokens",
       costUsd: "Cost (USD)",
       costEstimated: (value: string) => `≈ ${value} (estimated, API price)`,
+      costListPrice: (value: string) => `≈ ${value} (estimated, API list price)`,
       costSubscription: "— subscription quota",
       timeMinutes: "Time (min)",
       steps: "Steps",
@@ -191,6 +192,7 @@ const MESSAGES = defineMessages({
       tokens: "Tokens",
       costUsd: "Costo (USD)",
       costEstimated: (value: string) => `≈ ${value} (estimado, precio API)`,
+      costListPrice: (value: string) => `≈ ${value} (estimado, precio de lista de la API)`,
       costSubscription: "— cuota de suscripción",
       timeMinutes: "Tiempo (min)",
       steps: "Pasos",
@@ -316,6 +318,11 @@ function buildMetrics(m: Messages): Metric[] {
       label: m.metrics.costUsd,
       display: (c) => {
         const cost = c.validation?.cost;
+        // An API-key run (antigravity_cli, ADR-0096): a real per-token cost the
+        // lab priced from the list price — compared as is, labelled as such.
+        if (cost?.cost_usd != null && cost.cost_source === "api_list_price_estimate") {
+          return m.metrics.costListPrice(fmt(cost.cost_usd));
+        }
         if (cost?.cost_usd != null) {
           return fmt(cost.cost_usd);
         }

@@ -1,11 +1,11 @@
-# Harness adapters — opencode, codex, claude, gemini
+# Harness adapters — opencode, codex, claude, gemini, antigravity_cli
 
 > **Just want to run tests with claude/codex?** See the step-by-step
 > [runbook-claude-codex.md](runbook-claude-codex.md). This page is the design
 > reference behind it.
 
 The lab treats the **harness** (the agent CLI that drives a run) as an
-independent variable. Four are wired today:
+independent variable. Five are wired today:
 
 | Harness | CLI | Runs in | Auth | Model selection |
 |---|---|---|---|---|
@@ -13,13 +13,16 @@ independent variable. Four are wired today:
 | `codex` | `codex exec --json` (prompt on stdin) | **container** or **host** | ChatGPT plan login, lab session store (`make auth-codex`) | native menu → `-m` |
 | `claude` | `claude -p` | **container** (Docker) or **host** | native (Anthropic) — env token in Docker, your login on host | native menu → `--model` |
 | `gemini` | `gemini -p "" --output-format stream-json` (prompt on stdin) | **container** or **host** | Code Assist Standard/Enterprise login only — personal Google plans retired 2026-06-18 ([runbook](runbook-claude-codex.md#gemini-cli-and-personal-google-plans)) | native menu → `-m` |
+| `antigravity_cli` | `agy --settings … --mode accept-edits --input-format stream-json --output-format stream-json` (prompt on stdin) | **container only** | The operator's Google sign-in made by agy itself, on the plan's quota ([ADR-0097](adr/0097-antigravity-cli-on-the-operators-google-sign-in.md)), else a Gemini API key ([ADR-0096](adr/0096-antigravity-cli-runs-on-a-gemini-api-key.md)) | `agy models` slugs → `--model` (required) |
 
-(`antigravity` remains a separate human-driven flow, not executed by the runner.)
+(`antigravity` — no suffix — remains the separate human-driven IDE flow, not
+executed by the runner. `antigravity_cli` is the automated one.)
 
 The command builders live in `scripts/bench_run.py`
 (`build_opencode_cmd` / `build_codex_cmd` / `build_claude_cmd` /
-`build_gemini_cmd`, dispatched by `build_harness_cmd`). codex and gemini are
-described in [their own section](#codex-and-gemini-subscription-clis-adr-0094). The workspace path (`workspace/<run_id>/`) is carried in
+`build_gemini_cmd` / `build_agy_cmd`, dispatched by `build_harness_cmd`). codex
+and gemini are described in [their own section](#codex-and-gemini-subscription-clis-adr-0094),
+antigravity_cli [below](#antigravity-cli-on-a-gemini-api-key-adr-0096). The workspace path (`workspace/<run_id>/`) is carried in
 the **prompt**, so all three run with `cwd=REPO_ROOT` and produce the same
 artifact — only the CLI differs. Pick the harness in the New evaluation form (or
 the single-run form under Advanced → Runs).
@@ -336,3 +339,52 @@ the scrubbed environment, an empty `HOME`, and the credential copied back into
 the store only when it is a well-formed subscription login. Progress records
 (state, the public device URL, the one-time code, the test's answer or error)
 live in `data/app/native-connect/` and never hold a credential.
+
+## Antigravity CLI on a Gemini API key (ADR-0096)
+
+`antigravity_cli` runs Google's Antigravity CLI (`agy`, pinned 1.5.14 in
+`Dockerfile.runner`, sha512-verified per architecture) in the runner
+container. It is authenticated by a Gemini API key, or by the operator's
+Google sign-in (next section, ADR-0097). Operator steps, the failure table and
+the security limit are in the
+[runbook](runbook-claude-codex.md#antigravity-cli-on-your-google-plan).
+
+| Concern | Where | What |
+|---|---|---|
+| Credential | `api_key_auth.py` | Key store `<HARNESS_LAB_AUTH_DIR>/antigravity_cli/gemini_api_key` (0600, worker-written); `agy_env` drops every foreign credential and adds the key; exact-value redaction helpers |
+| Container | `executors.py` | `build_run_environment("antigravity_cli")`, `.env` + `.claude/settings.local.json` masked (`runner_secret_masks`), `.agents/skills` kept as the one skill mirror, key redacted from the log stream (`_DockerHandle`) |
+| Command | `scripts/bench_run.py` | `build_agy_cmd`, `agy_stdin_message`, `agy_run_env`, `agy_cost`; key redacted in `run_opencode` before any file |
+| Events | `harness_events.py` | `antigravity_to_claude` (`init` / `step_update` / `result` → claude shape), `render_antigravity_event` |
+| Models | `native_models.py` | `NATIVE_MODELS["antigravity_cli"]` (agy 1.5.14 slugs), `AGY_SLUG_MAP` slug → (Gemini API model, thinking level), `parse_agy_models` |
+| Cost | `api_price_estimate.py` | `GEMINI_PRICES` (paid tier, Standard, 2026-11-22), `estimate_gemini_api_cost`; `cost_source: api_list_price_estimate` / `api_price_unknown` |
+| Preflight | `run_service._check_agy` | Docker only, verified model required, CLI ≥ 1.5.14, key configured, third-party code refused unless `HARNESS_LAB_AGY_ALLOW_UNTRUSTED=1` |
+| UI | `NativeClisPanel.tsx` | Antigravity CLI card: Sign in with Google (`AgyAccountSection`), the key as *Use a Gemini API key instead*, test connection, refresh models |
+| UI | `guide/agyFamilies.ts`, `HarnessModelChooser.tsx` | The guided flows' Antigravity tab: one card per model family plus an effort row; a click sends the family's slug at that level (`gemini-3.8-flash-high`), the id agy takes |
+| API | `api.py` | `PUT/GET/DELETE /api/harness/clis/antigravity_cli/api-key`, `POST/GET/DELETE …/connect`, `POST …/connect/code`, `POST/GET …/models`, `POST/GET …/test` |
+| Worker | `tasks.py` | `_connect_agy_account` (sign-in), `save_cli_api_key`, `remove_cli_api_key`, `refresh_cli_models`, `test_native_cli` (agy branch), `_redact_api_key` after a run |
+
+### On the operator's Google sign-in (ADR-0097)
+
+When a sign-in is stored it wins over the key (`agy_account.auth_mode`).
+
+| Concern | Where | What |
+|---|---|---|
+| Sign-in | `scripts/agy_login.py` | In the login container: `agy` on a pty, picks *Google OAuth*, publishes the URL (OSC 8 target), types the pasted code from `$AGY_LOGIN_EXCHANGE/code`, reports `connected` when `~/.gemini/antigravity-cli/antigravity-oauth-token` exists; prints only `@@agy-login {json}` records |
+| Session | `agy_account.py` | Allow-list of the files agy wrote outside its work dirs, stored at `<HARNESS_LAB_AUTH_DIR>/antigravity_cli/account/` with a manifest; `stage_run_home` / `return_run_home` (only manifest files, regular and non-empty, while still signed in) |
+| Code hand-off | `native_connect.py` | `write_code_drop` (API, 0600, per attempt) → `take_code_drop` (worker) → the container's exchange dir; never the broker |
+| Container | `executors.py` | `agy_account_mounts` (run copy at `data/runs/<id>/agy-home` → `HOME`), `agy_login_environment`, no `GEMINI_API_KEY`, `HARNESS_LAB_AGY_AUTH=account`; `agy_account_copy_masks` empties other runs' copies in **every** container |
+| Billing | `bench_run.assemble_usage`, `native_auth.billing_mode` | `subscription` / `subscription_quota`, `cost_usd: null` (like codex) |
+| Preflight | `run_service._check_agy` | A well-formed slug is enough (the plan serves it); the untrusted-code guard still applies |
+
+**Event mapping.** `step_update` text deltas (`ACTIVE` chunks, closed by a
+`DONE` carrying only the tail) become one assistant text block per step. A
+finished tool step becomes a `tool_use` plus a `tool_result`, with `is_error`
+set on `ERROR` or on `Command exited with code N≠0`. Tool names map onto the
+claude vocabulary: `read_file`→Read, `write_file`→Write, `edit_file`→Edit,
+`run_command`→Bash, `search_web`→WebSearch, `invoke_subagent`→Agent,
+others `agy:<name>`. `result.usage` (`input_tokens` already excludes the cache,
+`output_tokens` includes `thinking_tokens`) becomes `usage` with
+`reasoning_output_tokens` recorded beside the output, never added to it. No agy
+event names the API model: `detected_model` is `init.model` (the slug, present
+because `--model` is always passed) and `api_model` comes from `AGY_SLUG_MAP`.
+A skill counts as consulted when its `SKILL.md` is read.

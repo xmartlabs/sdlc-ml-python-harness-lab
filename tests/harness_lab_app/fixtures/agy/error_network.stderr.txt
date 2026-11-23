@@ -1,0 +1,2 @@
+error: There was a network issue connecting to the server, please try again.
+AGY_ERROR: {"short_error":"agent executor error: generating and executing: doRequest: error sending request: Post \"http://127.0.0.1:8799/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse\": dial tcp 127.0.0.1:8799: connect: connection refused","status":"UNKNOWN","error_code":2,"code_kind":"grpc","retryable":true,"error_id":"7a399fb6-3cc9-4fac-a8a1-930586ef85f0-9"}

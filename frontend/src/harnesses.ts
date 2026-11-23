@@ -11,17 +11,47 @@ import type { ModelOption } from "./types";
  * batch form, the experiment wizard); a fourth in the experiment launch panel
  * was the point at which one source of truth became cheaper than the drift.
  */
-// bench_run.py accepts opencode | codex | claude | gemini; antigravity is the manual `make bench-antigravity` flow.
-export const HARNESS_OPTIONS = ["opencode", "codex", "claude", "gemini"] as const;
+// bench_run.py accepts opencode | codex | claude | gemini | antigravity_cli.
+// antigravity_cli is the automated Antigravity CLI (`agy`) on a Gemini API key
+// (ADR-0096); `antigravity` (the IDE) stays the manual `make bench-antigravity`
+// flow and is not offered here.
+export const HARNESS_OPTIONS = ["opencode", "codex", "claude", "gemini", "antigravity_cli"] as const;
+
+/** How a harness reads in a menu: the CLI's product name. */
+export const HARNESS_LABELS: Record<string, string> = {
+  opencode: "opencode",
+  codex: "codex",
+  claude: "claude",
+  gemini: "gemini",
+  antigravity_cli: "Antigravity CLI"
+};
+
+/** A harness id for display; unknown ids read as themselves. */
+export function harnessLabel(harness: string): string {
+  return HARNESS_LABELS[harness] ?? harness;
+}
+
+/**
+ * The harness as it reads inside "Runs the … CLI": its label without a
+ * trailing " CLI", so "Antigravity CLI" never reads "Antigravity CLI CLI".
+ */
+export function harnessCliName(harness: string): string {
+  return harnessLabel(harness).replace(/ CLI$/, "");
+}
 
 // Harnesses that drive their own CLI with native auth instead of a gateway
 // model. They run in the runner container (Docker) or on the host worker
-// (subprocess backend); the model menu is the CLI's own.
-export const HOST_HARNESSES = new Set(["codex", "claude", "gemini"]);
+// (subprocess backend); the model menu is the CLI's own. antigravity_cli runs
+// in Docker only (the runner container is its sandbox).
+export const HOST_HARNESSES = new Set(["codex", "claude", "gemini", "antigravity_cli"]);
 
 // Native CLIs signed in with a subscription kept per provider in the lab's
 // session store (ADR-0094): `make auth-codex` / `make auth-gemini`.
 export const SUBSCRIPTION_HARNESSES = new Set(["codex", "gemini"]);
+
+// Native CLIs authenticated by an API key the operator stores from System →
+// Agent CLIs (ADR-0096). Per-token API billing, no device login.
+export const API_KEY_HARNESSES = new Set(["antigravity_cli"]);
 
 /**
  * Reasoning effort levels the claude CLI accepts through `--effort`, lowest
@@ -68,6 +98,20 @@ export const HARNESS_NATIVE_MODELS: Record<string, ModelOption[]> = {
     { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
     { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
     { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite" }
+  ],
+  // Antigravity CLI on a Gemini API key (ADR-0096): `agy models` on agy 1.5.14,
+  // Gemini API provider. A slug is a model and a thinking level; the CLI has no
+  // default the lab can name, so a run always picks one (first = form default).
+  antigravity_cli: [
+    { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)" },
+    { id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash (High)" },
+    { id: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)" },
+    { id: "gemini-4-neon-high", label: "Gemini 4 Neon (High)" },
+    { id: "gemini-4-neon-xhigh", label: "Gemini 4 Neon (XHigh)" },
+    { id: "gemini-4-carbon-high", label: "Gemini 4 Carbon (High)" },
+    { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)" },
+    { id: "gemini-4-hydrogen-high", label: "Gemini 4 Hydrogen (High)" },
+    { id: "gemini-3.1-pro-high", label: "Gemini 3.1 Pro (High)" }
   ]
 };
 

@@ -470,7 +470,129 @@ def native_cli_status(facts: dict[str, Any] | None = None) -> list[dict[str, Any
         row.update(_connect_fields(harness))
         rows.append(row)
     rows.insert(0, _opencode_row())
+    rows.append(_agy_row(lane, facts))
     return rows
+
+
+def _agy_row(lane: str, facts: dict[str, Any] | None) -> dict[str, Any]:
+    """The Antigravity CLI card: the Google sign-in, or a Gemini API key.
+
+    Two credentials, one harness. The operator's own Google sign-in (ADR-0097)
+    runs on their plan's quota; a Gemini API key (ADR-0096) is billed per
+    token. When both exist the sign-in is used (``auth``). ``session`` is
+    ``connected`` once either is stored — not proof it works, which only the
+    connection test gives (``last_test``). No credential value is in the row:
+    the key's last four characters and the account's email at most.
+    """
+    from harness_lab_app import native_connect
+    from harness_lab_app.agy_account import AUTH_ACCOUNT, account_status, auth_mode
+    from harness_lab_app.api_key_auth import HARNESS, key_status, untrusted_allowed
+    from harness_lab_app.native_models import (
+        AGY_TEST_MODEL,
+        MIN_NATIVE_CLI_VERSION,
+        native_cli_too_old,
+    )
+
+    version = ""
+    installed: bool | None = None
+    if lane == "docker":
+        version = str(((facts or {}).get("cli_versions") or {}).get(HARNESS) or "")
+        installed = bool(version) if facts else None
+    key = key_status()
+    account = account_status()
+    mode = auth_mode(key_configured=bool(key["configured"]))
+    on_account = mode == AUTH_ACCOUNT
+    return {
+        "harness": HARNESS,
+        "lane": lane,
+        # Docker only: agy's sandbox cannot start in the runner and nothing
+        # contains it on the host (run_service._check_agy).
+        "lane_supported": lane == "docker",
+        "installed": installed,
+        "version": version,
+        "min_version": MIN_NATIVE_CLI_VERSION.get(HARNESS),
+        "too_old": native_cli_too_old(HARNESS, version),
+        "sandbox": "container",
+        "session": "connected" if mode else "missing",
+        "auth_kind": mode or None,
+        "billing_mode": "subscription" if on_account else "api",
+        # The card kind stays "api_key" (its own component); `agy_auth` says
+        # which credential runs use.
+        "auth": "api_key",
+        "agy_auth": mode or None,
+        "provider": "google_account" if on_account else "gemini_api",
+        "connectable": True,
+        "configurable": True,
+        "unavailable": None,
+        "testable": True,
+        "account": account,
+        "api_key": key,
+        "key_op": native_connect.read_state(HARNESS, "key"),
+        "login": native_connect.read_login(HARNESS),
+        "last_test": native_connect.read_state(HARNESS, "test"),
+        "models": native_connect.read_state(HARNESS, "models"),
+        "untrusted_allowed": untrusted_allowed(),
+        "default_test_model": "" if on_account else AGY_TEST_MODEL,
+    }
+
+
+def _check_agy(facts: dict[str, Any]) -> tuple[str, str, list[str]]:
+    """Health of the Antigravity CLI harness: image, key, last real request."""
+    row = _agy_row(
+        "host" if get_settings().execution_backend == "subprocess" else "docker", facts
+    )
+    if not row["lane_supported"]:
+        # Not applicable here, which is not a fault: an operator who never
+        # uses agy must not see host-mode health stuck below OK because of it.
+        return (
+            OK,
+            "Not applicable in host mode: antigravity_cli runs only in the Docker "
+            "runner.",
+            [],
+        )
+    if row["installed"] is None:
+        return UNKNOWN, "No worker replied, so the runner image could not be read.", []
+    if not row["installed"]:
+        return (
+            WARN,
+            "agy is not in the runner image; antigravity_cli runs are refused. "
+            "Rebuild the runner image.",
+            [],
+        )
+    if row["too_old"]:
+        return (
+            WARN,
+            f"agy {row['version']} is older than {row['too_old']}, the version the "
+            "lab verified; rebuild the runner image.",
+            [],
+        )
+    if row["session"] != "connected":
+        return (
+            OK,
+            f"agy {row['version']} installed; not signed in and no Gemini API key "
+            "(System → Agent CLIs).",
+            [],
+        )
+    test = row["last_test"] or {}
+    if test.get("state") == "failed":
+        return (
+            WARN,
+            f"agy {row['version']}: the last connection test failed "
+            f"({test.get('reason') or 'error'}): {str(test.get('error') or '')[:200]}",
+            [],
+        )
+    verified = "verified" if test.get("state") == "ok" else "not tested yet"
+    credential = (
+        "Google sign-in (plan quota)"
+        if row["agy_auth"] == "account"
+        else f"Gemini API key {row['api_key']['hint']}"
+    )
+    return (
+        OK,
+        f"agy {row['version']} (docker, sandbox: container), {credential} — "
+        f"{verified}.",
+        [],
+    )
 
 
 def _connect_fields(harness: str) -> dict[str, Any]:
@@ -575,6 +697,7 @@ def collect_health(session: Session) -> dict:
         ),
         _timed("codex_cli", "Codex CLI", lambda: _check_native_cli("codex", facts)),
         _timed("gemini_cli", "Gemini CLI", lambda: _check_native_cli("gemini", facts)),
+        _timed("antigravity_cli", "Antigravity CLI", lambda: _check_agy(facts)),
         _timed(
             "skills_drift", "Generated skill views", _check_skills_drift, "skills_sync"
         ),

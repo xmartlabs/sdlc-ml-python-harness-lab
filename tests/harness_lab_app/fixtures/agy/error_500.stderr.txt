@@ -1,0 +1,2 @@
+error: agent executor error: generating and executing: Error 500, Message: An internal error has occurred., Status: INTERNAL, Details: []
+AGY_ERROR: {"short_error":"agent executor error: generating and executing: Error 500, Message: An internal error has occurred., Status: INTERNAL, Details: []","status":"INTERNAL","error_code":500,"code_kind":"http","retryable":false,"error_id":"906b043d-b286-4c4d-a85d-fd00e3e20e0d-1"}
