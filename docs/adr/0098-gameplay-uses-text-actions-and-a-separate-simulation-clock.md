@@ -1,4 +1,4 @@
-# ADR-0096: Gameplay uses text actions and a separate simulation clock
+# ADR-0098: Gameplay uses text actions and a separate simulation clock
 
 - **Status:** Accepted
 - **Date:** 2026-11-23
