@@ -3738,3 +3738,19 @@ through the repository bind; for an API-key harness it is now masked.
   `test_deploy_compose.py` reads it with `yaml.safe_load`, which rejects the tag.
 - A Docker cleanup that frees space also deletes `harness-lab-runner-godot`
   (not built by `app-up`); the 3D cases then need `make images-3d` again.
+
+## 2026-11-23 — A killed ablation run leaves the lab's skill views ablated until the worker heals them
+
+- `bench_run.py` restored the full skill views from `atexit`. A stalled run is
+  ended with SIGKILL (exit 137), and `atexit` never runs, so chess3d-v1-K-016
+  (antigravity_cli, minimal profile) left `.agents/skills` (31 files),
+  CLAUDE.md, AGENTS.md, GEMINI.md, OPENCODE.md and copilot-instructions at the
+  ablated set. The "restore at the next run's start" heal came too late: a
+  commit made in between carried 5.6k deleted lines, and only `make ci`'s
+  `check-sync` in the pre-push hook stopped it.
+- The worker now runs `skills_sync sync` (`tasks._heal_ablated_tree`) after
+  every run that held the tree exclusively, before releasing the lease; a
+  failure leaves a run event naming `make sync-skills`.
+- When `git status` shows `.agents/skills/*` deleted and the CLAUDE.md skill
+  list trimmed, check for a running or just-killed ablation before treating it
+  as a change: `make sync-skills` restores it byte for byte.

@@ -1007,8 +1007,46 @@ def _execute_run_body(
             _execute_pending_run(session, run, executor, lane, lease_lost=lost)
         finally:
             stop.set()
+            if exclusive:
+                _heal_ablated_tree(session, run_id)
             with contextlib.suppress(Exception):
                 leases.release(run_id, exclusive)
+
+
+def _restore_skill_views() -> None:
+    """Every native skill view back to the full governed set (`make sync-skills`)."""
+    from ml_python_base.skills_sync.cli import main as skills_sync_main
+
+    code = skills_sync_main(["--root", str(get_settings().repo_root), "sync"])
+    if code != 0:
+        raise RuntimeError(f"skills_sync sync exited {code}")
+
+
+def _heal_ablated_tree(session: Session, run_id: str) -> None:
+    """Undo a skill ablation the runner could not, before the tree is shared again.
+
+    ``bench_run.py`` restores the lab's skill views from ``atexit``, which does
+    not run when the runner is killed (a stalled run ends in SIGKILL, exit
+    137). The views then stayed ablated until the next run started: the tree
+    showed ~30 deleted skill files and trimmed CLAUDE.md/AGENTS.md, and a
+    commit made in between carried them (2026-11-23). Idempotent after a clean
+    exit. Never raises: the lease must still be given back.
+    """
+    try:
+        _restore_skill_views()
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            session.rollback()
+            session.add(
+                RunEvent(
+                    run_id=run_id,
+                    level="warning",
+                    message="The run's skill ablation could not be undone, so the "
+                    "lab's skill views may still be ablated. Run `make "
+                    f"sync-skills` before committing: {exc!r}",
+                )
+            )
+            session.commit()
 
 
 def _execute_pending_run(
