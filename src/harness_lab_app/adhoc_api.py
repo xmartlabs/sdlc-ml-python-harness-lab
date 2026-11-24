@@ -36,6 +36,24 @@ class AdhocTaskCreate(BaseModel):
     title: str = ""
     setup_commands: list[str] = Field(default_factory=list)
     validation_commands: list[str] = Field(default_factory=list)
+    # The staged skill preselected in the task's run panel (ADR-0100).
+    trial_skill: str = ""
+    invoke_trial_skill: bool = False
+
+
+class AdhocPrReviewCreate(BaseModel):
+    """Review one pull request whose head is already in the folder (ADR-0100)."""
+
+    source: str
+    pr_number: int = Field(ge=1)
+    head_ref: str
+    base_ref: str = "origin/main"
+    repo: str = ""
+    pr_title: str = ""
+    pr_body: str = ""
+    depth: str = "standard"
+    trial_skill: str = ""
+    invoke_trial_skill: bool = False
 
 
 class AdhocTaskUpdate(BaseModel):
@@ -108,6 +126,30 @@ def create_adhoc_task(data: AdhocTaskCreate, session: Session = Depends(get_sess
             title=data.title,
             setup_commands=data.setup_commands,
             validation_commands=data.validation_commands,
+            trial_skill=data.trial_skill,
+            invoke_trial_skill=data.invoke_trial_skill,
+        )
+    except _EXPECTED as exc:
+        raise _http(exc) from exc
+    return AdhocService._task_dict(task)
+
+
+@adhoc_router.post("/api/adhoc/pr-reviews", status_code=201)
+def create_adhoc_pr_review(
+    data: AdhocPrReviewCreate, session: Session = Depends(get_session)
+):
+    try:
+        task = AdhocService(session).create_pr_review_task(
+            data.source,
+            data.pr_number,
+            data.head_ref,
+            base_ref=data.base_ref,
+            repo=data.repo,
+            pr_title=data.pr_title,
+            pr_body=data.pr_body,
+            depth=data.depth,
+            trial_skill=data.trial_skill,
+            invoke_trial_skill=data.invoke_trial_skill,
         )
     except _EXPECTED as exc:
         raise _http(exc) from exc

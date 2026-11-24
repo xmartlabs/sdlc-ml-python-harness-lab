@@ -9,7 +9,15 @@ import { Spinner } from "../components/Spinner";
 import { IconChecklist, IconGitBranch, IconStar, IconTrash } from "../components/icons";
 import { formatRelative } from "../dates";
 import { defineMessages, useMessages } from "../i18n";
-import type { AdhocDeleteUnkeptResult, AdhocSource, AdhocTaskSummary, LocalSourceListing } from "../types";
+import { InfoTooltip } from "../components/InfoTooltip";
+import type {
+  AdhocDeleteUnkeptResult,
+  AdhocReviewDepth,
+  AdhocSource,
+  AdhocTaskSummary,
+  LocalSourceListing,
+  StagedSkillRecord
+} from "../types";
 
 /**
  * Ad hoc tasks (ADR-0095): run the lab against a real folder on this machine.
@@ -81,12 +89,36 @@ const MESSAGES = defineMessages({
       create: "Create task",
       creating: "Creating…",
       branch: (name: string) => `on ${name}`,
-      head: (sha: string) => `HEAD ${sha}`
+      head: (sha: string) => `HEAD ${sha}`,
+      kind: { free: "Free task", review: "Review a PR" },
+      kindTip:
+        "A free task runs your prompt. Review a PR builds the prompt for you: the PR's range pinned by commit, and review.json as the output.",
+      pr: {
+        number: "PR number",
+        head: "PR head (branch or commit in this folder)",
+        headHint: (n: string) =>
+          `Not checked out for you: run git fetch origin pull/${n || "N"}/head:pr-${n || "N"} in the folder first. Nothing else changes in it.`,
+        base: "Base branch",
+        repo: "Repository (optional)",
+        repoPlaceholder: "owner/name — read from origin when empty",
+        title: "PR title (optional)",
+        body: "PR description (optional)",
+        bodyHint: "Paste it: the run has no GitHub access, and the intent is half of a review.",
+        depth: "Depth",
+        depths: { quick: "Quick", standard: "Standard", deep: "Deep" }
+      },
+      trial: "Skill to try (optional)",
+      trialTip:
+        "A staged skill from the Skills page, preselected every time you run this task. You can still change it per run.",
+      noTrial: "None",
+      invoke: "Tell the agent to use it",
+      invokeTip: "A skill that is only available is often never opened. Ticked, the prompt asks the agent to invoke it."
     },
     errors: {
       load: "Could not load the task list.",
       browse: "Could not read that folder.",
       noPrompt: "Write a prompt before creating the task.",
+      noPr: "Give the PR number and the branch or commit that holds its head.",
       create: "Could not create the task."
     }
   },
@@ -151,12 +183,36 @@ const MESSAGES = defineMessages({
       create: "Crear tarea",
       creating: "Creando…",
       branch: (name: string) => `en ${name}`,
-      head: (sha: string) => `HEAD ${sha}`
+      head: (sha: string) => `HEAD ${sha}`,
+      kind: { free: "Tarea libre", review: "Revisar un PR" },
+      kindTip:
+        "Una tarea libre corre tu prompt. Revisar un PR arma el prompt por vos: el rango del PR fijado por commit, y review.json como salida.",
+      pr: {
+        number: "Número de PR",
+        head: "Cabeza del PR (rama o commit en esta carpeta)",
+        headHint: (n: string) =>
+          `No se descarga solo: corré git fetch origin pull/${n || "N"}/head:pr-${n || "N"} en la carpeta primero. Nada más cambia en ella.`,
+        base: "Rama base",
+        repo: "Repositorio (opcional)",
+        repoPlaceholder: "owner/nombre — se lee de origin si queda vacío",
+        title: "Título del PR (opcional)",
+        body: "Descripción del PR (opcional)",
+        bodyHint: "Pegala: la corrida no tiene acceso a GitHub, y la intención es la mitad de un review.",
+        depth: "Profundidad",
+        depths: { quick: "Rápida", standard: "Estándar", deep: "Profunda" }
+      },
+      trial: "Skill a probar (opcional)",
+      trialTip:
+        "Una skill en borrador de la página Skills, preseleccionada cada vez que corras esta tarea. Igual podés cambiarla en cada corrida.",
+      noTrial: "Ninguna",
+      invoke: "Pedirle al agente que la use",
+      invokeTip: "Una skill que solo está disponible muchas veces ni se abre. Marcado, el prompt le pide al agente que la invoque."
     },
     errors: {
       load: "No se pudo cargar la lista de tareas.",
       browse: "No se pudo leer esa carpeta.",
       noPrompt: "Escribí un prompt antes de crear la tarea.",
+      noPr: "Indicá el número de PR y la rama o commit que tiene su cabeza.",
       create: "No se pudo crear la tarea."
     }
   }
@@ -198,6 +254,17 @@ export function AdhocTasks() {
   const [prompt, setPrompt] = useState("");
   const [setupText, setSetupText] = useState("");
   const [validationText, setValidationText] = useState("");
+  const [kind, setKind] = useState<"free" | "review">("free");
+  const [prNumber, setPrNumber] = useState("");
+  const [prHead, setPrHead] = useState("");
+  const [prBase, setPrBase] = useState("origin/main");
+  const [prRepo, setPrRepo] = useState("");
+  const [prTitle, setPrTitle] = useState("");
+  const [prBody, setPrBody] = useState("");
+  const [depth, setDepth] = useState<AdhocReviewDepth>("standard");
+  const [staged, setStaged] = useState<StagedSkillRecord[]>([]);
+  const [trialSkill, setTrialSkill] = useState("");
+  const [invokeTrial, setInvokeTrial] = useState(false);
   const [cleanup, setCleanup] = useState<AdhocDeleteUnkeptResult | null>(null);
 
   const loadTasks = () =>
@@ -261,6 +328,10 @@ export function AdhocTasks() {
       .browseLocalSources("")
       .then(setListing)
       .catch(() => setError(m.errors.browse));
+    api
+      .listStagedSkills()
+      .then((rows) => setStaged(rows.filter((row) => row.status !== "archived")))
+      .catch(() => setStaged([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showForm]);
 
@@ -286,20 +357,40 @@ export function AdhocTasks() {
 
   const create = async () => {
     if (!source) return;
-    if (!prompt.trim()) {
+    const number = Number.parseInt(prNumber, 10);
+    if (kind === "free" && !prompt.trim()) {
       setError(m.errors.noPrompt);
       return;
     }
+    if (kind === "review" && (!(number > 0) || !prHead.trim())) {
+      setError(m.errors.noPr);
+      return;
+    }
+    const skill = { trial_skill: trialSkill || undefined, invoke_trial_skill: Boolean(trialSkill) && invokeTrial };
     setBusy("create");
     setError(null);
     try {
-      const created = await api.createAdhocTask({
-        source: source.path,
-        title: title.trim() || undefined,
-        prompt: prompt.trim(),
-        setup_commands: linesOf(setupText),
-        validation_commands: linesOf(validationText)
-      });
+      const created =
+        kind === "review"
+          ? await api.createAdhocPrReview({
+              source: source.path,
+              pr_number: number,
+              head_ref: prHead.trim(),
+              base_ref: prBase.trim() || undefined,
+              repo: prRepo.trim() || undefined,
+              pr_title: prTitle.trim() || undefined,
+              pr_body: prBody.trim() || undefined,
+              depth,
+              ...skill
+            })
+          : await api.createAdhocTask({
+              source: source.path,
+              title: title.trim() || undefined,
+              prompt: prompt.trim(),
+              setup_commands: linesOf(setupText),
+              validation_commands: linesOf(validationText),
+              ...skill
+            });
       navigate(
         carriedArm
           ? `/adhoc/${created.task_id}?arm=${encodeURIComponent(carriedArm)}`
@@ -389,50 +480,161 @@ export function AdhocTasks() {
                 ) : null}
 
                 <h2>{m.form.step2}</h2>
-                <label className="field">
-                  <span>{m.form.titleLabel}</span>
-                  <input
-                    onChange={(event) => setTitle(event.target.value)}
-                    placeholder={m.form.titlePlaceholder}
-                    type="text"
-                    value={title}
-                  />
-                </label>
-                <label className="field">
-                  <span>{m.form.promptLabel}</span>
-                  <textarea
-                    onChange={(event) => setPrompt(event.target.value)}
-                    placeholder={m.form.promptPlaceholder}
-                    rows={6}
-                    value={prompt}
-                  />
-                  <span className="muted small">{m.form.promptTips}</span>
-                </label>
+                <div className="segmented" role="group" title={m.form.kindTip}>
+                  {(["free", "review"] as const).map((name) => (
+                    <button
+                      aria-pressed={kind === name}
+                      className={kind === name ? "active" : ""}
+                      key={name}
+                      onClick={() => setKind(name)}
+                      type="button"
+                    >
+                      {m.form.kind[name]}
+                    </button>
+                  ))}
+                </div>
 
-                <details>
-                  <summary>{m.form.advanced}</summary>
-                  <label className="field">
-                    <span>{m.form.setupLabel}</span>
-                    <textarea
-                      onChange={(event) => setSetupText(event.target.value)}
-                      rows={3}
-                      value={setupText}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>{m.form.validationLabel}</span>
-                    <textarea
-                      onChange={(event) => setValidationText(event.target.value)}
-                      rows={3}
-                      value={validationText}
-                    />
-                  </label>
-                </details>
+                {kind === "free" ? (
+                  <>
+                    <label className="field">
+                      <span>{m.form.titleLabel}</span>
+                      <input
+                        onChange={(event) => setTitle(event.target.value)}
+                        placeholder={m.form.titlePlaceholder}
+                        type="text"
+                        value={title}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>{m.form.promptLabel}</span>
+                      <textarea
+                        onChange={(event) => setPrompt(event.target.value)}
+                        placeholder={m.form.promptPlaceholder}
+                        rows={6}
+                        value={prompt}
+                      />
+                      <span className="muted small">{m.form.promptTips}</span>
+                    </label>
+
+                    <details>
+                      <summary>{m.form.advanced}</summary>
+                      <label className="field">
+                        <span>{m.form.setupLabel}</span>
+                        <textarea
+                          onChange={(event) => setSetupText(event.target.value)}
+                          rows={3}
+                          value={setupText}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>{m.form.validationLabel}</span>
+                        <textarea
+                          onChange={(event) => setValidationText(event.target.value)}
+                          rows={3}
+                          value={validationText}
+                        />
+                      </label>
+                    </details>
+                  </>
+                ) : (
+                  <div className="adhoc-pr-form">
+                    <div className="form-grid">
+                      <label className="field">
+                        <span>{m.form.pr.number}</span>
+                        <input
+                          inputMode="numeric"
+                          onChange={(event) => setPrNumber(event.target.value.replace(/[^0-9]/g, ""))}
+                          placeholder="651"
+                          type="text"
+                          value={prNumber}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>{m.form.pr.head}</span>
+                        <input
+                          onChange={(event) => setPrHead(event.target.value)}
+                          placeholder={`pr-${prNumber || "651"}`}
+                          type="text"
+                          value={prHead}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>{m.form.pr.base}</span>
+                        <input onChange={(event) => setPrBase(event.target.value)} type="text" value={prBase} />
+                      </label>
+                      <label className="field">
+                        <span>{m.form.pr.repo}</span>
+                        <input
+                          onChange={(event) => setPrRepo(event.target.value)}
+                          placeholder={m.form.pr.repoPlaceholder}
+                          type="text"
+                          value={prRepo}
+                        />
+                      </label>
+                    </div>
+                    <p className="muted small mono">{m.form.pr.headHint(prNumber)}</p>
+                    <label className="field">
+                      <span>{m.form.pr.title}</span>
+                      <input onChange={(event) => setPrTitle(event.target.value)} type="text" value={prTitle} />
+                    </label>
+                    <label className="field">
+                      <span>{m.form.pr.body}</span>
+                      <textarea onChange={(event) => setPrBody(event.target.value)} rows={5} value={prBody} />
+                      <span className="muted small">{m.form.pr.bodyHint}</span>
+                    </label>
+                    <div className="field">
+                      <span>{m.form.pr.depth}</span>
+                      <div className="segmented" role="group">
+                        {(["quick", "standard", "deep"] as const).map((name) => (
+                          <button
+                            aria-pressed={depth === name}
+                            className={depth === name ? "active" : ""}
+                            key={name}
+                            onClick={() => setDepth(name)}
+                            type="button"
+                          >
+                            {m.form.pr.depths[name]}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {staged.length > 0 ? (
+                  <div className="adhoc-trial adhoc-form-trial">
+                    <label>
+                      <span className="guide-field-label">
+                        {m.form.trial} <InfoTooltip text={m.form.trialTip} />
+                      </span>
+                      <select onChange={(event) => setTrialSkill(event.target.value)} value={trialSkill}>
+                        <option value="">{m.form.noTrial}</option>
+                        {staged.map((skill) => (
+                          <option key={skill.name} value={skill.name}>
+                            {skill.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {trialSkill ? (
+                      <label className="inline-check">
+                        <input
+                          checked={invokeTrial}
+                          onChange={(event) => setInvokeTrial(event.target.checked)}
+                          type="checkbox"
+                        />
+                        <span>
+                          {m.form.invoke} <InfoTooltip text={m.form.invokeTip} />
+                        </span>
+                      </label>
+                    ) : null}
+                  </div>
+                ) : null}
 
                 <div className="button-row">
                   <button
                     className="primary"
-                    disabled={busy !== "" || !prompt.trim()}
+                    disabled={busy !== "" || (kind === "free" ? !prompt.trim() : !prNumber || !prHead.trim())}
                     onClick={() => void create()}
                     type="button"
                   >

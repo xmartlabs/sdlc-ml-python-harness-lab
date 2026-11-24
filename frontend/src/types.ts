@@ -2661,9 +2661,18 @@ export type AdhocTask = {
   validation_commands: string[];
   /** Survives "delete unkept tasks". */
   keep?: boolean;
+  /** The staged skill preselected in the run panel (ADR-0100). */
+  trial_skill?: string;
+  invoke_trial_skill?: boolean;
+  /** "owner/repo#N" when the task reviews a pull request (ADR-0100). */
+  pr_ref?: string;
+  /** The SHA the PR leaves its base at: the review range is `<this>...HEAD`. */
+  pr_base_ref?: string;
   created_at: string;
   updated_at: string;
 };
+
+export type AdhocReviewDepth = "quick" | "standard" | "deep";
 
 /** What "delete unkept tasks" did: tasks still in use are skipped with the reason. */
 export type AdhocDeleteUnkeptResult = {
@@ -2704,6 +2713,8 @@ export type AdhocRunRecord = {
   trial_skills?: string[];
   /** Skills the agent was told to use. */
   skills_invoked?: string[];
+  /** Content hash of each trial skill at launch: which version of it ran. */
+  trial_skill_hashes?: Record<string, string>;
   created_at?: string | null;
   started_at?: string | null;
   ended_at?: string | null;

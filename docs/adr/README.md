@@ -128,6 +128,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 
 - [0098 — Gameplay uses text actions and a separate simulation clock](0098-gameplay-uses-text-actions-and-a-separate-simulation-clock.md)
 - [0099 — A local model is a door of its own](0099-a-local-model-is-a-door-of-its-own.md)
+- [0100 — An ad hoc task carries its skill to try, and can review a pull request](0100-an-adhoc-task-carries-its-skill-to-try-and-can-review-a-pull-request.md)
 
 ## Why ADRs exist
 

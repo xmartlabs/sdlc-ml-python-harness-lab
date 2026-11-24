@@ -944,6 +944,14 @@ class AdhocTask(SQLModel, table=True):
     # Marked by the operator to survive "delete unkept tasks". Nothing else
     # reads it: a kept task's run files still follow the retention rules.
     keep: bool = False
+    # The staged skill picked when the task was created, preselected in the run
+    # panel (ADR-0100). A default, never a constraint: any run may change it.
+    trial_skill: str = ""
+    invoke_trial_skill: bool = False
+    # Set when the task reviews a pull request (ADR-0100): "owner/repo#N" and
+    # the PR's base branch as the lab's copy names it, e.g. "origin/main".
+    pr_ref: str = ""
+    pr_base_ref: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -965,6 +973,12 @@ class AdhocRun(SQLModel, table=True):
     # ships — every run before levels existed), or the lab's harness projected
     # into the copy at a profile: "minimal" or "full" (ADR-0095, ADR-0085).
     harness_level: str = "repo"
+    # The content hash of each staged skill tried, read at launch (ADR-0100).
+    # Editing a staged skill changes its hash, so "v1 vs v2" of one skill stays
+    # legible in the table after the run's metadata.json is purged.
+    trial_skill_hashes: dict[str, str] = Field(
+        default_factory=dict, sa_column=Column(JSON)
+    )
     input_tokens: int | None = None
     output_tokens: int | None = None
     cache_read_tokens: int | None = None

@@ -38,6 +38,7 @@ const MESSAGES = defineMessages({
     prompt: "Prompt",
     folder: "Folder",
     baseCommit: "Base commit",
+    reviewsPr: (pr: string, base: string) => `Reviews ${pr} · range ${base}…HEAD`,
     headMoved: (n: number) =>
       `Your repo moved ${n} commits since this task was created: applying may conflict.`,
     runWith: "Run with…",
@@ -114,6 +115,7 @@ const MESSAGES = defineMessages({
     prompt: "Prompt",
     folder: "Carpeta",
     baseCommit: "Commit base",
+    reviewsPr: (pr: string, base: string) => `Revisa ${pr} · rango ${base}…HEAD`,
     headMoved: (n: number) =>
       `Tu repo avanzó ${n} commits desde que se creó esta tarea: aplicar puede generar conflictos.`,
     runWith: "Correr con…",
@@ -202,6 +204,12 @@ function costCell(run: AdhocRunRecord, m: (typeof MESSAGES)["en"]): string {
   return m.runs.none;
 }
 
+/** "name@abc1234": which version of a staged skill a run tried (ADR-0100). */
+function skillWithVersion(name: string, hashes?: Record<string, string>): string {
+  const hash = hashes?.[name] ?? "";
+  return hash ? `${name}@${hash.replace(/^sha256:/, "").slice(0, 7)}` : name;
+}
+
 export function AdhocTaskDetailPage() {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
@@ -222,12 +230,20 @@ export function AdhocTaskDetailPage() {
   const [launching, setLaunching] = useState(false);
   const runPanelRef = useRef<HTMLDivElement | null>(null);
 
+  const preselected = useRef(false);
   const load = useCallback(() => {
     if (!taskId) return;
     api
       .getAdhocTask(taskId)
       .then((result) => {
         setDetail(result);
+        // The skill picked at creation (ADR-0100) is the panel's starting
+        // point, set once so a later poll never undoes the operator's change.
+        if (!preselected.current) {
+          preselected.current = true;
+          setTrialSkill(result.task.trial_skill ?? "");
+          setInvokeTrial(Boolean(result.task.invoke_trial_skill));
+        }
         setSelectedRunId((current) => current ?? result.runs[0]?.run_id ?? null);
       })
       .catch(() => setError(m.errors.load));
@@ -344,6 +360,9 @@ export function AdhocTaskDetailPage() {
           <p className="mono small">
             {m.folder}: {task.host_path} · {task.branch} · {m.baseCommit} {task.base_commit.slice(0, 8)}
           </p>
+          {task.pr_ref ? (
+            <p className="mono small">{m.reviewsPr(task.pr_ref, (task.pr_base_ref ?? "").slice(0, 8))}</p>
+          ) : null}
         </div>
         <div className="page-header-action button-row">
           <button
@@ -467,7 +486,7 @@ export function AdhocTaskDetailPage() {
                   <td>{harnessLabel(run.harness)}</td>
                   <td className="small">
                     {m.level.names[run.harness_level ?? "repo"]}
-                    {run.trial_skills?.length ? ` + ${run.trial_skills.join(", ")}` : ""}
+                    {run.trial_skills?.length ? ` + ${run.trial_skills.map((name) => skillWithVersion(name, run.trial_skill_hashes)).join(", ")}` : ""}
                     {run.skills_invoked?.length ? " *" : ""}
                   </td>
                   <td className="mono small">{run.executor_model}</td>
