@@ -219,4 +219,5 @@ dev = [
     "nbstripout>=0.7.0",
     "ipykernel",
     "pytest-xdist>=3.6",
+    "httpx2>=2.12.0",
 ]

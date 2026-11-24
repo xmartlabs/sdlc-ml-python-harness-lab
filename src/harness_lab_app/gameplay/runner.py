@@ -46,6 +46,7 @@ def run_episode(
         ReplayHeader(
             environment_id=env.environment_id,
             environment_version=env.environment_version,
+            environment_provenance=getattr(env, "provenance", {}),
             config=config,
             initial=initial,
             policy_provenance=policy_provenance or {},
@@ -98,6 +99,7 @@ def run_episode(
     replay = Replay(
         environment_id=env.environment_id,
         environment_version=env.environment_version,
+        environment_provenance=getattr(env, "provenance", {}),
         config=config,
         initial=initial,
         policy_provenance=policy_provenance or {},

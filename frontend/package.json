@@ -8,18 +8,23 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "tsc --noEmit",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:racing": "node --test src/gameplay/racing.test.mjs",
+    "test:game-runtime": "node --test ../game-runtime/server.test.mjs",
+    "build:game": "vite build --config vite.game.config.ts"
   },
   "dependencies": {
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.5",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "three": "0.187.0"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/three": "0.187.0",
     "@vitejs/plugin-react": "^6.3.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.8"

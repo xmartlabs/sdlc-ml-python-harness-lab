@@ -96,6 +96,7 @@ class ReplayHeader(WireModel):
     environment_version: str
     config: EpisodeConfig
     initial: Observation
+    environment_provenance: dict[str, JsonValue] = Field(default_factory=dict)
     policy_provenance: dict[str, JsonValue] = Field(default_factory=dict)
 
 

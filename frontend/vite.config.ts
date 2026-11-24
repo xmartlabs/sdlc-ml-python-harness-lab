@@ -12,7 +12,8 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5173,
     proxy: {
-      "/api": apiTarget
+      "/api": apiTarget,
+      "/game/": process.env.VITE_GAME_RUNTIME_TARGET ?? "http://game-runtime:8080"
     }
   }
 });

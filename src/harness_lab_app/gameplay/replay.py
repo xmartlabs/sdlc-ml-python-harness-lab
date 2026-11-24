@@ -56,7 +56,11 @@ def summarize(
 ) -> EpisodeResult:
     last = frames[-1].observation if frames else initial
     failure = frames[-1].outcome if frames and frames[-1].outcome != "applied" else None
-    latencies = [frame.latency_seconds for frame in frames]
+    latencies = [
+        frame.latency_seconds
+        for frame in frames
+        if frame.provenance.get("model_call") is not False
+    ]
     ordered = sorted(latencies)
     return EpisodeResult(
         status=failure or ("completed" if last.terminal else "budget_exhausted"),
@@ -121,6 +125,11 @@ def verify_replay(path: Path, env: Environment) -> Replay:
         raise ValueError("Replay requires the original environment version")
     config = replay.config
     env.reset(config.seed)
+    fingerprint = replay.environment_provenance.get("engine_sha256")
+    if fingerprint and fingerprint != getattr(env, "provenance", {}).get(
+        "engine_sha256"
+    ):
+        raise ValueError("Replay executable fingerprint mismatch")
     current = observe(env, config, 0)
     if current != replay.initial:
         raise ValueError("Initial state mismatch")
