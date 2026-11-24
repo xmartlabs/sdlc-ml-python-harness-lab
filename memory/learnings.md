@@ -3,6 +3,20 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## 2026-11-24 — A run stuck `pending` with a worker that "succeeded" means the WAL was deleted
+
+Symptom: the launch returns 201, the worker logs `execute_run ... succeeded in 0.8s`, and the run never leaves `pending`. A fresh process cannot find the run, the experiment or a machine saved minutes before, while the api still serves all three. Cause: a host process opened `data/app/harness_lab.db` (here `make check` through `test_prune_script` → `prune.main` → `init_db()`). SQLite deleted `-wal`/`-shm` on close, because locks do not cross the Docker Desktop mount. Every container kept writing to the unlinked files (`ls -l /proc/*/fd` shows `(deleted)`). `_execute_run_body` returns silently when `run is None`.
+
+Fixes:
+- The root `tests/conftest.py` forces a scratch `HARNESS_LAB_DATABASE_URL`.
+- `scripts/prune.py` validates arguments before `init_db()`.
+- `harness_lab_app.db` refuses a host connection to the default DB while compose `api` runs (`LabDatabaseInUse`).
+- `make improve` and `make ladder` now go through `LAB_PY`.
+
+Recovery: restart api and every worker, then check `deleted fds: 0` in each container.
+
+**How to apply:** never import the lab DB from host code without an explicit `HARNESS_LAB_DATABASE_URL`. A new `make` target that opens the DB uses `$(LAB_PY)`.
+
 ## 2026-11-23 — Tune your local model and agent runs read two different server addresses
 
 `/local/tune` talks to the URL typed in step 2 (any of `host`, `host/v1`,

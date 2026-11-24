@@ -259,7 +259,7 @@ bench-audit:
 improve:
 	@[ -n "$(RUN)" ] || { echo "❌ RUN is required. Example: RUN=tetris-v1-K-004"; exit 1; }
 	@set -a; [ -f .env ] && . ./.env; set +a; \
-	uv run python scripts/lab_improve.py \
+	$(LAB_PY) scripts/lab_improve.py \
 		--run $(RUN) \
 		$(if $(IMPROVE_MODEL),--model $(IMPROVE_MODEL),) \
 		$(if $(IMPROVE_STRICTNESS),--strictness $(IMPROVE_STRICTNESS),) \
@@ -620,7 +620,7 @@ app-smoke-test:
 # CASES defaults to every active case; REPS defaults to 2 (a judgement).
 ladder:
 	@[ -n "$(MODEL)" ] || { echo "❌ MODEL is required. Example: MODEL=claude-haiku-4-5-20251001"; exit 1; }
-	@uv run python scripts/ladder.py $(if $(CASES),--cases $(CASES),) --model $(MODEL) --harness $(or $(HARNESS),claude) --reps $(or $(REPS),2) $(if $(LAUNCH),--launch,)
+	@$(LAB_PY) scripts/ladder.py $(if $(CASES),--cases $(CASES),) --model $(MODEL) --harness $(or $(HARNESS),claude) --reps $(or $(REPS),2) $(if $(LAUNCH),--launch,)
 
 # Lab scripts that open the database run inside the api container while the
 # stack is up: on the Docker Desktop bind mount, SQLite's WAL index is not shared

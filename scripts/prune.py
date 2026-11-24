@@ -186,6 +186,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--launch", action="store_true", help="queue the runs")
     args = parser.parse_args(argv)
 
+    # Refuse bad arguments before touching the database: a refusal needs none,
+    # and opening the lab DB for nothing is how a host-side call deleted the
+    # running api's WAL (2026-11-24, tests/conftest.py).
+    if args.all and not args.group:
+        sys.exit("❌ --all removes the catalog in one arm; add --group")
+    if args.all and args.items:
+        sys.exit("❌ --all and --items are exclusive")
+
     init_db()
     with Session(get_engine()) as session:
         catalog = sorted(known_skill_names())
@@ -194,10 +202,6 @@ def main(argv: list[str] | None = None) -> int:
         unknown = sorted(set(args.items) - set(catalog))
         if unknown:
             sys.exit(f"❌ not in the governed catalog: {', '.join(unknown)}")
-        if args.all and not args.group:
-            sys.exit("❌ --all removes the catalog in one arm; add --group")
-        if args.all and args.items:
-            sys.exit("❌ --all and --items are exclusive")
         if args.items:
             items = list(args.items)
         elif args.all:
