@@ -32,6 +32,19 @@ export function loadModels(): Promise<ModelOption[]> {
   return modelsPromise;
 }
 
+/**
+ * Drop the cached model list, here and on the server. Called after the
+ * operator points the lab at another local host (Tune your local model →
+ * "Use this server for runs"): the next chooser reads the new host's models.
+ */
+export function forgetModels(): Promise<void> {
+  modelsPromise = null;
+  return api.listModels(true).then(
+    () => undefined,
+    () => undefined
+  );
+}
+
 export function loadCases(): Promise<CaseRecord[]> {
   if (!casesPromise) {
     casesPromise = api

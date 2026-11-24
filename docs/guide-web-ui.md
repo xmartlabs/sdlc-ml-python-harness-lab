@@ -299,7 +299,7 @@ it owns.
 | **Models** | `/models` | Compare models, Harness × model, Tune your local model, Local results |
 | **Harness & skills** | `/harness` | the two profiles and the latest pruning verdict (live); New evaluation; Skills |
 | **Benchmarks** | `/benchmarks` | Cases, grouped by family (SWE-bench, 3D games, security, web, build, yours) |
-| **Your repo** | `/your-repo` | Audit, Validate your tool, Repositories |
+| **Local model** | `/local/tune` | Tune your local model (server setup, tests, then OpenCode on a real case or on your code), Local results ([guide](guide-local-models.md)) |
 | **Ad hoc tasks** | `/adhoc` | your folder + a prompt → run, review, apply or undo, compare runs by model ([guide](guide-adhoc-tasks.md)) |
 | **Results** | `/results` | Experiments, Runs, Ranking, Findings, Compare, Improvements |
 | **System** | `/system` | Settings, Health, Storage, Guide |
@@ -433,8 +433,11 @@ To check a change without opening a browser, screenshot the dev server headlessl
 ### Home — what do you want to try today?
 
 The landing page opens with the [showcase](#the-home-showcase) of real runs, then
-four doors — **Models**, **Harness & skills**, **Benchmarks**, **Your repo** —
-each opening its hub. Below them: the **Start in 30 seconds** band
+five doors — **Models and harness**, **Skills**, **Metrics**, **Benchmarks**,
+**Local model** — each opening its flow or page. *Your repo* is no longer a door or a
+sidebar entry ([ADR-0099](adr/0099-a-local-model-is-a-door-of-its-own.md)): its hub
+still answers at `/your-repo`, and Home reaches it through the **Start in 30 seconds**
+band and the *Your team's repo* journey. Below them: the **Start in 30 seconds** band
 (`make harness-check REPO=<path>` and the [demo guide](demo-guide.md)), the lab's
 loop as a diagram, four first journeys by what you have (a local model, a new
 skill, a new frontier model, your team's repo), what the lab will and will not

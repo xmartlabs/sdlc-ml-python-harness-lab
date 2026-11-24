@@ -3,6 +3,22 @@
 > Non-obvious facts discovered while working: gotchas, why-it-is-this-way, dead ends
 > to avoid. Append new entries at the top. One fact per entry.
 
+## 2026-11-23 — Tune your local model and agent runs read two different server addresses
+
+`/local/tune` talks to the URL typed in step 2 (any of `host`, `host/v1`,
+`host/api`). Agent runs, the model chooser and `/api/models` read
+`LMSTUDIO_BASE_URL` / `OLLAMA_BASE_URL` from `.env` instead, which must end in
+`/v1` (`run_service` refuses otherwise). Nothing tied the two, so a model could be
+tuned on one host and run on another. Since ADR-0099 step 2 compares them in
+`/v1` form and offers an explicit "Use this server for runs" (PUT
+`/api/settings/env`, then `forgetModels()` to drop the chooser's module cache).
+Runs read `.env` at launch, so no restart. `localhost` is rewritten to
+`host.docker.internal` on all three paths (`make_server`, `_direct_endpoint`,
+`build_run_environment`), so `http://localhost:1234/v1` is a valid saved value.
+
+**How to apply:** any new entry point that launches a local-model run must check
+the same pair; never assume the address a page tested is the one a run will use.
+
 ## 2026-11-23 — A bounded LM Studio reply may have no visible action
 
 The text gameplay fixture received an empty `content` with the entire output

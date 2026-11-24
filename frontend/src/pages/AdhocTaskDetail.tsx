@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import { AdhocRunReview } from "../components/AdhocRunReview";
@@ -211,7 +211,9 @@ export function AdhocTaskDetailPage() {
   const [detail, setDetail] = useState<AdhocTaskDetailType | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [arm, setArm] = useState("");
+  // Preselected when the task was created from Tune your local model.
+  const [params] = useSearchParams();
+  const [arm, setArm] = useState(params.get("arm") ?? "");
   const [level, setLevel] = useState<AdhocHarnessLevel>("repo");
   const [trialSkill, setTrialSkill] = useState("");
   const [invokeTrial, setInvokeTrial] = useState(false);

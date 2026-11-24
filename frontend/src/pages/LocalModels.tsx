@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { ErrorBanner } from "../components/ErrorBanner";
 import { HelpPanel } from "../components/HelpPanel";
@@ -10,6 +10,7 @@ import { MemoryBar } from "../components/MemoryBar";
 import { ServedConfigDiff } from "../components/ServedConfigDiff";
 import { Spinner } from "../components/Spinner";
 import { api, ApiError } from "../api";
+import { encodeArm, forgetModels } from "../components/guide/guideData";
 import { formatRunDate } from "../dates";
 import { defineMessages, useMessages } from "../i18n";
 import type {
@@ -70,12 +71,12 @@ const MESSAGES = defineMessages({
     header: {
       title: "Tune your local model",
       lede:
-        "Learn the parameters, estimate whether a configuration fits, apply it, and measure it — before spending 20–45 minutes on a real case."
+        "Run a model on your own machine, find a configuration that fits, test it in a few minutes, then try it with OpenCode on real work — before spending 20–45 minutes on a case."
     },
     help: {
       title: "How this page works",
       body:
-        "Five steps: your machine, your server, your model and configuration, load and test, and the result. Nothing is loaded until step 4, and loading, unloading or testing always checks first whether a lab run is using the same host."
+        "Five steps: your machine, your server, your model and configuration, load and test, and the result. Nothing is loaded until step 4, and loading, unloading or testing always checks first whether a lab run is using the same host. The result ends with two ways to try the model on real work: a benchmark case, or a task on your own code."
     },
     steps: {
       machine: "Your machine",
@@ -86,6 +87,10 @@ const MESSAGES = defineMessages({
     } as Record<StepKey, string>,
     machine: {
       heading: "Your machine",
+      intro:
+        "A quick pre-configuration: the lab cannot read your hardware from Docker, so it uses these figures only to estimate which models and contexts fit in memory. Pick your Mac or PC from the list (or the closest one) and go on — nothing is loaded or changed yet.",
+      fineTune: "Fine-tune the figures, save this machine (optional)",
+      next: "Next: your server",
       presetLabel: "Reference machine",
       presetCustom: "Other…",
       savedGroup: "My machines",
@@ -125,6 +130,40 @@ const MESSAGES = defineMessages({
     },
     server: {
       heading: "Your server",
+      intro:
+        "The program that runs the model on your machine and answers the lab over HTTP. LM Studio is a desktop app, the easiest start. Ollama is lighter and lives in the terminal.",
+      next: "Next: model & configuration",
+      setup: {
+        title: (name: string) => `No ${name} yet? Set it up in a few minutes`,
+        docs: "Official guide",
+        download: "Download",
+        modelsLink: "Models with tool use",
+        sizeHint: (gb: string) =>
+          `Your machine leaves about ${gb} GB for a model: pick one whose download is clearly smaller, so the context has room. 4-bit (Q4) versions are the usual choice.`,
+        lmstudio: [
+          "Download LM Studio and open it once.",
+          "Search and download a model with tool use (the hammer badge) — an agent needs it to edit files and run commands.",
+          "Developer tab → switch Status to Running, or run the command below. The address is http://localhost:1234."
+        ],
+        ollama: [
+          "Install Ollama: download the app (macOS, Windows) or run the command below (macOS, Linux).",
+          "Pull a model with tool use, e.g. ollama pull qwen3:8b.",
+          "Raise its context before you test: Ollama serves 4k by default and an agent needs at least 32k. In the app: Settings → Context length. In a terminal: start it with OLLAMA_CONTEXT_LENGTH=32768 ollama serve."
+        ],
+        lmstudioCommand: "lms server start",
+        ollamaCommand: "curl -fsSL https://ollama.com/install.sh | sh",
+        localhostNote:
+          "Same computer as the lab? Use localhost — the lab rewrites it to reach your machine from Docker. Another computer? Use its LAN address, and turn on Serve on Local Network (LM Studio) or set OLLAMA_HOST=0.0.0.0 (Ollama)."
+      },
+      forRuns: {
+        title: "Use this server for runs too",
+        body: (url: string) =>
+          `The tests on this page use the address above. Agent runs (OpenCode on a case or on your code) read the lab's setting instead${url ? `, which points at ${url}` : ", which is not set yet"}. Save this address there so both use the same server.`,
+        save: "Use this server for runs",
+        saving: "Saving…",
+        saved: (key: string, url: string) => `Saved: ${key} = ${url}. Runs now use this server.`,
+        inSync: "Runs use this same server."
+      },
       kind: "Server",
       url: "URL",
       urlPlaceholder: "http://192.168.0.10:1234",
@@ -223,6 +262,22 @@ const MESSAGES = defineMessages({
       compare: "Compare",
       notComparable: "Not comparable",
       useInNewEvaluation: "Use in New evaluation",
+      nextHeading: "Now try it on real work",
+      nextLede:
+        "A short test says the model fits and can call tools. Whether it is useful takes a real task: OpenCode drives your model as an agent, with the lab's harness, in an isolated copy.",
+      nextAgentFailed:
+        "The agent test did not pass: a real task will most likely fail too. Try a model with tool use, or a larger context, before spending time on it.",
+      nextServerMismatch:
+        "Runs still point at another server. Go back to step 2 and press \"Use this server for runs\" first.",
+      caseTitle: "A benchmark case",
+      caseBody:
+        "clinic-slots-t1: a small Python task with tests the agent did not write. One repetition takes 20–45 minutes on a laptop, and the verdict is objective.",
+      caseCta: "Run OpenCode on clinic-slots-t1",
+      adhocTitle: "Your own code",
+      adhocBody:
+        "Pick a folder on this machine and write what you want done. It runs on a copy; you review the change and apply it only if you like it.",
+      adhocCta: "Try it on your code",
+      advanced: "Advanced: open New evaluation with this model",
       promptTokens: "Prompt tokens",
       readSpeed: "Read tok/s",
       writeSpeed: "Write tok/s",
@@ -295,12 +350,12 @@ const MESSAGES = defineMessages({
     header: {
       title: "Optimizá tu modelo local",
       lede:
-        "Aprendé los parámetros, estimá si una configuración entra, aplicala y medila — antes de gastar 20 a 45 minutos en un caso real."
+        "Corré un modelo en tu propia máquina, encontrá una configuración que entre, probala en unos minutos y después usala con OpenCode en trabajo real — antes de gastar 20 a 45 minutos en un caso."
     },
     help: {
       title: "Cómo funciona esta página",
       body:
-        "Cinco pasos: tu máquina, tu servidor, tu modelo y configuración, cargar y probar, y el resultado. Nada se carga hasta el paso 4, y cargar, descargar o probar siempre revisa primero si una corrida del lab está usando el mismo host."
+        "Cinco pasos: tu máquina, tu servidor, tu modelo y configuración, cargar y probar, y el resultado. Nada se carga hasta el paso 4, y cargar, descargar o probar siempre revisa primero si una corrida del lab está usando el mismo host. El resultado termina con dos formas de probar el modelo en trabajo real: un caso del benchmark, o una tarea sobre tu propio código."
     },
     steps: {
       machine: "Tu máquina",
@@ -311,6 +366,10 @@ const MESSAGES = defineMessages({
     } as Record<StepKey, string>,
     machine: {
       heading: "Tu máquina",
+      intro:
+        "Una preconfiguración rápida: desde Docker el lab no puede leer tu hardware, así que usa estas cifras solo para estimar qué modelos y contextos entran en memoria. Elegí tu Mac o PC de la lista (o la más parecida) y seguí: todavía no se carga ni se cambia nada.",
+      fineTune: "Ajustar las cifras, guardar esta máquina (opcional)",
+      next: "Siguiente: tu servidor",
       presetLabel: "Máquina de referencia",
       presetCustom: "Otra…",
       savedGroup: "Mis máquinas",
@@ -350,6 +409,40 @@ const MESSAGES = defineMessages({
     },
     server: {
       heading: "Tu servidor",
+      intro:
+        "El programa que corre el modelo en tu máquina y le responde al lab por HTTP. LM Studio es una app de escritorio, lo más fácil para empezar. Ollama es más liviano y vive en la terminal.",
+      next: "Siguiente: modelo y configuración",
+      setup: {
+        title: (name: string) => `¿Todavía no tenés ${name}? Se instala en unos minutos`,
+        docs: "Guía oficial",
+        download: "Descargar",
+        modelsLink: "Modelos con uso de tools",
+        sizeHint: (gb: string) =>
+          `Tu máquina deja unos ${gb} GB para un modelo: elegí uno cuya descarga sea bastante más chica, así queda lugar para el contexto. Lo habitual son las versiones de 4 bits (Q4).`,
+        lmstudio: [
+          "Descargá LM Studio y abrilo una vez.",
+          "Buscá y descargá un modelo con uso de tools (el ícono del martillo): un agente lo necesita para editar archivos y correr comandos.",
+          "Pestaña Developer → poné Status en Running, o corré el comando de abajo. La dirección es http://localhost:1234."
+        ],
+        ollama: [
+          "Instalá Ollama: descargá la app (macOS, Windows) o corré el comando de abajo (macOS, Linux).",
+          "Bajá un modelo con uso de tools, por ejemplo ollama pull qwen3:8b.",
+          "Subile el contexto antes de probar: Ollama sirve 4k por defecto y un agente necesita al menos 32k. En la app: Settings → Context length. En la terminal: arrancalo con OLLAMA_CONTEXT_LENGTH=32768 ollama serve."
+        ],
+        lmstudioCommand: "lms server start",
+        ollamaCommand: "curl -fsSL https://ollama.com/install.sh | sh",
+        localhostNote:
+          "¿Misma computadora que el lab? Usá localhost: el lab lo reescribe para llegar a tu máquina desde Docker. ¿Otra computadora? Usá su dirección en la red local, y activá Serve on Local Network (LM Studio) o poné OLLAMA_HOST=0.0.0.0 (Ollama)."
+      },
+      forRuns: {
+        title: "Usá este servidor también para las corridas",
+        body: (url: string) =>
+          `Las pruebas de esta página usan la dirección de arriba. Las corridas del agente (OpenCode en un caso o sobre tu código) leen en cambio la configuración del lab${url ? `, que apunta a ${url}` : ", que todavía no está configurada"}. Guardá esta dirección ahí para que las dos usen el mismo servidor.`,
+        save: "Usar este servidor para las corridas",
+        saving: "Guardando…",
+        saved: (key: string, url: string) => `Guardado: ${key} = ${url}. Las corridas ya usan este servidor.`,
+        inSync: "Las corridas usan este mismo servidor."
+      },
       kind: "Servidor",
       url: "URL",
       urlPlaceholder: "http://192.168.0.10:1234",
@@ -448,6 +541,22 @@ const MESSAGES = defineMessages({
       compare: "Comparar",
       notComparable: "No comparables",
       useInNewEvaluation: "Usar en Nueva evaluación",
+      nextHeading: "Ahora probalo en trabajo real",
+      nextLede:
+        "Una prueba corta dice que el modelo entra y sabe llamar tools. Si sirve o no lo dice una tarea real: OpenCode maneja tu modelo como agente, con el arnés del lab, en una copia aislada.",
+      nextAgentFailed:
+        "La prueba de agente no pasó: lo más probable es que una tarea real también falle. Probá un modelo con uso de tools, o más contexto, antes de invertirle tiempo.",
+      nextServerMismatch:
+        "Las corridas todavía apuntan a otro servidor. Volvé al paso 2 y tocá «Usar este servidor para las corridas» primero.",
+      caseTitle: "Un caso del benchmark",
+      caseBody:
+        "clinic-slots-t1: una tarea chica en Python con tests que el agente no escribió. Una repetición tarda 20 a 45 minutos en una notebook, y el veredicto es objetivo.",
+      caseCta: "Correr OpenCode en clinic-slots-t1",
+      adhocTitle: "Tu propio código",
+      adhocBody:
+        "Elegí una carpeta de esta máquina y escribí qué querés que haga. Corre sobre una copia; revisás el cambio y lo aplicás solo si te gusta.",
+      adhocCta: "Probalo sobre tu código",
+      advanced: "Avanzado: abrir Nueva evaluación con este modelo",
       promptTokens: "Tokens de prompt",
       readSpeed: "Tok/s lectura",
       writeSpeed: "Tok/s escritura",
@@ -517,6 +626,51 @@ const MESSAGES = defineMessages({
     }
   }
 });
+
+/**
+ * Official setup pages for each server (checked 2026-11-23). The page links
+ * out rather than copying install instructions that change with every release.
+ */
+const SERVER_LINKS: Record<LocalServerKind, { name: string; download: string; docs: string; models: string }> = {
+  lmstudio: {
+    name: "LM Studio",
+    download: "https://lmstudio.ai/download",
+    docs: "https://lmstudio.ai/docs/developer/core/server",
+    models: "https://lmstudio.ai/models"
+  },
+  ollama: {
+    name: "Ollama",
+    download: "https://ollama.com/download",
+    docs: "https://docs.ollama.com/quickstart",
+    models: "https://ollama.com/search?c=tools"
+  }
+};
+
+/** The `.env` key agent runs read for each server (Settings → Local runtimes). */
+const RUNS_ENV_KEY: Record<LocalServerKind, string> = {
+  lmstudio: "LMSTUDIO_BASE_URL",
+  ollama: "OLLAMA_BASE_URL"
+};
+
+/** The first rung of the clinic ladder: the real case a local model tries first. */
+const FIRST_REAL_CASE = "clinic-slots-t1";
+
+/**
+ * The OpenAI-style address agent runs need: scheme, host and port, plus `/v1`
+ * (`http://localhost:1234` → `http://localhost:1234/v1`). Mirrors the backend's
+ * `host_root`, which accepts an empty path, `/v1` or `/api`.
+ */
+function runsBaseUrl(url: string): string {
+  const trimmed = url.trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  const root = trimmed.replace(/\/(v1|api)$/, "");
+  return `${root}/v1`;
+}
+
+/** Two addresses name the same server once both are in their `/v1` form. */
+function sameServer(a: string, b: string): boolean {
+  return Boolean(a) && Boolean(b) && runsBaseUrl(a).toLowerCase() === runsBaseUrl(b).toLowerCase();
+}
 
 const OS_COMMANDS: Record<"macos" | "linux" | "windows", string> = {
   macos: "system_profiler SPHardwareDataType | grep Memory",
@@ -611,6 +765,10 @@ export function LocalModels() {
   const [serverUrl, setServerUrl] = useState("");
   const [testingServer, setTestingServer] = useState(false);
   const [serverTest, setServerTest] = useState<LocalServerTestResult | null>(null);
+  // What agent runs read today (LMSTUDIO_BASE_URL / OLLAMA_BASE_URL): the
+  // tests here use `serverUrl`, runs use this, and the page says when they differ.
+  const [runsUrls, setRunsUrls] = useState<Record<LocalServerKind, string>>({ lmstudio: "", ollama: "" });
+  const [savingRunsUrl, setSavingRunsUrl] = useState(false);
 
   // --- Step 3: model & configuration -------------------------------------
   const [modelId, setModelId] = useState("");
@@ -700,6 +858,15 @@ export function LocalModels() {
         setLoadConfig(defaultLoadConfig(ref, null));
       })
       .catch(() => setError(m.unableToLoad));
+    api
+      .readEnvSettings()
+      .then((env) => {
+        const valueOf = (key: string) => env.items.find((item) => item.key === key)?.value ?? "";
+        setRunsUrls({ lmstudio: valueOf(RUNS_ENV_KEY.lmstudio), ollama: valueOf(RUNS_ENV_KEY.ollama) });
+      })
+      .catch(() => {
+        // Settings unreadable: the "use for runs" panel still offers the save.
+      });
   }, []);
 
   // A model, server or server kind change means the operator left step 4
@@ -1187,6 +1354,28 @@ export function LocalModels() {
       .catch((err: Error) => setError(err.message));
   };
 
+  const handleUseForRuns = () => {
+    const key = RUNS_ENV_KEY[serverKind];
+    const url = runsBaseUrl(serverUrl);
+    setSavingRunsUrl(true);
+    setError(null);
+    api
+      .writeEnvSettings({ [key]: url })
+      .then(() => {
+        setRunsUrls((current) => ({ ...current, [serverKind]: url }));
+        setNotice(m.server.forRuns.saved(key, url));
+        return forgetModels();
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setSavingRunsUrl(false));
+  };
+
+  // OpenCode on this server's model: the arm the guided flows read
+  // (`opencode|lmstudio/<id>`), so the next page opens with it chosen.
+  const localArm = modelId ? encodeArm("opencode", `${serverKind}/${modelId}`) : "";
+  const runsInSync = sameServer(serverUrl, runsUrls[serverKind]);
+  const agentResult = testSession?.results.find((result) => result.name === "agent");
+
   const handleUseInNewEvaluation = () => {
     navigate(`/evaluate/new?executor=${serverKind}/${encodeURIComponent(modelId)}`);
   };
@@ -1315,6 +1504,7 @@ export function LocalModels() {
             <div className="panel-head">
               <h2>{m.machine.heading}</h2>
             </div>
+            <p className="callout local-tune-intro">{m.machine.intro}</p>
             <div className="form-grid">
               <label className="field">
                 <span>{m.machine.presetLabel}</span>
@@ -1412,7 +1602,8 @@ export function LocalModels() {
             </div>
           </div>
 
-          <div className="panel">
+          <details className="panel local-tune-more">
+            <summary>{m.machine.fineTune}</summary>
             <div className="panel-head">
               <h3>{m.machine.commandsHeading}</h3>
             </div>
@@ -1434,9 +1625,6 @@ export function LocalModels() {
                 </div>
               ))}
             </div>
-          </div>
-
-          <div className="panel">
             <div className="panel-head">
               <h3>{m.machine.saveLabel}</h3>
             </div>
@@ -1478,11 +1666,11 @@ export function LocalModels() {
                 </ul>
               </>
             ) : null}
-          </div>
+          </details>
 
           <div className="toolbar">
             <button className="primary" onClick={() => setStep("server")} type="button">
-              {m.steps.server}
+              {m.machine.next}
             </button>
           </div>
         </div>
@@ -1494,6 +1682,7 @@ export function LocalModels() {
             <div className="panel-head">
               <h2>{m.server.heading}</h2>
             </div>
+            <p className="muted">{m.server.intro}</p>
             <div className="form-grid">
               <label className="field">
                 <span>{m.server.kind}</span>
@@ -1534,6 +1723,17 @@ export function LocalModels() {
             </div>
           </div>
 
+          {!serverTest?.reachable ? (
+            <ServerSetupHelp
+              availableGb={
+                memoryKind === "unified" ? gpuGb * wiredFraction - reserveGb : gpuGb - reserveGb
+              }
+              kind={serverKind}
+              messages={m}
+              onCopied={() => setNotice(m.machine.copied)}
+            />
+          ) : null}
+
           {serverTest && !serverTest.reachable ? (
             <div className="callout callout--danger">
               <div>
@@ -1542,6 +1742,27 @@ export function LocalModels() {
                 <p className="muted small">{serverUrl}</p>
               </div>
             </div>
+          ) : null}
+
+          {serverTest && serverTest.reachable ? (
+            runsInSync ? (
+              <p className="callout callout--ok">{m.server.forRuns.inSync}</p>
+            ) : (
+              <div className="callout callout--warning local-runs-url">
+                <div>
+                  <strong>{m.server.forRuns.title}</strong>
+                  <p>{m.server.forRuns.body(runsUrls[serverKind])}</p>
+                </div>
+                <button
+                  className="secondary"
+                  disabled={savingRunsUrl}
+                  onClick={handleUseForRuns}
+                  type="button"
+                >
+                  {savingRunsUrl ? m.server.forRuns.saving : m.server.forRuns.save}
+                </button>
+              </div>
+            )
           ) : null}
 
           {serverTest && serverTest.reachable ? (
@@ -1599,7 +1820,7 @@ export function LocalModels() {
               onClick={() => setStep("config")}
               type="button"
             >
-              {m.steps.config}
+              {m.server.next}
             </button>
           </div>
         </div>
@@ -1992,9 +2213,38 @@ export function LocalModels() {
               <p className="muted small">{m.testStep.noMachineNote}</p>
             )}
 
-            <div className="toolbar">
-              <button className="secondary" onClick={handleUseInNewEvaluation} type="button">
-                {m.resultStep.useInNewEvaluation}
+            <div className="panel local-next">
+              <div className="panel-head">
+                <h3>{m.resultStep.nextHeading}</h3>
+              </div>
+              <p className="muted">{m.resultStep.nextLede}</p>
+              {agentResult && agentResult.verdict === "fail" ? (
+                <p className="callout callout--warning">{m.resultStep.nextAgentFailed}</p>
+              ) : null}
+              {!runsInSync ? (
+                <p className="callout callout--warning">{m.resultStep.nextServerMismatch}</p>
+              ) : null}
+              <div className="local-next-cards">
+                <div className="card">
+                  <h4>{m.resultStep.caseTitle}</h4>
+                  <p className="muted small">{m.resultStep.caseBody}</p>
+                  <Link
+                    className="primary"
+                    to={`/flows/models?vary=models&case=${FIRST_REAL_CASE}&first=${encodeURIComponent(localArm)}`}
+                  >
+                    {m.resultStep.caseCta}
+                  </Link>
+                </div>
+                <div className="card">
+                  <h4>{m.resultStep.adhocTitle}</h4>
+                  <p className="muted small">{m.resultStep.adhocBody}</p>
+                  <Link className="secondary" to={`/adhoc?arm=${encodeURIComponent(localArm)}`}>
+                    {m.resultStep.adhocCta}
+                  </Link>
+                </div>
+              </div>
+              <button className="button-link" onClick={handleUseInNewEvaluation} type="button">
+                {m.resultStep.advanced}
               </button>
             </div>
 
@@ -2111,6 +2361,62 @@ export function LocalModels() {
         </div>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * Step 2's "no server yet?" box: three steps, one command and the official
+ * pages for the server picked above. Shown until a connection test succeeds.
+ */
+function ServerSetupHelp({
+  kind,
+  availableGb,
+  messages,
+  onCopied
+}: {
+  kind: LocalServerKind;
+  availableGb: number;
+  messages: (typeof MESSAGES)["en"];
+  onCopied: () => void;
+}) {
+  const links = SERVER_LINKS[kind];
+  const text = messages.server.setup;
+  const command = kind === "lmstudio" ? text.lmstudioCommand : text.ollamaCommand;
+  return (
+    <details className="panel local-setup" open>
+      <summary>{text.title(links.name)}</summary>
+      <ol className="local-setup-steps">
+        {text[kind].map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ol>
+      <div className="local-setup-command">
+        <pre className="command-preview">{command}</pre>
+        <button
+          className="secondary"
+          onClick={() => {
+            void navigator.clipboard.writeText(command);
+            onCopied();
+          }}
+          type="button"
+        >
+          {messages.machine.copy}
+        </button>
+      </div>
+      {availableGb > 0 ? <p className="muted small">{text.sizeHint(availableGb.toFixed(0))}</p> : null}
+      <p className="muted small">{text.localhostNote}</p>
+      <p className="local-setup-links">
+        <a href={links.download} rel="noreferrer" target="_blank">
+          {text.download} {links.name} ↗
+        </a>
+        <a href={links.docs} rel="noreferrer" target="_blank">
+          {text.docs} ↗
+        </a>
+        <a href={links.models} rel="noreferrer" target="_blank">
+          {text.modelsLink} ↗
+        </a>
+      </p>
+    </details>
   );
 }
 

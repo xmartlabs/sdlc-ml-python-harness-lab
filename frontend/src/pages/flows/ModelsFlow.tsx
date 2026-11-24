@@ -202,6 +202,9 @@ export function ModelsFlow() {
   const initial: GuideValues = {};
   if (params.get("vary") === "levels" || params.get("vary") === "models") initial.vary = params.get("vary") ?? "";
   if (params.get("case")) initial.case = params.get("case") ?? "";
+  // `?first=harness|model` (Tune your local model → "Try it on a real case"):
+  // the model comparison opens with that arm already chosen.
+  if (params.get("first")) initial.first = params.get("first") ?? "";
   const display = (value: string) => (value === SKIPPED ? m.none : armLabel(value, models, native));
   const isLadder = (values: GuideValues) => values.vary === "levels";
   const notLadder = (values: GuideValues) => !isLadder(values);
