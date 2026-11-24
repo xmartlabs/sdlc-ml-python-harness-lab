@@ -949,7 +949,7 @@ class AdhocTask(SQLModel, table=True):
     trial_skill: str = ""
     invoke_trial_skill: bool = False
     # Set when the task reviews a pull request (ADR-0100): "owner/repo#N" and
-    # the PR's base branch as the lab's copy names it, e.g. "origin/main".
+    # the merge-base SHA the review range starts from (never a branch name).
     pr_ref: str = ""
     pr_base_ref: str = ""
     created_at: datetime = Field(default_factory=utc_now)

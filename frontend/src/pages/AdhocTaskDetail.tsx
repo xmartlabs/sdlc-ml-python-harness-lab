@@ -230,29 +230,44 @@ export function AdhocTaskDetailPage() {
   const [launching, setLaunching] = useState(false);
   const runPanelRef = useRef<HTMLDivElement | null>(null);
 
-  const preselected = useRef(false);
+  const [stagedLoaded, setStagedLoaded] = useState(false);
+  // The task whose default skill already seeded the panel. Keyed by task, not
+  // a boolean: the router reuses this page when the task id changes.
+  const preselectedFor = useRef<string | null>(null);
   const load = useCallback(() => {
     if (!taskId) return;
     api
       .getAdhocTask(taskId)
       .then((result) => {
         setDetail(result);
-        // The skill picked at creation (ADR-0100) is the panel's starting
-        // point, set once so a later poll never undoes the operator's change.
-        if (!preselected.current) {
-          preselected.current = true;
-          setTrialSkill(result.task.trial_skill ?? "");
-          setInvokeTrial(Boolean(result.task.invoke_trial_skill));
-        }
         setSelectedRunId((current) => current ?? result.runs[0]?.run_id ?? null);
       })
       .catch(() => setError(m.errors.load));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
 
+  // Another task: start from a clean panel and that task's own runs.
   useEffect(() => {
+    setDetail(null);
+    setSelectedRunId(null);
+    setTrialSkill("");
+    setInvokeTrial(false);
     load();
   }, [load]);
+
+  // The skill picked at creation (ADR-0100) is the panel's starting point, set
+  // once per task so a later poll never undoes the operator's change. Only a
+  // skill still offered in the list: an archived default would show "None"
+  // while the launch still sent it, and the API would refuse the run.
+  useEffect(() => {
+    if (!detail || !stagedLoaded || detail.task.task_id !== taskId) return;
+    if (preselectedFor.current === taskId) return;
+    preselectedFor.current = taskId;
+    const wanted = detail.task.trial_skill ?? "";
+    const offered = Boolean(wanted) && staged.some((skill) => skill.name === wanted);
+    setTrialSkill(offered ? wanted : "");
+    setInvokeTrial(offered && Boolean(detail.task.invoke_trial_skill));
+  }, [detail, staged, stagedLoaded, taskId]);
 
   // What each harness level carries, and the staged skills one can try.
   useEffect(() => {
@@ -263,7 +278,8 @@ export function AdhocTaskDetailPage() {
     api
       .listStagedSkills()
       .then((rows) => setStaged(rows.filter((row) => row.status !== "archived")))
-      .catch(() => setStaged([]));
+      .catch(() => setStaged([]))
+      .finally(() => setStagedLoaded(true));
   }, []);
 
   // Poll while anything on this task is still moving.

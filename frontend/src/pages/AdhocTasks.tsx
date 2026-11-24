@@ -97,7 +97,7 @@ const MESSAGES = defineMessages({
         number: "PR number",
         head: "PR head (branch or commit in this folder)",
         headHint: (n: string) =>
-          `Not checked out for you: run git fetch origin pull/${n || "N"}/head:pr-${n || "N"} in the folder first. Nothing else changes in it.`,
+          `Not checked out for you: run git fetch origin +pull/${n || "N"}/head:pr-${n || "N"} in the folder first. Nothing else changes in it.`,
         base: "Base branch",
         repo: "Repository (optional)",
         repoPlaceholder: "owner/name — read from origin when empty",

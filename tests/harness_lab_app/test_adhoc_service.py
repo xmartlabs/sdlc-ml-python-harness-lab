@@ -928,6 +928,29 @@ def test_each_run_records_the_version_of_the_skill_it_tried(session, lab):
     assert plain["trial_skill_hashes"] == {}
 
 
+def test_a_run_keeps_the_skill_version_it_actually_ran(session, lab):
+    """Edited while queued: the run's own metadata.json wins over launch time."""
+    _stage(session, "review_pr", "v1hash")
+    task = _task(session, lab)
+    service = AdhocService(session)
+    run_id = service.launch_run(
+        task.task_id, harness="claude", trial_skill="review_pr"
+    )["run_id"]
+    run_dir = lab["settings"].data_runs_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "metadata.json").write_text(
+        json.dumps({"skills_extra_hashes": {"review_pr": "v2hash"}})
+    )
+    run = session.exec(select(Run).where(Run.run_id == run_id)).one()
+    run.state = RunState.completed
+    session.add(run)
+    session.commit()
+
+    service.capture_metrics(run_id)
+
+    assert service.run_record(run_id)["trial_skill_hashes"] == {"review_pr": "v2hash"}
+
+
 def _pr_branch(repo: Path) -> tuple[str, str]:
     """A main that moved on after a PR branch left it; (merge-base, PR head)."""
     base = _git(repo, "rev-parse", "HEAD")
@@ -986,8 +1009,11 @@ def test_a_pr_review_task_does_not_warn_that_the_folder_moved(session, lab):
 
 def test_a_pr_review_explains_a_head_or_base_it_cannot_find(session, lab):
     service = AdhocService(session)
-    with pytest.raises(AdhocError, match="pull/7/head"):
+    with pytest.raises(AdhocError, match=r"'no-such-branch'.*\+pull/7/head:pr-7"):
         service.create_pr_review_task("shop", 7, "no-such-branch", base_ref="main")
+    # A missing base is named as the base, not blamed on the PR head.
+    with pytest.raises(AdhocError, match=r"'origin/main'.*base branch"):
+        service.create_pr_review_task("shop", 7, "main", base_ref="origin/main")
     with pytest.raises(AdhocError, match="depth"):
         service.create_pr_review_task("shop", 7, "main", depth="huge")
     with pytest.raises(AdhocError, match="branch or commit"):

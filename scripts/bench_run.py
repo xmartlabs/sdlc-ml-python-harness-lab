@@ -1647,6 +1647,11 @@ def write_metadata(
             w.as_dict() for w in detected_context_windows(run_models(args))
         ],
     }
+    # The staged skills' trees as this run materialized them, hashed once and
+    # recorded: the lab labels a run with the version it actually ran, not the
+    # one staged when it was queued (ADR-0100).
+    extra_hashes = staged_skill_hashes(list(getattr(args, "extra_skill", []) or []))
+    meta["skills_extra_hashes"] = extra_hashes
     # Add the hashable trial condition manifest (condition_hash, harness
     # fingerprint, model condition, prompt/case hashes). Best-effort: if
     # provenance can't be computed the base metadata is still written.
@@ -1664,9 +1669,7 @@ def write_metadata(
         harness_source=harness_source,
         harness_root=harness_root,
         harness_projection=harness_projection,
-        skills_extra_hashes=staged_skill_hashes(
-            list(getattr(args, "extra_skill", []) or [])
-        ),
+        skills_extra_hashes=extra_hashes,
         skills_extra_hash_algo=STAGED_SKILL_HASH_ALGO,
         gateway_overlay_hash=apply_gateway_overlay(
             direct_models(args), run_models(args)

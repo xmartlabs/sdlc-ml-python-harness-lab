@@ -19,6 +19,7 @@ benchmark-facing views leave ad hoc work out without a join (``is_adhoc_*``).
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from datetime import UTC, datetime
@@ -295,7 +296,8 @@ def review_prompt(
         lines += ["", "PR description:", body.strip()[:6000]]
     lines += [
         "",
-        f"Unattended run: depth = {depth}. There is no GitHub access here; work "
+        f"Unattended run: depth = {depth}. Nobody is there to answer a question "
+        "and nothing is published. There is no GitHub access here; work "
         "from the local git range. Run the repository's own checks that work "
         "without external services, and report the ones you could not run.",
         "",
@@ -466,12 +468,25 @@ class AdhocService:
         folder = resolve(source)
         if not (folder / ".git").exists():
             raise AdhocError(f"{host_view_of(folder)} is not a git repository.")
+        # Each side checked alone, so the error names the one that is missing:
+        # a base left at "origin/main" on a master repo is not a PR to fetch.
+        for ref, fix in (
+            (head, f"git fetch origin +pull/{pr_number}/head:pr-{pr_number}"),
+            (base, "git fetch origin, then name the PR's base branch"),
+        ):
+            code, _, _ = adhoc_git.git(
+                ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], folder
+            )
+            if code != 0:
+                raise AdhocError(
+                    f"'{ref}' is not a branch or commit in "
+                    f"{host_view_of(folder)}. Run: {fix}."
+                )
         code, merge_base, _ = adhoc_git.git(["merge-base", base, head], folder)
         if code != 0 or not merge_base.strip():
             raise AdhocError(
-                f"Could not find where '{head}' leaves '{base}' in "
-                f"{host_view_of(folder)}. Fetch both first (git fetch origin "
-                f"pull/{pr_number}/head:<branch>)."
+                f"'{head}' and '{base}' share no history in "
+                f"{host_view_of(folder)}: is '{base}' the PR's base branch?"
             )
         merge_base = merge_base.strip()
         _, files, _ = adhoc_git.git(
@@ -518,6 +533,30 @@ class AdhocService:
             select(StagedSkill).where(StagedSkill.name.in_(names))  # type: ignore[attr-defined]
         ).all()
         return {row.name: row.content_hash or "" for row in rows}
+
+    def _record_ran_skill_hashes(self, row: AdhocRun, directory: Path) -> bool:
+        """Swap the launch-time hashes for the ones the run itself recorded.
+
+        The launch reads the staged copy when the run is queued; the worker
+        materializes it later. An edit in between would label the run with a
+        version it never ran, so ``metadata.json`` (hashed by the runner from
+        the tree it copied) wins whenever it is there.
+        """
+        if not row.trial_skill_hashes:
+            return False
+        try:
+            meta = json.loads((directory / "metadata.json").read_text())
+        except (OSError, ValueError):
+            return False
+        ran = meta.get("skills_extra_hashes") if isinstance(meta, dict) else None
+        if not isinstance(ran, dict) or not ran:
+            return False
+        merged = {**row.trial_skill_hashes, **{str(k): str(v) for k, v in ran.items()}}
+        if merged == row.trial_skill_hashes:
+            return False
+        row.trial_skill_hashes = merged
+        self.session.add(row)
+        return True
 
     def _next_task_id(self, folder_name: str) -> str:
         stem = f"{PREFIX}{_slug(folder_name)}"
@@ -935,10 +974,12 @@ class AdhocService:
         run = self.session.exec(select(Run).where(Run.run_id == run_id)).first()
         if run is None or run.state in LIVE_RUN_STATES:
             return
+        directory = get_settings().data_runs_dir / run_id
+        if self._record_ran_skill_hashes(row, directory) and commit:
+            self.session.commit()
         validation = self.session.exec(
             select(Validation).where(Validation.run_id == run_id)
         ).first()
-        directory = get_settings().data_runs_dir / run_id
         cost = dict(validation.cost) if validation and validation.cost else {}
         if not cost.get("available"):
             cost = collect_cost(directory)

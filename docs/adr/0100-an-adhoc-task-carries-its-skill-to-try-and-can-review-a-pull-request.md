@@ -33,9 +33,11 @@ a real pull-request review:
   preselects it once when the task loads; every run may still change it. It is a
   default, never a constraint.
 - **Each ad hoc run records the content hash of every skill it tried**
-  (`AdhocRun.trial_skill_hashes`), read when the run is launched. The table shows
-  `name@<7 chars>`, so two versions of one skill stay distinct after the run's files
-  are purged.
+  (`AdhocRun.trial_skill_hashes`). It is read when the run is launched, then replaced
+  by the hash the runner wrote to the run's `metadata.json` (`skills_extra_hashes`,
+  from the tree it actually materialized) once the run ends, so an edit made while
+  the run was queued never mislabels it. The table shows `name@<7 chars>`, so two
+  versions of one skill stay distinct after the run's files are purged.
 - **A task can review a pull request** (`POST /api/adhoc/pr-reviews`, *Review a PR* in
   the form). It takes the PR number, the branch or commit in the folder that holds the
   PR's head, the base branch, and optionally the repository, title, description and
@@ -57,7 +59,10 @@ a real pull-request review:
 - An operator can stage a skill, open *New task → Review a PR*, pick the skill, and
   compare runs (no skill, skill v1, skill v2) on one fixed PR with the same model.
 - Runs only measure the **unattended half** of a review skill: the findings in
-  `review.json`. Posting comments to GitHub stays outside the lab by design.
+  `review.json`. Posting comments to GitHub stays outside the lab by design. A
+  review skill built for the interactive flow (`gh`, a PR link, "publish?") needs
+  an unattended mode keyed on the run's prompt, as `review_pr` has, or every run
+  with it measures the setup rather than the skill.
 - Grading is still the generic LLM judge. Precision and recall against known defects
   need a case built from merged PRs with known follow-up fixes; that is future work.
 - Migration: four `adhoctask` columns and one `adhocrun` JSON column, added in place
