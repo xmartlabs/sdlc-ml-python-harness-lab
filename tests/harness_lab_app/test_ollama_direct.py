@@ -233,6 +233,16 @@ def test_preflight_names_the_models_the_host_actually_has(session, _direct):
         RunService(session).create_run(_config("ollama/qwen3.6:35b"))
 
 
+def test_a_missing_model_names_the_server_that_was_asked(session, _direct):
+    """Same as LM Studio: the model may live on another host than OLLAMA_BASE_URL."""
+    _direct([OllamaModel("qwen3:32b", True, 40960)])
+    with pytest.raises(RunPreflightError) as excinfo:
+        RunService(session).create_run(_config("ollama/qwen3.6:35b"))
+    message = str(excinfo.value)
+    assert "http://h:11434" in message
+    assert "OLLAMA_BASE_URL" in message
+
+
 def test_preflight_rejects_a_running_window_below_the_floor(session, _direct):
     _direct([OllamaModel("qwen3:32b", True, 4096)])
     with pytest.raises(RunPreflightError, match="OLLAMA_CONTEXT_LENGTH"):

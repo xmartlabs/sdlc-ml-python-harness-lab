@@ -25,9 +25,10 @@ To measure *how reliably* a model does real work once it runs, continue with
    connection test succeeds the page shows how to set the chosen server up: three
    steps, one command, and the official download, guide and tool-capable model pages
    (see [Setting up a server](#setting-up-a-server)). *Test connection* lists the
-   models you have downloaded without loading any of them. When the address differs
-   from the one agent runs use, **Use this server for runs** saves it (see
-   [The tests and the runs use one server](#the-tests-and-the-runs-use-one-server)).
+   models you have downloaded without loading any of them. A connection that works is
+   also saved as the server agent runs use (see
+   [The tests and the runs use one server](#the-tests-and-the-runs-use-one-server)),
+   and the next visit opens on it.
 3. **Your model and configuration.** Choose the settings. The memory bar estimates
    whether they fit before anything is loaded.
 4. **Load and test.** The lab loads the model with your settings, reads back what the
@@ -39,6 +40,8 @@ To measure *how reliably* a model does real work once it runs, continue with
    20–45 minutes, graded by tests the agent did not write) and **Try it on your code**
    (an [ad hoc task](guide-adhoc-tasks.md) on a folder of yours, run on a copy). When the
    agent test failed, the page warns first that a real task will most likely fail too.
+   When runs still point at another server, the two links give way to **Use this
+   server for runs**: a run there would not find the model you just tested.
    *New evaluation* stays one click away as the advanced option.
 
 ## Setting up a server
@@ -68,12 +71,18 @@ address here.
 
 The tests on this page talk to the address typed in step 2. Agent runs (OpenCode on a
 case, an ad hoc task, a model comparison) read `LMSTUDIO_BASE_URL` or `OLLAMA_BASE_URL`
-from the lab's settings (*System → Settings → Local runtimes*). When the two differ,
-step 2 says so and offers **Use this server for runs**, which writes the address in its
-`/v1` form (`http://localhost:1234` → `http://localhost:1234/v1`) and refreshes the
-model list. Nothing is written without that click. Runs read the setting at launch, so
-no restart is needed. Step 5 repeats the warning while they still differ, because a
-model tuned on one server and run on another measures neither.
+from the lab's settings (*System → Settings → Local runtimes*). Every successful
+**Test connection** whose address differs from the saved one writes it there, in its
+`/v1` form (`http://localhost:1234` → `http://localhost:1234/v1`), refreshes the model
+list, and says what it replaced. Most people run the server on `localhost` or on a LAN
+box of their own, so the address that answered is the one they mean. Runs read the
+setting at launch, so no restart is needed, and the next visit to this page opens on
+it.
+
+If that write fails, step 2 shows **Use this server for runs** to retry, and step 5
+offers it in place of the run links: a model tuned on one server and run on another
+fails at launch with *LM Studio at … (LMSTUDIO_BASE_URL) does not know a model called
+…*, naming the host it asked.
 
 The page never loads or unloads a model while a lab run uses that server without
 asking you first. If you continue anyway, the affected runs get an event saying so, so
@@ -178,7 +187,12 @@ budget ran out while the model was still thinking.
 
 ## History and the Results page
 
-With a saved machine (step 1), every finished test session is kept automatically. It is
+Every finished test session is kept automatically, under a saved machine. When none is
+picked, **Run tests** saves one first: an existing machine with the same figures, or
+these figures under the reference machine's name (*MacBook Pro M3 Pro · 36 GB unified*)
+or *My machine · 36 GB*. Rename or delete it under *Fine-tune the figures* in step 1.
+**Saved results**, at the top of the page and again in step 5, opens every saved test
+and every real case run on a local model, without running a new test. It is
 named after what was served, e.g. `bonsai-27b · 128k · FA · batch 512`, and you can
 rename it. Step 5 lists this machine and model's history. Tick two rows and **Compare**
 shows each metric side by side with a winner. Differences under 5% are treated as
