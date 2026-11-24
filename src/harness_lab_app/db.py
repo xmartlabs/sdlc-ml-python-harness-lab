@@ -15,6 +15,67 @@ def _sqlite_path(database_url: str) -> Path | None:
     return Path(database_url.removeprefix(prefix))
 
 
+class LabDatabaseInUse(RuntimeError):
+    """The host tried to open the database the running Docker stack writes."""
+
+
+def _stack_api_running() -> bool:
+    """True when the compose stack's ``api`` service is up (host side only)."""
+    import shutil
+    import subprocess
+
+    if shutil.which("docker") is None:
+        return False
+    try:
+        out = subprocess.run(
+            ["docker", "compose", "ps", "--services", "--filter", "status=running"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "api" in out.split()
+
+
+def _refuse_host_open_of_live_db(engine, sqlite_path: Path) -> None:
+    """Stop a host process from opening the stack's own SQLite file.
+
+    On the Docker Desktop bind mount SQLite's locks do not span the Mac and the
+    VM. A host process that opens ``data/app/harness_lab.db`` checkpoints on
+    close and deletes the ``-wal``/``-shm`` the containers still hold open, so
+    every later api commit lands in an unlinked WAL no worker can read: a launch
+    returns 201 and the worker silently skips a run it cannot find
+    (clinic-slots-t1-K-005, 2026-11-24; also 2026-11-17 and 2026-11-19).
+
+    Checked on the first connection, not at import, so importing the module
+    stays free. Applies only to the default database on the host: inside a
+    container, or with an explicit ``HARNESS_LAB_DATABASE_URL`` (``make
+    app-host``, a scratch copy), nothing changes. ``make`` targets reach the
+    live database through the api container instead (``LAB_PY``).
+    """
+    import os
+
+    if Path("/.dockerenv").exists() or os.environ.get("HARNESS_LAB_DATABASE_URL"):
+        return
+    checked: list[bool] = []
+
+    @event.listens_for(engine, "do_connect")
+    def _guard(*_args, **_kwargs):
+        if not checked:
+            checked.append(_stack_api_running())
+        if checked[0]:
+            raise LabDatabaseInUse(
+                f"{sqlite_path} belongs to the running Docker stack. Opening it "
+                "from the host deletes the WAL the containers write to. Run this "
+                "inside the api container (docker compose exec -T api python …, "
+                "or a make target), stop the stack first (make app-down), or set "
+                "HARNESS_LAB_DATABASE_URL to a copy."
+            )
+        return None
+
+
 def get_engine():
     settings = get_settings()
     sqlite_path = _sqlite_path(settings.database_url)
@@ -27,6 +88,8 @@ def get_engine():
     )
     engine = create_engine(settings.database_url, connect_args=connect_args)
     if settings.database_url.startswith("sqlite"):
+        if sqlite_path is not None:
+            _refuse_host_open_of_live_db(engine, sqlite_path)
         _tune_sqlite(engine)
     return engine
 
