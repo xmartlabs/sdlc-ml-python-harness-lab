@@ -279,6 +279,28 @@ stack is up, including an ad-hoc `sqlite3` session: closing it can unlink the
 `-wal`/`-shm` the containers are still using. Read the database through
 `docker compose exec api` instead, or stop the stack first.
 
+That is how run `clinic-slots-t1-K-005` was lost (2026-11-24, and almost
+certainly the losses of 2026-11-17 and 2026-11-19): `make check` on the host
+ran a test that called `scripts/prune.py` → `init_db()` against the default
+database. Three guards now close that path:
+
+- **The suite never sees the lab database.** The root `tests/conftest.py` points
+  `HARNESS_LAB_DATABASE_URL` at a scratch file before any lab module is
+  imported, so `make check` / `make test` are safe with the stack up.
+  `tests/test_suite_never_opens_the_lab_db.py` fails if that ever regresses.
+- **The host cannot open it while the stack runs.** `harness_lab_app.db` checks,
+  on the engine's first connection, whether the compose `api` service is
+  running; if so, a host process using the default database gets
+  `LabDatabaseInUse` instead of a connection, before SQLite touches the file.
+  Inside a container, or with an explicit `HARNESS_LAB_DATABASE_URL`
+  (`make app-host`, a copy), the guard steps aside.
+- **`make` scripts go through the container.** Targets that read or write the
+  lab database run via `LAB_PY` (`docker compose exec -T api python …` when the
+  stack is up), now including `make improve` and `make ladder`.
+
+The guard does not cover a process that bypasses the lab's engine (a raw
+`sqlite3` shell); the advice above still applies to those.
+
 Not fixed at the root. The structural fix is to move the database off the bind
 mount onto a named volume (so WAL and `-shm` live on the VM's own filesystem),
 or to stop sharing it between processes at all and have the worker reach the
