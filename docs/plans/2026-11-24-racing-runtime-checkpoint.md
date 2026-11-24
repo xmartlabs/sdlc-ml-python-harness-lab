@@ -172,3 +172,15 @@ ignored recordings/DB retained for review; no user notes or model downloads touc
 Final limitation: this establishes deterministic game/runtime execution and
 recording integrity, not competitive LLM driving ability. No model finished a lap;
 further policy improvements or larger budgets must be separately evaluated.
+
+
+## Submission authorization and hook portability
+
+User authorized commit/push and ready-for-review PR publication. Commit cef614f
+contains the reviewed implementation. Xmartlabs SSH identity reverified and main
+unchanged. No existing PR for this branch found in public API. CLI has no account
+with ambient GH/GITHUB tokens cleared; never use the unrelated default token.
+First pre-push ran Python/sync/rules/HTTP gates successfully but macOS signed
+desktop Node could not load native rolldown. Add explicit FRONTEND_IN_DOCKER=1
+make option to reuse the existing verified Docker target in the full gate. This
+is a host-tool restriction, not a failed container game build. No hook bypasses.

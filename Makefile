@@ -801,7 +801,11 @@ check:
 # contributor path does not install. `make ci` runs both.
 # The build matters as well as tsc: vite resolves imports and fails on a module
 # tsc is happy to type-check but cannot bundle.
-check-frontend:
+# FRONTEND_IN_DOCKER=1 keeps the full pre-push gate portable without host npm.
+.PHONY: check-frontend check-frontend-host
+check-frontend: $(if $(filter 1,$(FRONTEND_IN_DOCKER)),game-runtime-verify,check-frontend-host)
+
+check-frontend-host:
 	@echo "🔎 Running read-only frontend gate..."
 	@if [ ! -d frontend/node_modules ]; then cd frontend && npm ci; fi
 	@cd frontend && npm run typecheck

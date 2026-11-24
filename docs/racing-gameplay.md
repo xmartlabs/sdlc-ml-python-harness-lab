@@ -96,6 +96,7 @@ not model-supplied programs. No additional broker or model server is introduced.
 
 ```bash
 make game-runtime-build     # Build entirely inside Docker; no host npm.
+make ci FRONTEND_IN_DOCKER=1 # Full Python/sync gate + container frontend verification.
 make game-runtime-verify    # Builder: types, rules, HTTP tests, production UI build.
 make game-runtime-check     # Headless calibration executable; numerical metrics.
 make app-up-prod            # Graphical mode: http://localhost:8080/gameplay/racing
