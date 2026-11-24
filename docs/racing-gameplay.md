@@ -155,7 +155,9 @@ seed, cadence and state snapshots. Missing, corrupt, incompatible or countdown-o
 recordings are rejected with an explanation. Meaningful partial attempts can be
 selected, but show **PARTIAL** and stop at their last known state; a timeout is never
 turned into a completed lap. **Practice vs SCRIPTED ghost** creates an explicitly
-labeled deterministic calibration reference when no useful model recording exists.
+labeled deterministic calibration reference when no useful model recording exists. Repeated practice
+requests reuse a completed, verified reference for the same engine build and seed
+rather than adding duplicate rows/artifacts; missing or invalid recordings are rebuilt.
 It performs no model inference and is never reported as a model benchmark.
 
 Selection starts a new human race with the reference beside it. A translucent

@@ -129,12 +129,55 @@ class RacingService:
             "recording": replay.model_dump(mode="json"),
         }
 
+    def _cached_calibration(self, env: RacingEnvironment) -> GameplayEpisode | None:
+        fingerprint = env.provenance.get("engine_sha256")
+        if not fingerprint:
+            return None
+        candidates = self.session.exec(
+            select(GameplayEpisode)
+            .where(
+                GameplayEpisode.controller == "calibration",
+                GameplayEpisode.state == "completed",
+                GameplayEpisode.seed == 7,
+            )
+            .order_by(cast("Any", GameplayEpisode.created_at).desc())
+        )
+        for row in candidates:
+            try:
+                replay = self.replay(row.episode_id)
+            except (ValueError, LookupError, OSError):
+                continue  # Missing or malformed stored artifact, not runtime I/O.
+            if (
+                replay.environment_provenance.get("engine_sha256") != fingerprint
+                or replay.config.seed != 7
+                or (
+                    replay.config.tick_rate,
+                    replay.config.ticks_per_action,
+                    replay.config.max_ticks,
+                )
+                != (60, 12, 7200)
+                or replay.result.metrics.get("finished") != 1
+            ):
+                continue
+            try:
+                verify_replay(
+                    self.runs_dir / row.episode_id / "gameplay" / "replay.json", env
+                )
+            except (ValueError, FileNotFoundError):
+                continue  # Corrupt/disappearing artifact; transport errors propagate.
+            return row
+        return None
+
     def create_calibration(self) -> GameplayEpisode:
-        """Explicit reference instrument, never counted as model performance."""
-        row = self._new(7, "calibration", "SCRIPTED calibration")
-        self._save(row)
-        try:
-            with RacingEnvironment() as env:
+        """Reuse a verified reference for this build; never a model performance."""
+        with RacingEnvironment() as env:
+            env.reset(7)
+            cached = self._cached_calibration(env)
+            if cached is not None:
+                return cached
+            row = self._new(7, "calibration", "SCRIPTED calibration")
+            self._save(row)
+            try:
                 replay = run_episode(
                     env,
                     baseline_policy(env),
@@ -146,12 +189,14 @@ class RacingService:
                         "model_call": False,
                     },
                 )
-            row.result_json = replay.result.model_dump(mode="json")
-            row.state = "completed"
-        except Exception:
-            row.state = "failed"
-            row.failure_reason = "Calibration could not run; check the game runtime."
-        return self._save(row)
+                row.result_json = replay.result.model_dump(mode="json")
+                row.state = "completed"
+            except Exception:
+                row.state = "failed"
+                row.failure_reason = (
+                    "Calibration could not run; check the game runtime."
+                )
+            return self._save(row)
 
     def _save(self, row: GameplayEpisode) -> GameplayEpisode:
         row.updated_at = utc_now()

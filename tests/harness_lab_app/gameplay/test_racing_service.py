@@ -210,3 +210,42 @@ def test_failed_model_ghost_requires_meaningful_coverage(
     else:
         with pytest.raises(ValueError, match="movement"):
             service.ghost_reference(row.episode_id, 7)
+
+
+def test_calibration_is_reused_without_hiding_other_attempts(session, tmp_path):
+    service = RacingService(session, tmp_path / "runs")
+    first = service.create_calibration()
+    other = service._new(7, "model", "model-attempt")
+    service._save(other)
+    repeated = service.create_calibration()
+    assert repeated.episode_id == first.episode_id
+    assert {r.episode_id for r in service.list_episodes()} == {
+        first.episode_id,
+        other.episode_id,
+    }
+    assert len(list((tmp_path / "runs").glob("race-*"))) == 1
+
+
+@pytest.mark.parametrize(
+    "invalid", ["different-build", "missing-file", "corrupt-state"]
+)
+def test_calibration_cache_never_reuses_incompatible_or_broken_replay(
+    session, tmp_path, invalid
+):
+    import json
+
+    service = RacingService(session, tmp_path / "runs")
+    old = service.create_calibration()
+    path = tmp_path / "runs" / old.episode_id / "gameplay" / "replay.json"
+    data = json.loads(path.read_text())
+    if invalid == "different-build":
+        data["environment_provenance"]["engine_sha256"] = "f" * 64
+    elif invalid == "corrupt-state":
+        data["frames"][20]["observation"]["state"]["x"] += 1
+    if invalid == "missing-file":
+        path.unlink()
+    else:
+        path.write_text(json.dumps(data))
+    current = service.create_calibration()
+    assert current.episode_id != old.episode_id
+    assert service.ghost_reference(current.episode_id, 7)["partial"] is False

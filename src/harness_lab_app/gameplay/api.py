@@ -70,6 +70,8 @@ def human(data: HumanRace, session: SessionDep):
         )
     except (ValueError, LookupError) as exc:
         raise HTTPException(422, str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(503, "Game runtime is unavailable") from exc
 
 
 @racing_router.get("/episodes/{episode_id}/replay")
@@ -102,7 +104,10 @@ def ghost(episode_id: str, session: SessionDep, seed: int = 7):
 
 @racing_router.post("/ghosts/calibration", status_code=201)
 def calibration(session: SessionDep):
-    row = RacingService(session).create_calibration()
+    try:
+        row = RacingService(session).create_calibration()
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(503, "Game runtime is unavailable") from exc
     if row.state != "completed":
         raise HTTPException(503, row.failure_reason)
     return row
