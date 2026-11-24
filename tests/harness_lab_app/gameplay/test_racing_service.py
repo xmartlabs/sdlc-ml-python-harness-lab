@@ -136,3 +136,77 @@ def test_cancel_during_final_provider_reply_cannot_be_overwritten(
     monkeypatch.setattr(module, "run_episode", final_reply)
     service.execute(row.episode_id)
     assert service.get(row.episode_id).state == "cancelled"
+
+
+def test_scripted_ghost_is_verified_and_linked_to_human_recording(session, tmp_path):
+    service = RacingService(session, tmp_path / "runs")
+    row = service.create_calibration()
+    assert row.controller == "calibration"
+    source = service.ghost_reference(row.episode_id, 7)
+    assert source["label"] == "SCRIPTED calibration"
+    assert source["partial"] is False
+    controls = [
+        frame.action.controls for frame in service.replay(row.episode_id).frames
+    ]
+    human = service.save_human(7, controls, ghost_episode_id=row.episode_id)
+    assert human.state == "completed"
+    assert human.policy_json["ghost_episode_id"] == row.episode_id
+    assert (
+        service.replay(human.episode_id).policy_provenance["ghost_episode_id"]
+        == row.episode_id
+    )
+    with pytest.raises(ValueError, match="seed"):
+        service.ghost_reference(row.episode_id, 8)
+    with pytest.raises(ValueError, match="model or scripted"):
+        service.ghost_reference(human.episode_id, 7)
+
+
+@pytest.mark.parametrize("corrupt_state", [True, False])
+def test_ghost_rejects_missing_fingerprint_or_corrupt_recording(
+    session, tmp_path, corrupt_state
+):
+    import json
+
+    service = RacingService(session, tmp_path / "runs")
+    row = service.create_calibration()
+    path = tmp_path / "runs" / row.episode_id / "gameplay" / "replay.json"
+    data = json.loads(path.read_text())
+    if corrupt_state:
+        data["frames"][20]["observation"]["state"]["x"] += 1
+    else:
+        data["environment_provenance"] = {}
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError):
+        service.ghost_reference(row.episode_id, 7)
+
+
+@pytest.mark.parametrize("stop_tick,eligible", [(180, False), (360, True)])
+def test_failed_model_ghost_requires_meaningful_coverage(
+    session, tmp_path, stop_tick, eligible
+):
+    service = RacingService(session, tmp_path / "runs")
+    row = service._new(7, "model", "recorded-test-model")
+    service._save(row)
+    with RacingEnvironment() as env:
+        baseline = baseline_policy(env)
+
+        def decide(observation, timeout):
+            if observation.tick >= stop_tick:
+                raise TimeoutError
+            return baseline(observation, timeout)
+
+        replay = run_episode(
+            env,
+            decide,
+            service._config(row),
+            tmp_path / "runs" / row.episode_id / "gameplay",
+            clock=lambda: 0.0,
+        )
+    assert replay.result.status == "timeout"
+    if eligible:
+        reference = service.ghost_reference(row.episode_id, 7)
+        assert reference["partial"] is True
+        assert reference["finish_time_seconds"] is None
+    else:
+        with pytest.raises(ValueError, match="movement"):
+            service.ghost_reference(row.episode_id, 7)

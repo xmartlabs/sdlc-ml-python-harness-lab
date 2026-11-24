@@ -40,3 +40,6 @@ def test_gameplay_routes_are_covered_by_the_existing_session_gate(monkeypatch):
     assert client.get("/api/gameplay/racing/episodes").status_code == 401
     assert client.post("/api/gameplay/racing/human", json={}).status_code == 401
     assert client.post("/api/gameplay/racing/episodes", json={}).status_code == 401
+
+    assert client.get("/api/gameplay/racing/ghosts/race-" + "a" * 20).status_code == 401
+    assert client.post("/api/gameplay/racing/ghosts/calibration").status_code == 401
