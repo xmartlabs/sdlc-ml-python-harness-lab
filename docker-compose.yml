@@ -18,12 +18,27 @@ x-logging: &logging
       max-file: "5"
 
 services:
+  game-runtime:
+    <<: [*restart, *logging]
+    build:
+      context: .
+      dockerfile: Dockerfile.game-runtime
+    image: harness-lab-game-runtime:latest
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 192m
+    cpus: 1.0
+    pids_limit: 32
+    expose: ["8080"]
+
   api:
     <<: [*restart, *logging]
     build:
       context: .
       dockerfile: Dockerfile.api
     environment:
+      HARNESS_LAB_GAMEPLAY_RUNTIME_URL: http://game-runtime:8080
       HARNESS_LAB_REPO_ROOT: /app
       HARNESS_LAB_DATABASE_URL: sqlite:////app/data/app/harness_lab.db
       HARNESS_LAB_RUNNER_PYTHON: /opt/venv/bin/python
@@ -73,6 +88,8 @@ services:
       # is already taken sets HARNESS_LAB_API_PORT and nothing else moves.
       - "${HARNESS_LAB_API_BIND_ADDR:-127.0.0.1}:${HARNESS_LAB_API_PORT:-8009}:8008"
     depends_on:
+      game-runtime:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -116,6 +133,7 @@ services:
         "runs@%h",
       ]
     environment:
+      HARNESS_LAB_GAMEPLAY_RUNTIME_URL: http://game-runtime:8080
       HARNESS_LAB_REPO_ROOT: /app
       HARNESS_LAB_DATABASE_URL: sqlite:////app/data/app/harness_lab.db
       HARNESS_LAB_RUNNER_PYTHON: /opt/venv/bin/python
@@ -144,6 +162,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HARNESS_LAB_AUTH_DIR:-${HOME}/.harness-lab/auth}:/harness-auth
     depends_on:
+      game-runtime:
+        condition: service_healthy
       redis:
         condition: service_healthy
 

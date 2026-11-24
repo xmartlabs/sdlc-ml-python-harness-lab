@@ -999,3 +999,21 @@ class AdhocRun(SQLModel, table=True):
     files_purged: bool = False
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class GameplayEpisode(SQLModel, table=True):
+    """Fixed-game measurement, separate from coding-agent benchmark runs."""
+
+    episode_id: str = Field(primary_key=True)
+    environment_id: str = "tidal-ring"
+    environment_version: str = "1"
+    seed: int
+    controller: str
+    model: str = ""
+    state: str = "pending"
+    cancel_requested: bool = False
+    failure_reason: str = ""
+    policy_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    result_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

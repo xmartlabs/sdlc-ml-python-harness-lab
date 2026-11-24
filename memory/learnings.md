@@ -3796,3 +3796,16 @@ through the repository bind; for an API-key harness it is now masked.
 - When `git status` shows `.agents/skills/*` deleted and the CLAUDE.md skill
   list trimmed, check for a running or just-killed ablation before treating it
   as a change: `make sync-skills` restores it byte for byte.
+
+
+### Fixed gameplay builds and Docker verification (2026-11-24)
+
+- API/worker `/app` source mounts do not make a game build portable. Bake the
+  shared executable rules and compiled browser assets into the dedicated runtime;
+  proxy static assets only and use internal HTTP sessions for scored re-simulation.
+- Timeout/provider-error recordings intentionally have no numerical game metrics.
+  Result UIs must distinguish absent metrics from a measured zero/DNF.
+- Coplanar island cylinders produce terrain flicker even when a render smoke has
+  no JS errors. Review actual headless screenshots, not only process exit status.
+- Replays need the engine fingerprint as well as a human version string. A mismatch
+  should fail closed rather than silently compare different rules (ADR-0100).

@@ -432,7 +432,7 @@ app-up:
 	@# The three workers share one image (harness-lab-worker:latest). `up --build`
 	@# built it once per worker, in parallel, and the second export failed with
 	@# "already exists". Build each image once, then start without building.
-	@docker compose --profile dev build api worker frontend
+	@docker compose --profile dev build api worker frontend game-runtime
 	@docker compose --profile dev up -d api worker worker-parallel worker-interactive redis frontend
 	@if [ "$$HARNESS_LAB_API_BIND_ADDR" = "0.0.0.0" ] \
 		&& ! grep -qs '^HARNESS_LAB_ADMIN_PASSWORD_HASH=.\+' .env; then \
@@ -469,7 +469,7 @@ app-up-prod:
 	@grep -qs '^HARNESS_LAB_ADMIN_PASSWORD_HASH=.\+' .env \
 		|| echo "⚠️  No admin password set — the UI is open. Run: make set-password"
 	@docker compose build runner sandbox
-	@docker compose --profile prod build api worker frontend-prod
+	@docker compose --profile prod build api worker frontend-prod game-runtime
 	@HARNESS_LAB_API_BIND_ADDR=127.0.0.1 \
 		docker compose --profile prod up -d api worker worker-parallel worker-interactive redis frontend-prod
 	@echo "✅ http://localhost:8080 (set HARNESS_LAB_BIND_ADDR=0.0.0.0 for LAN access)"
@@ -801,10 +801,16 @@ check:
 # contributor path does not install. `make ci` runs both.
 # The build matters as well as tsc: vite resolves imports and fails on a module
 # tsc is happy to type-check but cannot bundle.
-check-frontend:
+# FRONTEND_IN_DOCKER=1 keeps the full pre-push gate portable without host npm.
+.PHONY: check-frontend check-frontend-host
+check-frontend: $(if $(filter 1,$(FRONTEND_IN_DOCKER)),game-runtime-verify,check-frontend-host)
+
+check-frontend-host:
 	@echo "🔎 Running read-only frontend gate..."
 	@if [ ! -d frontend/node_modules ]; then cd frontend && npm ci; fi
 	@cd frontend && npm run typecheck
+	@cd frontend && npm run test:racing
+	@cd frontend && npm run test:game-runtime
 	@cd frontend && npx vite build
 	@echo "✅ Frontend gate passed (read-only)."
 
@@ -1141,3 +1147,19 @@ gameplay-episode:
 gameplay-verify:
 	@[ -n "$(REPLAY)" ] || { echo "REPLAY is required."; exit 1; }
 	@. $(VENV_DIR)/bin/activate && PYTHONPATH=${PWD}/src python scripts/gameplay_episode.py --verify "$(REPLAY)"
+
+# Purpose-built fixed-game runtime: no host Node/npm or game-engine installation.
+.PHONY: game-runtime-build game-runtime-up game-runtime-check
+game-runtime-build:
+	@docker compose build game-runtime
+
+game-runtime-up:
+	@docker compose up -d game-runtime
+
+game-runtime-check:
+	@docker compose run --rm --no-deps game-runtime node game-runtime/cli.mjs calibrate
+
+# Build-stage verification uses locked tools inside Docker, not host npm.
+.PHONY: game-runtime-verify
+game-runtime-verify:
+	@docker build --target verify -f Dockerfile.game-runtime .

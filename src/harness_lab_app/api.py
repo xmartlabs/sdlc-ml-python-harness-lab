@@ -87,6 +87,7 @@ from harness_lab_app.finding_service import (
     FindingNotFoundError,
     FindingService,
 )
+from harness_lab_app.gameplay.api import racing_router
 from harness_lab_app.gateway_catalog_service import GatewayCatalogService
 from harness_lab_app.harness_lifecycle import drafting, sanitizer
 from harness_lab_app.improvement_service import ImprovementError, ImprovementService
@@ -480,6 +481,7 @@ def create_app() -> FastAPI:
     app.add_middleware(SessionMiddleware)
     app.include_router(local_router)
     app.include_router(adhoc_router)
+    app.include_router(racing_router)
 
     @app.on_event("startup")
     def startup() -> None:

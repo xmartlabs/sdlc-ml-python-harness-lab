@@ -95,3 +95,5 @@ here is needed to use it.
 [Plans](plans/)
 
 - [Text gameplay episode contract and recorder](gameplay-episodes.md) — deterministic fixture, LM Studio actions and replay verification.
+
+- [Tidal Ring fixed racing gameplay](racing-gameplay.md) — human/text-model controls, scoring and recordings.

@@ -187,3 +187,33 @@ def test_failed_provider_keeps_policy_identity_in_the_journal_and_replay(tmp_pat
         (tmp_path / "episode" / "journal.jsonl").read_text().splitlines()[0]
     )
     assert header["payload"]["policy_provenance"]["quantization"] == "Q4"
+
+
+def test_fixed_non_model_intervals_do_not_dilute_model_latency(tmp_path):
+    calls = 0
+
+    def policy(observation, timeout):
+        nonlocal calls
+        calls += 1
+        reply = right(observation, timeout)
+        if calls == 1:
+            reply.provenance["model_call"] = False
+        return reply
+
+    clock = iter([0.0, 0.25, 1.0, 1.75])
+    replay = run_episode(
+        LineWorld(), policy, config(), tmp_path / "episode", clock=lambda: next(clock)
+    )
+    assert replay.result.inference_seconds == 0.75
+    assert replay.result.latency_p50_seconds == 0.75
+    assert replay.result.simulation_ticks == 4
+
+
+def test_replay_rejects_a_different_executable_fingerprint(tmp_path):
+    env = LineWorld()
+    env.provenance = {"engine_sha256": "original-engine"}
+    run_episode(env, right, config(), tmp_path / "episode")
+    changed = LineWorld()
+    changed.provenance = {"engine_sha256": "different-engine"}
+    with pytest.raises(ValueError, match="fingerprint"):
+        verify_replay(tmp_path / "episode" / "replay.json", changed)

@@ -15,7 +15,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
     task_routes={"harness_lab_app.tasks.*": {"queue": "runs"}},
-    imports=("harness_lab_app.tasks",),
+    imports=("harness_lab_app.tasks", "harness_lab_app.gameplay.tasks"),
 )
 
 

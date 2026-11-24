@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { api, SESSION_EXPIRED_EVENT } from "./api";
 import { AdhocTasks } from "./pages/AdhocTasks";
@@ -50,6 +50,8 @@ import type {
   RunRecord,
   SessionState
 } from "./types";
+
+const Racing = lazy(() => import("./pages/RacingRuntime").then(module => ({ default: module.RacingRuntime })));
 
 const MESSAGES = defineMessages({
   en: { previewMode: "Preview mode" },
@@ -352,6 +354,7 @@ export default function App() {
         }
       >
         <Route element={<Home />} path="/" />
+        <Route element={<Suspense fallback={<p>Loading time trial…</p>}><Racing /></Suspense>} path="/gameplay/racing" />
         {/* Capability hubs (ADR-0090): each links to screens that keep their routes. */}
         <Route element={<ModelsHub />} path="/models" />
         <Route element={<HarnessHub />} path="/harness" />
