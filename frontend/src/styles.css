@@ -4226,6 +4226,14 @@ button.danger:hover {
 }
 
 /* Tune your local model: the guidance around the form (2026-11-23). */
+.local-results-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+}
+
 .local-tune-intro {
   margin: 0 0 var(--space-4);
 }

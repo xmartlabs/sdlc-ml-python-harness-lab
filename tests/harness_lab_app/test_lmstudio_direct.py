@@ -336,6 +336,21 @@ def test_preflight_names_the_models_the_server_actually_serves(session, _direct)
         RunService(session).create_run(_config("lmstudio/qwen3.6:35b"))
 
 
+def test_a_missing_model_names_the_server_that_was_asked(session, _direct):
+    """A model tuned on one LM Studio and run against another (2026-11-23).
+
+    Tune your local model tested 127.0.0.1 while LMSTUDIO_BASE_URL pointed at a
+    LAN box without that model. "Press Refresh models" cannot fix that; naming
+    the host and the setting that chose it can.
+    """
+    _direct([LMStudioModel("prism-ml/bonsai-27b", "llm", "loaded", 131072, 54000)])
+    with pytest.raises(RunPreflightError) as excinfo:
+        RunService(session).create_run(_config("lmstudio/qwen/qwen3-vl-8b"))
+    message = str(excinfo.value)
+    assert "http://h:1234" in message
+    assert "LMSTUDIO_BASE_URL" in message
+
+
 def test_preflight_rejects_a_model_that_is_not_loaded(session, _direct):
     _direct([LMStudioModel("p/m", "llm", "not-loaded", 131072, None)])
     with pytest.raises(RunPreflightError, match="not loaded"):

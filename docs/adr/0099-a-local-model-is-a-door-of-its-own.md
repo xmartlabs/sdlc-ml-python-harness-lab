@@ -44,11 +44,16 @@ answer was hard to reach and stopped halfway:
   official download, server guide and tool-capable model pages. It does not copy
   install instructions that change with every release. It names the two things an
   agent needs (tool use, a 32k+ context) and Ollama's 4k default.
-- **One server for tests and runs, by an explicit click.** When the tested address
-  differs from the one runs use, step 2 offers *Use this server for runs*. It
-  writes the address in its `/v1` form through the existing settings endpoint and
-  refreshes the model list. The page never writes settings without that click.
-  Step 5 repeats the warning while the two still differ.
+- **One server for tests and runs: the one that answered.** A successful
+  connection test whose address differs from the one runs use writes it, in its
+  `/v1` form, through the existing settings endpoint, refreshes the model list and
+  says which address it replaced. Most operators run the server on `localhost` or
+  a LAN box of their own, and the lab's `.env` holds whoever configured it first;
+  a tested address that runs then ignored is what made a step-5 run fail on a
+  model the page had just passed (2026-11-23). An explicit-click version shipped
+  first and was replaced the same day for that reason. When the write fails,
+  step 2 offers *Use this server for runs* to retry, and step 5 shows it *instead
+  of* the run links.
 - **Step 5 ends on real work, with OpenCode and the model already chosen:** the
   first clinic case (`clinic-slots-t1`) in the *Models* flow, or an ad hoc task on
   a folder of the operator's. Both pages accept the arm as a query parameter
@@ -65,6 +70,13 @@ answer was hard to reach and stopped halfway:
   through Home or the URL. The hub itself is unchanged.
 - The setup box links to third-party pages that can move. The links were checked
   on 2026-11-23 and live in one constant (`SERVER_LINKS` in `LocalModels.tsx`).
-- Writing `LMSTUDIO_BASE_URL` / `OLLAMA_BASE_URL` from this page changes the server
-  every later run uses, including other operators' runs on a shared lab. The click
-  is explicit for that reason, and the setting stays editable in *System → Settings*.
+- Testing a server on this page changes the server every later run uses, including
+  other operators' runs on a shared lab. The page says so when it happens (old and
+  new address), and the setting stays editable in *System → Settings*.
+- The run preflight's "unknown model" refusal names the host it asked and the
+  setting that chose it, for LM Studio and Ollama alike.
+- Every test is kept: *Run tests* files it under a saved machine, saving the
+  step-1 figures as one when none is picked (the backend keeps history only for a
+  saved machine, and step 1 no longer asks anyone to save). *Saved results*
+  (`/local/results`) is linked from the top of the page and from step 5, so past
+  tests are one click away without running a new one.

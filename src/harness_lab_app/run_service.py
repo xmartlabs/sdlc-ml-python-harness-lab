@@ -693,10 +693,15 @@ class RunService:
         model = find_model(models, bare)
         if model is None:
             known = ", ".join(m.id for m in models[:8]) or "none"
+            # Name the host: a model tuned on one LM Studio (Tune your local
+            # model tests any address) and run against the one in .env is the
+            # usual cause, and "refresh" cannot fix that.
             raise RunPreflightError(
-                f"LM Studio does not know a model called '{bare}'. It currently "
-                f"serves: {known}. Press 'Refresh models' — this list is read "
-                "straight off the server, so a name in it always routes."
+                f"LM Studio at {lmstudio_root(base)} (LMSTUDIO_BASE_URL) does not "
+                f"know a model called '{bare}'. It currently serves: {known}. "
+                "If the model is on another server, point LMSTUDIO_BASE_URL at "
+                "it (Local model → Your server, or Settings); if it was just "
+                "downloaded, press 'Refresh models'."
             )
         if not model.loaded:
             if model.state == "unknown":
@@ -775,9 +780,10 @@ class RunService:
         if model is None:
             known = ", ".join(m.id for m in models[:8]) or "none"
             raise RunPreflightError(
-                f"Ollama does not have a model called '{bare}'. It currently "
-                f"has: {known}. Pull it there, then press Reload — this list is "
-                "read straight off the server, so a name in it always routes."
+                f"Ollama at {ollama_root(base)} (OLLAMA_BASE_URL) does not have a "
+                f"model called '{bare}'. It currently has: {known}. If the model "
+                "is on another server, point OLLAMA_BASE_URL at it (Local model → "
+                "Your server, or Settings); otherwise pull it there and press Reload."
             )
         window = model.context_length
         if model.running and window is not None and window < MIN_CONTEXT_TOKENS:

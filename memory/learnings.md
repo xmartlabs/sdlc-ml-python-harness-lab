@@ -9,9 +9,11 @@
 `host/api`). Agent runs, the model chooser and `/api/models` read
 `LMSTUDIO_BASE_URL` / `OLLAMA_BASE_URL` from `.env` instead, which must end in
 `/v1` (`run_service` refuses otherwise). Nothing tied the two, so a model could be
-tuned on one host and run on another. Since ADR-0099 step 2 compares them in
-`/v1` form and offers an explicit "Use this server for runs" (PUT
-`/api/settings/env`, then `forgetModels()` to drop the chooser's module cache).
+tuned on one host and run on another (seen 2026-11-23: qwen3-vl-8b tested on
+127.0.0.1, run refused against a LAN box without it). Since ADR-0099 a successful
+step-2 test writes the address in `/v1` form (PUT `/api/settings/env`, then
+`forgetModels()` to drop the chooser's module cache); the explicit-click version
+was rejected by the user the same day — the tested address must stick.
 Runs read `.env` at launch, so no restart. `localhost` is rewritten to
 `host.docker.internal` on all three paths (`make_server`, `_direct_endpoint`,
 `build_run_environment`), so `http://localhost:1234/v1` is a valid saved value.

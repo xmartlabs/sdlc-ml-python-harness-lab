@@ -73,6 +73,8 @@ const MESSAGES = defineMessages({
       lede:
         "Run a model on your own machine, find a configuration that fits, test it in a few minutes, then try it with OpenCode on real work — before spending 20–45 minutes on a case."
     },
+    savedResults: "Saved results",
+    savedResultsHint: "Every test you ran, by machine and model, and real cases run on a local model.",
     help: {
       title: "How this page works",
       body:
@@ -156,12 +158,15 @@ const MESSAGES = defineMessages({
           "Same computer as the lab? Use localhost — the lab rewrites it to reach your machine from Docker. Another computer? Use its LAN address, and turn on Serve on Local Network (LM Studio) or set OLLAMA_HOST=0.0.0.0 (Ollama)."
       },
       forRuns: {
-        title: "Use this server for runs too",
+        title: "Runs still use another server",
         body: (url: string) =>
-          `The tests on this page use the address above. Agent runs (OpenCode on a case or on your code) read the lab's setting instead${url ? `, which points at ${url}` : ", which is not set yet"}. Save this address there so both use the same server.`,
+          `The connection works, but this address could not be saved for agent runs${url ? `, which still go to ${url}` : ""}. Save it so OpenCode runs on the model you test here.`,
         save: "Use this server for runs",
         saving: "Saving…",
-        saved: (key: string, url: string) => `Saved: ${key} = ${url}. Runs now use this server.`,
+        saved: (key: string, url: string, previous: string) =>
+          previous
+            ? `Saved for runs: ${key} = ${url} (it was ${previous}).`
+            : `Saved for runs: ${key} = ${url}.`,
         inSync: "Runs use this same server."
       },
       kind: "Server",
@@ -229,7 +234,8 @@ const MESSAGES = defineMessages({
       unloadAnyway: "Unload anyway",
       runTests: "Run tests",
       running: "Running…",
-      noMachineNote: "Save the machine in step 1 to keep this test in the history.",
+      noMachineNote: "Every test is kept in Saved results, under this machine.",
+      autoMachineName: (gb: number) => `My machine · ${gb} GB`,
       refresh: "Refresh",
       testNames: {
         fit: "Fit",
@@ -267,8 +273,8 @@ const MESSAGES = defineMessages({
         "A short test says the model fits and can call tools. Whether it is useful takes a real task: OpenCode drives your model as an agent, with the lab's harness, in an isolated copy.",
       nextAgentFailed:
         "The agent test did not pass: a real task will most likely fail too. Try a model with tool use, or a larger context, before spending time on it.",
-      nextServerMismatch:
-        "Runs still point at another server. Go back to step 2 and press \"Use this server for runs\" first.",
+      nextServerMismatch: (url: string) =>
+        `Agent runs still go to ${url || "another server"}, which may not have this model. Save this server for runs first.`,
       caseTitle: "A benchmark case",
       caseBody:
         "clinic-slots-t1: a small Python task with tests the agent did not write. One repetition takes 20–45 minutes on a laptop, and the verdict is objective.",
@@ -278,6 +284,7 @@ const MESSAGES = defineMessages({
         "Pick a folder on this machine and write what you want done. It runs on a copy; you review the change and apply it only if you like it.",
       adhocCta: "Try it on your code",
       advanced: "Advanced: open New evaluation with this model",
+      allResults: "See every saved result",
       promptTokens: "Prompt tokens",
       readSpeed: "Read tok/s",
       writeSpeed: "Write tok/s",
@@ -352,6 +359,8 @@ const MESSAGES = defineMessages({
       lede:
         "Corré un modelo en tu propia máquina, encontrá una configuración que entre, probala en unos minutos y después usala con OpenCode en trabajo real — antes de gastar 20 a 45 minutos en un caso."
     },
+    savedResults: "Resultados guardados",
+    savedResultsHint: "Cada prueba que corriste, por máquina y modelo, y los casos reales corridos con un modelo local.",
     help: {
       title: "Cómo funciona esta página",
       body:
@@ -435,12 +444,15 @@ const MESSAGES = defineMessages({
           "¿Misma computadora que el lab? Usá localhost: el lab lo reescribe para llegar a tu máquina desde Docker. ¿Otra computadora? Usá su dirección en la red local, y activá Serve on Local Network (LM Studio) o poné OLLAMA_HOST=0.0.0.0 (Ollama)."
       },
       forRuns: {
-        title: "Usá este servidor también para las corridas",
+        title: "Las corridas todavía usan otro servidor",
         body: (url: string) =>
-          `Las pruebas de esta página usan la dirección de arriba. Las corridas del agente (OpenCode en un caso o sobre tu código) leen en cambio la configuración del lab${url ? `, que apunta a ${url}` : ", que todavía no está configurada"}. Guardá esta dirección ahí para que las dos usen el mismo servidor.`,
+          `La conexión funciona, pero no se pudo guardar esta dirección para las corridas del agente${url ? `, que siguen yendo a ${url}` : ""}. Guardala para que OpenCode corra con el modelo que probás acá.`,
         save: "Usar este servidor para las corridas",
         saving: "Guardando…",
-        saved: (key: string, url: string) => `Guardado: ${key} = ${url}. Las corridas ya usan este servidor.`,
+        saved: (key: string, url: string, previous: string) =>
+          previous
+            ? `Guardado para las corridas: ${key} = ${url} (antes era ${previous}).`
+            : `Guardado para las corridas: ${key} = ${url}.`,
         inSync: "Las corridas usan este mismo servidor."
       },
       kind: "Servidor",
@@ -508,7 +520,8 @@ const MESSAGES = defineMessages({
       unloadAnyway: "Descargar de todos modos",
       runTests: "Correr pruebas",
       running: "Corriendo…",
-      noMachineNote: "Guardá la máquina en el paso 1 para conservar esta prueba en el historial.",
+      noMachineNote: "Cada prueba queda en Resultados guardados, bajo esta máquina.",
+      autoMachineName: (gb: number) => `Mi máquina · ${gb} GB`,
       refresh: "Actualizar",
       testNames: {
         fit: "Entra",
@@ -546,8 +559,8 @@ const MESSAGES = defineMessages({
         "Una prueba corta dice que el modelo entra y sabe llamar tools. Si sirve o no lo dice una tarea real: OpenCode maneja tu modelo como agente, con el arnés del lab, en una copia aislada.",
       nextAgentFailed:
         "La prueba de agente no pasó: lo más probable es que una tarea real también falle. Probá un modelo con uso de tools, o más contexto, antes de invertirle tiempo.",
-      nextServerMismatch:
-        "Las corridas todavía apuntan a otro servidor. Volvé al paso 2 y tocá «Usar este servidor para las corridas» primero.",
+      nextServerMismatch: (url: string) =>
+        `Las corridas del agente todavía van a ${url || "otro servidor"}, que puede no tener este modelo. Guardá este servidor para las corridas primero.`,
       caseTitle: "Un caso del benchmark",
       caseBody:
         "clinic-slots-t1: una tarea chica en Python con tests que el agente no escribió. Una repetición tarda 20 a 45 minutos en una notebook, y el veredicto es objetivo.",
@@ -557,6 +570,7 @@ const MESSAGES = defineMessages({
         "Elegí una carpeta de esta máquina y escribí qué querés que haga. Corre sobre una copia; revisás el cambio y lo aplicás solo si te gusta.",
       adhocCta: "Probalo sobre tu código",
       advanced: "Avanzado: abrir Nueva evaluación con este modelo",
+      allResults: "Ver todos los resultados guardados",
       promptTokens: "Tokens de prompt",
       readSpeed: "Tok/s lectura",
       writeSpeed: "Tok/s escritura",
@@ -1112,12 +1126,21 @@ export function LocalModels() {
     setTestingServer(true);
     setError(null);
     setServerTest(null);
+    const kind = serverKind;
+    const url = serverUrl.trim();
     api.local
-      .testServer(serverKind, serverUrl.trim())
+      .testServer(kind, url)
       .then((result) => {
         setServerTest(result);
         if (!result.reachable) {
           setError(result.error || m.server.unreachableHint);
+          return;
+        }
+        // A server that answers is the one the operator means: keep it for
+        // agent runs too, so a model tested here is the model a run gets and
+        // the next visit opens on this address (2026-11-23, ADR-0099).
+        if (!sameServer(url, runsUrls[kind])) {
+          saveForRuns(kind, url);
         }
       })
       .catch((err: Error) => setError(err.message))
@@ -1216,6 +1239,54 @@ export function LocalModels() {
       .finally(() => setUnloadBusy(false));
   };
 
+  /**
+   * The saved machine this test is filed under. The backend keeps a finished
+   * test in the history only for a saved machine, and step 1 no longer asks
+   * anyone to save one (2026-11-23), so a test without one would vanish. Reuse
+   * a saved machine with the same figures, else save these figures under the
+   * reference machine's name (or "My machine · N GB").
+   */
+  const ensureMachine = (): Promise<LocalMachine | null> => {
+    if (machine) return Promise.resolve(machine);
+    const same = savedMachines.find(
+      (item) =>
+        item.memory_kind === memoryKind &&
+        item.gpu_gb === gpuGb &&
+        item.ram_gb === ramGb &&
+        item.reserve_gb === reserveGb &&
+        item.gpu_wired_fraction === wiredFraction
+    );
+    if (same) {
+      setMachineName(same.name);
+      setPresetId(`${SAVED_MACHINE_PREFIX}${same.id}`);
+      return Promise.resolve(same);
+    }
+    const preset = reference?.machines.find((item) => item.id === presetId);
+    const base = machineName.trim() || preset?.label || m.testStep.autoMachineName(gpuGb);
+    const taken = new Set(savedMachines.map((item) => item.name));
+    let name = base;
+    for (let n = 2; taken.has(name); n += 1) name = `${base} (${n})`;
+    return api.local
+      .createMachine({
+        name,
+        memory_kind: memoryKind,
+        gpu_gb: gpuGb,
+        ram_gb: ramGb,
+        reserve_gb: reserveGb,
+        gpu_wired_fraction: wiredFraction,
+        bandwidth_gbs: bandwidthGbs ? Number(bandwidthGbs) : null,
+        notes: ""
+      })
+      .then((created) => {
+        setSavedMachines((current) => [created, ...current]);
+        setMachineName(created.name);
+        setPresetId(`${SAVED_MACHINE_PREFIX}${created.id}`);
+        return created;
+      })
+      // Not worth blocking a test on: it runs, it just is not kept.
+      .catch(() => null);
+  };
+
   const handleRunTests = (acknowledgeGuard = false) => {
     if (!selectedModel || (!evaluateOnly && !loadResult)) {
       return Promise.resolve();
@@ -1223,18 +1294,20 @@ export function LocalModels() {
     setTestingBusy(true);
     setError(null);
     setNotLoaded(null);
-    return api.local
-      .startTests(
-        serverKind,
-        serverUrl.trim(),
-        selectedModel,
-        loadConfig,
-        machineSpec,
-        loadResult?.served ?? EMPTY_SERVED_CONFIG,
-        acknowledgeGuard,
-        machine ? machine.id : null,
-        estimate,
-        evaluateOnly
+    return ensureMachine()
+      .then((filedUnder) =>
+        api.local.startTests(
+          serverKind,
+          serverUrl.trim(),
+          selectedModel,
+          loadConfig,
+          machineSpec,
+          loadResult?.served ?? EMPTY_SERVED_CONFIG,
+          acknowledgeGuard,
+          filedUnder ? filedUnder.id : null,
+          estimate,
+          evaluateOnly
+        )
       )
       .then((session) => {
         pollFailures.current = 0;
@@ -1354,20 +1427,30 @@ export function LocalModels() {
       .catch((err: Error) => setError(err.message));
   };
 
-  const handleUseForRuns = () => {
-    const key = RUNS_ENV_KEY[serverKind];
-    const url = runsBaseUrl(serverUrl);
+  /**
+   * Write `address` (in its `/v1` form) as the server agent runs use for
+   * `kind`. Called on every successful connection test whose address differs
+   * from the saved one, and by the retry button when that write failed.
+   */
+  function saveForRuns(kind: LocalServerKind, address: string) {
+    const key = RUNS_ENV_KEY[kind];
+    const url = runsBaseUrl(address);
+    const previous = runsUrls[kind];
     setSavingRunsUrl(true);
-    setError(null);
     api
       .writeEnvSettings({ [key]: url })
       .then(() => {
-        setRunsUrls((current) => ({ ...current, [serverKind]: url }));
-        setNotice(m.server.forRuns.saved(key, url));
+        setRunsUrls((current) => ({ ...current, [kind]: url }));
+        setNotice(m.server.forRuns.saved(key, url, previous));
         return forgetModels();
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setSavingRunsUrl(false));
+  }
+
+  const handleUseForRuns = () => {
+    setError(null);
+    saveForRuns(serverKind, serverUrl);
   };
 
   // OpenCode on this server's model: the arm the guided flows read
@@ -1403,6 +1486,13 @@ export function LocalModels() {
       <HelpPanel title={m.help.title}>
         <p>{m.help.body}</p>
       </HelpPanel>
+
+      <p className="local-results-link muted small">
+        <Link className="secondary" to="/local/results">
+          {m.savedResults} →
+        </Link>
+        <span>{m.savedResultsHint}</span>
+      </p>
 
       <ol className="stepper">
         {STEPS.map((item, index) => (
@@ -1744,7 +1834,7 @@ export function LocalModels() {
             </div>
           ) : null}
 
-          {serverTest && serverTest.reachable ? (
+          {serverTest && serverTest.reachable && !savingRunsUrl ? (
             runsInSync ? (
               <p className="callout callout--ok">{m.server.forRuns.inSync}</p>
             ) : (
@@ -2102,7 +2192,7 @@ export function LocalModels() {
                 {testingBusy ? m.testStep.running : m.testStep.runTests}
               </button>
             </div>
-            {!machine ? <p className="muted small">{m.testStep.noMachineNote}</p> : null}
+            <p className="muted small">{m.testStep.noMachineNote}</p>
 
             {testSession ? (
               <div className="local-test-progress">
@@ -2222,8 +2312,22 @@ export function LocalModels() {
                 <p className="callout callout--warning">{m.resultStep.nextAgentFailed}</p>
               ) : null}
               {!runsInSync ? (
-                <p className="callout callout--warning">{m.resultStep.nextServerMismatch}</p>
-              ) : null}
+                // A run here would reach another server, which may not have
+                // this model: the fix replaces the links instead of sitting
+                // above them (the 2026-11-23 report: qwen3-vl-8b tested on
+                // 127.0.0.1, run against a LAN box without it).
+                <div className="callout callout--warning local-runs-url">
+                  <p>{m.resultStep.nextServerMismatch(runsUrls[serverKind])}</p>
+                  <button
+                    className="primary"
+                    disabled={savingRunsUrl}
+                    onClick={handleUseForRuns}
+                    type="button"
+                  >
+                    {savingRunsUrl ? m.server.forRuns.saving : m.server.forRuns.save}
+                  </button>
+                </div>
+              ) : (
               <div className="local-next-cards">
                 <div className="card">
                   <h4>{m.resultStep.caseTitle}</h4>
@@ -2243,9 +2347,15 @@ export function LocalModels() {
                   </Link>
                 </div>
               </div>
-              <button className="button-link" onClick={handleUseInNewEvaluation} type="button">
-                {m.resultStep.advanced}
-              </button>
+              )}
+              <div className="toolbar">
+                <Link className="button-link" to="/local/results">
+                  {m.resultStep.allResults}
+                </Link>
+                <button className="button-link" onClick={handleUseInNewEvaluation} type="button">
+                  {m.resultStep.advanced}
+                </button>
+              </div>
             </div>
 
             <div className="panel subtle">
