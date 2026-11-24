@@ -184,4 +184,5 @@ a delta and a verdict per step up.
 `/flows/improve` to `/flows/skills?do=improve`, keeping the rest of the query, so the
 showcase's **And without harness?** and the links from Metrics land on the right branch.
 Home has five doors: Models and harness, Skills, Metrics, Benchmarks and Your repo. The
-sidebar's *Try* group follows.
+sidebar's *Try* group follows. (Since [ADR-0099](0099-a-local-model-is-a-door-of-its-own.md)
+the fifth door is Local model; Your repo keeps its hub at `/your-repo`.)

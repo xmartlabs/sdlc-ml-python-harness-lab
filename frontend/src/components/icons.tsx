@@ -85,6 +85,14 @@ export const IconRepo = (p: IconProps) => (
   </Svg>
 );
 
+/** A laptop: a model running on the operator's own machine, offline. */
+export const IconLaptop = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9" />
+    <path d="M2.5 16h19l-1.2 2.4a1 1 0 0 1-.9.6H4.6a1 1 0 0 1-.9-.6z" />
+  </Svg>
+);
+
 export const IconPuzzle = (p: IconProps) => (
   <Svg {...p}>
     <path d="M9 4a2 2 0 1 1 4 0v1h3a1 1 0 0 1 1 1v3h1a2 2 0 1 1 0 4h-1v3a1 1 0 0 1-1 1h-3v-1a2 2 0 1 0-4 0v1H6a1 1 0 0 1-1-1v-3H4a2 2 0 1 1 0-4h1V6a1 1 0 0 1 1-1h3z" />

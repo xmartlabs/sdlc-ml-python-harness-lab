@@ -16,9 +16,9 @@ import {
   IconFiles,
   IconFlask,
   IconInfo,
+  IconLaptop,
   IconLayers,
   IconPuzzle,
-  IconRepo,
   IconSearch,
   IconTrendUp
 } from "../components/icons";
@@ -58,13 +58,18 @@ const MODES = [
  * guided flow. Models and harness share one door, and so do trying and
  * improving a skill (2026-11-20): each pair is one question with two branches.
  * The evaluation modes above are still one click away, under "in detail".
+ *
+ * The fifth door is a local model (2026-11-23, ADR-0099): "I am about to travel
+ * — can this model on my laptop do real work offline?" is a question people
+ * arrive with. Your repo, the door it replaced, keeps its first journey below
+ * and the 30-second check banner.
  */
 const DOORS = [
   { key: "models", icon: IconCpu, to: "/flows/models" },
   { key: "skills", icon: IconPuzzle, to: "/flows/skills" },
   { key: "metrics", icon: IconTrendUp, to: "/flows/metrics" },
   { key: "benchmarks", icon: IconFiles, to: "/benchmarks" },
-  { key: "repo", icon: IconRepo, to: "/your-repo" }
+  { key: "local", icon: IconLaptop, to: "/local/tune" }
 ] as const;
 
 const SEVERITY_ICON: Record<string, ComponentType<IconProps>> = {
@@ -83,7 +88,7 @@ const MESSAGES = defineMessages({
       skills: { title: "Skills", body: "Does this skill earn a place? And can the LLM make it better?", tags: ["the case's", "catalog", "yours", "LLM audit"], tip: "Try a skill: from the case, the catalog, another repo or written by hand, against minimal, full or both. Improve a skill: the LLM reads its runs, drafts a v2 you review, and sets up v1 vs v2." },
       metrics: { title: "Metrics", body: "Compare runs, what to improve, what each number means.", tags: ["compare", "criteria"], tip: "Reads what already ran. Creates nothing." },
       benchmarks: { title: "Benchmarks", body: "Pick a test case, by family.", tags: ["SWE-bench", "3D games", "Security", "Web"], tip: "Every case carries a check the agent did not write." },
-      repo: { title: "Your repo", body: "Check your project's harness and take home what helps.", tags: ["30 seconds", "audit", "export"], tip: "No comparison: it reviews a project of yours and says what it lacks." }
+      local: { title: "Local model", body: "A model on your laptop, no internet. Does it do real work?", tags: ["LM Studio", "Ollama", "OpenCode", "offline"], tip: "Set up LM Studio or Ollama, find a configuration that fits your memory, then run OpenCode with that model on a real case or on your own code." }
     },
     open: "Open",
     loopTitle: "The lab's loop",
@@ -97,7 +102,7 @@ const MESSAGES = defineMessages({
     routesTitle: "A first journey, by what you have",
     routesNote: "15 to 45 minutes each",
     routes: [
-      { who: "A local model", hint: "LM Studio or Ollama", steps: ["Tune it in 5 steps", "Run clinic-slots-t1", "Compare it with a cloud model"], to: "/local/tune" },
+      { who: "A local model", hint: "LM Studio or Ollama, on your laptop", steps: ["Set it up and test it", "OpenCode on clinic-slots-t1", "Or on your own code"], to: "/local/tune" },
       { who: "A new skill", hint: "yours or from GitHub", steps: ["Import it in Skills", "Minimal vs minimal + skill", "Does it earn its place?"], to: "/evidence/skills?tab=import" },
       { who: "A new frontier model", hint: "the one out this week", steps: ["Compare models on a 3D case", "See which phases it passed", "Play what it built"], to: "/evaluate/compare-models" },
       { who: "Your team's repo", hint: "cloned on your machine", steps: ["make harness-check", "Audit it in the UI", "Take home what it lacks"], to: "/evaluate/audit" }
@@ -201,7 +206,7 @@ const MESSAGES = defineMessages({
       skills: { title: "Skills", body: "¿Esta skill se gana un lugar? ¿Y el LLM la puede mejorar?", tags: ["la del caso", "catálogo", "tuya", "auditoría LLM"], tip: "Probar una skill: del caso, del catálogo, de otro repo o escrita a mano, contra minimal, full o las dos. Mejorar una skill: el LLM lee sus corridas, escribe una v2 que revisás y arma v1 contra v2." },
       metrics: { title: "Métricas", body: "Comparar corridas, qué mejorar, qué significa cada número.", tags: ["comparar", "criterios"], tip: "Lee lo que ya corrió. No crea nada." },
       benchmarks: { title: "Benchmarks", body: "Elegí un caso de prueba por familia.", tags: ["SWE-bench", "Juegos 3D", "Seguridad", "Web"], tip: "Cada caso trae un chequeo que el agente no escribió." },
-      repo: { title: "Tu repo", body: "Revisá el arnés de tu proyecto y llevate lo que sirve.", tags: ["30 segundos", "auditoría", "export"], tip: "No compara nada: revisa un proyecto tuyo y dice qué le falta." }
+      local: { title: "Modelo local", body: "Un modelo en tu notebook, sin internet. ¿Sirve para trabajo real?", tags: ["LM Studio", "Ollama", "OpenCode", "offline"], tip: "Instalá LM Studio u Ollama, encontrá una configuración que entre en tu memoria y corré OpenCode con ese modelo en un caso real o sobre tu propio código." }
     },
     open: "Abrir",
     loopTitle: "El ciclo del lab",
@@ -215,7 +220,7 @@ const MESSAGES = defineMessages({
     routesTitle: "Primer recorrido, según lo que tengas",
     routesNote: "15 a 45 minutos cada uno",
     routes: [
-      { who: "Un modelo local", hint: "LM Studio u Ollama", steps: ["Afinalo en 5 pasos", "Corré clinic-slots-t1", "Comparalo con uno de la nube"], to: "/local/tune" },
+      { who: "Un modelo local", hint: "LM Studio u Ollama, en tu notebook", steps: ["Instalalo y probalo", "OpenCode en clinic-slots-t1", "O sobre tu propio código"], to: "/local/tune" },
       { who: "Una skill nueva", hint: "tuya o de GitHub", steps: ["Importala en Skills", "Minimal vs minimal + skill", "¿Se gana su lugar?"], to: "/evidence/skills?tab=import" },
       { who: "Un modelo frontera nuevo", hint: "el que salió esta semana", steps: ["Compará modelos en un caso 3D", "Mirá qué fases pasó", "Jugá lo que construyó"], to: "/evaluate/compare-models" },
       { who: "El repo de tu equipo", hint: "clonado en tu máquina", steps: ["make harness-check", "Auditalo en la UI", "Llevate lo que le falta"], to: "/evaluate/audit" }

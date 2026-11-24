@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import { EmptyState } from "../components/EmptyState";
@@ -184,7 +184,12 @@ export function AdhocTasks() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [showForm, setShowForm] = useState(false);
+  // `?arm=harness|model` (Tune your local model → "Try it on your code"): open
+  // the form straight away and carry the model to the task, where it is
+  // preselected. Only an answer the chooser can read is carried.
+  const [params] = useSearchParams();
+  const carriedArm = params.get("arm") ?? "";
+  const [showForm, setShowForm] = useState(Boolean(carriedArm));
   const [listing, setListing] = useState<LocalSourceListing | null>(null);
   const [source, setSource] = useState<AdhocSource | null>(null);
   const [busy, setBusy] = useState("");
@@ -295,7 +300,11 @@ export function AdhocTasks() {
         setup_commands: linesOf(setupText),
         validation_commands: linesOf(validationText)
       });
-      navigate(`/adhoc/${created.task_id}`);
+      navigate(
+        carriedArm
+          ? `/adhoc/${created.task_id}?arm=${encodeURIComponent(carriedArm)}`
+          : `/adhoc/${created.task_id}`
+      );
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : m.errors.create);
     } finally {

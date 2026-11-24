@@ -4225,6 +4225,83 @@ button.danger:hover {
   gap: var(--space-4);
 }
 
+/* Tune your local model: the guidance around the form (2026-11-23). */
+.local-tune-intro {
+  margin: 0 0 var(--space-4);
+}
+
+.local-tune-more > summary,
+.local-setup > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.local-tune-more[open] > summary,
+.local-setup[open] > summary {
+  margin-bottom: var(--space-3);
+}
+
+.local-setup-steps {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-3);
+  padding-left: 1.25rem;
+}
+
+.local-setup-command {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-2);
+}
+
+.local-setup-command .command-preview {
+  flex: 1 1 260px;
+  margin: 0;
+}
+
+.local-setup-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin: var(--space-2) 0 0;
+}
+
+.local-runs-url {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.local-runs-url > div {
+  flex: 1 1 320px;
+}
+
+.local-next-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+}
+
+.local-next-cards .card {
+  display: grid;
+  gap: var(--space-2);
+  align-content: start;
+}
+
+.local-next-cards .card h4 {
+  margin: 0;
+}
+
+.local-next-cards .card a {
+  justify-self: start;
+}
+
+.local-next .callout {
+  margin-top: var(--space-2);
+}
+
 .local-test-progress {
   display: grid;
   gap: var(--space-1);

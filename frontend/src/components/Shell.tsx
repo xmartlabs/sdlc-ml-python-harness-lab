@@ -15,9 +15,9 @@ import {
   IconFiles,
   IconFlask,
   IconHome,
+  IconLaptop,
   IconList,
   IconPuzzle,
-  IconRepo,
   IconSettings,
   IconTrendUp
 } from "./icons";
@@ -44,7 +44,7 @@ const MESSAGES = defineMessages({
       models: "Models and harness",
       skills: "Skills",
       benchmarks: "Benchmarks",
-      repo: "Your repo",
+      local: "Local model",
       adhoc: "Ad hoc tasks",
       results: "Results",
       metrics: "Metrics",
@@ -69,7 +69,7 @@ const MESSAGES = defineMessages({
       models: "Modelos y arnés",
       skills: "Skills",
       benchmarks: "Benchmarks",
-      repo: "Tu repo",
+      local: "Modelo local",
       adhoc: "Tareas ad hoc",
       results: "Resultados",
       metrics: "Métricas",
@@ -129,7 +129,6 @@ const NAV_GROUPS: NavGroup[] = [
         icon: IconCpu,
         owns: [
           "/models",
-          "/local/",
           "/evaluate/compare-models",
           "/harness",
           "/evaluate/harness-by-model",
@@ -150,10 +149,14 @@ const NAV_GROUPS: NavGroup[] = [
         owns: ["/evidence/cases"]
       },
       {
-        to: "/your-repo",
-        label: "repo",
-        icon: IconRepo,
-        owns: ["/evaluate/audit", "/evaluate/subject", "/evidence/repositories"]
+        // A model on the operator's own laptop (2026-11-23, ADR-0099): its own
+        // entry, because "can I work offline with it?" is a question people
+        // arrive with. Your repo left the sidebar for Home's first journeys;
+        // its hub and screens keep their routes.
+        to: "/local/tune",
+        label: "local",
+        icon: IconLaptop,
+        owns: ["/local/"]
       },
       {
         to: "/adhoc",

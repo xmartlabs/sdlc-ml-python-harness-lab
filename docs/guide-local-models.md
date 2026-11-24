@@ -1,8 +1,13 @@
 # Tune your local model
 
 How to find a configuration that fits your machine and works for agent tasks, using
-the **Local models → Tune your local model** page. It also explains what each server
-setting does, because the page's tooltips are short and this is where they point.
+the **Local model** page (sidebar → *Try* → **Local model**, or the **Local model**
+door on Home; route `/local/tune`). It also explains what each server setting does,
+because the page's tooltips are short and this is where they point.
+
+The typical use: you are about to work without internet (a trip, a flight) and want
+to know whether a model on your laptop can do real work. The page takes you from
+installing a server to an OpenCode run on a real case or on your own code.
 
 Design: [`superpowers/specs/2026-11-08-local-model-tuning-design.md`](superpowers/specs/2026-11-08-local-model-tuning-design.md).
 Decision: [ADR-0074](adr/0074-the-lab-applies-a-local-configuration-and-verifies-what-was-served.md).
@@ -11,18 +16,64 @@ To measure *how reliably* a model does real work once it runs, continue with
 
 ## What the page does
 
-1. **Your machine.** Pick one of your saved machines (listed first, under *My
-   machines*), a reference machine, or enter your own figures. The lab runs
-   in Docker and the server may be on another computer, so it cannot read your
-   hardware: you tell it. The page shows the command that prints the exact numbers.
-2. **Your server.** LM Studio or Ollama, on `localhost` or a LAN address. *Test
-   connection* lists the models you have downloaded without loading any of them.
+1. **Your machine.** A quick pre-configuration: pick one of your saved machines
+   (listed first, under *My machines*), a reference machine, or the closest one, and go
+   on. The lab runs in Docker and the server may be on another computer, so it cannot
+   read your hardware: these figures only feed the memory estimate. The commands that
+   print the exact numbers, and *Save this machine*, sit under *Fine-tune the figures*.
+2. **Your server.** LM Studio or Ollama, on `localhost` or a LAN address. Until a
+   connection test succeeds the page shows how to set the chosen server up: three
+   steps, one command, and the official download, guide and tool-capable model pages
+   (see [Setting up a server](#setting-up-a-server)). *Test connection* lists the
+   models you have downloaded without loading any of them. When the address differs
+   from the one agent runs use, **Use this server for runs** saves it (see
+   [The tests and the runs use one server](#the-tests-and-the-runs-use-one-server)).
 3. **Your model and configuration.** Choose the settings. The memory bar estimates
    whether they fit before anything is loaded.
 4. **Load and test.** The lab loads the model with your settings, reads back what the
    server *actually* applied, and runs four short tests (a few minutes).
 5. **Result.** One verdict per test, a plain reading of what it means for an agent run,
-   and a profile you can save, compare and hand to *New evaluation*.
+   and a profile you can save and compare. **Now try it on real work** offers two next
+   steps, both with OpenCode and this model already chosen: **Run OpenCode on
+   clinic-slots-t1** (the first rung of the [clinic ladder](guide-small-models.md),
+   20–45 minutes, graded by tests the agent did not write) and **Try it on your code**
+   (an [ad hoc task](guide-adhoc-tasks.md) on a folder of yours, run on a copy). When the
+   agent test failed, the page warns first that a real task will most likely fail too.
+   *New evaluation* stays one click away as the advanced option.
+
+## Setting up a server
+
+The page links out to the official pages instead of copying instructions that change
+with every release (checked 2026-11-23):
+
+| | LM Studio | Ollama |
+|---|---|---|
+| Download | [lmstudio.ai/download](https://lmstudio.ai/download) | [ollama.com/download](https://ollama.com/download) — or `curl -fsSL https://ollama.com/install.sh \| sh` (macOS, Linux) |
+| Start the server | Developer tab → *Status: Running*, or `lms server start` ([guide](https://lmstudio.ai/docs/developer/core/server)) | the app, or `ollama serve` ([quickstart](https://docs.ollama.com/quickstart)) |
+| Address | `http://localhost:1234` | `http://localhost:11434` |
+| Models with tool use | the hammer badge in the app | [ollama.com/search?c=tools](https://ollama.com/search?c=tools) |
+| Context | set per load (this page does it in step 4) | **4k by default** on machines under 24 GB: raise it in the app (*Settings → Context length*) or with `OLLAMA_CONTEXT_LENGTH=32768 ollama serve` ([context length](https://docs.ollama.com/context-length)) |
+
+An agent needs tool use (to read and edit files and run commands) and at least a 32k
+context: the harness's system prompt alone is ~14k tokens. Ollama's 4k default is below
+that, so an unconfigured Ollama cannot run an agent at all.
+
+**`localhost` works from Docker.** When the lab runs in Docker, `localhost` inside the
+container is the container itself; the lab rewrites it to `host.docker.internal` for
+the tests, the model picker and the runs alike. A server on another computer needs
+*Serve on Local Network* (LM Studio) or `OLLAMA_HOST=0.0.0.0` (Ollama), and its LAN
+address here.
+
+## The tests and the runs use one server
+
+The tests on this page talk to the address typed in step 2. Agent runs (OpenCode on a
+case, an ad hoc task, a model comparison) read `LMSTUDIO_BASE_URL` or `OLLAMA_BASE_URL`
+from the lab's settings (*System → Settings → Local runtimes*). When the two differ,
+step 2 says so and offers **Use this server for runs**, which writes the address in its
+`/v1` form (`http://localhost:1234` → `http://localhost:1234/v1`) and refreshes the
+model list. Nothing is written without that click. Runs read the setting at launch, so
+no restart is needed. Step 5 repeats the warning while they still differ, because a
+model tuned on one server and run on another measures neither.
 
 The page never loads or unloads a model while a lab run uses that server without
 asking you first. If you continue anyway, the affected runs get an event saying so, so

@@ -127,6 +127,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0097 — Antigravity CLI can run on the operator's own Google sign-in](0097-antigravity-cli-on-the-operators-google-sign-in.md)
 
 - [0098 — Gameplay uses text actions and a separate simulation clock](0098-gameplay-uses-text-actions-and-a-separate-simulation-clock.md)
+- [0099 — A local model is a door of its own](0099-a-local-model-is-a-door-of-its-own.md)
 
 ## Why ADRs exist
 
