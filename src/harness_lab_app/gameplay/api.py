@@ -31,6 +31,7 @@ class HumanRace(BaseModel):
     model_config = ConfigDict(extra="forbid")
     seed: int = Field(default=7, ge=0, le=2**32 - 1)
     actions: list[Controls] = Field(min_length=1, max_length=600)
+    ghost_episode_id: str | None = Field(default=None, pattern=r"^race-[0-9a-f]{20}$")
 
 
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -63,9 +64,14 @@ def launch(data: ModelRace, session: SessionDep):
 
 @racing_router.post("/human", status_code=201)
 def human(data: HumanRace, session: SessionDep):
-    return RacingService(session).save_human(
-        data.seed, [a.model_dump() for a in data.actions]
-    )
+    try:
+        return RacingService(session).save_human(
+            data.seed, [a.model_dump() for a in data.actions], data.ghost_episode_id
+        )
+    except (ValueError, LookupError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(503, "Game runtime is unavailable") from exc
 
 
 @racing_router.get("/episodes/{episode_id}/replay")
@@ -82,3 +88,26 @@ def cancel(episode_id: str, session: SessionDep):
         return RacingService(session).cancel(episode_id)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+@racing_router.get("/ghosts/{episode_id}")
+def ghost(episode_id: str, session: SessionDep, seed: int = 7):
+    try:
+        return RacingService(session).ghost_reference(episode_id, seed)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, "Ghost incompatible or corrupt: " + str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(503, "Game runtime is unavailable") from exc
+
+
+@racing_router.post("/ghosts/calibration", status_code=201)
+def calibration(session: SessionDep):
+    try:
+        row = RacingService(session).create_calibration()
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(503, "Game runtime is unavailable") from exc
+    if row.state != "completed":
+        raise HTTPException(503, row.failure_reason)
+    return row

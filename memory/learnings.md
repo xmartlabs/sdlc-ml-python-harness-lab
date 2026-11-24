@@ -3809,3 +3809,15 @@ through the repository bind; for an API-key harness it is now masked.
   no JS errors. Review actual headless screenshots, not only process exit status.
 - Replays need the engine fingerprint as well as a human version string. A mismatch
   should fail closed rather than silently compare different rules (ADR-0100).
+
+### Recorded ghosts across browser/server engines (2026-11-24)
+
+- Comparing browser state snapshots bit-for-bit can reject a valid replay after
+  Python JSON re-encoding changes the last binary floating bit. Keep authoritative
+  server replay verification, then allow only1e-9 absolute numerical drift for
+  browser compatibility checks; reject structural or meaningful state differences.
+- Recorded competitors need independent state driven by the human simulation tick,
+  not render wall time or provider latency. A failed partial recording freezes at
+  its known coverage and has no manufactured finish time.
+- Asynchronous reference/playback loading must lock conflicting race transitions;
+  failed loading must not clear an active run's reference attribution.

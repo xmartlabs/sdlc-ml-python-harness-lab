@@ -94,11 +94,21 @@ export function createRacingScene(canvas: HTMLCanvasElement) {
   mesh(new THREE.BoxGeometry(.15, .12, 1.25), pale, 1.6, .7, 0, car);
   mesh(new THREE.BoxGeometry(.35, .15, 1.9), dark, -1.35, 1.2, 0, car);
   for (const x of [-1, 1]) for (const z of [-.85, .85]) mesh(new THREE.CylinderGeometry(.4, .4, .3, 12), tires, x, .4, z, car).rotation.x = Math.PI / 2;
+  // Spectator only: no reference to the human state or collision simulation.
+  const ghostCar = car.clone(); ghostCar.visible = false; scene.add(ghostCar);
+  ghostCar.traverse(object => {
+    if (object instanceof THREE.Mesh) {
+      const ghostMaterial = new THREE.MeshBasicMaterial({ color: '#d7a3ff', transparent: true, opacity: .48, depthWrite: false });
+      object.material = ghostMaterial; materials.push(ghostMaterial); object.castShadow = false; object.receiveShadow = false;
+    }
+  });
   const resize = () => { const width = canvas.clientWidth, height = canvas.clientHeight; renderer.setSize(width, height, false); camera.aspect = width / Math.max(height, 1); camera.updateProjectionMatrix(); };
   const observer = new ResizeObserver(resize); observer.observe(canvas); resize();
   let initialized = false;
   return {
-    render(state: RaceObservation, overview = false) {
+    render(state: RaceObservation, overview = false, ghost?: RaceObservation) {
+      ghostCar.visible = !!ghost;
+      if (ghost) { ghostCar.position.set(ghost.x, .18, ghost.z); ghostCar.rotation.y = -ghost.heading; }
       car.position.set(state.x, .12, state.z); car.rotation.y = -state.heading;
       const target = overview ? new THREE.Vector3(82, 88, 88) : new THREE.Vector3(state.x - Math.cos(state.heading) * 16, 16, state.z - Math.sin(state.heading) * 16);
       camera.position.lerp(target, initialized ? .09 : 1); initialized = true;

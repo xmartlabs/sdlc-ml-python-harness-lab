@@ -18,7 +18,12 @@ from harness_lab_app.gameplay.contracts import (
     Replay,
 )
 from harness_lab_app.gameplay.lmstudio import LMStudioPolicy
-from harness_lab_app.gameplay.racing import RacingEnvironment, after_countdown
+from harness_lab_app.gameplay.racing import (
+    RacingEnvironment,
+    after_countdown,
+    baseline_policy,
+)
+from harness_lab_app.gameplay.replay import verify_replay
 from harness_lab_app.gameplay.runner import run_episode
 from harness_lab_app.llm_transport import setting
 from harness_lab_app.models import GameplayEpisode, utc_now
@@ -91,6 +96,108 @@ class RacingService:
             raise LookupError("Recording is not finalized")
         return Replay.model_validate_json(path.read_text())
 
+    def ghost_reference(self, episode_id: str, seed: int) -> dict[str, Any]:
+        row = self.get(episode_id)
+        if row.controller not in ("model", "calibration"):
+            raise ValueError("Choose a recorded model or scripted calibration run")
+        replay = self.replay(episode_id)
+        config = replay.config
+        if config.seed != seed or (
+            config.tick_rate,
+            config.ticks_per_action,
+            config.max_ticks,
+        ) != (60, 12, 7200):
+            raise ValueError("Ghost requires the same seed and control cadence")
+        if not replay.environment_provenance.get("engine_sha256"):
+            raise ValueError("Ghost recording has no engine fingerprint")
+        with RacingEnvironment() as env:
+            verify_replay(self.runs_dir / episode_id / "gameplay" / "replay.json", env)
+        last = replay.frames[-1].observation if replay.frames else replay.initial
+        progress = last.state.get("progress", 0)
+        if last.tick <= 180 or not isinstance(progress, (int, float)) or progress <= 0:
+            raise ValueError(
+                "Recording has no meaningful racing movement after countdown"
+            )
+        return {
+            "episode_id": episode_id,
+            "label": "SCRIPTED calibration"
+            if row.controller == "calibration"
+            else row.model,
+            "partial": last.state.get("phase") != "finished",
+            "status": replay.result.status,
+            "finish_time_seconds": replay.result.metrics.get("finish_time_seconds"),
+            "recording": replay.model_dump(mode="json"),
+        }
+
+    def _cached_calibration(self, env: RacingEnvironment) -> GameplayEpisode | None:
+        fingerprint = env.provenance.get("engine_sha256")
+        if not fingerprint:
+            return None
+        candidates = self.session.exec(
+            select(GameplayEpisode)
+            .where(
+                GameplayEpisode.controller == "calibration",
+                GameplayEpisode.state == "completed",
+                GameplayEpisode.seed == 7,
+            )
+            .order_by(cast("Any", GameplayEpisode.created_at).desc())
+        )
+        for row in candidates:
+            try:
+                replay = self.replay(row.episode_id)
+            except (ValueError, LookupError, OSError):
+                continue  # Missing or malformed stored artifact, not runtime I/O.
+            if (
+                replay.environment_provenance.get("engine_sha256") != fingerprint
+                or replay.config.seed != 7
+                or (
+                    replay.config.tick_rate,
+                    replay.config.ticks_per_action,
+                    replay.config.max_ticks,
+                )
+                != (60, 12, 7200)
+                or replay.result.metrics.get("finished") != 1
+            ):
+                continue
+            try:
+                verify_replay(
+                    self.runs_dir / row.episode_id / "gameplay" / "replay.json", env
+                )
+            except (ValueError, FileNotFoundError):
+                continue  # Corrupt/disappearing artifact; transport errors propagate.
+            return row
+        return None
+
+    def create_calibration(self) -> GameplayEpisode:
+        """Reuse a verified reference for this build; never a model performance."""
+        with RacingEnvironment() as env:
+            env.reset(7)
+            cached = self._cached_calibration(env)
+            if cached is not None:
+                return cached
+            row = self._new(7, "calibration", "SCRIPTED calibration")
+            self._save(row)
+            try:
+                replay = run_episode(
+                    env,
+                    baseline_policy(env),
+                    self._config(row),
+                    self.runs_dir / row.episode_id / "gameplay",
+                    clock=lambda: 0.0,
+                    policy_provenance={
+                        "controller": "scripted-calibration",
+                        "model_call": False,
+                    },
+                )
+                row.result_json = replay.result.model_dump(mode="json")
+                row.state = "completed"
+            except Exception:
+                row.state = "failed"
+                row.failure_reason = (
+                    "Calibration could not run; check the game runtime."
+                )
+            return self._save(row)
+
     def _save(self, row: GameplayEpisode) -> GameplayEpisode:
         row.updated_at = utc_now()
         self.session.add(row)
@@ -130,7 +237,10 @@ class RacingService:
         return row
 
     def save_human(
-        self, seed: int, controls: list[dict[str, float]]
+        self,
+        seed: int,
+        controls: list[dict[str, float]],
+        ghost_episode_id: str | None = None,
     ) -> GameplayEpisode:
         if not 1 <= len(controls) <= 600:
             raise ValueError("Supply 1 to 600 action intervals")
@@ -145,7 +255,17 @@ class RacingService:
                 raise ValueError("Invalid racing controls")
             if any(item[k] < 0 for k in ("throttle", "brake", "reset")):
                 raise ValueError("Invalid racing controls")
+        ghost = (
+            self.ghost_reference(ghost_episode_id, seed) if ghost_episode_id else None
+        )
         row = self._new(seed, "human")
+        if ghost is not None:
+            row.policy_json = {
+                "ghost_episode_id": ghost_episode_id,
+                "ghost_engine_sha256": ghost["recording"]["environment_provenance"][
+                    "engine_sha256"
+                ],
+            }
         self._save(row)
         index = 0
 
@@ -168,6 +288,7 @@ class RacingService:
                     self.runs_dir / row.episode_id / "gameplay",
                     clock=lambda: 0.0,
                     policy_provenance={
+                        **row.policy_json,
                         "controller": "human-recorded-controls",
                         "input_cadence_hz": 5,
                     },
