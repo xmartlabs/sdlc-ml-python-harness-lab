@@ -88,3 +88,27 @@ playback state changes only after successful request. Independent review P2s res
 
 Ready to commit/push all PR3 files, excluding local user notes/artifacts. Proposed
 body in 2026-11-24-racing-ghost-pr-description.md. No PR4 work or physics/task edits.
+
+## Published handoff
+
+PR2: https://github.com/xmartlabs/sdlc-ml-python-harness-lab/pull/64
+main ← codex/fixed-racing-runtime6531346. GitHub quality+frontend jobs PASSED.
+PR3: https://github.com/xmartlabs/sdlc-ml-python-harness-lab/pull/65
+codex/fixed-racing-runtime ← codex/racing-ghost-challenges4db336c (implementation).
+Both OPEN,non-draft/ready-review,author mmerino-xmartlabs verified via scoped CLI.
+PR3 full pre-push gate passed; GitHub frontend passed,quality running at checkpoint.
+Check the PR's current check rollup for final CI; don't treat pending as green.
+
+Final smoke rerun passed pause/restart/save metadata/transition locks/mobile after
+readability fix. Final saved human test race-f0e4fcef84e74139a990 references scripted
+race-2451fc02e2b34d668eb0; human DNF117s,no fabricated model success. Partial coverage
+is proven by Node freeze tests and Python real timeout fixtures, not a completed
+model lap. Isolated test project/network removed; recordings remain ignored under
+data/runs. No models were loaded. User notes remain untouched/untracked.
+
+No merges performed. PR3 depends on PR2; once #64 merges, retarget #65 to main and
+verify its diff stays ghost-only. PR4 cooking/vision not started. No global/system
+or other-repository changes; task auth remains under /tmp/pr2-xmartlabs-gh. Future
+CLI commands must unset ambient GH/GITHUB tokens, use that config and verify user.
+Runtime image :pr3 is available for local review; `make app-up-prod` rebuilds the
+normal image from the checked-out branch. Last account milestone62%used,25%weekly.
