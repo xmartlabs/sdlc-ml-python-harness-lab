@@ -184,3 +184,22 @@ First pre-push ran Python/sync/rules/HTTP gates successfully but macOS signed
 desktop Node could not load native rolldown. Add explicit FRONTEND_IN_DOCKER=1
 make option to reuse the existing verified Docker target in the full gate. This
 is a host-tool restriction, not a failed container game build. No hook bypasses.
+
+## Pushed; GitHub CLI authentication pending
+
+Implementation commit cef614f and Docker gate follow-up1ccd968 are pushed to
+origin/codex/fixed-racing-runtime through verified github-xmartlabs identity
+mmerino-xmartlabs. Full pre-push `make ci` passed with FRONTEND_IN_DOCKER=1;
+no checks bypassed. User's CONTRIBUTION_IDEAS.local.md remains the only untracked
+file. Public API found no existing PR for this branch before publication.
+
+User explicitly authorized publishing ready for review. No correct-account gh
+credential is available with ambient GH/GITHUB tokens cleared. A task-scoped device
+login is pending using GH_CONFIG_DIR=/tmp/pr2-xmartlabs-gh, global/default accounts
+untouched. User must complete GitHub device authorization as mmerino-xmartlabs.
+After auth, ALWAYS verify `gh api user --jq .login` equals mmerino-xmartlabs with
+both ambient token variables unset and this task config before any mutation.
+Then query PR list for this branch again, create non-draft PR against main using
+/tmp/pr2-ready-body.md (or reconstruct from proposed-description document), verify
+author/base/head/draft/URL and inspect CI. Do not use computer/browser automation,
+the wrong HTTPS fork, default account token, or merge. PR3 remains separate.
