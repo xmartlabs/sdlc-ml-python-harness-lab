@@ -53,3 +53,14 @@ test('malformed URL returns 400 and leaves the runtime alive',()=>withServer(asy
  assert.equal(result,400);
  assert.equal((await fetch(base+'/health')).status,200);
 }));
+
+test('raw backslash cannot turn a public asset request into a private session',()=>withServer(async base=>{
+ for(const method of ['POST','GET']) {
+  const status=await new Promise((resolve,reject)=>{
+   const req=request({hostname:'127.0.0.1',port:new URL(base).port,path:'/game/..\\v1/sessions',method,headers:{'Content-Type':'application/json'}},response=>{response.resume();response.on('end',()=>resolve(response.statusCode));});
+   req.on('error',reject);req.end(method==='POST'?JSON.stringify({seed:7}):undefined);
+  });
+  assert.equal(status,400);
+ }
+ assert.equal((await(await fetch(base+'/health')).json()).sessions,0);
+}));

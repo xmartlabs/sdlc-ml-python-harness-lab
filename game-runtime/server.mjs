@@ -17,6 +17,9 @@ export function createGameServer({maxSessions=32,ttlMs=900_000,staticRoot=fileUR
  const server=createServer(async(request,response)=>{
   prune();
   try {
+   // WHATWG URL normalization treats a raw backslash as a slash. Reject it
+   // before routing so the public /game/ proxy cannot reach private /v1/.
+   if(request.url.includes('\\'))return json(response,400,{error:'Invalid runtime request'});
    const path=new URL(request.url,'http://runtime').pathname;
    if(request.method==='GET' && path==='/health')return json(response,200,{status:'ok',api_version:'game-runtime.v1',environment_id:TRACK.id,environment_version:TRACK.version,engine_sha256:engineHash,node_version:process.version,sessions:sessions.size});
    if(path.startsWith('/v1/')) {

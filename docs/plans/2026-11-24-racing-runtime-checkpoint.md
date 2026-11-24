@@ -203,3 +203,24 @@ Then query PR list for this branch again, create non-draft PR against main using
 /tmp/pr2-ready-body.md (or reconstruct from proposed-description document), verify
 author/base/head/draft/URL and inspect CI. Do not use computer/browser automation,
 the wrong HTTPS fork, default account token, or merge. PR3 remains separate.
+
+## Owner review revision — November24 afternoon
+
+Reviewer marcossotoxl identified a private-session routing bypass (inline4685030406).
+Confirmed before fixing: raw POST /game/..\\v1/sessions returned201 and created a
+session, because WHATWG URL treats backslash as slash after nginx chose /game/.
+Fix rejects raw backslash before URL parsing and restricts the nginx /game/ location
+to GET/HEAD. Permanent Node regression exercises raw POST+GET and asserts zero
+sessions created; failed201before, now passes400. Live nginx validation pending.
+
+PR64 baseline6531346 and PR65baselineac00f62 preserved in backup branches
+codex/review-backup-racing-20261124 and codex/review-backup-ghosts-20261124.
+Demo-only uncommitted docs stashed by explicit path; local user notes excluded.
+PR64 changes go first; PR65 then rebased with exact remote lease and ghost behavior
+preserved. Review snapshot: /tmp/2026-11-24-pr-review-snapshot.json.
+
+Live isolated nginx regression passed: malicious raw-path POST403,GET400; normal
+/game/ GET200; runtime session count stayed0, legitimate internal session POST201
+and deletion succeeded. Only two test-owned containers/network; no inference.
+Evidence /tmp/pr64-review-red.log and /tmp/pr64-review-build.log. All6HTTP Node
+tests pass. Push will run full Python/sync/Docker frontend pre-push gate unchanged.
