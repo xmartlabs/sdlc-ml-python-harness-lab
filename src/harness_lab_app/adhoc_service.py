@@ -19,6 +19,7 @@ benchmark-facing views leave ad hoc work out without a join (``is_adhoc_*``).
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from datetime import UTC, datetime
@@ -240,7 +241,7 @@ def _source_state(task: AdhocTask) -> dict[str, Any]:
             "head_moved_by": None,
         }
     moved: int | None = None
-    if state.get("head"):
+    if state.get("head") and not task.pr_ref:
         from harness_lab_app.local_sources_service import resolve
 
         code, out, _ = adhoc_git.git(
@@ -251,6 +252,61 @@ def _source_state(task: AdhocTask) -> dict[str, Any]:
             moved = int(out.strip())
     state["head_moved_by"] = moved
     return state
+
+
+# --------------------------------------------------------------------------
+# Reviewing a pull request (ADR-0100)
+# --------------------------------------------------------------------------
+
+REVIEW_DEPTHS = ("quick", "standard", "deep")
+_REMOTE_SLUG = re.compile(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$")
+
+
+def _repo_slug(folder: Path) -> str:
+    """``owner/name`` from the folder's origin, SSH host aliases included."""
+    _, remote, _ = adhoc_git.git(["config", "--get", "remote.origin.url"], folder)
+    match = _REMOTE_SLUG.search(remote.strip())
+    return f"{match.group(1)}/{match.group(2)}" if match else ""
+
+
+def review_prompt(
+    *,
+    pr: str,
+    merge_base: str,
+    base_ref: str,
+    title: str = "",
+    body: str = "",
+    depth: str = "standard",
+    stat: str = "",
+) -> str:
+    """The task an unattended review run gets: the range, the PR, the output.
+
+    The range is a SHA, not ``origin/<base>``: the run's workspace is a clone
+    of the lab's copy and has no remote-tracking branches.
+    """
+    lines = [
+        f"Review pull request {pr}. Its head is checked out here (HEAD).",
+        f"Review the range `{merge_base}...HEAD` (where it leaves `{base_ref}`).",
+    ]
+    if stat:
+        lines.append(f"Size: {stat}.")
+    if title.strip():
+        lines += ["", f"PR title: {title.strip()}"]
+    if body.strip():
+        lines += ["", "PR description:", body.strip()[:6000]]
+    lines += [
+        "",
+        f"Unattended run: depth = {depth}. Nobody is there to answer a question "
+        "and nothing is published. There is no GitHub access here; work "
+        "from the local git range. Run the repository's own checks that work "
+        "without external services, and report the ones you could not run.",
+        "",
+        "Write the review to `review.json` at the repository root: a verdict, a "
+        "one-sentence summary, and findings with file, line (in the new file), "
+        "severity, title, explanation and suggestion. Do not change, commit or "
+        "delete any other file.",
+    ]
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------
@@ -272,24 +328,48 @@ class AdhocService:
         title: str = "",
         setup_commands: list[str] | None = None,
         validation_commands: list[str] | None = None,
+        trial_skill: str = "",
+        invoke_trial_skill: bool = False,
+        head_ref: str = "",
+        pr_ref: str = "",
+        pr_base_ref: str = "",
     ) -> AdhocTask:
-        """Copy the folder into the lab, pin its HEAD, and register the task."""
+        """Copy the folder into the lab, pin a commit, and register the task.
+
+        The pinned commit is the folder's HEAD, or ``head_ref`` when given (a
+        branch or SHA the folder already has — how a pull request's head is
+        reviewed without checking it out over the operator's work). The folder
+        is only read either way.
+        """
         from harness_lab_app.checkout_service import CheckoutError
         from harness_lab_app.local_sources_service import host_view_of, resolve
 
         text = (prompt or "").strip()
         if not text:
             raise AdhocError("A task needs a prompt.")
+        trial = (trial_skill or "").strip()
+        if invoke_trial_skill and not trial:
+            raise AdhocError("Pick the skill to try before asking the agent to use it.")
+        if trial:
+            self._require_staged_skill(trial)
         folder = resolve(source)
         if not (folder / ".git").exists():
             raise AdhocError(f"{host_view_of(folder)} is not a git repository.")
-        code, head, _ = adhoc_git.git(["rev-parse", "HEAD"], folder)
+        ref = (head_ref or "").strip()
+        code, head, _ = adhoc_git.git(
+            ["rev-parse", "--verify", "--quiet", f"{ref or 'HEAD'}^{{commit}}"], folder
+        )
         if code != 0:
+            if ref:
+                raise AdhocError(f"{host_view_of(folder)} has no commit '{ref}'.")
             raise AdhocError(
                 "The repository has no commits yet: commit something first."
             )
         base_commit = head.strip()
-        _, branch, _ = adhoc_git.git(["symbolic-ref", "--short", "HEAD"], folder)
+        if ref:
+            branch = ref
+        else:
+            _, branch, _ = adhoc_git.git(["symbolic-ref", "--short", "HEAD"], folder)
 
         task_id = self._next_task_id(folder.name)
         checkout = get_settings().checkouts_dir / task_id
@@ -342,6 +422,10 @@ class AdhocService:
             case_id=task_id,
             setup_commands=list(target.setup_commands),
             validation_commands=list(target.validation_commands),
+            trial_skill=trial,
+            invoke_trial_skill=bool(trial) and invoke_trial_skill,
+            pr_ref=(pr_ref or "").strip(),
+            pr_base_ref=(pr_base_ref or "").strip(),
         )
         self.session.add(target)
         self.session.add(case)
@@ -349,6 +433,130 @@ class AdhocService:
         self.session.commit()
         self.session.refresh(task)
         return task
+
+    def create_pr_review_task(
+        self,
+        source: str,
+        pr_number: int,
+        head_ref: str,
+        base_ref: str = "origin/main",
+        repo: str = "",
+        pr_title: str = "",
+        pr_body: str = "",
+        trial_skill: str = "",
+        invoke_trial_skill: bool = False,
+        depth: str = "standard",
+    ) -> AdhocTask:
+        """A task that reviews one pull request (ADR-0100).
+
+        The PR's head must already be in the folder (a branch or a fetched
+        ``refs/pull/N/head``): the lab container holds no credential for the
+        operator's remote, and the folder is only read. The review range is
+        pinned as ``<merge-base>...HEAD`` by SHA because the run's workspace is
+        a plain clone of the lab's copy and carries no remote-tracking branch.
+        """
+        from harness_lab_app.local_sources_service import host_view_of, resolve
+
+        if pr_number < 1:
+            raise AdhocError("A pull request number is a positive integer.")
+        if depth not in REVIEW_DEPTHS:
+            raise AdhocError(f"depth must be one of {', '.join(REVIEW_DEPTHS)}.")
+        head = (head_ref or "").strip()
+        base = (base_ref or "").strip() or "origin/main"
+        if not head:
+            raise AdhocError("Name the branch or commit that holds the PR's head.")
+        folder = resolve(source)
+        if not (folder / ".git").exists():
+            raise AdhocError(f"{host_view_of(folder)} is not a git repository.")
+        # Each side checked alone, so the error names the one that is missing:
+        # a base left at "origin/main" on a master repo is not a PR to fetch.
+        for ref, fix in (
+            (head, f"git fetch origin +pull/{pr_number}/head:pr-{pr_number}"),
+            (base, "git fetch origin, then name the PR's base branch"),
+        ):
+            code, _, _ = adhoc_git.git(
+                ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], folder
+            )
+            if code != 0:
+                raise AdhocError(
+                    f"'{ref}' is not a branch or commit in "
+                    f"{host_view_of(folder)}. Run: {fix}."
+                )
+        code, merge_base, _ = adhoc_git.git(["merge-base", base, head], folder)
+        if code != 0 or not merge_base.strip():
+            raise AdhocError(
+                f"'{head}' and '{base}' share no history in "
+                f"{host_view_of(folder)}: is '{base}' the PR's base branch?"
+            )
+        merge_base = merge_base.strip()
+        _, files, _ = adhoc_git.git(
+            ["diff", "--shortstat", f"{merge_base}...{head}"], folder
+        )
+        name = repo.strip() or _repo_slug(folder) or folder.name
+        prompt = review_prompt(
+            pr=f"{name}#{pr_number}",
+            merge_base=merge_base,
+            base_ref=base,
+            title=pr_title,
+            body=pr_body,
+            depth=depth,
+            stat=files.strip(),
+        )
+        return self.create_task(
+            source,
+            prompt,
+            title=f"Review PR #{pr_number}"
+            + (f": {pr_title.strip()}" if pr_title.strip() else ""),
+            trial_skill=trial_skill,
+            invoke_trial_skill=invoke_trial_skill,
+            head_ref=head,
+            pr_ref=f"{name}#{pr_number}",
+            pr_base_ref=merge_base,
+        )
+
+    def _require_staged_skill(self, name: str) -> None:
+        from harness_lab_app.models import StagedSkill
+
+        skill = self.session.exec(
+            select(StagedSkill).where(StagedSkill.name == name)
+        ).first()
+        if skill is None or skill.status == "archived":
+            raise AdhocError(f"No staged skill named '{name}'.")
+
+    def _trial_skill_hashes(self, names: list[str]) -> dict[str, str]:
+        """Each staged skill's content hash now, as the run will see it."""
+        from harness_lab_app.models import StagedSkill
+
+        if not names:
+            return {}
+        rows = self.session.exec(
+            select(StagedSkill).where(StagedSkill.name.in_(names))  # type: ignore[attr-defined]
+        ).all()
+        return {row.name: row.content_hash or "" for row in rows}
+
+    def _record_ran_skill_hashes(self, row: AdhocRun, directory: Path) -> bool:
+        """Swap the launch-time hashes for the ones the run itself recorded.
+
+        The launch reads the staged copy when the run is queued; the worker
+        materializes it later. An edit in between would label the run with a
+        version it never ran, so ``metadata.json`` (hashed by the runner from
+        the tree it copied) wins whenever it is there.
+        """
+        if not row.trial_skill_hashes:
+            return False
+        try:
+            meta = json.loads((directory / "metadata.json").read_text())
+        except (OSError, ValueError):
+            return False
+        ran = meta.get("skills_extra_hashes") if isinstance(meta, dict) else None
+        if not isinstance(ran, dict) or not ran:
+            return False
+        merged = {**row.trial_skill_hashes, **{str(k): str(v) for k, v in ran.items()}}
+        if merged == row.trial_skill_hashes:
+            return False
+        row.trial_skill_hashes = merged
+        self.session.add(row)
+        return True
 
     def _next_task_id(self, folder_name: str) -> str:
         stem = f"{PREFIX}{_slug(folder_name)}"
@@ -605,6 +813,7 @@ class AdhocService:
                 run_id=run.run_id,
                 task_id=task.task_id,
                 harness_level=(harness_level or "repo").strip(),
+                trial_skill_hashes=self._trial_skill_hashes([trial] if trial else []),
             )
         )
         self.session.commit()
@@ -636,6 +845,7 @@ class AdhocService:
             "harness_level": row.harness_level,
             "trial_skills": list(config.skills_extra) if config else [],
             "skills_invoked": list(config.skills_invoke) if config else [],
+            "trial_skill_hashes": dict(row.trial_skill_hashes or {}),
             "created_at": row.created_at.isoformat(),
             "started_at": run.started_at.isoformat()
             if run and run.started_at
@@ -764,10 +974,12 @@ class AdhocService:
         run = self.session.exec(select(Run).where(Run.run_id == run_id)).first()
         if run is None or run.state in LIVE_RUN_STATES:
             return
+        directory = get_settings().data_runs_dir / run_id
+        if self._record_ran_skill_hashes(row, directory) and commit:
+            self.session.commit()
         validation = self.session.exec(
             select(Validation).where(Validation.run_id == run_id)
         ).first()
-        directory = get_settings().data_runs_dir / run_id
         cost = dict(validation.cost) if validation and validation.cost else {}
         if not cost.get("available"):
             cost = collect_cost(directory)

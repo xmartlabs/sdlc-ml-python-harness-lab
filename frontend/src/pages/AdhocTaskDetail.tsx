@@ -38,6 +38,7 @@ const MESSAGES = defineMessages({
     prompt: "Prompt",
     folder: "Folder",
     baseCommit: "Base commit",
+    reviewsPr: (pr: string, base: string) => `Reviews ${pr} · range ${base}…HEAD`,
     headMoved: (n: number) =>
       `Your repo moved ${n} commits since this task was created: applying may conflict.`,
     runWith: "Run with…",
@@ -114,6 +115,7 @@ const MESSAGES = defineMessages({
     prompt: "Prompt",
     folder: "Carpeta",
     baseCommit: "Commit base",
+    reviewsPr: (pr: string, base: string) => `Revisa ${pr} · rango ${base}…HEAD`,
     headMoved: (n: number) =>
       `Tu repo avanzó ${n} commits desde que se creó esta tarea: aplicar puede generar conflictos.`,
     runWith: "Correr con…",
@@ -202,6 +204,12 @@ function costCell(run: AdhocRunRecord, m: (typeof MESSAGES)["en"]): string {
   return m.runs.none;
 }
 
+/** "name@abc1234": which version of a staged skill a run tried (ADR-0100). */
+function skillWithVersion(name: string, hashes?: Record<string, string>): string {
+  const hash = hashes?.[name] ?? "";
+  return hash ? `${name}@${hash.replace(/^sha256:/, "").slice(0, 7)}` : name;
+}
+
 export function AdhocTaskDetailPage() {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
@@ -222,6 +230,10 @@ export function AdhocTaskDetailPage() {
   const [launching, setLaunching] = useState(false);
   const runPanelRef = useRef<HTMLDivElement | null>(null);
 
+  const [stagedLoaded, setStagedLoaded] = useState(false);
+  // The task whose default skill already seeded the panel. Keyed by task, not
+  // a boolean: the router reuses this page when the task id changes.
+  const preselectedFor = useRef<string | null>(null);
   const load = useCallback(() => {
     if (!taskId) return;
     api
@@ -234,9 +246,28 @@ export function AdhocTaskDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
 
+  // Another task: start from a clean panel and that task's own runs.
   useEffect(() => {
+    setDetail(null);
+    setSelectedRunId(null);
+    setTrialSkill("");
+    setInvokeTrial(false);
     load();
   }, [load]);
+
+  // The skill picked at creation (ADR-0100) is the panel's starting point, set
+  // once per task so a later poll never undoes the operator's change. Only a
+  // skill still offered in the list: an archived default would show "None"
+  // while the launch still sent it, and the API would refuse the run.
+  useEffect(() => {
+    if (!detail || !stagedLoaded || detail.task.task_id !== taskId) return;
+    if (preselectedFor.current === taskId) return;
+    preselectedFor.current = taskId;
+    const wanted = detail.task.trial_skill ?? "";
+    const offered = Boolean(wanted) && staged.some((skill) => skill.name === wanted);
+    setTrialSkill(offered ? wanted : "");
+    setInvokeTrial(offered && Boolean(detail.task.invoke_trial_skill));
+  }, [detail, staged, stagedLoaded, taskId]);
 
   // What each harness level carries, and the staged skills one can try.
   useEffect(() => {
@@ -247,7 +278,8 @@ export function AdhocTaskDetailPage() {
     api
       .listStagedSkills()
       .then((rows) => setStaged(rows.filter((row) => row.status !== "archived")))
-      .catch(() => setStaged([]));
+      .catch(() => setStaged([]))
+      .finally(() => setStagedLoaded(true));
   }, []);
 
   // Poll while anything on this task is still moving.
@@ -344,6 +376,9 @@ export function AdhocTaskDetailPage() {
           <p className="mono small">
             {m.folder}: {task.host_path} · {task.branch} · {m.baseCommit} {task.base_commit.slice(0, 8)}
           </p>
+          {task.pr_ref ? (
+            <p className="mono small">{m.reviewsPr(task.pr_ref, (task.pr_base_ref ?? "").slice(0, 8))}</p>
+          ) : null}
         </div>
         <div className="page-header-action button-row">
           <button
@@ -467,7 +502,7 @@ export function AdhocTaskDetailPage() {
                   <td>{harnessLabel(run.harness)}</td>
                   <td className="small">
                     {m.level.names[run.harness_level ?? "repo"]}
-                    {run.trial_skills?.length ? ` + ${run.trial_skills.join(", ")}` : ""}
+                    {run.trial_skills?.length ? ` + ${run.trial_skills.map((name) => skillWithVersion(name, run.trial_skill_hashes)).join(", ")}` : ""}
                     {run.skills_invoked?.length ? " *" : ""}
                   </td>
                   <td className="mono small">{run.executor_model}</td>

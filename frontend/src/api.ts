@@ -107,6 +107,7 @@ import type {
   StagedSkillPromoteResult,
   StagedSkillRecord,
   AdhocHarnessLevel,
+  AdhocReviewDepth,
   AdhocDeleteUnkeptResult,
   SuggestionRecord,
   SwebenchProInstance,
@@ -971,8 +972,27 @@ export const api = {
     prompt: string;
     setup_commands?: string[];
     validation_commands?: string[];
+    trial_skill?: string;
+    invoke_trial_skill?: boolean;
   }) =>
     request<AdhocTask>("/api/adhoc/tasks", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  /** Review one pull request whose head is already in the folder (ADR-0100). */
+  createAdhocPrReview: (payload: {
+    source: string;
+    pr_number: number;
+    head_ref: string;
+    base_ref?: string;
+    repo?: string;
+    pr_title?: string;
+    pr_body?: string;
+    depth?: AdhocReviewDepth;
+    trial_skill?: string;
+    invoke_trial_skill?: boolean;
+  }) =>
+    request<AdhocTask>("/api/adhoc/pr-reviews", {
       method: "POST",
       body: JSON.stringify(payload)
     }),

@@ -580,6 +580,7 @@ def test_the_router_is_mounted_and_owns_the_contract_routes():
         "/api/adhoc/tasks",
         "/api/adhoc/tasks/{task_id}",
         "/api/adhoc/tasks/{task_id}/runs",
+        "/api/adhoc/pr-reviews",
         "/api/adhoc/runs/{run_id}",
         "/api/adhoc/runs/{run_id}/patch",
         "/api/adhoc/runs/{run_id}/apply-check",
@@ -875,3 +876,154 @@ def test_the_delete_unkept_route_is_on_the_router():
     }
     assert ("/api/adhoc/tasks/delete-unkept", "POST") in routes
     assert ("/api/adhoc/tasks/{task_id}", "DELETE") in routes
+
+
+# ---- ADR-0100: a skill to try from the start, its version, and PR reviews ----
+
+
+def _stage(session: Session, name: str, content_hash: str) -> None:
+    from harness_lab_app.models import StagedSkill
+
+    session.add(StagedSkill(name=name, content="x", content_hash=content_hash))
+    session.commit()
+
+
+def test_a_task_carries_the_skill_to_try_picked_at_creation(session, lab):
+    _stage(session, "review_pr", "aaa111")
+
+    task = AdhocService(session).create_task(
+        "shop", "Review it.", trial_skill="review_pr", invoke_trial_skill=True
+    )
+
+    body = AdhocService._task_dict(task)
+    assert body["trial_skill"] == "review_pr"
+    assert body["invoke_trial_skill"] is True
+
+
+def test_a_task_refuses_a_skill_that_is_not_staged(session, lab):
+    with pytest.raises(AdhocError, match="No staged skill"):
+        AdhocService(session).create_task("shop", "Do it.", trial_skill="ghost")
+    with pytest.raises(AdhocError, match="skill to try"):
+        AdhocService(session).create_task("shop", "Do it.", invoke_trial_skill=True)
+
+
+def test_each_run_records_the_version_of_the_skill_it_tried(session, lab):
+    from harness_lab_app.models import StagedSkill
+
+    _stage(session, "review_pr", "v1hash")
+    task = _task(session, lab)
+    service = AdhocService(session)
+    first = service.launch_run(task.task_id, harness="claude", trial_skill="review_pr")
+    skill = session.exec(
+        select(StagedSkill).where(StagedSkill.name == "review_pr")
+    ).one()
+    skill.content_hash = "v2hash"  # the operator edited the staged copy
+    session.add(skill)
+    session.commit()
+    second = service.launch_run(task.task_id, harness="claude", trial_skill="review_pr")
+    plain = service.launch_run(task.task_id, harness="claude")
+
+    assert first["trial_skill_hashes"] == {"review_pr": "v1hash"}
+    assert second["trial_skill_hashes"] == {"review_pr": "v2hash"}
+    assert plain["trial_skill_hashes"] == {}
+
+
+def test_a_run_keeps_the_skill_version_it_actually_ran(session, lab):
+    """Edited while queued: the run's own metadata.json wins over launch time."""
+    _stage(session, "review_pr", "v1hash")
+    task = _task(session, lab)
+    service = AdhocService(session)
+    run_id = service.launch_run(
+        task.task_id, harness="claude", trial_skill="review_pr"
+    )["run_id"]
+    run_dir = lab["settings"].data_runs_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "metadata.json").write_text(
+        json.dumps({"skills_extra_hashes": {"review_pr": "v2hash"}})
+    )
+    run = session.exec(select(Run).where(Run.run_id == run_id)).one()
+    run.state = RunState.completed
+    session.add(run)
+    session.commit()
+
+    service.capture_metrics(run_id)
+
+    assert service.run_record(run_id)["trial_skill_hashes"] == {"review_pr": "v2hash"}
+
+
+def _pr_branch(repo: Path) -> tuple[str, str]:
+    """A main that moved on after a PR branch left it; (merge-base, PR head)."""
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "pr-7")
+    (repo / "app.py").write_text("def total(items):\n    return sum(items or [])\n")
+    _git(repo, "commit", "-q", "-am", "handle None")
+    head = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "main")
+    (repo / "README.md").write_text("# shop\nmoved on\n")
+    _git(repo, "commit", "-q", "-am", "main moved")
+    return base, head
+
+
+def test_a_pr_review_pins_the_pr_head_and_the_range_by_sha(session, lab):
+    merge_base, head = _pr_branch(lab["repo"])
+    _stage(session, "review_pr", "h")
+
+    task = AdhocService(session).create_pr_review_task(
+        "shop",
+        7,
+        "pr-7",
+        base_ref="main",
+        repo="acme/shop",
+        pr_title="Handle a missing cart",
+        pr_body="Fixes #3.",
+        trial_skill="review_pr",
+        invoke_trial_skill=True,
+    )
+
+    assert task.base_commit == head
+    assert task.pr_ref == "acme/shop#7"
+    assert task.pr_base_ref == merge_base
+    # The run's workspace has no origin/* refs, so the range must be a SHA.
+    assert f"`{merge_base}...HEAD`" in task.prompt
+    assert "Handle a missing cart" in task.prompt and "Fixes #3." in task.prompt
+    assert "review.json" in task.prompt
+    assert task.trial_skill == "review_pr" and task.invoke_trial_skill
+    # The operator's folder is only read: still on main, nothing checked out.
+    assert _git(lab["repo"], "symbolic-ref", "--short", "HEAD") == "main"
+    copy = lab["settings"].checkouts_dir / task.task_id
+    assert _git(copy, "rev-parse", "HEAD") == head
+    assert _git(copy, "cat-file", "-t", merge_base) == "commit"
+
+
+def test_a_pr_review_task_does_not_warn_that_the_folder_moved(session, lab):
+    _pr_branch(lab["repo"])
+    task = AdhocService(session).create_pr_review_task(
+        "shop", 7, "pr-7", base_ref="main"
+    )
+
+    assert (
+        AdhocService(session).task_detail(task.task_id)["source"]["head_moved_by"]
+        is None
+    )
+
+
+def test_a_pr_review_explains_a_head_or_base_it_cannot_find(session, lab):
+    service = AdhocService(session)
+    with pytest.raises(AdhocError, match=r"'no-such-branch'.*\+pull/7/head:pr-7"):
+        service.create_pr_review_task("shop", 7, "no-such-branch", base_ref="main")
+    # A missing base is named as the base, not blamed on the PR head.
+    with pytest.raises(AdhocError, match=r"'origin/main'.*base branch"):
+        service.create_pr_review_task("shop", 7, "main", base_ref="origin/main")
+    with pytest.raises(AdhocError, match="depth"):
+        service.create_pr_review_task("shop", 7, "main", depth="huge")
+    with pytest.raises(AdhocError, match="branch or commit"):
+        service.create_pr_review_task("shop", 7, "  ")
+
+
+def test_the_repo_slug_reads_ssh_host_aliases(tmp_path):
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "remote", "add", "origin", "git@github-work:Acme-Corp/ivy-backend.git")
+
+    assert adhoc_service._repo_slug(repo) == "Acme-Corp/ivy-backend"

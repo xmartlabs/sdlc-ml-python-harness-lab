@@ -6243,6 +6243,24 @@ button.guide-option[aria-pressed="true"] { border-color: var(--accent); backgrou
   gap: 4px;
 }
 
+/* The grid above stacked the checkbox over its text; keep them on one line. */
+.adhoc-trial label.inline-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* New task form (ADR-0100): the PR fields, and the skill picked up front. */
+.adhoc-pr-form .segmented {
+  align-self: flex-start;
+  flex-wrap: wrap;
+}
+
+.adhoc-form-trial {
+  margin-top: var(--space-4, 16px);
+  margin-bottom: var(--space-3, 12px);
+}
+
 /* Ad hoc task list: keep (star) and delete. */
 .adhoc-list-head {
   display: flex;
