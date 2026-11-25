@@ -99,7 +99,11 @@ def _finding(severity: str = "menor", line: int = 11, path: str = "src/app.py") 
         "path": path,
         "line": line,
         "severity": severity,
-        "comment": "**Menor:** algo.",
+        "worth": 5 if severity == "importante" else 3,
+        "quote": "second added",
+        "comment": (
+            "**Importante:** algo." if severity == "importante" else "**Menor:** algo."
+        ),
     }
 
 
@@ -171,6 +175,184 @@ class PayloadTests(unittest.TestCase):
                 self.build([_finding() | {"comment": text}])
         with self.assertRaises(prdiff.PayloadError):
             self.build([_finding() | {"comment": "falla -- arreglalo `x`"}])
+
+
+class QualityGateTests(unittest.TestCase):
+    """What a finding must carry before it can be posted or exported."""
+
+    def build(self, findings: list[dict], **kw) -> tuple[dict, dict]:
+        args = {"sha": SHA, "author": "someone", "me": "reviewer"} | kw
+        return prdiff.build(
+            {"body": "Body.", "findings": findings}, COMMENTABLE, **args
+        )
+
+    def test_a_finding_without_a_quote_is_refused(self) -> None:
+        for quote in (None, "", "   "):
+            with self.subTest(quote=quote), self.assertRaises(prdiff.PayloadError):
+                self.build([_finding() | {"quote": quote}])
+
+    def test_worth_must_be_1_to_5(self) -> None:
+        for worth in (None, 0, 6, "5", True, 4.0):
+            with self.subTest(worth=worth), self.assertRaises(prdiff.PayloadError):
+                self.build([_finding() | {"worth": worth}])
+
+    def test_importante_needs_a_traced_worth(self) -> None:
+        with self.assertRaises(prdiff.PayloadError):
+            self.build([_finding("importante") | {"worth": 3}])
+        self.build([_finding("importante") | {"worth": 4}])
+        # A low worth is fine on a minor finding.
+        self.build([_finding() | {"worth": 1}])
+
+    def test_the_label_matches_severity_and_language(self) -> None:
+        with self.assertRaises(prdiff.PayloadError):
+            self.build([_finding() | {"comment": "**Importante:** algo."}])
+        with self.assertRaises(prdiff.PayloadError):
+            self.build([_finding()], lang="en")
+        english = _finding() | {"comment": "**Minor:** something."}
+        payload, _ = self.build([english], lang="en")
+        self.assertEqual(payload["comments"][0]["body"], "**Minor:** something.")
+        with self.assertRaises(prdiff.PayloadError):
+            self.build([english], lang="fr")
+
+    def test_outside_the_diff_header_follows_the_language(self) -> None:
+        english = _finding(line=99) | {"comment": "**Minor:** something."}
+        payload, _ = self.build([english], lang="en")
+        self.assertIn("Outside the diff:", payload["body"])
+        payload, _ = self.build([_finding(line=99)])
+        self.assertIn("Fuera del diff:", payload["body"])
+
+
+def _files(*entries: tuple[str, int]) -> list[dict]:
+    return [
+        {"path": p, "added": n, "deleted": 0, "generated": False, "binary": False}
+        for p, n in entries
+    ]
+
+
+class PlanTests(unittest.TestCase):
+    def test_small_and_safe_is_quick_with_no_questions(self) -> None:
+        result = prdiff.plan(_files(("src/a.py", 20), ("tests/test_a.py", 30)))
+        self.assertEqual((result["depth"], result["questions"]), ("quick", 0))
+
+    def test_a_risky_path_is_deep_whatever_the_size(self) -> None:
+        for path in (
+            ".github/workflows/ci.yml",
+            "src/auth/session.py",
+            "migrations/0054_x.py",
+            "deploy/helm/values.yaml",
+            "Dockerfile",
+        ):
+            with self.subTest(path=path):
+                result = prdiff.plan(_files((path, 2)))
+                self.assertEqual(result["depth"], "deep")
+                self.assertEqual(result["questions"], 12)
+                self.assertIn(path, result["risky"])
+
+    def test_a_word_inside_a_name_is_not_a_risky_path(self) -> None:
+        # "author" contains "auth"; "tokenizer" contains "token".
+        result = prdiff.plan(
+            _files(("src/author_list.py", 10), ("src/tokenizer.py", 10))
+        )
+        self.assertEqual(result["risky"], [])
+
+    def test_medium_is_standard_and_huge_is_deep(self) -> None:
+        self.assertEqual(prdiff.plan(_files(("src/a.py", 200)))["depth"], "standard")
+        self.assertEqual(
+            prdiff.plan(_files(*[(f"src/m{i}.py", 10) for i in range(4)]))["depth"],
+            "standard",
+        )
+        self.assertEqual(prdiff.plan(_files(("src/a.py", 2000)))["depth"], "deep")
+
+    def test_generated_and_binary_files_do_not_count(self) -> None:
+        files = [
+            *_files(("src/a.py", 10)),
+            {
+                "path": "uv.lock",
+                "added": 5000,
+                "deleted": 0,
+                "generated": True,
+                "binary": False,
+            },
+            {
+                "path": "img.png",
+                "added": 0,
+                "deleted": 0,
+                "generated": False,
+                "binary": True,
+            },
+        ]
+        result = prdiff.plan(files)
+        self.assertEqual(
+            (result["depth"], result["files"], result["lines"]), ("quick", 1, 10)
+        )
+
+    def test_asked_depth_and_question_count_win(self) -> None:
+        result = prdiff.plan(_files((".github/workflows/ci.yml", 2)), depth="quick")
+        self.assertEqual((result["depth"], result["questions"]), ("quick", 0))
+        result = prdiff.plan(_files(("src/a.py", 10)), depth="quick", questions=3)
+        self.assertEqual(result["questions"], 3)
+        with self.assertRaises(prdiff.PayloadError):
+            prdiff.plan(_files(("src/a.py", 10)), depth="lite")
+        with self.assertRaises(prdiff.PayloadError):
+            prdiff.plan(_files(("src/a.py", 10)), questions=-1)
+
+    def test_a_custom_risk_pattern_replaces_the_default(self) -> None:
+        result = prdiff.plan(_files(("src/console/server.py", 10)), risk=r"console/")
+        self.assertEqual(result["depth"], "deep")
+
+
+class ExportTests(unittest.TestCase):
+    def test_the_unattended_shape(self) -> None:
+        doc = {
+            "summary": "Adds a route.",
+            "findings": [
+                _finding() | {"title": "small", "worth": 2},
+                _finding("importante") | {"title": "big", "suggestion": "Guard it."},
+            ],
+        }
+        result = prdiff.export(doc, sha=SHA)
+        self.assertEqual(result["verdict"], "changes_suggested")
+        self.assertEqual(result["commit"], SHA)
+        # Highest worth first.
+        self.assertEqual([f["title"] for f in result["findings"]], ["big", "small"])
+        self.assertEqual(
+            set(result["findings"][0]),
+            {
+                "file",
+                "line",
+                "severity",
+                "worth",
+                "title",
+                "quote",
+                "explanation",
+                "suggestion",
+            },
+        )
+        self.assertEqual(result["findings"][0]["suggestion"], "Guard it.")
+
+    def test_clean_and_refusals(self) -> None:
+        self.assertEqual(
+            prdiff.export({"summary": "Fine."}, sha=SHA)["verdict"], "clean"
+        )
+        with self.assertRaises(prdiff.PayloadError):
+            prdiff.export({"summary": ""}, sha=SHA)
+        with self.assertRaises(prdiff.PayloadError):
+            prdiff.export({"summary": "x"}, sha="HEAD")
+        with self.assertRaises(prdiff.PayloadError):
+            prdiff.export(
+                {"summary": "x", "findings": [_finding() | {"quote": ""}]}, sha=SHA
+            )
+
+    def test_cli_writes_the_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "findings.json"
+            src.write_text(json.dumps({"summary": "Fine."}), encoding="utf-8")
+            out = Path(tmp) / "review.json"
+            self.assertEqual(
+                prdiff.main(["export", str(src), "--sha", SHA, "-o", str(out)]), 0
+            )
+            self.assertEqual(json.loads(out.read_text())["verdict"], "clean")
+            self.assertEqual(prdiff.main(["export", str(src), "--sha", "bad"]), 2)
 
 
 if __name__ == "__main__":
