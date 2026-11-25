@@ -40,8 +40,10 @@ python3 -I "$SKILL_DIR/scripts/prdiff.py" export "$T/findings.json" \
   --sha "$SHA" --lang <es|en> -o review.json
 ```
 
-`export` runs the same checks as `payload` (quote, worth, labels, punctuation)
-and writes, highest worth first:
+`export` runs the same checks as `payload` (quote, worth, labels, punctuation),
+also refuses a finding without a `title`, drops the `**Importante:**` /
+`**Menor:**` label from `explanation` (severity is its own field) and writes,
+highest worth first:
 
 ```json
 {"schema": 1, "commit": "<sha>", "verdict": "changes_suggested" | "clean",

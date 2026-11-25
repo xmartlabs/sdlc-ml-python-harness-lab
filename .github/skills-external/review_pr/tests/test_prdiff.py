@@ -241,6 +241,16 @@ class PlanTests(unittest.TestCase):
             "migrations/0054_x.py",
             "deploy/helm/values.yaml",
             "Dockerfile",
+            "src/payments/charge.py",
+            "config/credentials.json",
+            "app/permissions.py",
+            "src/authentication/login.py",
+            "src/oauth/flow.py",
+            "db/migrate/001.rb",
+            "Data/Migrations/X.cs",
+            "src/Auth/x.ts",
+            "api/schema.graphql",
+            "src/schemas/user.py",
         ):
             with self.subTest(path=path):
                 result = prdiff.plan(_files((path, 2)))
@@ -249,9 +259,14 @@ class PlanTests(unittest.TestCase):
                 self.assertIn(path, result["risky"])
 
     def test_a_word_inside_a_name_is_not_a_risky_path(self) -> None:
-        # "author" contains "auth"; "tokenizer" contains "token".
+        # "author" contains "auth"; "tokenizer" contains "token"; a doc that
+        # only names a schema is not one.
         result = prdiff.plan(
-            _files(("src/author_list.py", 10), ("src/tokenizer.py", 10))
+            _files(
+                ("src/author_list.py", 10),
+                ("src/tokenizer.py", 10),
+                ("docs/schema_notes.md", 1),
+            )
         )
         self.assertEqual(result["risky"], [])
 
@@ -296,6 +311,14 @@ class PlanTests(unittest.TestCase):
         with self.assertRaises(prdiff.PayloadError):
             prdiff.plan(_files(("src/a.py", 10)), questions=-1)
 
+    def test_an_invalid_risk_pattern_is_refused_not_a_traceback(self) -> None:
+        with self.assertRaises(prdiff.PayloadError):
+            prdiff.plan(_files(("src/a.py", 10)), risk="(auth")
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "files.json"
+            src.write_text(json.dumps(_files(("src/a.py", 10))), encoding="utf-8")
+            self.assertEqual(prdiff.main(["plan", str(src), "--risk", "(auth"]), 2)
+
     def test_a_custom_risk_pattern_replaces_the_default(self) -> None:
         result = prdiff.plan(_files(("src/console/server.py", 10)), risk=r"console/")
         self.assertEqual(result["depth"], "deep")
@@ -329,6 +352,16 @@ class ExportTests(unittest.TestCase):
             },
         )
         self.assertEqual(result["findings"][0]["suggestion"], "Guard it.")
+        # severity is its own field: the posting label is not repeated.
+        self.assertEqual(result["findings"][0]["explanation"], "algo.")
+
+    def test_a_finding_without_a_title_is_refused(self) -> None:
+        for title in (None, "", "   "):
+            finding = _finding()
+            if title is not None:
+                finding["title"] = title
+            with self.subTest(title=title), self.assertRaises(prdiff.PayloadError):
+                prdiff.export({"summary": "x", "findings": [finding]}, sha=SHA)
 
     def test_clean_and_refusals(self) -> None:
         self.assertEqual(
@@ -340,7 +373,11 @@ class ExportTests(unittest.TestCase):
             prdiff.export({"summary": "x"}, sha="HEAD")
         with self.assertRaises(prdiff.PayloadError):
             prdiff.export(
-                {"summary": "x", "findings": [_finding() | {"quote": ""}]}, sha=SHA
+                {
+                    "summary": "x",
+                    "findings": [_finding() | {"quote": "", "title": "t"}],
+                },
+                sha=SHA,
             )
 
     def test_cli_writes_the_file(self) -> None:

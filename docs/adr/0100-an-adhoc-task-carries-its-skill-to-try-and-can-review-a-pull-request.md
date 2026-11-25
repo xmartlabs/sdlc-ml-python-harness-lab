@@ -67,3 +67,23 @@ a real pull-request review:
   need a case built from merged PRs with known follow-up fixes; that is future work.
 - Migration: four `adhoctask` columns and one `adhocrun` JSON column, added in place
   with defaults; older rows read as "no default skill, not a PR, no hashes".
+
+## Addendum (2026-11-25): how `review_pr` meets the run
+
+- **Depth.** The lab's `depth` (quick, standard, deep) reaches the skill as
+  `prdiff.py plan --depth <depth>`. Run interactively with no depth, `plan` picks
+  one: quick for at most 3 reviewable files and 80 changed lines; deep past 1500
+  lines or when any path is risky (auth, permissions, secrets, credentials,
+  payments, billing, migrations, schemas, CI workflows, deploy, Dockerfile;
+  case-insensitive, plurals included); standard otherwise. Generated and binary
+  files do not count toward size.
+- **`review.json`.** `prdiff.py export` writes it after the same checks as a posted
+  review (a quote at the head for every finding, worth, labels, punctuation), and
+  refuses a finding without a `title`:
+  `{"schema": 1, "commit", "verdict": "changes_suggested" | "clean", "summary",
+  "findings": [{"file", "line", "severity", "worth", "title", "quote",
+  "explanation", "suggestion"}]}`, highest worth first. `explanation` carries no
+  severity label: `severity` is its own field.
+- **Follow-up** (`--follow-up`, interactive only) re-checks an earlier review's
+  findings as FIXED, STILL_OPEN or CANNOT_TELL. It is outside what the lab
+  measures.

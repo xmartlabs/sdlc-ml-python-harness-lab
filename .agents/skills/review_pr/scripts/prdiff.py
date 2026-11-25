@@ -70,10 +70,15 @@ DEPTHS = ("quick", "standard", "deep")
 #: Scenario questions to write per depth (overridable with --questions).
 QUESTIONS = {"quick": 0, "standard": 8, "deep": 12}
 #: Paths where a defect costs most: auth, money, schema, CI and deploy, secrets.
+#: Case-insensitive; a keyword is a whole path segment or its prefix up to `_` or
+#: `.`, so "author" and "tokenizer" do not count. A schema counts as a folder or
+#: a schema file, not as a word in a doc's name.
 RISK_DEFAULT = (
-    r"(^|/)(auth|security|permission|token|secret|credential|payment|billing|"
-    r"invoice|migrations?|alembic)(/|_|\.|$)|(^|/)\.github/workflows/|"
-    r"(^|/)(deploy|helm|terraform|k8s)/|Dockerfile|(^|/)schema"
+    r"(?i)(^|/)(auth|authn|authz|authentication|authorization|oauth2?|security|"
+    r"permissions?|tokens?|secrets?|credentials?|payments?|billing|invoices?|"
+    r"migrations?|migrate|alembic)(/|_|\.|$)|(^|/)\.github/workflows/|"
+    r"(^|/)(deploy|helm|terraform|k8s)/|Dockerfile|"
+    r"(^|/)schemas?(/|\.(graphql|gql|prisma|proto|sql|json|ya?ml|py|ts)$)"
 )
 #: quick needs both: at most this many reviewable files and changed lines.
 QUICK_FILES, QUICK_LINES = 3, 80
@@ -264,7 +269,10 @@ def plan(
     not count toward size; a deleted risky file still counts as risky."""
     reviewable = [f for f in files if not f.get("generated") and not f.get("binary")]
     lines = sum(f.get("added", 0) + f.get("deleted", 0) for f in reviewable)
-    pattern = re.compile(risk)
+    try:
+        pattern = re.compile(risk)
+    except re.error as exc:
+        raise PayloadError(f"--risk is not a valid regex: {exc}") from exc
     risky = sorted({f["path"] for f in reviewable if pattern.search(f["path"])})
     if depth != "auto":
         if depth not in DEPTHS:
@@ -446,6 +454,10 @@ def export(doc: dict, *, sha: str, lang: str = "es") -> dict:
         raise PayloadError(f"--lang must be one of {tuple(LABELS)}")
     findings = doc.get("findings") or []
     _check_findings(findings, lang)
+    for i, f in enumerate(findings):
+        if not isinstance(f.get("title"), str) or not f["title"].strip():
+            raise PayloadError(f"finding {i}: title is required in export")
+    labels = LABELS[lang]
     summary = (doc.get("summary") or doc.get("body") or "").strip()
     if not summary:
         raise PayloadError("summary is required")
@@ -462,9 +474,13 @@ def export(doc: dict, *, sha: str, lang: str = "es") -> dict:
                 "line": f["line"],
                 "severity": f["severity"],
                 "worth": f["worth"],
-                "title": (f.get("title") or "").strip(),
+                "title": f["title"].strip(),
                 "quote": f["quote"],
-                "explanation": f["comment"].strip(),
+                # severity is its own field; drop the posting label.
+                "explanation": f["comment"]
+                .strip()
+                .removeprefix(labels[f["severity"]])
+                .strip(),
                 "suggestion": (f.get("suggestion") or "").strip(),
             }
             for f in sorted(findings, key=lambda f: -f["worth"])

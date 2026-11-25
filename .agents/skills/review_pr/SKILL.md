@@ -43,7 +43,8 @@ Three, chosen by how the skill was invoked. Exactly one applies.
   the summary. Never publish before an explicit yes.
 - **The only write is one `POST repos/{owner}/{repo}/pulls/{n}/reviews`.** Never
   run `gh pr review`, `gh pr comment`, `gh pr merge`, `gh pr edit`, labels,
-  pushes, or a second review.
+  pushes, or a second review in the same run. A follow-up run is a new run:
+  it may post one review of its own (`references/follow-up.md`).
 - **Never APPROVE** when any finding is `importante`, or when the PR author is
   the active `gh` user. Never use `REQUEST_CHANGES`. `prdiff.py payload`
   enforces this; never edit the event it chose.
@@ -123,10 +124,20 @@ depth and its reason in the "PR fetched" line.
   to switch with `gh auth switch -u <login>`. Do not switch on your own, and do
   not probe the other account with its token (`gh auth token -u`): that is
   credential access and the harness refuses it. After a switch, recompute `ME`.
-- **Diff too large for `gh pr diff`:** fall back to
-  `gh api "repos/$O/$R/pulls/$N/files" --paginate`, which returns each file's
-  `patch`. Say in the summary if any file came without a patch (binary or too
-  large) and was not reviewed.
+- **Diff too large for `gh pr diff`:** rebuild it from the files API, which
+  returns each file's `patch` without the headers `split` needs, then `split`
+  as usual:
+
+  ```bash
+  gh api "repos/$O/$R/pulls/$N/files" --paginate --jq '.[] | select(.patch) |
+    "diff --git a/\(.previous_filename // .filename) b/\(.filename)\n" +
+    (if .status == "added" then "--- /dev/null" else "--- a/\(.previous_filename // .filename)" end) + "\n" +
+    (if .status == "removed" then "+++ /dev/null" else "+++ b/\(.filename)" end) + "\n" +
+    .patch' > "$T/pr.diff"
+  ```
+
+  Say in the summary which files came without a patch (binary or too large)
+  and were not reviewed.
 - **Generated files** (`files.json` marks lockfiles and minified or
   `generated/` paths; treat regenerated schemas, generated clients and large
   fixtures the same): do not review them line by line. Check that their
