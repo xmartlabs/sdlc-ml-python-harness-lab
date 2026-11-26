@@ -184,7 +184,7 @@ export function BenchmarksHub() {
       </header>
       {groups && cases && cases.length === 0 ? <p className="muted">{m.empty}</p> : null}
       <div className="hub-cards">
-        <article className="hub-card"><p className="eyebrow">Fixed-game gameplay</p><h3>Tidal Ring time trial</h3><p>Play an original racing circuit or give a text model the same controls. Numerical results and verified recordings.</p><Link to="/gameplay/racing">Open racing lab →</Link></article>
+        <article className="hub-card"><p className="eyebrow">Fixed-game gameplay</p><h3>Tidal Ring time trial</h3><p>Play an original racing circuit or give a text model the same controls. Numerical results and verified recordings.</p><Link to="/gameplay/racing">Open racing lab →</Link> <Link to="/gameplay/racing/comparison">Live model comparison →</Link></article>
         {groups
           ? CASE_FAMILIES.filter((family) => groups[family].length > 0).map((family) => (
               <FamilyCard family={family} items={groups[family]} key={family} />

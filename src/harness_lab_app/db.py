@@ -485,6 +485,25 @@ def _apply_sqlite_compat_migrations() -> None:
                     "NOT NULL DEFAULT 'repo'"
                 )
             )
+        # ADR-0100: a task's default trial skill, its pull request, and the
+        # skill version each run used. Older rows had none of them.
+        if adhoc_run_columns and "trial_skill_hashes" not in adhoc_run_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE adhocrun ADD COLUMN trial_skill_hashes JSON "
+                    "NOT NULL DEFAULT '{}'"
+                )
+            )
+        for column, ddl in (
+            ("trial_skill", "VARCHAR NOT NULL DEFAULT ''"),
+            ("invoke_trial_skill", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("pr_ref", "VARCHAR NOT NULL DEFAULT ''"),
+            ("pr_base_ref", "VARCHAR NOT NULL DEFAULT ''"),
+        ):
+            if adhoc_task_columns and column not in adhoc_task_columns:
+                connection.execute(
+                    text(f"ALTER TABLE adhoctask ADD COLUMN {column} {ddl}")
+                )
 
         _migrate_staged_skills(connection)
 

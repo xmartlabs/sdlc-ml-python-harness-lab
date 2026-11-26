@@ -811,6 +811,7 @@ check-frontend-host:
 	@cd frontend && npm run typecheck
 	@cd frontend && npm run test:racing
 	@cd frontend && npm run test:game-runtime
+	@cd frontend && npm run test:cooking
 	@cd frontend && npx vite build
 	@echo "✅ Frontend gate passed (read-only)."
 

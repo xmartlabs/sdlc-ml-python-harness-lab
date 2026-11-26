@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
+import urllib.error
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from harness_lab_app.direct_hosts import DirectHostUnreachable, host_root
-from harness_lab_app.gameplay.contracts import Action, PolicyReply
+from harness_lab_app.direct_hosts import DirectHostUnreachable, get_json, host_root
+from harness_lab_app.gameplay.contracts import PolicyReply
 from harness_lab_app.lmstudio_direct import bare_model_id
 from harness_lab_app.local_tuning.servers import LMStudioServer
 
@@ -59,37 +59,88 @@ class LMStudioPolicy:
             "model_facts": self.model_facts,
             "effective_model": None,
             "effective_temperature": None,
+            "requested_temperature": 0,
+            "reasoning_effort": "none",
+            "response_format": "json_schema",
+            "policy_version": "structured-action.v2",
             "max_output_tokens": 512,
         }
 
     def __call__(self, observation: Observation, timeout: float) -> PolicyReply:
+        control_schema = {
+            name: {
+                "type": "integer" if bounds.integer else "number",
+                "minimum": bounds.minimum,
+                "maximum": bounds.maximum,
+            }
+            for name, bounds in observation.controls.items()
+        }
+        schema = {
+            "type": "object",
+            "properties": {
+                "version": {"type": "string", "const": "gameplay.v1"},
+                "observation_id": {
+                    "type": "string",
+                    "const": observation.observation_id,
+                },
+                "controls": {
+                    "type": "object",
+                    "properties": control_schema,
+                    "required": list(control_schema),
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["version", "observation_id", "controls"],
+            "additionalProperties": False,
+        }
         prompt = (
             "Play the fixed environment using only its visible state. "
-            "Follow observation.instructions. Controls are held for "
-            "ticks_to_advance simulation ticks; simulation pauses during inference. "
-            "Return ONLY one JSON object matching ACTION_SCHEMA, with the exact "
-            "observation_id and every advertised control. No markdown or explanation.\n"
-            "ACTION_SCHEMA\n" + json.dumps(Action.model_json_schema()) + "\n"
+            "Follow observation.instructions. Choose every advertised control. "
+            "Controls last ticks_to_advance simulation ticks; game time pauses "
+            "during inference. Return only the requested JSON action, no explanation.\n"
             "OBSERVATION\n" + observation.model_dump_json()
         )
         try:
-            completion = self.server.complete(
-                self.instance_id, prompt, max_tokens=512, timeout=timeout
+            payload = get_json(
+                f"{self.server.base_url}/v1/chat/completions",
+                timeout,
+                {
+                    "model": self.instance_id,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 512,
+                    "temperature": 0,
+                    "reasoning_effort": "none",
+                    "stream": False,
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "game_action",
+                            "strict": True,
+                            "schema": schema,
+                        },
+                    },
+                },
             )
-        except DirectHostUnreachable as exc:
-            cause = exc.__cause__
-            if isinstance(cause, TimeoutError) or isinstance(
-                getattr(cause, "reason", None), TimeoutError
+        except (TimeoutError, urllib.error.URLError) as exc:
+            if isinstance(exc, TimeoutError) or isinstance(
+                getattr(exc, "reason", None), TimeoutError
             ):
                 raise TimeoutError("LM Studio decision timed out") from exc
-            raise
-        if completion.error:
+            raise DirectHostUnreachable("LM Studio completion unavailable") from exc
+        if payload.get("error") or not payload.get("choices"):
             raise RuntimeError("LM Studio completion failed")
+        choice = payload["choices"][0]
+        content = choice.get("message", {}).get("content") or ""
+        usage = payload.get("usage") or {}
+        details = usage.get("completion_tokens_details") or {}
         return PolicyReply(
-            action_json=completion.text,
+            action_json=content,
             provenance={
                 **self.provenance,
-                "prompt_tokens": completion.prompt_tokens,
-                "completion_tokens": completion.completion_tokens,
+                "prompt_tokens": usage.get("prompt_tokens"),
+                "completion_tokens": usage.get("completion_tokens"),
+                "reasoning_tokens": details.get("reasoning_tokens"),
+                "finish_reason": choice.get("finish_reason"),
+                "response_model": payload.get("model"),
             },
         )

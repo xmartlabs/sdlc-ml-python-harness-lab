@@ -112,3 +112,24 @@ or other-repository changes; task auth remains under /tmp/pr2-xmartlabs-gh. Futu
 CLI commands must unset ambient GH/GITHUB tokens, use that config and verify user.
 Runtime image :pr3 is available for local review; `make app-up-prod` rebuilds the
 normal image from the checked-out branch. Last account milestone62%used,25%weekly.
+
+## Latest direction: pause for reset, then demo first
+
+See [Gameplay demo handoff](2026-11-24-gameplay-demo-handoff.md) for the superseding
+user priority: after the Nov24 allowance reset, prove two functional local games
+and real sequential model recordings/ghosts, with personal user play and video
+evidence before further polish/submissions. Cooking is not built and no model has
+completed a racing lap. Current action is documentation only; resume in chat.
+Both submitted PRs' final quality/frontend checks passed; this is a new uncommitted
+documentation handoff, not another code change or publication.
+
+
+## Afternoon owner review completed
+
+PR64 head597286e fixes the reproduced raw-backslash/proxy-session bypass. PR65
+rebased cleanly onto it, head6e52a1f fixes runtime503mapping and calibration reuse.
+Both latest heads' quality/frontend CI passed; all3marcossotoxl threads replied and
+resolved. Exact lease protected the owned PR65 rewrite; original heads and the demo
+docs stash remain backed up. No merges or LLM calls. Preserved uncommitted demo
+docs restored. Continue the demo-first handoff, not another submission. Detailed
+review evidence: [review checkpoint](2026-11-24-gameplay-review-checkpoint.md).

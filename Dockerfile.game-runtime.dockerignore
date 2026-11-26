@@ -16,3 +16,6 @@
 !game-runtime/server.test.mjs
 !scripts/
 !scripts/racing_bridge.mjs
+
+!frontend/cooking.html
+!scripts/cooking_bridge.mjs

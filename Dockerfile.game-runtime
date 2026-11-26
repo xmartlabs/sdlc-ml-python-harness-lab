@@ -6,14 +6,14 @@ WORKDIR /build/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/src ./src
-COPY frontend/gameplay.html frontend/vite.game.config.ts ./
+COPY frontend/gameplay.html frontend/cooking.html frontend/vite.game.config.ts ./
 RUN npm exec vite build -- --config vite.game.config.ts
 
 # Optional build-time quality target; none of these files/tools enter runtime.
 FROM build AS verify
 COPY frontend/tsconfig.json frontend/index.html frontend/vite.config.ts ./
 COPY game-runtime /build/game-runtime
-RUN npm run typecheck && npm run test:racing && npm run test:game-runtime && npm run build
+RUN npm run typecheck && npm run test:racing && npm run test:game-runtime && npm run test:cooking && npm run build
 
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS runtime
 # Copy the executable and only its non-libc shared libraries from the pinned stage.
@@ -23,9 +23,9 @@ COPY --from=build /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /usr/lib/
 RUN addgroup -g 1000 node && adduser -D -u 1000 -G node node
 WORKDIR /game
 COPY --chown=node:node --from=build /build/frontend/game-dist ./game-runtime/public
-COPY --chown=node:node frontend/src/gameplay/racing.mjs ./frontend/src/gameplay/racing.mjs
-COPY --chown=node:node game-runtime/server.mjs game-runtime/cli.mjs ./game-runtime/
-COPY --chown=node:node scripts/racing_bridge.mjs ./scripts/racing_bridge.mjs
+COPY --chown=node:node frontend/src/gameplay/racing.mjs frontend/src/gameplay/racingBenchmark.mjs frontend/src/gameplay/cooking.mjs ./frontend/src/gameplay/
+COPY --chown=node:node game-runtime/server.mjs game-runtime/cli.mjs game-runtime/games.mjs ./game-runtime/
+COPY --chown=node:node scripts/racing_bridge.mjs scripts/cooking_bridge.mjs ./scripts/
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 CMD ["node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]

@@ -6,7 +6,9 @@ the change, and apply it to your folder with one button — or copy a command an
 apply it yourself. Every run is measured, so you can run the same task again
 with another model and compare what each cost.
 
-Decision record: [ADR-0095](adr/0095-an-adhoc-task-runs-on-a-copy-and-is-applied-on-request.md).
+Decision records: [ADR-0095](adr/0095-an-adhoc-task-runs-on-a-copy-and-is-applied-on-request.md),
+[ADR-0100](adr/0100-an-adhoc-task-carries-its-skill-to-try-and-can-review-a-pull-request.md)
+(skill to try at creation, its version per run, pull-request reviews).
 
 ## Before you start
 
@@ -26,9 +28,13 @@ Decision record: [ADR-0095](adr/0095-an-adhoc-task-runs-on-a-copy-and-is-applied
    HEAD and any uncommitted files.
    - **Uncommitted changes are not copied.** The agent works on your last
      commit. Commit or stash first if the task depends on them.
-2. **Write the prompt.** One thing per task, the acceptance criterion, and the
-   files involved if you know them. Optional: setup commands (run in the copy
-   before the agent, e.g. `uv sync`) and verification commands (your tests).
+2. **Write the prompt** (*Free task*), or switch to **Review a PR** (see
+   [below](#review-a-pull-request)). One thing per task, the acceptance criterion,
+   and the files involved if you know them. Optional: setup commands (run in the
+   copy before the agent, e.g. `uv sync`) and verification commands (your tests).
+   - **Skill to try (optional)** — a staged skill from the Skills page, and whether
+     to tell the agent to use it. It is preselected every time you run this task;
+     each run can still change it.
 3. **Create task.** The lab copies the folder into
    `data/checkouts/adhoc-<name>-NNN` and pins your HEAD. Your folder is not
    touched.
@@ -41,7 +47,8 @@ Decision record: [ADR-0095](adr/0095-an-adhoc-task-runs-on-a-copy-and-is-applied
      plan, debug, verify, research, review).
    - **Lab full** — the lab's whole harness, every skill plus its subagents.
    - **Skill to try** (optional) — one staged skill from the Skills page on
-     top of any level; tick **Tell the agent to use it** to require it.
+     top of any level; tick **Tell the agent to use it** to require it. It
+     starts as the one picked when the task was created.
 
    The lab's harness goes into the copy only. If your repo has a `CLAUDE.md`,
    the copy's is replaced (yours is kept beside it as `CLAUDE.md.native.bak`).
@@ -65,10 +72,39 @@ Decision record: [ADR-0095](adr/0095-an-adhoc-task-runs-on-a-copy-and-is-applied
    **Grade with the LLM judge** scores it 0-10 against the task itself (one
    model call); **Run the LLM audit** explains how the agent worked and which
    skills it opened.
-7. **Run again with another model.** Every run of a task starts from the same
-   commit, so the table compares like with like: agent harness (a `*` marks a
+7. **Run again with another model — or another version of the skill.** Every
+   run of a task starts from the same commit, so the table compares like with
+   like: agent harness, the skill tried as `name@<version>` (a `*` marks a
    required skill), tokens, cost (real, estimated for subscriptions, $0 for
    local models), minutes, files and lines changed, decision, apply state.
+   Editing a staged skill changes its version, so v1 and v2 show apart.
+
+## Review a pull request
+
+**New task → Review a PR** builds a review task from a PR whose head is already
+in your folder. The lab never fetches from GitHub: it has no credential for
+your remote. Fetch the head first, without checking it out:
+
+```bash
+git -C <folder> fetch origin pull/651/head:pr-651
+```
+
+Then fill in the PR number, the head (`pr-651`), the base branch (default
+`origin/main`), and paste the title and description: the run has no GitHub
+access, and the intent is half of a review. Pick a depth (quick, standard,
+deep) and, usually, the review skill to try.
+
+The lab finds where the head leaves the base in your folder (read-only), pins
+the task at the head, and writes the prompt with that range **by commit**,
+`<merge-base>...HEAD`. A range written as `origin/main...HEAD` would fail
+inside the run: its workspace is a clone of the lab's copy and has no
+`origin/*` branches. The agent writes `review.json`; there is nothing to apply,
+so **Reject** the run once you have read it.
+
+To compare: run the task with no skill, then with the skill, then edit the
+skill and run again, all on the same model. Read each run's `review.json` in
+the diff and the judge's grade. Runs only measure the review itself; posting
+comments to GitHub happens outside the lab.
 
 ## What is kept, and for how long
 

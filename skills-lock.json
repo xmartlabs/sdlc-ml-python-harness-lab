@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-11-23T19:29:32Z",
+  "generatedAt": "2026-11-25T17:30:15Z",
   "skills": {
     "brainstorming": {
       "source": "synced-local",
@@ -33,6 +33,14 @@
       "skillFile": ".github/skills-external/requesting-code-review/SKILL.md",
       "computedHash": "5a3a44a3667800e2dc836829c6b92fada51e6dc58ac144ec05fe59f47d6bcd84",
       "syncedAt": "2026-06-09T13:47:23Z"
+    },
+    "review_pr": {
+      "source": "synced-local",
+      "sourceType": "directory",
+      "path": ".github/skills-external/review_pr",
+      "skillFile": ".github/skills-external/review_pr/SKILL.md",
+      "computedHash": "3c2087280c9cf95a2df1bdc67d12674a45bafaca483f88541150254cdc70708d",
+      "syncedAt": "2026-11-25T17:30:15Z"
     },
     "subagent-driven-development": {
       "source": "synced-local",

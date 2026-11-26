@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 class RacingEnvironment:
     environment_id = "tidal-ring"
     environment_version = "1"
+    bridge_script = "scripts/racing_bridge.mjs"
+    engine_module = "frontend/src/gameplay/racing.mjs"
     instructions = (
         "Finish one valid lap through the ordered checkpoints. You control a car on "
         "a fixed circuit. throttle and brake are 0..1; steer is -1..1 with the same "
@@ -60,10 +62,10 @@ class RacingEnvironment:
             raise RuntimeError("Racing requires Node.js 20 or newer")
         self.root = root or Path(__file__).resolve().parents[3]
         self.provenance["engine_sha256"] = hashlib.sha256(
-            (self.root / "frontend/src/gameplay/racing.mjs").read_bytes()
+            (self.root / self.engine_module).read_bytes()
         ).hexdigest()
         self.process = subprocess.Popen(  # nosec B603 - fixed trusted local bridge
-            [node, str(self.root / "scripts/racing_bridge.mjs")],
+            [node, str(self.root / self.bridge_script)],
             cwd=self.root,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -77,7 +79,10 @@ class RacingEnvironment:
             operation = payload["op"]
             if operation == "reset":
                 self._close_remote()
-                path, body = "/v1/sessions", {"seed": payload["seed"]}
+                path, body = (
+                    "/v1/sessions",
+                    {"seed": payload["seed"], "environment": self.environment_id},
+                )
             else:
                 if not self.session_id:
                     raise RuntimeError("Reset required before runtime operation")
@@ -115,7 +120,8 @@ class RacingEnvironment:
     def state(self) -> dict[str, JsonValue]:
         return self.current["state"]
 
-    def controls(self) -> dict[str, ControlBounds]:
+    @staticmethod
+    def controls() -> dict[str, ControlBounds]:
         return {
             name: ControlBounds(minimum=-1.0 if name == "steer" else 0.0, maximum=1.0)
             for name in ("throttle", "brake", "steer", "reset")

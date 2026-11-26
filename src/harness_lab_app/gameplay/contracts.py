@@ -24,6 +24,7 @@ class EpisodeConfig(WireModel):
 class ControlBounds(WireModel):
     minimum: float
     maximum: float
+    integer: bool = Field(default=False, exclude_if=lambda value: not value)
 
     @model_validator(mode="after")
     def ordered(self) -> ControlBounds:
@@ -57,6 +58,8 @@ class Action(WireModel):
             bounds = observation.controls[name]
             if not bounds.minimum <= value <= bounds.maximum:
                 raise ValueError("Control outside advertised bounds")
+            if bounds.integer and not value.is_integer():
+                raise ValueError("Control must be an integer")
 
 
 class PolicyReply(WireModel):
