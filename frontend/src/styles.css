@@ -6296,3 +6296,96 @@ button.guide-option[aria-pressed="true"] { border-color: var(--accent); backgrou
 .keep-button.active {
   color: var(--warning, #d29922);
 }
+
+/* Get more models on the Your server step (ADR-0101). */
+.model-downloads {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.model-downloads .segmented {
+  justify-self: start;
+  flex-wrap: wrap;
+}
+
+.model-download-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.model-download-search input {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.model-download-exact {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.model-download-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.model-download {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+}
+
+.model-download-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.model-download-name {
+  display: grid;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-download-progress {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.model-download-track {
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--line);
+}
+
+.model-download-track > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+.model-download-error {
+  color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .model-download-main {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-download-track > span {
+    transition: none;
+  }
+}

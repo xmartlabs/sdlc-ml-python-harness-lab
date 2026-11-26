@@ -63,9 +63,12 @@ import type {
   GateCheckRecord,
   GroupIssueResult,
   LocalGuardReport,
+  LocalHubSearchResult,
   LocalHistoryRow,
   LocalLoadConfig,
   LocalLoadResult,
+  LocalPullJob,
+  LocalPullStarted,
   LocalMachine,
   LocalMemoryEstimate,
   LocalModelInfo,
@@ -1190,6 +1193,20 @@ export const api = {
       request<LocalProfileCompareResult>(
         `/api/local/profiles/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`
       ),
+
+    /** Models to download: the curated list (empty query) or a Hugging Face search. */
+    hubSearch: (query: string, machine: MachineSpec | null) =>
+      request<LocalHubSearchResult>("/api/local/hub/search", {
+        method: "POST",
+        body: JSON.stringify({ query, machine })
+      }),
+    /** Ask the server to download a model; poll `getPull` for progress. */
+    startPull: (kind: LocalServerKind, url: string, model: string, quantization = "") =>
+      request<LocalPullStarted>("/api/local/pulls", {
+        method: "POST",
+        body: JSON.stringify({ kind, url, model, quantization })
+      }),
+    getPull: (jobId: string) => request<LocalPullJob>(`/api/local/pulls/${encodeURIComponent(jobId)}`),
 
     modelLoadCheck: (model: string) =>
       request<LocalModelLoadCheck>(`/api/local/model-load-check?model=${encodeURIComponent(model)}`)

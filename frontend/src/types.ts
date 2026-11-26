@@ -2424,6 +2424,65 @@ export type LocalServerTestResult = {
   error: string;
 };
 
+/** One downloadable quantization of a model, and what each server is asked to pull (ADR-0101). */
+export type LocalHubQuant = {
+  name: string;
+  size_bytes: number | null;
+  ollama_model: string;
+  lmstudio_model: string;
+  /** Memory estimate at the default 32k load on the machine from step 1. */
+  verdict: LocalVerdict | null;
+  total_gb: number | null;
+  /** Largest context option that still fits; null when none does. */
+  fit_context: number | null;
+};
+
+export type LocalHubModel = {
+  source: "curated" | "huggingface";
+  repo: string;
+  label: string;
+  params: string;
+  arch: string;
+  supports_tools: boolean | null;
+  downloads: number | null;
+  max_context: number | null;
+  quants: LocalHubQuant[];
+  note: string;
+};
+
+export type LocalHubSearchResult = {
+  models: LocalHubModel[];
+  /** Set when Hugging Face could not be searched; the curated list still works. */
+  error: string;
+};
+
+export type LocalPullStatus = "downloading" | "completed" | "failed";
+
+export type LocalPullJob = {
+  id: string;
+  server_kind: LocalServerKind;
+  server_url: string;
+  model: string;
+  quantization: string;
+  status: LocalPullStatus;
+  total_bytes: number | null;
+  completed_bytes: number | null;
+  detail: string;
+  error: string;
+};
+
+export type LocalPullStarted = {
+  job: LocalPullJob;
+  /** Lab runs on the host: a download shares its disk and network, so this only warns. */
+  guard: LocalGuardReport;
+};
+
+/** The 409 body `pulls` answers with when a download is already running on the host. */
+export type LocalPullBusyDetail = {
+  message: string;
+  job: LocalPullJob;
+};
+
 export type LocalLoadResult = {
   served: LocalServedConfig;
   diff: LocalConfigDiff[];

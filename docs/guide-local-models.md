@@ -67,6 +67,37 @@ the tests, the model picker and the runs alike. A server on another computer nee
 *Serve on Local Network* (LM Studio) or `OLLAMA_HOST=0.0.0.0` (Ollama), and its LAN
 address here.
 
+## Getting more models
+
+Once the server answers, step 2 shows *Get more models* under its downloaded
+models ([ADR-0101](adr/0101-the-lab-downloads-models-through-the-servers-own-api.md)).
+The download runs **on that server**, so a Jetson or any other box on the network
+gets the model without a shell on it.
+
+| Tab | What it lists |
+|---|---|
+| Recommended | A short list of models that run an agent on small machines (Qwen3, Qwen3 Coder, Qwen2.5 Coder, Llama 3.1, gpt-oss, Gemma 3), with sizes checked against Hugging Face on 2026-11-26. Works offline. |
+| Search Hugging Face | GGUF repos matching the words typed, most downloaded first, with each single-file quantization and its size. Needs the lab to reach the internet. |
+| Exact name | Whatever the server's own download takes: `qwen3:14b` or `hf.co/owner/repo:Q4_K_M` on Ollama; `qwen/qwen3-14b` or a `https://huggingface.co/` link on LM Studio. |
+
+Each file shows whether it fits the machine from step 1 at the default 32k context,
+or the largest context that does (*Fits up to 16k*). That is advice: the download is
+never blocked, since the model may be meant for another machine. Files over 10 GB ask
+for a second click. One download runs per server at a time; when it finishes the
+model appears in the table above, ready for step 3. If it fails, the row shows the
+command to run on that machine instead (`ollama pull …` or `lms get … --gguf`).
+
+How each server is asked:
+
+| | Ollama | LM Studio |
+|---|---|---|
+| Endpoint | `POST /api/pull` (streamed progress) | `POST /api/v1/models/download`, then `GET /api/v1/models/download/status/{job_id}` (LM Studio 0.4+) |
+| Curated model | the library tag when there is one (`qwen3:8b`), otherwise `hf.co/{repo}:{quant}` | the Hugging Face link with the quantization beside it |
+
+Ollama's own library has no public search API, so it is reachable by exact name only.
+Split GGUF files (`-00001-of-00002`) are left out of the search: a single pull cannot
+fetch them.
+
 ## The tests and the runs use one server
 
 The tests on this page talk to the address typed in step 2. Agent runs (OpenCode on a

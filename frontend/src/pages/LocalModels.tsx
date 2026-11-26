@@ -7,6 +7,7 @@ import type { HostGuardAction } from "../components/HostGuardModal";
 import { HostGuardModal } from "../components/HostGuardModal";
 import { InfoTooltip } from "../components/InfoTooltip";
 import { MemoryBar } from "../components/MemoryBar";
+import { ModelDownloads } from "../components/ModelDownloads";
 import { ServedConfigDiff } from "../components/ServedConfigDiff";
 import { Spinner } from "../components/Spinner";
 import { api, ApiError } from "../api";
@@ -1147,6 +1148,23 @@ export function LocalModels() {
       .finally(() => setTestingServer(false));
   };
 
+  // After a download: list the server's models again, quietly, so the new one
+  // shows up in the table without the connection test's reset and save.
+  const handleRefreshServerModels = () => {
+    if (!serverTest?.reachable) {
+      return;
+    }
+    const { kind, url } = serverTest;
+    api.local
+      .testServer(kind, url)
+      .then((result) => {
+        if (result.reachable) {
+          setServerTest(result);
+        }
+      })
+      .catch(() => undefined);
+  };
+
   const runGuardedAction = (action: HostGuardAction, run: (ack: boolean) => Promise<void>) => {
     api.local
       .guard(serverKind, serverUrl.trim())
@@ -1901,6 +1919,16 @@ export function LocalModels() {
                 </tbody>
               </table>
             </div>
+          ) : null}
+
+          {serverTest && serverTest.reachable ? (
+            <ModelDownloads
+              downloadedIds={serverTest.models.map((item) => item.id)}
+              kind={serverTest.kind}
+              machine={machineSpec}
+              onDownloaded={handleRefreshServerModels}
+              url={serverTest.url}
+            />
           ) : null}
 
           <div className="toolbar">
