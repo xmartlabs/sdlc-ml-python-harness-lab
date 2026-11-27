@@ -167,6 +167,30 @@ export type RunContext = {
   // bound to each action, read from the grader's harvest of its InputMap.
   play_guide?: { goal: string; controls: [string, string][]; tips: string[] } | Record<string, never>;
   bound_keys?: Record<string, string[]>;
+  // A graded racing episode can be replayed on the run page (ADR-0103).
+  racing_replay?: boolean;
+};
+
+/** The graded racing episode of a run: what the grader replayed (ADR-0103). */
+export type RacingReplayRecord = {
+  condition: {
+    seed: number;
+    tick_rate: number;
+    ticks_per_action: number;
+    countdown_ticks: number;
+    horizon_ticks: number;
+  };
+  controls: { throttle: number; brake: number; steer: number; reset: number }[];
+  metrics: {
+    finished?: number;
+    progress?: number;
+    collisions?: number;
+    resets?: number;
+    finish_time_seconds?: number;
+  };
+  ended_by: string;
+  par_seconds?: number | null;
+  checkpoints_total?: number | null;
 };
 
 export type RunEventRecord = {

@@ -17,6 +17,10 @@ from harness_lab_app.evaluation import (
     run_profile,
 )
 from harness_lab_app.models import Audit, HarnessSource, Score, Validation
+from harness_lab_app.racing_play import (
+    CASE_ID as RACING_CASE_ID,
+    load_racing_grade,
+)
 from harness_lab_app.run_service import RunService
 
 
@@ -233,6 +237,9 @@ class ScoreService:
             files_expected=expected,
             files_forbidden=forbidden,
             skills_under_test=tuple(sorted(under_test)),
+            racing_grade=(
+                load_racing_grade(run_dir) if config.case_id == RACING_CASE_ID else None
+            ),
         )
 
     def evaluate_run(self, run_id: str, profile: str = "default") -> list[Score]:

@@ -132,6 +132,8 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 
 - [0100 — Fixed games run as baked builds in a slim runtime](0100-fixed-games-run-as-baked-builds-in-a-slim-runtime.md)
 - [0101 — The lab downloads models through the server's own API](0101-the-lab-downloads-models-through-the-servers-own-api.md)
+- [0102 — A model plays a fixed game as a lab case](0102-a-model-plays-a-fixed-game-as-a-lab-case.md)
+- [0103 — Watch a graded racing run again on its run page](0103-watch-a-graded-racing-run-again.md)
 
 ## Why ADRs exist
 

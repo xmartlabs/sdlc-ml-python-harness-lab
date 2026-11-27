@@ -526,6 +526,93 @@ _TRAJECTORY = [
     ),
 ]
 
+# --- racing-play-v1 (a model plays a fixed game) ---------------------------
+_RACING_PLAY = [
+    _d(
+        name="racing_play_mode",
+        category=BEHAVIORAL,
+        kind=CATEGORICAL,
+        provenance=OBSERVATION,
+        direction=NEUTRAL,
+        version="v1",
+        source="racing_play",
+        description=(
+            "played (one tool call per decision), scripted (a program drove "
+            "some steps) or unknown (no record to read). The reason names the "
+            "record: harness tool events, or the race tool's call timing."
+        ),
+    ),
+    _d(
+        name="racing_episode_complete",
+        category=OUTCOME,
+        kind=BOOLEAN,
+        provenance=FACT,
+        direction=NEUTRAL,
+        version="v1",
+        source="racing_play",
+        description=(
+            "The episode reached a lap or the 60 s horizon; false when the "
+            "session ended mid-race or left no valid episode."
+        ),
+    ),
+    _d(
+        name="racing_progress",
+        category=OUTCOME,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=HIGHER_IS_BETTER,
+        version="v1",
+        source="racing_play",
+        minimum=0.0,
+        maximum=1.0,
+        description="Share of the lap reached in the replayed episode (1 = finished).",
+    ),
+    _d(
+        name="racing_finish_seconds",
+        category=OUTCOME,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="racing_play",
+        minimum=0.0,
+        description="Game-time lap time of a finished episode; absent when unfinished.",
+    ),
+    _d(
+        name="racing_collisions",
+        category=OUTCOME,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="racing_play",
+        minimum=0.0,
+        description="Barrier impacts in the replayed episode.",
+    ),
+    _d(
+        name="racing_resets",
+        category=OUTCOME,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=LOWER_IS_BETTER,
+        version="v1",
+        source="racing_play",
+        minimum=0.0,
+        description="Recoveries to the last checkpoint in the replayed episode.",
+    ),
+    _d(
+        name="racing_actions",
+        category=EFFICIENCY,
+        kind=NUMERIC,
+        provenance=FACT,
+        direction=NEUTRAL,
+        version="v1",
+        source="racing_play",
+        minimum=0.0,
+        description="Decisions (0.5 s each) in the replayed episode.",
+    ),
+]
+
 REGISTRY: dict[str, ScoreDefinition] = {
     definition.name: definition
     for definition in (
@@ -534,6 +621,7 @@ REGISTRY: dict[str, ScoreDefinition] = {
         *_STEP_REWARD,
         *_TRAJECTORY,
         *_BEHAVIORAL,
+        *_RACING_PLAY,
     )
 }
 

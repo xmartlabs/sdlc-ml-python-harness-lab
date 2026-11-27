@@ -95,6 +95,7 @@ from harness_lab_app.leaderboard_service import LeaderboardService
 from harness_lab_app.local_api import local_router
 from harness_lab_app.observability_service import ObservabilityService
 from harness_lab_app.overview_service import OverviewService
+from harness_lab_app.racing_play import racing_replay
 from harness_lab_app.run_service import (
     RunAlreadyExistsError,
     RunBatchTooLargeError,
@@ -3194,7 +3195,26 @@ def create_app() -> FastAPI:
             # game really bound, read from the grader's harvest of its InputMap.
             "play_guide": _safe_play_guide(case),
             "bound_keys": _bound_keys(get_settings().data_runs_dir / run.run_id),
+            # A graded racing episode can be watched again on the run page.
+            "racing_replay": racing_replay(get_settings().data_runs_dir / run.run_id)
+            is not None,
         }
+
+    @app.get("/api/runs/{run_id}/racing-replay")
+    def get_racing_replay(run_id: str, session: Session = Depends(get_session)):
+        """The graded racing episode — condition and accepted controls — to
+        replay on the run page with the lab's own engine (ADR-0103)."""
+        try:
+            RunService(session).get_run(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        replay = racing_replay(get_settings().data_runs_dir / run_id)
+        if replay is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No graded racing episode for this run.",
+            )
+        return replay
 
     @app.get("/api/runs/{run_id}/validation")
     def get_validation(run_id: str, session: Session = Depends(get_session)):

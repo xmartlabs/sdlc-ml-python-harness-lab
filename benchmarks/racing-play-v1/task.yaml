@@ -1,0 +1,84 @@
+task_id: racing-play-v1
+version: "1"
+status: active
+category: game-play
+tags: [play, racing, deterministic, graded, hidden-grader, node]
+
+description: >
+  Play one lap of the Tidal Ring circuit, decision by decision, through a `race`
+  tool in the workspace: read the car's numeric state, choose throttle, brake,
+  steer and reset, and advance the game 0.5 s per call. Any harness and model the
+  lab runs can play. Graded by replaying the recorded action log with the lab's
+  own copy of the engine, from a valid episode up to a fast clean lap, and each
+  run is labelled played (one tool call per decision) or scripted (a program drove
+  the car) — both are allowed (ADR-0102).
+
+subject_repo: ml-python-base
+base_commit: 97338ea2747f24d49a6962fb07e2aa5f63f478b3
+
+# The race tool, its frozen condition and a copy of the engine seed the
+# workspace (ADR-0068). The grader never uses the workspace copies.
+starter: benchmarks/racing-play-v1/starter
+
+target_level: 10
+complexity: medium
+
+entry_point: .race/actions.jsonl
+
+# The episode is the deliverable: one step, measured on what was played.
+deliverable: report
+max_steps: 1
+# ~120 decisions; a small local model took 9 to 15 minutes for one episode.
+run_timeout_minutes: 90
+
+# The grader, rubric and notes stay out of the agent's container (ADR-0079).
+agent_hidden:
+  - benchmarks/racing-play-v1/grader/
+  - benchmarks/racing-play-v1/scoring.md
+  - benchmarks/racing-play-v1/README.md
+
+validation: objective
+validation_note: >
+  The grader in benchmarks/racing-play-v1/grader/ replays .race/actions.jsonl with
+  the lab's frontend/src/gameplay/racing.mjs and the starter's frozen condition,
+  offline, and judges one rung per command after the tamper guard. It also writes
+  .lab-grade/racing.json, which the racing_play evaluator reads for the lap numbers
+  and the played/scripted label. A missing Node is inconclusive (exit 127).
+
+validation_commands:
+  - "git -C /app diff --quiet HEAD -- benchmarks/racing-play-v1/grader benchmarks/racing-play-v1/starter frontend/src/gameplay/racing.mjs && test -z \"$(git -C /app status --porcelain -- benchmarks/racing-play-v1/grader benchmarks/racing-play-v1/starter frontend/src/gameplay/racing.mjs)\""
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing-play-v1/grader/grade.py check episode_valid \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing-play-v1/grader/grade.py check progress_25 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing-play-v1/grader/grade.py check progress_50 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing-play-v1/grader/grade.py check progress_75 \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing-play-v1/grader/grade.py check all_gates \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing-play-v1/grader/grade.py check finished \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing-play-v1/grader/grade.py check clean \"$PWD\" {run_id}"
+  - "cd {workspace} && timeout 120 python /app/benchmarks/racing-play-v1/grader/grade.py check fast \"$PWD\" {run_id}"
+
+files_forbidden:
+  - benchmarks/racing-play-v1/grader/grade.py
+  - benchmarks/racing-play-v1/grader/replay.mjs
+
+constraints:
+  - Play through the race tool; game time only advances on `race step`
+  - Do not edit the grader or the lab's engine
+  - Writing a program that calls `race step` is allowed and labelled scripted
+
+success_criteria:
+  level_0: no valid episode
+  level_2: a valid, replayable episode
+  level_4: a quarter of the lap
+  level_5: half the lap
+  level_6: three quarters of the lap
+  level_7: every checkpoint in order
+  level_8: a finished lap within 60 s of game time
+  level_9: a clean lap — no collisions, no resets
+  level_10: a clean lap at or under par (20 s)
+
+# Exactly two variants (ADR-0047): the task, and the task plus the harness.
+prompts:
+  default: benchmarks/racing-play-v1/prompt_default.md
+  harness: benchmarks/racing-play-v1/prompt_harness.md
+
+scoring_rubric: benchmarks/racing-play-v1/scoring.md

@@ -1930,6 +1930,15 @@ def write_diff_patch(out_dir: Path, dest: Path) -> int:
         diff_ref = provisioned or "HEAD"
         result = _run_git(["git", "-C", str(dest), "diff", diff_ref], cwd=REPO_ROOT)
     else:
+        # Diff against what the lab seeded, not against nothing: a starter's
+        # files are the case's, not the agent's. racing-play-v1-K-001 reported
+        # 1935 changed lines over 8 files, most of them the `race` tool and the
+        # engine copy it was handed; only drive.mjs and its log were its own.
+        try:
+            starter = starter_source(_load_case_spec(out_dir))
+        except ValueError:
+            starter = None
+        #
         # Diff the archive against an empty directory, NOT against /dev/null.
         # `git diff --no-index /dev/null <dir>` looks like it means "everything
         # is new" but git pairs the basename and dies with
@@ -1943,11 +1952,17 @@ def write_diff_patch(out_dir: Path, dest: Path) -> int:
             tempfile.TemporaryDirectory() as scratch,
         ):
             code = _diffable_copy(dest, Path(scratch) / dest.name)
+            base = Path(empty)
+            if starter is not None:
+                base = Path(scratch) / "starter"
+                _copy_starter(starter, base)
             result = _run_git(
-                ["git", "diff", "--no-index", empty, str(code)], cwd=REPO_ROOT
+                ["git", "diff", "--no-index", str(base), str(code)], cwd=REPO_ROOT
             )
-        # The copy's path appears in the patch headers; name the archive instead.
+        # The copies' paths appear in the patch headers; name the archive instead.
         result.stdout = result.stdout.replace(str(code), str(dest))
+        if starter is not None:
+            result.stdout = result.stdout.replace(str(base), str(dest))
     diff_path.write_text(result.stdout)
     diff_lines = result.stdout.count("\n")
     print(f"  diff.patch: {diff_lines} lines")
@@ -2121,6 +2136,40 @@ def report_deliverable(spec: dict | None) -> bool:
     return str((spec or {}).get("deliverable") or "").strip().lower() == "report"
 
 
+def starter_source(spec: dict | None) -> Path | None:
+    """The case's starter directory, or None when the case declares none.
+
+    Raises ``ValueError`` for a ``starter_dir`` outside ``benchmarks/`` or one
+    that does not exist: the spec is a file the worker writes, and a path
+    outside the corpus would copy host files into a run.
+    """
+    starter = str((spec or {}).get("starter_dir") or "").strip()
+    if not starter:
+        return None
+    root = (REPO_ROOT / "benchmarks").resolve()
+    source = (REPO_ROOT / starter).resolve()
+    if Path(starter).is_absolute() or root not in source.parents:
+        raise ValueError(
+            f"starter_dir '{starter}' is not inside benchmarks/; refusing to seed."
+        )
+    if not source.is_dir():
+        raise ValueError(f"starter_dir '{starter}' does not exist.")
+    return source
+
+
+def _copy_starter(source: Path, into: Path) -> int:
+    """Copy a starter's regular files into ``into``; symlinks are skipped."""
+    copied = 0
+    for path in sorted(source.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        target = into / path.relative_to(source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+        copied += 1
+    return copied
+
+
 def seed_workspace(workspace: Path, spec: dict | None) -> int:
     """Copy a case's starter files into an empty workspace (ADR-0068).
 
@@ -2133,28 +2182,16 @@ def seed_workspace(workspace: Path, spec: dict | None) -> int:
     files (a resumed or continued run) is left alone. Returns the number of
     files copied.
     """
-    starter = str((spec or {}).get("starter_dir") or "").strip()
-    if not starter:
+    try:
+        source = starter_source(spec)
+    except ValueError as exc:
+        sys.exit(f"❌ {exc}")
+    if source is None:
         return 0
-    root = (REPO_ROOT / "benchmarks").resolve()
-    source = (REPO_ROOT / starter).resolve()
-    if Path(starter).is_absolute() or root not in source.parents:
-        sys.exit(
-            f"❌ starter_dir '{starter}' is not inside benchmarks/; refusing to seed."
-        )
-    if not source.is_dir():
-        sys.exit(f"❌ starter_dir '{starter}' does not exist.")
     if workspace.exists() and any(workspace.iterdir()):
         return 0
     workspace.mkdir(parents=True, exist_ok=True)
-    copied = 0
-    for path in sorted(source.rglob("*")):
-        if path.is_symlink() or not path.is_file():
-            continue
-        target = workspace / path.relative_to(source)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, target)
-        copied += 1
+    copied = _copy_starter(source, workspace)
     print(f"  Seeded workspace/{workspace.name}/ with {copied} starter file(s).")
     return copied
 
@@ -3912,6 +3949,9 @@ def main(argv: list[str] | None = None) -> int:
             "staged by the worker as data/runs/<run-id>/case_spec.json — start "
             "it from the web UI, not by hand."
         )
+
+    # The report and the gateway key are tagged with the case, not Tetris.
+    run.setdefault("benchmark_id", str(task.get("task_id") or args.case))
 
     # A continuation replaces the task instruction in *every* lane, curated
     # included: `resolve_prompt_file` would hand back the original benchmark

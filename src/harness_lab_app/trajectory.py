@@ -27,6 +27,8 @@ import json
 import re
 from typing import Any
 
+from harness_lab_app.racing_play import is_race_step
+
 # How many steps a trajectory carries. A 200-step run rendered in full would
 # dominate a judge's context and cost more than the run it is judging; the head
 # and the tail are where the plan and the outcome live.
@@ -234,6 +236,13 @@ def build(
     if not parsed["steps"]:
         return None
 
+    # Counted before clipping: a racing-play episode is ~120 calls, and the
+    # played/scripted label must see every one of them (racing_play).
+    race_step_commands = [
+        step["input"]
+        for step in parsed["steps"]
+        if step["tool"] == "Bash" and is_race_step(step["input"])
+    ]
     steps, truncated = _clip(parsed["steps"])
     tools_called: list[str] = []
     for step in parsed["steps"]:
@@ -260,6 +269,8 @@ def build(
         "final_output": parsed["final_output"],
         "skill_invocations": skill_invocations,
         "skill_call_errors": skill_call_errors,
+        "race_step_calls": len(race_step_commands),
+        "race_step_commands": race_step_commands,
     }
 
 

@@ -92,15 +92,26 @@ def set_status_running(runs_path: Path, run_id: str) -> None:
     runs_path.write_text(new_text)
 
 
+def benchmark_id(run: dict) -> str:
+    """The run's case id, for its report and gateway tags.
+
+    Every run was once tagged ``tetris-v1``, the lab's first benchmark, so a
+    racing or SWE run showed up in Langfuse under Tetris. The caller sets
+    ``benchmark_id``; ``tetris-v1`` stays only for a run dict that predates it.
+    """
+    return str(run.get("benchmark_id") or "tetris-v1")
+
+
 def scaffold_report(run: dict, out_dir: Path) -> Path:
     report = REPORT_TEMPLATE.read_text()
     tags = (
-        f"benchmark:tetris-v1 harness:{run.get('harness', '')} "
+        f"benchmark:{benchmark_id(run)} harness:{run.get('harness', '')} "
         f"method:{run.get('methodology', '')} planner:{run.get('planner_model', '')} "
         f"executor:{run.get('executor_model', '')} prompt:{run.get('prompt_variant', '')}"
     )
     replacements = {
         "<run-id>": run["run_id"],
+        "- Benchmark ID:": f"- Benchmark ID: {benchmark_id(run)}",
         "- Harness:": f"- Harness: {run.get('harness', '')}",
         "- Methodology:": f"- Methodology: {run.get('methodology', '')}",
         "- Planner model:": f"- Planner model: {run.get('planner_model', '')}",
@@ -149,7 +160,7 @@ def create_litellm_key(gateway_base: str, master_key: str, run: dict) -> str:
             "session_id": session_id,
             "langfuse_session_id": session_id,
             "run_id": run["run_id"],
-            "benchmark_id": "tetris-v1",
+            "benchmark_id": benchmark_id(run),
             "methodology": run.get("methodology", ""),
             "planner_model": run.get("planner_model", ""),
             "executor_model": run.get("executor_model", ""),
@@ -191,6 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.exit(f"Unknown benchmark '{args.benchmark}'. Known: {list(RUNS_FILES)}")
 
     run = find_run(runs_path, args.run)
+    run.setdefault("benchmark_id", args.benchmark)
 
     if run.get("status") == "completed":
         sys.exit(f"Run {args.run} is already completed. Use a new run_id.")
@@ -254,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    POST /key/generate  key_alias={args.run}")
         print(f"    metadata.session_id={session_id}")
         print(
-            f"    tags=[benchmark:tetris-v1, method:{run.get('methodology', '')}, ...]"
+            f"    tags=[benchmark:{benchmark_id(run)}, method:{run.get('methodology', '')}, ...]"
         )
         print()
         print("  Or re-run after setting LITELLM_MASTER_KEY in .env")
