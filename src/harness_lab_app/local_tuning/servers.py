@@ -25,9 +25,13 @@ Facts specific to each backend (see the design spec for the sourcing):
 
 from __future__ import annotations
 
+import contextlib
 import json
+import time
 import urllib.error
+import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from harness_lab_app.direct_hosts import (
@@ -41,13 +45,18 @@ from harness_lab_app.local_tuning.contracts import (
     ArchShape,
     Completion,
     ConfigDiff,
+    LoadCheck,
     LoadConfig,
     LocalServer,
     ModelInfo,
+    PullProgress,
     ServedConfig,
     ServerError,
     ServerKind,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
 
 # Model types LM Studio lists that can actually serve a completion. Embedding
 # models are listed too, and would fail every test this page runs.
@@ -64,6 +73,16 @@ _LMSTUDIO_RUNNABLE_TYPES = ("llm", "vlm")
 # this constant if large-model loads through the proxy need to survive past
 # five minutes; this module does not change nginx's own configuration.
 _LOAD_TIMEOUT_SECONDS = 600.0
+# The load check after a download uses a small context: it proves the file
+# runs, not that a chosen configuration fits.
+_LOAD_CHECK_CONTEXT = 2048
+
+# How long a download may go without a single progress line or status change
+# before the lab gives up on it. Ollama goes quiet while it verifies the
+# digest of a large file, so this matches the load timeout.
+_PULL_STALL_SECONDS = _LOAD_TIMEOUT_SECONDS
+# LM Studio downloads run as a job the lab polls at this interval.
+_PULL_POLL_SECONDS = 1.0
 
 
 class _HttpServerError(ServerError):
@@ -107,6 +126,37 @@ def _http(url: str, timeout: float, payload: dict | None = None) -> dict:
         raise ServerError(
             _truncate(f"{url} answered with an invalid response: {exc}")
         ) from exc
+
+
+def _stream_json_lines(url: str, timeout: float, payload: dict) -> Iterator[dict]:
+    """POST ``payload`` and yield each JSON line of a streamed (NDJSON) answer.
+
+    The streaming twin of :func:`_http`, and the seam tests monkeypatch for
+    Ollama's ``/api/pull``. ``timeout`` bounds each read, not the whole
+    stream: a multi-gigabyte download legitimately takes far longer.
+    """
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "Accept": "application/x-ndjson"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
+            for raw in resp:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(item, dict):
+                    yield item
+    except urllib.error.HTTPError as exc:
+        raise _HttpServerError(_truncate(_http_error_message(exc)), exc.code) from exc
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        raise DirectHostUnreachable(f"{url} did not answer: {exc}") from exc
 
 
 def _http_error_message(exc: urllib.error.HTTPError) -> str:
@@ -385,9 +435,121 @@ class LMStudioServer:
             tool_calls=_parse_tool_calls(message.get("tool_calls")),
         )
 
+    def version(self) -> str:
+        """LM Studio has no version endpoint the lab relies on."""
+        return ""
+
+    def check_load(self, model_id: str) -> LoadCheck:  # noqa: ARG002
+        """Not done on LM Studio: a download leaves no stable model key to load.
+
+        The key LM Studio assigns a Hugging Face download is its own; step 3
+        lists it, and the load there reports any failure in LM Studio's words.
+        """
+        return LoadCheck(status="skipped")
+
+    def pull(
+        self,
+        model: str,
+        quantization: str = "",
+        *,
+        on_progress: Callable[[PullProgress], None],
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> PullProgress:
+        """Download through ``POST /api/v1/models/download`` and poll its job.
+
+        ``model`` is a catalog key or a Hugging Face link; ``quantization``
+        only applies to a Hugging Face link (LM Studio's own rule).
+        """
+        body: dict = {"model": model}
+        if quantization:
+            body["quantization"] = quantization
+        try:
+            started = _http(
+                f"{self.base_url}/api/v1/models/download", self.timeout, body
+            )
+        except _HttpServerError as exc:
+            # A missing model is a 404 too ("... not found", model_not_found);
+            # only an unknown route means this LM Studio predates the API.
+            if exc.status == 404 and "Unexpected endpoint" in str(exc):
+                raise ServerError(
+                    "This LM Studio cannot download through its API. Update it to "
+                    "0.4 or later, or download the model in LM Studio itself."
+                ) from exc
+            raise
+        progress = _lmstudio_progress(started)
+        job_id = str(started.get("job_id") or "")
+        if progress.status == "downloading" and not job_id:
+            progress = PullProgress(
+                status="failed",
+                error="LM Studio started a download without a job id to follow.",
+            )
+        on_progress(progress)
+        if progress.status != "downloading":
+            return progress
+        last_change = clock()
+        while True:
+            sleep(_PULL_POLL_SECONDS)
+            payload = _http(
+                f"{self.base_url}/api/v1/models/download/status/{job_id}",
+                self.timeout,
+            )
+            reading = _lmstudio_progress(payload)
+            if reading != progress:
+                last_change = clock()
+                progress = reading
+                on_progress(progress)
+            if progress.status != "downloading":
+                return progress
+            if clock() - last_change > _PULL_STALL_SECONDS:
+                return PullProgress(
+                    status="failed",
+                    total_bytes=progress.total_bytes,
+                    completed_bytes=progress.completed_bytes,
+                    error="LM Studio reported no progress for 10 minutes.",
+                )
+
+
+def _lmstudio_progress(payload: dict) -> PullProgress:
+    """A :class:`PullProgress` from LM Studio's download job object."""
+    raw = str(payload.get("status") or "")
+    total = as_int(payload.get("total_size_bytes"))
+    completed = as_int(payload.get("downloaded_bytes"))
+    if raw in ("completed", "already_downloaded"):
+        return PullProgress(
+            status="completed",
+            total_bytes=total,
+            completed_bytes=total if total is not None else completed,
+            detail="already downloaded" if raw == "already_downloaded" else "",
+        )
+    if raw == "failed":
+        return PullProgress(
+            status="failed",
+            total_bytes=total,
+            completed_bytes=completed,
+            error=str(
+                payload.get("error") or "LM Studio reported the download failed."
+            ),
+        )
+    return PullProgress(
+        status="downloading",
+        total_bytes=total,
+        completed_bytes=completed,
+        detail="paused in LM Studio" if raw == "paused" else "",
+    )
+
 
 def _ollama_shape(arch: str, model_info: dict) -> ArchShape | None:
-    """``ArchShape`` from ``/api/show``'s ``model_info``, the "exact" source."""
+    """``ArchShape`` from ``/api/show``'s ``model_info``, the "exact" source.
+
+    ``None`` when the flat reading would be wrong: a model whose sliding-window
+    layers have their own key length (Gemma 4) also shares KV between layers,
+    and ``/api/show`` lists the per-layer pattern only in its 12 MB verbose
+    form. The architecture table carries that shape instead (seen live on a
+    Jetson: the flat reading put Gemma 4 E4B at 3.4 GB of KV at 32k, not 0.6).
+    """
+    if f"{arch}.attention.key_length_swa" in model_info:
+        return None
     layers = as_int(model_info.get(f"{arch}.block_count"))
     kv_heads = as_int(model_info.get(f"{arch}.attention.head_count_kv"))
     head_dim = as_int(model_info.get(f"{arch}.attention.key_length"))
@@ -400,6 +562,49 @@ def _ollama_shape(arch: str, model_info: dict) -> ArchShape | None:
         return None
     return ArchShape(
         layers=layers, kv_layers=layers, kv_heads=kv_heads, head_dim=head_dim
+    )
+
+
+# Ollama 0.30 moved GGUF models to llama.cpp's own server, which runs the
+# split (text + mmproj) files Hugging Face repos ship for recent
+# architectures; earlier versions answer "unable to load model" for them
+# (ollama/ollama#14575, #15235). Ollama's library builds of the same models
+# carry their own floor, e.g. gemma4 requires 0.30.9.
+OLLAMA_SPLIT_GGUF_MIN_VERSION = "0.30.0"
+
+
+def version_tuple(version: str) -> tuple[int, ...]:
+    """ "0.24.0" -> (0, 24, 0); "0.30.0-rc1" -> (0, 30, 0); "" -> ()."""
+    parts: list[int] = []
+    for piece in version.strip().lstrip("v").split("."):
+        digits = ""
+        for char in piece:
+            if not char.isdigit():
+                break
+            digits += char
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+def explain_ollama_load_error(error: str, version: str) -> str:
+    """Ollama's "unable to load model: <blob path>" names no cause; add one."""
+    if "unable to load model" not in error:
+        return error
+    running = version_tuple(version)
+    if running and running < version_tuple(OLLAMA_SPLIT_GGUF_MIN_VERSION):
+        return (
+            f"Ollama {version} could not load this model. Older Ollama cannot "
+            "run many recent Hugging Face GGUF files (Gemma 4, Qwen 3.5 and "
+            "others that ship a separate vision file). Update Ollama on that "
+            "machine (curl -fsSL https://ollama.com/install.sh | sh) or use the "
+            f"model's ollama.com/library build. Ollama said: {error}"
+        )
+    return (
+        "Ollama could not load this model: its architecture or file layout may "
+        "not be supported by this Ollama build. Try the model's "
+        f"ollama.com/library build or another quantization. Ollama said: {error}"
     )
 
 
@@ -449,6 +654,12 @@ class OllamaServer:
             arch = str(details.get("family") or "")
             params = str(details.get("parameter_size") or "")
             quantization = str(details.get("quantization_level") or "")
+            if quantization.lower() in ("", "unknown") and name.startswith(
+                ("hf.co/", "huggingface.co/")
+            ):
+                # Hugging Face pulls report "unknown"; their tag names the file.
+                tag = name.rsplit(":", 1)[1] if ":" in name else ""
+                quantization = tag.upper() if tag else quantization
             max_context = None
             shape = None
             try:
@@ -589,6 +800,112 @@ class OllamaServer:
             prompt_tokens_per_second=prompt_tps,
             tool_calls=_parse_tool_calls(message.get("tool_calls")),
         )
+
+    def version(self) -> str:
+        try:
+            payload = _http(f"{self.base_url}/api/version", self.timeout)
+        except (DirectHostUnreachable, ServerError):
+            return ""
+        return str(payload.get("version") or "")
+
+    def check_load(self, model_id: str) -> LoadCheck:
+        """Warm ``model_id`` at a small context, then unload it.
+
+        Skipped when any model is loaded: the check must never evict a model a
+        run or the user is using. A failure carries Ollama's own words plus
+        what usually causes it (see :func:`explain_ollama_load_error`).
+        """
+        if self._running_by_name():
+            return LoadCheck(status="skipped")
+        try:
+            # Not ``keep_alive: 0`` here: with an empty prompt Ollama reads that
+            # as "unload" and answers at once without loading anything (seen
+            # live on 0.24, done_reason "unload"). Load, then unload.
+            _http(
+                f"{self.base_url}/api/generate",
+                _LOAD_TIMEOUT_SECONDS,
+                {
+                    "model": model_id,
+                    "prompt": "",
+                    "keep_alive": "1m",
+                    "options": {"num_ctx": _LOAD_CHECK_CONTEXT},
+                },
+            )
+        except ServerError as exc:
+            return LoadCheck(
+                status="failed",
+                error=explain_ollama_load_error(str(exc), self.version()),
+            )
+        # It loaded; if the unload fails, Ollama drops it after keep_alive.
+        with contextlib.suppress(DirectHostUnreachable, ServerError):
+            self.unload(model_id)
+        return LoadCheck(status="ok")
+
+    def pull(
+        self,
+        model: str,
+        quantization: str = "",  # noqa: ARG002 - the tag already names it
+        *,
+        on_progress: Callable[[PullProgress], None],
+    ) -> PullProgress:
+        """Download through Ollama's streamed ``POST /api/pull``.
+
+        Each line reports one layer (``digest``); the bytes shown are the sum
+        over layers. ``model`` is a library tag (``qwen3:8b``) or a Hugging
+        Face reference (``hf.co/{repo}:{quant}``), which carries its own
+        quantization.
+        """
+        layers: dict[str, tuple[int, int]] = {}
+        last = PullProgress(status="downloading", detail="starting")
+        on_progress(last)
+        for item in _stream_json_lines(
+            f"{self.base_url}/api/pull",
+            _PULL_STALL_SECONDS,
+            {"model": model, "stream": True},
+        ):
+            if item.get("error"):
+                last = PullProgress(
+                    status="failed",
+                    total_bytes=last.total_bytes,
+                    completed_bytes=last.completed_bytes,
+                    error=_truncate(str(item["error"])),
+                )
+                on_progress(last)
+                return last
+            phase = str(item.get("status") or "")
+            digest = item.get("digest")
+            if digest:
+                total = as_int(item.get("total")) or 0
+                completed = as_int(item.get("completed")) or 0
+                layers[str(digest)] = (total, completed)
+            total_bytes = sum(t for t, _ in layers.values()) or None
+            completed_bytes = sum(c for _, c in layers.values()) if layers else None
+            if phase == "success":
+                last = PullProgress(
+                    status="completed",
+                    total_bytes=total_bytes,
+                    completed_bytes=total_bytes,
+                    detail=phase,
+                )
+                on_progress(last)
+                return last
+            last = PullProgress(
+                status="downloading",
+                total_bytes=total_bytes,
+                completed_bytes=completed_bytes,
+                detail="downloading"
+                if phase.startswith("pulling ") and digest
+                else phase,
+            )
+            on_progress(last)
+        failed = PullProgress(
+            status="failed",
+            total_bytes=last.total_bytes,
+            completed_bytes=last.completed_bytes,
+            error="Ollama closed the download before it reported success.",
+        )
+        on_progress(failed)
+        return failed
 
 
 class InvalidServerUrl(ValueError):

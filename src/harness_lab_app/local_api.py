@@ -9,10 +9,11 @@ line.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from harness_lab_app.config import read_env_file_value
 from harness_lab_app.db import get_session
@@ -153,6 +154,58 @@ class TestsStartRequest(BaseModel):
     # model exactly as it is served. The lab never loads, reloads or reconfigures
     # it, and refuses when it is not loaded rather than loading it.
     evaluate_only: bool = False
+
+
+class HubSearchRequest(BaseModel):
+    # Empty: the curated list. Otherwise a Hugging Face search.
+    query: str = ""
+    # The machine from step 1, to mark each file fits / tight / too big.
+    machine: MachineSpec | None = None
+
+
+# A model reference a server's download API takes: an Ollama library tag
+# ("qwen3:8b", "user/model:tag"), a Hugging Face file
+# ("hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M"), an LM Studio catalog key
+# ("qwen/qwen3-8b") or a https://huggingface.co/ link. Nothing else reaches the
+# server: no other URL scheme, no whitespace, no leading dash, and no other
+# registry host — Ollama would otherwise fetch "evil.example/ns/m:tag" from
+# any host the requester names.
+_PULL_MODEL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}")
+_HF_LINK_PREFIX = "https://huggingface.co/"
+_ALLOWED_REGISTRY_HOSTS = ("hf.co", "huggingface.co", "registry.ollama.ai")
+
+
+def _names_another_registry(reference: str) -> bool:
+    """True when the first path segment looks like a host other than the allowed ones."""
+    first, _, rest = reference.partition("/")
+    if not rest:
+        return False
+    # Ollama reads the first segment as a host when it has a dot or a port,
+    # or is localhost (its own name parser's rule).
+    looks_like_host = "." in first or ":" in first or first.lower() == "localhost"
+    return looks_like_host and first.lower() not in _ALLOWED_REGISTRY_HOSTS
+
+
+class PullStartRequest(BaseModel):
+    kind: ServerKind
+    url: str
+    model: str = Field(min_length=1, max_length=230)
+    quantization: str = Field(default="", max_length=40, pattern=r"^[A-Za-z0-9_-]*$")
+
+    @field_validator("model")
+    @classmethod
+    def _model_reference(cls, value: str) -> str:
+        reference = value.removeprefix(_HF_LINK_PREFIX)
+        if (
+            "://" in reference
+            or not _PULL_MODEL_PATTERN.fullmatch(reference)
+            or _names_another_registry(reference)
+        ):
+            raise ValueError(
+                "Use a model name (qwen3:8b), a Hugging Face reference "
+                "(hf.co/owner/repo:Q4_K_M) or a https://huggingface.co/ link."
+            )
+        return value
 
 
 class ProfileCreateRequest(BaseModel):
@@ -310,6 +363,9 @@ def test_server(data: ServerTestRequest):
             "reachable": True,
             "models": [m.model_dump() for m in models],
             "error": "",
+            # Lets *Get more models* warn before a download the server
+            # cannot run (ADR-0101); "" when the server does not say.
+            "version": server.version(),
         }
     except (DirectHostUnreachable, ServerError, InvalidServerUrl) as exc:
         return {
@@ -318,6 +374,7 @@ def test_server(data: ServerTestRequest):
             "reachable": False,
             "models": [],
             "error": str(exc),
+            "version": "",
         }
 
 
@@ -381,7 +438,14 @@ def load(data: LoadRequest, session: Session = Depends(get_session)):
             status_code=502, detail=_unreachable_detail(data.url)
         ) from exc
     except ServerError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        message = str(exc)
+        if data.kind == "ollama":
+            from harness_lab_app.local_tuning.servers import (
+                explain_ollama_load_error,
+            )
+
+            message = explain_ollama_load_error(message, server.version())
+        raise HTTPException(status_code=422, detail=message) from exc
     _record_override_after_success(
         session, report, f"load {data.model_id}", data.acknowledge_guard
     )
@@ -558,6 +622,68 @@ def _history_saver(data: TestsStartRequest):
             return profile.id
 
     return save
+
+
+@local_router.post("/hub/search")
+def hub_search(data: HubSearchRequest):
+    """Models to download: the curated list, or a Hugging Face search."""
+    from harness_lab_app.local_tuning.model_hub import (
+        HubUnavailable,
+        curated_models,
+        search_huggingface,
+        with_fit,
+    )
+
+    query = data.query.strip()
+    if not query:
+        return {"models": with_fit(curated_models(), data.machine), "error": ""}
+    try:
+        models = search_huggingface(query)
+    except HubUnavailable as exc:
+        return {"models": [], "error": str(exc)}
+    return {"models": with_fit(models, data.machine), "error": ""}
+
+
+@local_router.post("/pulls")
+def start_pull(data: PullStartRequest, session: Session = Depends(get_session)):
+    """Ask the server to download a model; poll ``GET /pulls/{id}`` for progress.
+
+    A download never loads the model, so lab runs on the host are reported
+    beside the job instead of blocking it: they share the host's disk and
+    network, not its memory.
+    """
+    from harness_lab_app.local_tuning.pull_jobs import (
+        PullBusy,
+        start_pull as start_job,
+    )
+    from harness_lab_app.local_tuning.servers import InvalidServerUrl, make_server
+
+    _validate_url(data.url)
+    try:
+        server = make_server(data.kind, data.url)
+    except InvalidServerUrl as exc:  # pragma: no cover - _validate_url ran first
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        job = start_job(server, data.model, data.quantization)
+    except PullBusy as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(exc), "job": exc.existing.model_dump()},
+        ) from exc
+    routing, routing_unknown = _gateway_routing()
+    report = active_runs_on_host(session, _host_of(data.url), routing)
+    report.routing_unknown = routing_unknown
+    return {"job": job.model_dump(), "guard": report.model_dump()}
+
+
+@local_router.get("/pulls/{job_id}")
+def get_pull(job_id: str):
+    from harness_lab_app.local_tuning.pull_jobs import get_job
+
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Download not found")
+    return job
 
 
 @local_router.get("/tests/{session_id}")
