@@ -13,7 +13,7 @@ RUN npm exec vite build -- --config vite.game.config.ts
 FROM build AS verify
 COPY frontend/tsconfig.json frontend/index.html frontend/vite.config.ts ./
 COPY game-runtime /build/game-runtime
-RUN npm run typecheck && npm run test:racing && npm run test:game-runtime && npm run build
+RUN npm run typecheck && npm run test:racing && npm run test:game-runtime && npm run test:local && npm run build
 
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS runtime
 # Copy the executable and only its non-libc shared libraries from the pinned stage.

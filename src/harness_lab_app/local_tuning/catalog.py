@@ -398,6 +398,85 @@ _GEMMA_BUCKETS = {
     },
 }
 
+# Gemma 4 differs from Gemma 3 in three ways that shrink its KV cache a lot:
+# the full-attention layers keep few, wide KV heads (global_head_dim 512);
+# the sliding-window layers keep their own narrower heads (head_dim 256); and
+# the small "E" models reuse the KV of earlier layers in their last
+# ``num_kv_shared_layers`` blocks, so those keep no cache at all. ``kv_layers``
+# and ``swa_layers`` count only the layers that keep one. Two keys per small
+# model: the Hugging Face name says "E4B", Ollama reports the total with the
+# per-layer embeddings ("7.46B").
+_GEMMA4_E2B = {
+    # source: google/gemma-4-E2B-it config.json (text_config): 35 layers,
+    # full attention every 5th (4, 9, ... 34), num_kv_shared_layers 20, so
+    # layers 0-14 keep a cache: 3 full, 12 sliding.
+    "layers": 35,
+    "kv_layers": 3,
+    "kv_heads": 1,
+    "head_dim": 512,
+    "sliding_window": 512,
+    "swa_layers": 12,
+    "swa_kv_heads": 1,
+    "swa_head_dim": 256,
+}
+_GEMMA4_E4B = {
+    # source: google/gemma-4-E4B-it config.json (text_config): 42 layers,
+    # full attention every 6th (5, 11, ... 41), num_kv_shared_layers 18, so
+    # layers 0-23 keep a cache: 4 full, 20 sliding. Matches what Ollama 0.24
+    # reports for it (head_count_kv 2, key_length 512, key_length_swa 256).
+    "layers": 42,
+    "kv_layers": 4,
+    "kv_heads": 2,
+    "head_dim": 512,
+    "sliding_window": 512,
+    "swa_layers": 20,
+    "swa_kv_heads": 2,
+    "swa_head_dim": 256,
+}
+_GEMMA4_BUCKETS = {
+    2.0: _GEMMA4_E2B,
+    4.6: _GEMMA4_E2B,
+    4.0: _GEMMA4_E4B,
+    7.5: _GEMMA4_E4B,
+    # source: google/gemma-4-12b-it config.json: 48 layers, every 6th full;
+    # num_global_key_value_heads 1, num_key_value_heads 8. attention_k_eq_v
+    # could halve the full layers' cache; not counted, to stay conservative.
+    12.0: {
+        "layers": 48,
+        "kv_layers": 8,
+        "kv_heads": 1,
+        "head_dim": 512,
+        "sliding_window": 1024,
+        "swa_layers": 40,
+        "swa_kv_heads": 8,
+        "swa_head_dim": 256,
+    },
+    # source: google/gemma-4-26B-A4B-it config.json: 30 layers, every 6th
+    # full; 2 global / 8 sliding KV heads.
+    26.0: {
+        "layers": 30,
+        "kv_layers": 5,
+        "kv_heads": 2,
+        "head_dim": 512,
+        "sliding_window": 1024,
+        "swa_layers": 25,
+        "swa_kv_heads": 8,
+        "swa_head_dim": 256,
+    },
+    # source: google/gemma-4-31B-it config.json: 60 layers, every 6th full;
+    # 4 global / 16 sliding KV heads.
+    31.0: {
+        "layers": 60,
+        "kv_layers": 10,
+        "kv_heads": 4,
+        "head_dim": 512,
+        "sliding_window": 1024,
+        "swa_layers": 50,
+        "swa_kv_heads": 16,
+        "swa_head_dim": 256,
+    },
+}
+
 _GPT_OSS_BUCKETS = {
     # source: openai/gpt-oss-20b config.json; alternating sliding-window /
     # full-attention layers.
@@ -427,7 +506,7 @@ ARCH_TABLE: dict[str, dict] = {
     "qwen36": {"buckets": _QWEN35_BUCKETS},
     "qwen38": {"buckets": _QWEN35_BUCKETS},
     "gemma3": {"buckets": _GEMMA_BUCKETS},
-    "gemma4": {"buckets": _GEMMA_BUCKETS},
+    "gemma4": {"buckets": _GEMMA4_BUCKETS},
     "gpt-oss": {"buckets": _GPT_OSS_BUCKETS},
     "mistral": {"buckets": _MISTRAL_BUCKETS},
     "mistral3": {"buckets": _MISTRAL_BUCKETS},

@@ -131,6 +131,7 @@ The `/adr` slash command (Claude Code) scaffolds a new record from the template.
 - [0100 — An ad hoc task carries its skill to try, and can review a pull request](0100-an-adhoc-task-carries-its-skill-to-try-and-can-review-a-pull-request.md)
 
 - [0100 — Fixed games run as baked builds in a slim runtime](0100-fixed-games-run-as-baked-builds-in-a-slim-runtime.md)
+- [0101 — The lab downloads models through the server's own API](0101-the-lab-downloads-models-through-the-servers-own-api.md)
 
 ## Why ADRs exist
 

@@ -111,8 +111,8 @@ def _kv_cache_gb(
         if shape.sliding_window and shape.swa_layers:
             swa_bytes_per_token = (
                 2
-                * shape.kv_heads
-                * shape.head_dim
+                * (shape.swa_kv_heads or shape.kv_heads)
+                * (shape.swa_head_dim or shape.head_dim)
                 * config.kv_cache_bytes
                 * shape.swa_layers
             )
