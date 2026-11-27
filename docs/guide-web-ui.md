@@ -329,6 +329,21 @@ Two doors each hold two branches, because each pair asks one kind of question.
 The old routes `/flows/harness` and `/flows/improve` still work: they land on the
 matching branch and keep `?case=` and `?skill=`.
 
+Every **Which case?** step shelves its cards by kind of case, each shelf with a
+heading, a count and one line on what it holds. The shelf comes from the case's tags
+(`frontend/src/caseGroups.mjs`), never from a stored field, and only changes the layout.
+The first rule that matches wins:
+
+| Shelf | Tags | Today |
+|---|---|---|
+| **Code** | none of the below; SWE-bench instances too | build, fix, frontend and security-fix cases |
+| **Review & audit** | `code-review` or `audit` | `pr-review-v1`, `security-audit-v1` |
+| **3D games** | `3d` or `godot` | `chess3d-v1`, `racing3d-v1`, `opencity3d-v1` |
+| **Gameplay** | `play` | a case where the model plays a fixed game |
+
+Empty shelves are hidden, and a step with a single shelf stays one flat grid. A new
+case lands on the right shelf by its tags alone; tag it `play` if the model plays a game.
+
 The last step always shows **arms, runs, estimated cost and time**, and only then
 **Create and launch (N runs)**:
 

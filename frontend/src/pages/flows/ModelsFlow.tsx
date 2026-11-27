@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { api } from "../../api";
 import { GuideFlow, SKIPPED } from "../../components/guide/GuideFlow";
-import type { GuideStep, GuideValues } from "../../components/guide/GuideFlow";
+import type { GuideOption, GuideStep, GuideValues } from "../../components/guide/GuideFlow";
 import {
   armFor,
   defaultVariant,
@@ -20,7 +20,9 @@ import {
   uniqueExperimentId
 } from "../../components/guide/guideData";
 import { armLabel, HarnessModelChooser } from "../../components/guide/HarnessModelChooser";
-import { defineMessages, useMessages } from "../../i18n";
+import { groupCases } from "../../caseGroups.mjs";
+import type { CaseGroup } from "../../caseGroups.mjs";
+import { defineMessages, pickMessages, useMessages } from "../../i18n";
 import type { HarnessLevel } from "../../components/guide/guideData";
 import type { CaseRecord, ModelOption, NativeModelRecord, SkillProfileRecord } from "../../types";
 
@@ -169,13 +171,33 @@ const MESSAGES = defineMessages({
   }
 });
 
-export function caseOptions(cases: CaseRecord[]) {
-  return cases.map((row) => ({
-    id: row.case_id,
-    label: row.name && row.name !== row.case_id && row.name.length < 40 ? row.name : row.case_id,
-    sub: (row.tags ?? []).slice(0, 3).join(" · "),
-    tip: row.description ? row.description.slice(0, 280) : row.case_id
-  }));
+const GROUP_MESSAGES = defineMessages<Record<CaseGroup, { title: string; hint: string }>>({
+  en: {
+    code: { title: "Code", hint: "Build, fix and SWE-bench tasks graded by tests" },
+    review: { title: "Review & audit", hint: "Read code and report findings, without changing it" },
+    game_3d: { title: "3D games", hint: "Godot builds in their own image, 30 to 75 min per run" },
+    gameplay: { title: "Gameplay", hint: "The model plays a fixed game, decision by decision" }
+  },
+  es: {
+    code: { title: "Código", hint: "Construir, corregir y SWE-bench, evaluados con tests" },
+    review: { title: "Revisión y auditoría", hint: "Leer código y reportar hallazgos, sin modificarlo" },
+    game_3d: { title: "Juegos 3D", hint: "Builds de Godot en su propia imagen, 30 a 75 min por corrida" },
+    gameplay: { title: "Gameplay", hint: "El modelo juega un juego fijo, decisión por decisión" }
+  }
+});
+
+/** The *Which case?* cards of every guided flow, shelved by kind of case. */
+export function caseOptions(cases: CaseRecord[]): GuideOption[] {
+  const groups = pickMessages(GROUP_MESSAGES);
+  return groupCases(cases).flatMap(({ group, items }) =>
+    items.map((row) => ({
+      id: row.case_id,
+      label: row.name && row.name !== row.case_id && row.name.length < 40 ? row.name : row.case_id,
+      sub: (row.tags ?? []).slice(0, 3).join(" · "),
+      tip: row.description ? row.description.slice(0, 280) : row.case_id,
+      group: { id: group, ...groups[group] }
+    }))
+  );
 }
 
 export function ModelsFlow() {
