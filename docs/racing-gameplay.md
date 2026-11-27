@@ -5,6 +5,21 @@ arcade time trial, not another task asking an agent to generate game code. Exist
 `racing3d-v1`, chess and city creation tasks remain unchanged. Human-versus-model
 interactive ghost challenges are PR3; cooking and vision are later.
 
+## Any model, as a lab case
+
+To have any configured harness and model (Claude, Codex, Gemini, Antigravity,
+OpenCode over LM Studio/Ollama) play this track as an ordinary Run — listed in
+Runs, scored, comparable in Compare — pick the **`racing-play-v1`** case in a
+guided flow. The agent plays through a `race` tool, one 0.5 s decision per call,
+and the run is labelled played or scripted. See
+[`benchmarks/racing-play-v1/README.md`](../benchmarks/racing-play-v1/README.md) and
+ADR-0102. The page below stays the place for humans and direct LM Studio episodes.
+
+Once such a run is graded, its run page has a **Replay** tab: the exact controls the
+grader accepted, re-simulated with the lab's engine and drawn with the same Three.js
+scene, with play/pause, restart and 0.5×–4× speed (ADR-0103). It reads only the
+grader's `data/runs/<id>/racing.json`, so an invalid episode has no replay.
+
 ## Play and inspect runs
 
 Start the normal Docker stack with `make app-up` (development) or `make app-up-prod`

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api";
@@ -41,6 +41,11 @@ type RunDetailProps = {
   onScoreRun: (runId: string, score: number, interventions: number, notes: string) => Promise<RunRecord>;
   onContinueRun?: (runId: string, prompt: string, maxSteps?: number) => Promise<RunRecord>;
 };
+
+// Three.js loads only when a replay is opened, not with every run page.
+const RacingReplay = lazy(() =>
+  import("../components/RacingReplay").then((module) => ({ default: module.RacingReplay }))
+);
 
 const POLL_INTERVAL_MS = 1500;
 export const CANCELLABLE_STATES: RunRecord["state"][] = ["pending", "running"];
@@ -128,7 +133,7 @@ const MESSAGES = defineMessages({
       sentSpans: (spans: number, sessionId: string) => `Sent ${spans} spans to session ${sessionId}.`,
       exportFailed: "Export failed."
     },
-    tabs: { detail: "Detail", terminal: "Terminal", desktop: "Desktop", play: "Play" },
+    tabs: { detail: "Detail", replay: "Replay", terminal: "Terminal", desktop: "Desktop", play: "Play" },
     summary: {
       score: "Score",
       interventions: "Interventions",
@@ -428,7 +433,7 @@ const MESSAGES = defineMessages({
       sentSpans: (spans: number, sessionId: string) => `Se enviaron ${spans} spans a la sesión ${sessionId}.`,
       exportFailed: "Falló la exportación."
     },
-    tabs: { detail: "Detalle", terminal: "Terminal", desktop: "Escritorio", play: "Jugar" },
+    tabs: { detail: "Detalle", replay: "Replay", terminal: "Terminal", desktop: "Escritorio", play: "Jugar" },
     summary: {
       score: "Puntaje",
       interventions: "Intervenciones",
@@ -832,15 +837,23 @@ export function RunDetail({
   // at it. Read once, at mount — after that the tab is yours.
   const [searchParams] = useSearchParams();
   const requestedTab = searchParams.get("tab");
-  const [tab, setTab] = useState<"detail" | "terminal" | "desktop" | "play">(
-    requestedTab === "terminal" || requestedTab === "desktop" || requestedTab === "play"
+  const [tab, setTab] = useState<"detail" | "replay" | "terminal" | "desktop" | "play">(
+    requestedTab === "terminal" ||
+      requestedTab === "desktop" ||
+      requestedTab === "play" ||
+      requestedTab === "replay"
       ? requestedTab
       : "detail"
   );
   // `?tab=play` is only honoured once the run is known to ship a game: before
   // its context loads, or on a run with no play_command, the Play tab does not
   // exist, and showing its panel would offer a Launch the worker must refuse.
-  const shownTab = tab === "play" && !runContext?.play_command ? "detail" : tab;
+  // `?tab=replay` likewise waits for a graded racing episode (ADR-0103).
+  const shownTab =
+    (tab === "play" && !runContext?.play_command) ||
+    (tab === "replay" && !runContext?.racing_replay)
+      ? "detail"
+      : tab;
   const consoleRef = useRef<HTMLDivElement | null>(null);
   // A claude run with events-based attribution has real tool counts; only fall
   // back to the summary-only explainer when there is nothing to show.
@@ -1431,10 +1444,16 @@ export function RunDetail({
         </p>
       </div>
       <div className="run-tabs">
-        {/* Play only when the case ships a game to start (ADR-0078). */}
-        {(runContext?.play_command
-          ? (["detail", "play", "terminal", "desktop"] as const)
-          : (["detail", "terminal", "desktop"] as const)
+        {/* Play only when the case ships a game to start (ADR-0078); Replay
+            only when the run has a graded racing episode (ADR-0103). */}
+        {(
+          [
+            "detail",
+            ...(runContext?.racing_replay ? (["replay"] as const) : []),
+            ...(runContext?.play_command ? (["play"] as const) : []),
+            "terminal",
+            "desktop",
+          ] as const
         ).map((name) => (
           <button
             className={shownTab === name ? "run-tab active" : "run-tab"}
@@ -1447,7 +1466,12 @@ export function RunDetail({
         ))}
       </div>
       {shownTab === "play" && runContext ? <PlayGuide context={runContext} /> : null}
-      {shownTab !== "detail" ? (
+      {shownTab === "replay" ? (
+        <Suspense fallback={<p className="muted">…</p>}>
+          <RacingReplay runId={run.run_id} />
+        </Suspense>
+      ) : null}
+      {shownTab !== "detail" && shownTab !== "replay" ? (
         <SandboxPanel key={shownTab} kind={shownTab} runId={run.run_id} />
       ) : null}
       {shownTab === "detail" ? (

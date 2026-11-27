@@ -946,6 +946,35 @@ def test_a_workspace_with_a_virtualenv_still_archives(tmp_path):
     assert (dest / "venv" / "lib" / "blob.so").exists()
 
 
+def test_a_seeded_starter_is_not_the_agents_diff(tmp_path, monkeypatch):
+    """racing-play-v1-K-001 (2026-11-27): the `race` tool and the engine copy the
+    lab seeded counted as 1935 changed lines of the agent's code. Only what the
+    agent wrote or changed belongs in diff.patch."""
+    lab = tmp_path / "lab"
+    starter = lab / "benchmarks" / "case-v1" / "starter"
+    starter.mkdir(parents=True)
+    (starter / "tool.mjs").write_text("export const seeded = 1;\n")
+    (starter / "kept.mjs").write_text("export const same = 1;\n")
+    monkeypatch.setattr(bench_run, "REPO_ROOT", lab)
+    out_dir = tmp_path / "run"
+    dest = out_dir / "workspace"
+    dest.mkdir(parents=True)
+    (out_dir / "case_spec.json").write_text(
+        json.dumps({"starter_dir": "benchmarks/case-v1/starter"})
+    )
+    (dest / "tool.mjs").write_text("export const seeded = 2;\n")
+    (dest / "kept.mjs").write_text("export const same = 1;\n")
+    (dest / "drive.mjs").write_text("console.log('mine');\n")
+
+    bench_run.write_diff_patch(out_dir, dest)
+    patch = (out_dir / "diff.patch").read_text()
+
+    assert "drive.mjs" in patch
+    assert "-export const seeded = 1;" in patch and "+export const seeded = 2;" in patch
+    assert "kept.mjs" not in patch
+    assert str(lab) not in patch
+
+
 def test_git_output_that_is_not_utf8_never_raises(tmp_path):
     (tmp_path / "f.bin").write_bytes(b"\xa4\xff\x00 binary")
     result = bench_run._run_git(
@@ -1598,3 +1627,15 @@ def test_harness_paths_name_each_projected_skill_agent_dir_and_backup():
     assert bench_run.harness_paths(registry, "claude", ["tdd-lite"]) == [
         ".claude/skills/tdd-lite"
     ]
+
+
+def test_the_report_is_tagged_with_its_own_case(tmp_path):
+    """racing-play-v1-K-001's report and Langfuse tags said `benchmark:tetris-v1`."""
+    import create_run
+
+    run = {"run_id": "racing-play-v1-K-001", "benchmark_id": "racing-play-v1"}
+    report = create_run.scaffold_report(run, tmp_path).read_text()
+
+    assert "benchmark:racing-play-v1" in report
+    assert "- Benchmark ID: racing-play-v1" in report
+    assert "tetris" not in report.split("## Functional score")[0]

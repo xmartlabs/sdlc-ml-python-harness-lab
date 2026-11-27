@@ -189,3 +189,72 @@ def test_context_of_an_unknown_run_is_a_404():
         _endpoint(app, "/api/runs/{run_id}/context")("nope", session)
 
     assert exc.value.status_code == 404
+
+
+def _grade(**overrides) -> dict:
+    grade = {
+        "valid": True,
+        "condition": {"seed": 7, "ticks_per_action": 30, "countdown_ticks": 180},
+        "controls": [{"throttle": 1, "brake": 0, "steer": 0.1, "reset": 0}],
+        "metrics": {"finished": 1, "finish_time_seconds": 15.7},
+        "ended_by": "finished",
+        "par_seconds": 20.0,
+        "checkpoints_total": 12,
+    }
+    grade.update(overrides)
+    return grade
+
+
+@pytest.fixture
+def runs_dir(tmp_path, monkeypatch):
+    from harness_lab_app.config import Settings
+
+    monkeypatch.setattr(Settings, "data_runs_dir", tmp_path)
+    return tmp_path
+
+
+def test_a_graded_racing_episode_is_offered_for_replay(runs_dir):
+    """racing-play-v1-K-001 finished a clean lap no one could watch (ADR-0103)."""
+    import json
+
+    (runs_dir / "acme-api-J-001").mkdir()
+    (runs_dir / "acme-api-J-001" / "racing.json").write_text(json.dumps(_grade()))
+    app = create_app()
+    with _session() as session:
+        _seed(session)
+        context = _endpoint(app, "/api/runs/{run_id}/context")(
+            "acme-api-J-001", session
+        )
+        replay = _endpoint(app, "/api/runs/{run_id}/racing-replay")(
+            "acme-api-J-001", session
+        )
+
+    assert context["racing_replay"] is True
+    assert replay["condition"]["ticks_per_action"] == 30
+    assert replay["controls"] == _grade()["controls"]
+    assert replay["metrics"]["finish_time_seconds"] == 15.7
+
+
+@pytest.mark.parametrize(
+    "content",
+    [None, "not json", '{"valid": false, "controls": []}'],
+)
+def test_no_replay_without_a_valid_graded_episode(runs_dir, content):
+    """Only the grader's report of a valid episode is replayed; nothing else is
+    guessed into a lap."""
+    if content is not None:
+        (runs_dir / "acme-api-J-001").mkdir()
+        (runs_dir / "acme-api-J-001" / "racing.json").write_text(content)
+    app = create_app()
+    with _session() as session:
+        _seed(session)
+        context = _endpoint(app, "/api/runs/{run_id}/context")(
+            "acme-api-J-001", session
+        )
+        with pytest.raises(HTTPException) as raised:
+            _endpoint(app, "/api/runs/{run_id}/racing-replay")(
+                "acme-api-J-001", session
+            )
+
+    assert context["racing_replay"] is False
+    assert raised.value.status_code == 404

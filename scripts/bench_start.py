@@ -122,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.exit(f"Unknown benchmark '{args.benchmark}'. Known: {list(RUNS_FILES)}")
 
     run = find_run(runs_path, args.run)
+    run.setdefault("benchmark_id", args.benchmark)
     if run.get("status") == "completed":
         sys.exit(f"Run {args.run} is already completed. Use a new run_id.")
 

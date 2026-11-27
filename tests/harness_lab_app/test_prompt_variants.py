@@ -122,6 +122,8 @@ GRADED_CONTRACT = {
     # The audit contract: the findings file, the precision floor, the service
     # left untouched.
     "security-audit-v1": ("findings.json", "precision", "untouched"),
+    # The episode is graded from the tool's action log; the rungs are not named.
+    "racing-play-v1": ("racing.mjs", "{workspace}"),
 }
 
 

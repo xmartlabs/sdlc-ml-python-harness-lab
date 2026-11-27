@@ -16,6 +16,11 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
+from harness_lab_app.racing_play import (
+    count_race_step_calls,
+    play_mode,
+    trajectory_matches_log,
+)
 from harness_lab_app.scores import get_definition
 
 _DIFF_FILE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
@@ -77,6 +82,9 @@ class EvaluationContext:
     # staged (`skills_extra`), asked for (`skills_invoke`), or removed in a
     # sibling arm. Empty for a run no skill question is being asked of.
     skills_under_test: tuple[str, ...] = ()
+    # racing-play-v1's replayed episode (`.lab-grade/racing.json`), or None for
+    # every other case.
+    racing_grade: dict[str, Any] | None = None
 
 
 def _fold(text: str) -> str:
@@ -504,6 +512,82 @@ class DeepEvalEvaluator:
         ]
 
 
+class RacingPlayEvaluator:
+    """racing-play-v1 — how the lap went, and whether it was played or scripted.
+
+    Emits nothing for any other case (no ``racing_grade``). The racing numbers
+    are facts from the grader's replay; the play mode is an observation whose
+    reason names the record it was read from (see :mod:`racing_play`).
+    """
+
+    id = "racing_play"
+
+    def evaluate(self, context: EvaluationContext) -> list[ScoreValue]:
+        grade = context.racing_grade
+        if not grade:
+            return []
+        actions = int(grade.get("actions") or 0) if grade.get("valid") else 0
+        event_calls = count_race_step_calls(context.trajectory)
+        calls = [int(t) for t in grade.get("calls") or []]
+        label, source = play_mode(actions, event_calls, calls)
+        matches = (
+            trajectory_matches_log(
+                context.trajectory, list(grade.get("controls") or [])
+            )
+            if actions
+            else None
+        )
+        reason = f"{label} · {source}"
+        if label == "played" and matches is False:
+            label = "scripted"
+            reason = (
+                "scripted · events (the action log does not match the recorded calls)"
+            )
+        detail = {
+            "actions": actions,
+            "event_calls": event_calls,
+            "timed_calls": len(calls),
+            "controls_match_calls": matches,
+            "ended_by": grade.get("ended_by", ""),
+        }
+        scores = [
+            ScoreValue(
+                "racing_play_mode",
+                label,
+                reason=reason,
+                provenance_detail=detail,
+            ),
+            ScoreValue(
+                "racing_episode_complete",
+                bool(grade.get("episode_complete")),
+                reason=str(
+                    grade.get("ended_by")
+                    if grade.get("valid")
+                    else grade.get("invalid_reason") or "no valid episode"
+                ),
+            ),
+        ]
+        if not grade.get("valid"):
+            return scores
+        metrics = grade.get("metrics") or {}
+        scores += [
+            ScoreValue("racing_progress", float(metrics.get("progress") or 0.0)),
+            ScoreValue("racing_collisions", float(metrics.get("collisions") or 0)),
+            ScoreValue("racing_resets", float(metrics.get("resets") or 0)),
+            ScoreValue("racing_actions", float(actions)),
+        ]
+        if (
+            metrics.get("finished") == 1
+            and metrics.get("finish_time_seconds") is not None
+        ):
+            scores.append(
+                ScoreValue(
+                    "racing_finish_seconds", float(metrics["finish_time_seconds"])
+                )
+            )
+        return scores
+
+
 # Named sets of evaluators. A profile is what an experiment declares, so two
 # arms are always scored by the same instruments.
 PROFILES: dict[str, tuple[str, ...]] = {
@@ -522,6 +606,7 @@ PROFILES: dict[str, tuple[str, ...]] = {
         "skill_usage",
         "harness_audit",
         "deepeval",
+        "racing_play",
     ),
     "with_trajectory": (
         "deterministic",
@@ -531,9 +616,16 @@ PROFILES: dict[str, tuple[str, ...]] = {
         "skill_usage",
         "harness_audit",
         "deepeval",
+        "racing_play",
     ),
-    "outcome_only": ("deterministic",),
-    "no_judgement": ("deterministic", "efficiency", "step_reward", "skill_usage"),
+    "outcome_only": ("deterministic", "racing_play"),
+    "no_judgement": (
+        "deterministic",
+        "efficiency",
+        "step_reward",
+        "skill_usage",
+        "racing_play",
+    ),
 }
 
 EVALUATORS = {
@@ -546,6 +638,7 @@ EVALUATORS = {
         SkillUsageEvaluator(),
         HarnessBehaviorEvaluator(),
         DeepEvalEvaluator(),
+        RacingPlayEvaluator(),
     )
 }
 

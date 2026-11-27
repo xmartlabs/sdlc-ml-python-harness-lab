@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { defineMessages, pickMessages, useMessages } from "../i18n";
 import { ProvenanceBadge, ProvenanceLegend } from "./ProvenanceBadge";
+import { racingPlaySummary } from "../scores/racingPlay.mjs";
 import type { ScoreRecord } from "../types";
 
 const MESSAGES = defineMessages({
@@ -22,7 +23,9 @@ const MESSAGES = defineMessages({
       "Not scored yet. Scoring reads the run's validation, diff and audit and " +
       "records them against the versioned registry.",
     pass: "pass",
-    fail: "fail"
+    fail: "fail",
+    racingTitle: "Race",
+    racingCut: "session ended mid-race"
   },
   es: {
     categoryLabel: {
@@ -40,7 +43,9 @@ const MESSAGES = defineMessages({
       "Todavía no tiene puntaje. Al puntuar se leen la validación, el diff y la " +
       "auditoría de la corrida y se registran contra el registro versionado.",
     pass: "pasó",
-    fail: "falló"
+    fail: "falló",
+    racingTitle: "Carrera",
+    racingCut: "la sesión terminó a mitad de carrera"
   }
 });
 
@@ -82,6 +87,7 @@ export function ScoresPanel({ runId }: { runId: string }) {
     }
   };
 
+  const racing = racingPlaySummary(scores);
   const byCategory = scores.reduce<Record<string, ScoreRecord[]>>((acc, score) => {
     (acc[score.category] ??= []).push(score);
     return acc;
@@ -100,6 +106,15 @@ export function ScoresPanel({ runId }: { runId: string }) {
         <p className="muted">{m.notScoredYet}</p>
       ) : (
         <>
+        {racing !== null && (
+          <p className="racing-play-summary">
+            <strong>{m.racingTitle}:</strong>{" "}
+            <span className={`badge racing-mode-${racing.mode}`}>{racing.badge}</span>{" "}
+            {racing.outcome}
+            {racing.impacts && <span className="muted"> · {racing.impacts}</span>}
+            {!racing.complete && <span className="muted"> · {m.racingCut}</span>}
+          </p>
+        )}
         <ProvenanceLegend />
         {Object.entries(byCategory).map(([category, rows]) => (
           <div key={category}>

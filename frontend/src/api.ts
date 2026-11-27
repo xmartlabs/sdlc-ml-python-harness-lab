@@ -95,6 +95,7 @@ import type {
   StorageReport,
   SessionState,
   RunContext,
+  RacingReplayRecord,
   RunEventRecord,
   RetryMode,
   RetryOptions,
@@ -379,6 +380,8 @@ export const api = {
   // The home page's two calls. Kept separate because they answer different
   // questions: what should I do next, and what does the lab currently hold.
   getRunContext: (runId: string) => request<RunContext>(`/api/runs/${runId}/context`),
+  getRacingReplay: (runId: string) =>
+    request<RacingReplayRecord>(`/api/runs/${runId}/racing-replay`),
   getAttention: () => request<AttentionFeed>("/api/attention"),
   getEvidenceSummary: () => request<EvidenceSummary>("/api/evidence-summary"),
   listExperiments: () => request<ExperimentRecord[]>("/api/experiments"),
