@@ -363,6 +363,9 @@ def test_server(data: ServerTestRequest):
             "reachable": True,
             "models": [m.model_dump() for m in models],
             "error": "",
+            # Lets *Get more models* warn before a download the server
+            # cannot run (ADR-0101); "" when the server does not say.
+            "version": server.version(),
         }
     except (DirectHostUnreachable, ServerError, InvalidServerUrl) as exc:
         return {
@@ -371,6 +374,7 @@ def test_server(data: ServerTestRequest):
             "reachable": False,
             "models": [],
             "error": str(exc),
+            "version": "",
         }
 
 
@@ -434,7 +438,14 @@ def load(data: LoadRequest, session: Session = Depends(get_session)):
             status_code=502, detail=_unreachable_detail(data.url)
         ) from exc
     except ServerError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        message = str(exc)
+        if data.kind == "ollama":
+            from harness_lab_app.local_tuning.servers import (
+                explain_ollama_load_error,
+            )
+
+            message = explain_ollama_load_error(message, server.version())
+        raise HTTPException(status_code=422, detail=message) from exc
     _record_override_after_success(
         session, report, f"load {data.model_id}", data.acknowledge_guard
     )

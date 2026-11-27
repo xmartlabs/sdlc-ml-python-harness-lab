@@ -18,6 +18,7 @@ from harness_lab_app import local_api
 from harness_lab_app.direct_hosts import DirectHostUnreachable
 from harness_lab_app.local_tuning import model_hub, pull_jobs, servers
 from harness_lab_app.local_tuning.contracts import (
+    LoadCheck,
     MachineSpec,
     PullProgress,
     ServerError,
@@ -229,6 +230,18 @@ class _FakeServer:
         self.base_url = base_url
         self.outcome = outcome
         self.asked: list[tuple[str, str]] = []
+        self.checked: list[str] = []
+
+    load_check = LoadCheck(status="ok")
+
+    def check_load(self, model_id):
+        self.checked.append(model_id)
+        if isinstance(self.load_check, Exception):
+            raise self.load_check
+        return self.load_check
+
+    def version(self):
+        return ""
 
     def pull(self, model, quantization="", *, on_progress):
         self.asked.append((model, quantization))
@@ -326,6 +339,7 @@ def test_quants_from_tree_skips_shards_projectors_and_subfolders():
     quants = model_hub.quants_from_tree("o/M-GGUF", tree)
 
     assert [q.name for q in quants] == ["Q4_K_M", "UD-Q4_K_XL", "Q8_0"]
+    assert all(q.common for q in quants)
     assert quants[0].ollama_model == "hf.co/o/M-GGUF:Q4_K_M"
 
 
@@ -622,3 +636,335 @@ def test_pull_request_refuses_other_registries(model):
 )
 def test_pull_request_accepts_known_registries(model):
     local_api.PullStartRequest(kind="ollama", url="http://box:11434", model=model)
+
+
+# --- Review of the first Jetson test (2026-11-26) -------------------------------
+# A Gemma 4 GGUF from Hugging Face downloaded fine onto Ollama 0.24 and then
+# failed in step 4 with "unable to load model: <blob>". Every case below is a
+# piece of that session.
+
+_JETSON = MachineSpec(
+    memory_kind="unified", gpu_gb=8, ram_gb=8, reserve_gb=1.5, gpu_wired_fraction=1.0
+)
+
+
+def test_a_completed_download_is_load_checked():
+    server = _FakeServer("http://box:11434", PullProgress(status="completed"))
+    server.load_check = LoadCheck(status="failed", error="Ollama 0.24.0 could not")
+
+    job = pull_jobs.start_pull(server, "hf.co/o/m:Q4_K_M", executor=_sync)
+
+    assert server.checked == ["hf.co/o/m:Q4_K_M"]
+    assert job.status == "completed"  # the file is on the server
+    assert job.load_check == "failed"
+    assert "0.24.0" in job.load_error
+
+
+def test_a_failed_download_is_not_load_checked():
+    server = _FakeServer(
+        "http://box:11434", PullProgress(status="failed", error="no manifest")
+    )
+
+    job = pull_jobs.start_pull(server, "qwen3:8b", executor=_sync)
+
+    assert server.checked == []
+    assert job.load_check == ""
+
+
+def test_a_load_check_that_raises_keeps_the_download():
+    server = _FakeServer("http://box:11434", PullProgress(status="completed"))
+    server.load_check = DirectHostUnreachable("gone")
+
+    job = pull_jobs.start_pull(server, "qwen3:8b", executor=_sync)
+
+    assert job.status == "completed"
+    assert job.load_check == "failed"
+
+
+def test_ollama_load_check_never_evicts_a_loaded_model(monkeypatch):
+    calls: list[str] = []
+
+    def fake_http(url, timeout, payload=None):
+        calls.append(url)
+        if url.endswith("/api/ps"):
+            return {"models": [{"name": "qwen3:4b", "model": "qwen3:4b"}]}
+        raise AssertionError(f"must not load: {url}")
+
+    monkeypatch.setattr(servers, "_http", fake_http)
+
+    check = servers.OllamaServer("http://jetson:11434").check_load("gemma")
+
+    assert check.status == "skipped"
+    assert not any(url.endswith("/api/generate") for url in calls)
+
+
+def test_ollama_load_check_explains_an_old_server(monkeypatch):
+    sent: list[dict] = []
+
+    def fake_http(url, timeout, payload=None):
+        if url.endswith("/api/ps"):
+            return {"models": []}
+        if url.endswith("/api/version"):
+            return {"version": "0.24.0"}
+        if url.endswith("/api/generate"):
+            sent.append(payload)
+            raise ServerError("unable to load model: /usr/share/ollama/blobs/sha256-1")
+        raise AssertionError(url)
+
+    monkeypatch.setattr(servers, "_http", fake_http)
+
+    check = servers.OllamaServer("http://jetson:11434").check_load("hf.co/x/g:Q3_K_M")
+
+    assert check.status == "failed"
+    assert "Ollama 0.24.0" in check.error
+    assert "install.sh" in check.error
+    assert "unable to load model" in check.error  # Ollama's own words stay
+    assert sent[0]["keep_alive"] != 0  # 0 with an empty prompt only unloads
+    assert sent[0]["options"]["num_ctx"] == 2048
+
+
+def test_ollama_load_check_loads_then_unloads(monkeypatch):
+    sent: list[dict] = []
+
+    def fake_http(url, timeout, payload=None):
+        if url.endswith("/api/ps"):
+            return {"models": []}
+        if url.endswith("/api/generate"):
+            sent.append(payload)
+            return {"done": True, "done_reason": "load"}
+        raise AssertionError(url)
+
+    monkeypatch.setattr(servers, "_http", fake_http)
+
+    check = servers.OllamaServer("http://jetson:11434").check_load("qwen3:4b")
+
+    assert check.status == "ok"
+    assert [p.get("keep_alive") for p in sent] == ["1m", 0]
+    assert sent[0]["prompt"] == ""
+
+
+@pytest.mark.parametrize(
+    ("error", "version", "says"),
+    [
+        ("unable to load model: /b", "0.24.0", "Update Ollama"),
+        ("unable to load model: /b", "0.40.18", "not be supported by this Ollama"),
+        ("unable to load model: /b", "", "not be supported by this Ollama"),
+        ("model requires more system memory", "0.24.0", None),
+    ],
+)
+def test_explain_ollama_load_error(error, version, says):
+    explained = servers.explain_ollama_load_error(error, version)
+    if says is None:
+        assert explained == error  # other errors already say what is wrong
+    else:
+        assert says in explained
+
+
+def test_version_tuple():
+    assert servers.version_tuple("0.24.0") < servers.version_tuple("0.30.0")
+    assert servers.version_tuple("v0.30.0-rc1") == (0, 30, 0)
+    assert servers.version_tuple("") == ()
+
+
+def test_load_endpoint_explains_ollamas_unable_to_load(monkeypatch):
+    class _OldOllama:
+        kind = "ollama"
+        base_url = "http://jetson:11434"
+
+        def list_models(self):
+            return []
+
+        def load(self, model_id, config):
+            raise ServerError("unable to load model: /usr/share/ollama/blobs/sha256-1")
+
+        def version(self):
+            return "0.24.0"
+
+    monkeypatch.setattr(servers, "make_server", lambda _kind, _url: _OldOllama())
+    monkeypatch.setattr(local_api, "_gateway_routing", lambda: ({}, False))
+
+    with _session() as session, pytest.raises(HTTPException) as exc:
+        local_api.load(
+            local_api.LoadRequest(
+                kind="ollama",
+                url="http://jetson:11434",
+                model_id="hf.co/x/g:Q3_K_M",
+                config={"context_length": 8192},
+            ),
+            session,
+        )
+
+    assert exc.value.status_code == 422
+    assert "Ollama 0.24.0" in str(exc.value.detail)
+
+
+def test_hugging_face_pulls_name_their_quantization(monkeypatch):
+    tags = {
+        "models": [
+            {
+                "name": "hf.co/turintech/gemma-4-E4B-it-Artemis-GGUF:Q3_K_M",
+                "size": 4545477908,
+                "details": {"family": "gemma4", "quantization_level": "unknown"},
+            },
+            {
+                "name": "mine:latest",
+                "size": 1,
+                "details": {"family": "llama", "quantization_level": "unknown"},
+            },
+        ]
+    }
+
+    def fake_http(url, timeout, payload=None):
+        if url.endswith("/api/tags"):
+            return tags
+        if url.endswith("/api/ps"):
+            return {"models": []}
+        raise ServerError("no show")
+
+    monkeypatch.setattr(servers, "_http", fake_http)
+    gemma, mine = servers.OllamaServer("http://jetson:11434").list_models()
+
+    assert gemma.quantization == "Q3_K_M"
+    assert mine.quantization == "unknown"  # a local tag is not a quantization
+
+
+def test_gemma4_shape_from_show_defers_to_the_table(monkeypatch):
+    """Ollama's flat reading of Gemma 4 counts every layer's KV at full width."""
+    show = {
+        "model_info": {
+            "general.architecture": "gemma4",
+            "gemma4.block_count": 42,
+            "gemma4.attention.head_count_kv": 2,
+            "gemma4.attention.key_length": 512,
+            "gemma4.attention.key_length_swa": 256,
+            "gemma4.context_length": 131072,
+        }
+    }
+    tags = {
+        "models": [
+            {
+                "name": "hf.co/t/gemma-4-E4B-it-GGUF:Q3_K_M",
+                "size": 4545477908,
+                "details": {"family": "gemma4", "parameter_size": "7.46B"},
+            }
+        ]
+    }
+
+    def fake_http(url, timeout, payload=None):
+        if url.endswith("/api/tags"):
+            return tags
+        if url.endswith("/api/ps"):
+            return {"models": []}
+        return show
+
+    monkeypatch.setattr(servers, "_http", fake_http)
+    (model,) = servers.OllamaServer("http://jetson:11434").list_models()
+
+    assert model.shape is None  # the table's Gemma 4 shape is used instead
+    from harness_lab_app.local_tuning.catalog import DEFAULT_LOAD
+    from harness_lab_app.local_tuning.memory_estimate import estimate_memory
+
+    estimate = estimate_memory(model, DEFAULT_LOAD, _JETSON)
+    assert estimate.breakdown.kv_cache_gb < 1.0  # was 3.4 with the flat reading
+    assert estimate.verdict != Verdict.fail
+
+
+def test_gemma4_e4b_fits_a_jetson_at_32k_and_gemma4_12b_does_not():
+    e4b, small, big = (
+        model_hub.with_fit(
+            [
+                model_hub.HubModel(
+                    source="huggingface",
+                    repo=repo,
+                    params=params,
+                    arch="gemma4",
+                    max_context=131072,
+                    quants=[model_hub._quant(repo, "Q4_K_M", size)],
+                )
+            ],
+            _JETSON,
+        )[0].quants[0]
+        for repo, params, size in [
+            ("unsloth/gemma-4-E4B-it-GGUF", "4B", 4_977_171_584),
+            ("unsloth/gemma-4-E2B-it-GGUF", "2B", 3_106_738_272),
+            ("unsloth/gemma-4-12b-it-GGUF", "12B", 7_121_861_440),
+        ]
+    )
+
+    assert e4b.verdict in (Verdict.ok, Verdict.tight)
+    assert small.verdict == Verdict.ok
+    assert big.verdict == Verdict.fail
+
+
+def test_search_marks_split_repos_and_orders_common_quants_first(monkeypatch):
+    model_hub._search_cache.clear()
+
+    def fake_fetch(url: str):
+        if "/tree/main" in url:
+            return [
+                {"type": "file", "path": "g-UD-IQ2_M.gguf", "size": 2},
+                {"type": "file", "path": "g-Q8_0.gguf", "size": 8},
+                {"type": "file", "path": "g-Q3_K_M.gguf", "size": 3},
+                {"type": "file", "path": "g-BF16.gguf", "size": 16},
+                {"type": "file", "path": "g-Q4_K_M.gguf", "size": 4},
+                {"type": "file", "path": "mmproj-F16.gguf", "size": 1},
+            ]
+        return [{"id": "u/gemma-4-E4B-it-GGUF", "gguf": {"architecture": "gemma4"}}]
+
+    monkeypatch.setattr(model_hub, "_fetch", fake_fetch)
+
+    (model,) = model_hub.search_huggingface("gemma 4")
+
+    assert model.separate_projector is True
+    assert [q.name for q in model.quants] == [
+        "Q3_K_M",
+        "Q4_K_M",
+        "Q8_0",
+        "UD-IQ2_M",
+        "BF16",
+    ]
+    assert [q.common for q in model.quants] == [True, True, True, False, False]
+    assert {q.min_ollama_version for q in model.quants} == {"0.30.0"}
+
+
+def test_a_repo_without_a_vision_file_names_no_ollama_floor(monkeypatch):
+    model_hub._search_cache.clear()
+
+    def fake_fetch(url: str):
+        if "/tree/main" in url:
+            return [{"type": "file", "path": "Qwen3-8B-Q4_K_M.gguf", "size": 5}]
+        return [{"id": "Qwen/Qwen3-8B-GGUF", "gguf": {"architecture": "qwen3"}}]
+
+    monkeypatch.setattr(model_hub, "_fetch", fake_fetch)
+
+    (model,) = model_hub.search_huggingface("qwen3 8b")
+
+    assert model.separate_projector is False
+    assert model.quants[0].min_ollama_version == ""
+
+
+def test_curated_gemma4_uses_the_library_build_with_its_floor():
+    e4b = next(m for m in model_hub.curated_models() if m.label == "Gemma 4 E4B")
+    q4, q8 = e4b.quants
+
+    assert q4.ollama_model == "gemma4:e4b"
+    assert q4.min_ollama_version == "0.30.9"  # what its manifest requires
+    assert q8.ollama_model == "hf.co/unsloth/gemma-4-E4B-it-GGUF:Q8_0"
+    assert q8.min_ollama_version == "0.30.0"
+
+
+def test_server_test_reports_the_version(monkeypatch):
+    class _Server:
+        def list_models(self):
+            return []
+
+        def version(self):
+            return "0.24.0"
+
+    monkeypatch.setattr(servers, "make_server", lambda _kind, _url: _Server())
+
+    result = local_api.test_server(
+        local_api.ServerTestRequest(kind="ollama", url="http://jetson:11434")
+    )
+
+    assert result["version"] == "0.24.0"

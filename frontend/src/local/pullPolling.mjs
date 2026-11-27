@@ -47,3 +47,30 @@ export function createLatest() {
     }
   };
 }
+
+/** "0.24.0" -> [0, 24, 0]; "v0.30.0-rc1" -> [0, 30, 0]; "" -> []. */
+export function versionParts(version) {
+  const parts = [];
+  for (const piece of String(version ?? "").trim().replace(/^v/, "").split(".")) {
+    const match = /^\d+/.exec(piece);
+    if (!match) break;
+    parts.push(Number(match[0]));
+  }
+  return parts;
+}
+
+/**
+ * True only when both versions are known and `version` is older than `min`:
+ * an unknown server version never blocks or warns.
+ */
+export function olderThan(version, min) {
+  const have = versionParts(version);
+  const need = versionParts(min);
+  if (have.length === 0 || need.length === 0) return false;
+  for (let i = 0; i < Math.max(have.length, need.length); i += 1) {
+    const a = have[i] ?? 0;
+    const b = need[i] ?? 0;
+    if (a !== b) return a < b;
+  }
+  return false;
+}

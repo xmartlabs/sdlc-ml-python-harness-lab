@@ -62,6 +62,25 @@ Three ways to fetch one were weighed:
   registry host (a dot, a port, or `localhost`) must be `hf.co`, `huggingface.co`
   or `registry.ollama.ai`, so a request cannot make a LAN server fetch from an
   arbitrary host.
+- **A download is checked to load (Ollama).** When the pull completes and no
+  other model is loaded, the lab loads it once at a 2k context and unloads it
+  right away (`keep_alive: 0`). A file the server cannot run then fails in
+  step 2 with a cause, not in step 4 with a blob path. The download itself
+  stays *completed*: the file is on the server. When another model is loaded
+  the check is skipped, so it never evicts a model someone is using. LM Studio
+  is not checked: the key it gives a Hugging Face download is its own.
+- **The server version is read and used.** The connection test reports
+  Ollama's `/api/version`. A file with a known floor (a library tag's manifest
+  `requires`, e.g. `gemma4` needs 0.30.9; a Hugging Face repo that ships a
+  separate `mmproj` vision file needs 0.30, the release that moved GGUF models
+  to llama.cpp's server) shows a warning on an older server before the
+  download. Ollama's bare `unable to load model: <blob>` is explained the same
+  way wherever it appears, including step 4's load.
+- **The quantization list leads with the usual picks.** Q3_K_M, Q4_0, Q4_K_S,
+  Q4_K_M, UD-Q4_K_XL, Q5_K_M, Q6_K, Q8_0 and MXFP4 come first; 1-2 bit,
+  importance-matrix and full-precision files sit in a second group of the same
+  select. A row opens on Q4_K_M when it fits, else the largest usual pick that
+  does.
 - **The page survives a long download.** Polling retries transient errors with
   backoff (a proxy 502 twenty minutes in is not fatal), stops when the panel
   unmounts, and releases the page when the API forgets the job. Search answers
@@ -82,6 +101,15 @@ Three ways to fetch one were weighed:
   and unload models there.
 - The curated list goes stale as models are released. Its sizes and Ollama tags
   were checked on 2026-11-26 and live in one constant (`_CURATED_SPECS`).
+- Found on the first real test (a Jetson with Ollama 0.24, 2026-11-26): a
+  Gemma 4 GGUF from Hugging Face downloaded, then failed to load, and every
+  Gemma 4 file read *Too big* because the estimate used Gemma 3 27B's shape.
+  Gemma 4 now has its own shapes in the architecture table (few wide KV heads
+  on its full-attention layers, narrower ones on its sliding-window layers, and
+  no cache at all on the E models' KV-shared layers): E4B at 32k needs about
+  0.6 GB of KV cache, not 3.4. Ollama's `/api/show` reads Gemma 4 flat, so the
+  lab ignores that shape for any model whose sliding-window layers report their
+  own key length.
 - LM Studio older than 0.4 has no download API; the page says to update it or to
   download in LM Studio itself. A missing model is also a 404 there, so the
   "update" message is shown only for LM Studio's unknown-route answer.

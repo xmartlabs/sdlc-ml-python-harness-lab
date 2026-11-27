@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLatest, nextPollStep, pollDelay } from './pullPolling.mjs';
+import { createLatest, nextPollStep, olderThan, pollDelay, versionParts } from './pullPolling.mjs';
 
 test('a running download keeps polling and resets the error count', () => {
   assert.deepEqual(nextPollStep({ job: { status: 'downloading' } }, 3), { action: 'continue', failures: 0 });
@@ -41,4 +41,20 @@ test('only the newest search answer applies', () => {
   assert.equal(latest.isLatest(slowSearch), false);
   latest.cancel();
   assert.equal(latest.isLatest(curated), false);
+});
+
+test('versions parse with a leading v and a pre-release suffix', () => {
+  assert.deepEqual(versionParts('0.24.0'), [0, 24, 0]);
+  assert.deepEqual(versionParts('v0.30.0-rc1'), [0, 30, 0]);
+  assert.deepEqual(versionParts(''), []);
+});
+
+test('an older Ollama is flagged, a newer or unknown one is not', () => {
+  assert.equal(olderThan('0.24.0', '0.30.0'), true); // the Jetson that failed
+  assert.equal(olderThan('0.30.0', '0.30.9'), true);
+  assert.equal(olderThan('0.30.9', '0.30.9'), false);
+  assert.equal(olderThan('0.40.18', '0.30.9'), false);
+  assert.equal(olderThan('0.30', '0.30.0'), false);
+  assert.equal(olderThan('', '0.30.0'), false); // unknown never warns
+  assert.equal(olderThan('0.24.0', ''), false); // no floor
 });

@@ -2248,6 +2248,8 @@ export type LocalArchShape = {
   head_dim: number;
   sliding_window: number | null;
   swa_layers: number;
+  swa_kv_heads: number | null;
+  swa_head_dim: number | null;
 };
 
 export type LocalServedConfig = {
@@ -2422,6 +2424,8 @@ export type LocalServerTestResult = {
   reachable: boolean;
   models: LocalModelInfo[];
   error: string;
+  /** The server's version (Ollama's /api/version); "" when it does not say. */
+  version?: string;
 };
 
 /** One downloadable quantization of a model, and what each server is asked to pull (ADR-0101). */
@@ -2435,6 +2439,10 @@ export type LocalHubQuant = {
   total_gb: number | null;
   /** Largest context option that still fits; null when none does. */
   fit_context: number | null;
+  /** One of the usual picks (Q4_K_M, Q8_0…): listed first. */
+  common: boolean;
+  /** Oldest Ollama that loads this file; "" = no known floor. */
+  min_ollama_version: string;
 };
 
 export type LocalHubModel = {
@@ -2448,6 +2456,8 @@ export type LocalHubModel = {
   max_context: number | null;
   quants: LocalHubQuant[];
   note: string;
+  /** The repo ships its vision weights as a separate mmproj file. */
+  separate_projector: boolean;
 };
 
 export type LocalHubSearchResult = {
@@ -2469,6 +2479,9 @@ export type LocalPullJob = {
   completed_bytes: number | null;
   detail: string;
   error: string;
+  /** After an Ollama download: did it load? "skipped" when another model was loaded. */
+  load_check: "" | "ok" | "failed" | "skipped";
+  load_error: string;
 };
 
 export type LocalPullStarted = {

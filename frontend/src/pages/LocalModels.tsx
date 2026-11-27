@@ -1927,6 +1927,7 @@ export function LocalModels() {
               kind={serverTest.kind}
               machine={machineSpec}
               onDownloaded={handleRefreshServerModels}
+              serverVersion={serverTest.version ?? ""}
               url={serverTest.url}
             />
           ) : null}

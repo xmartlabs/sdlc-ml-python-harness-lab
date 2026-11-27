@@ -59,6 +59,10 @@ class ArchShape(BaseModel):
     # Sliding-window layers keep at most this many tokens; None = full context.
     sliding_window: int | None = None
     swa_layers: int = 0
+    # Gemma 4 gives its sliding-window layers fewer, narrower KV heads than its
+    # full-attention ones; None = the same as ``kv_heads`` / ``head_dim``.
+    swa_kv_heads: int | None = None
+    swa_head_dim: int | None = None
 
 
 class ModelInfo(BaseModel):
@@ -204,6 +208,8 @@ class GuardReport(BaseModel):
 
 
 PullStatus = Literal["downloading", "completed", "failed"]
+# After an Ollama download: did the model load? "" = not checked (LM Studio).
+LoadCheckStatus = Literal["", "ok", "failed", "skipped"]
 
 
 class PullProgress(BaseModel):
@@ -229,6 +235,17 @@ class PullJob(BaseModel):
     completed_bytes: int | None = None
     detail: str = ""
     error: str = ""
+    # A completed download is loaded once, briefly, when nothing else is
+    # loaded: a file the server cannot run must fail here, not in step 4.
+    load_check: LoadCheckStatus = ""
+    load_error: str = ""
+
+
+class LoadCheck(BaseModel):
+    """Whether a freshly downloaded model loads on the server."""
+
+    status: LoadCheckStatus
+    error: str = ""
 
 
 class HubQuant(BaseModel):
@@ -246,6 +263,13 @@ class HubQuant(BaseModel):
     # the smallest does not. Lets a small box see "fits up to 16k" instead
     # of a flat "too big" at the 32k default.
     fit_context: int | None = None
+    # One of the quantizations most people pick (Q4_K_M, Q5_K_M, Q8_0...).
+    # The page lists these first; 1-2 bit and full-precision files come after.
+    common: bool = False
+    # Oldest Ollama that loads what ``ollama_model`` pulls; "" = no known
+    # floor. A library tag carries its own (gemma4 needs 0.30.9); a Hugging
+    # Face file from a repo with a separate vision file needs 0.30.
+    min_ollama_version: str = ""
 
 
 class HubModel(BaseModel):
@@ -261,6 +285,10 @@ class HubModel(BaseModel):
     max_context: int | None = None
     quants: list[HubQuant] = Field(default_factory=list)
     note: str = ""
+    # The repo ships its vision weights as a separate mmproj file. Ollama
+    # pulls it too, and before 0.30 cannot load such a split model for recent
+    # architectures (Gemma 4, Qwen 3.5): the download works, the load fails.
+    separate_projector: bool = False
 
 
 class ServerError(RuntimeError):
@@ -308,6 +336,17 @@ class LocalServer(Protocol):
         """Download ``model`` onto the server, reporting progress until it ends.
 
         Blocks until the download completes or fails; returns the last reading.
+        """
+        ...
+
+    def version(self) -> str:
+        """The server's version ("0.24.0"), or "" when it does not say."""
+        ...
+
+    def check_load(self, model_id: str) -> LoadCheck:
+        """Load ``model_id`` briefly to prove it runs, then unload it.
+
+        Skipped (never evicts) when another model is loaded.
         """
         ...
 

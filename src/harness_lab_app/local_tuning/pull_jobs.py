@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from harness_lab_app.direct_hosts import DirectHostUnreachable
 from harness_lab_app.local_tuning.contracts import (
+    LoadCheck,
     PullJob,
     PullProgress,
     ServerError,
@@ -76,6 +77,8 @@ def _execute(job_id: str, host: str, server: LocalServer) -> None:
             job.quantization,
             on_progress=lambda progress: _apply(job_id, progress),
         )
+        if final.status == "completed":
+            final = _check_load(job_id, server, job.model, final)
         if final.status == "downloading":
             # pull() returned without an outcome: never leave the host locked
             # and the page polling a job nothing will update again.
@@ -100,6 +103,35 @@ def _execute(job_id: str, host: str, server: LocalServer) -> None:
             if _running_hosts.get(host) == job_id:
                 del _running_hosts[host]
             _prune_finished()
+
+
+def _check_load(
+    job_id: str, server: LocalServer, model: str, final: PullProgress
+) -> PullProgress:
+    """Load the new model once, so a file the server cannot run fails here.
+
+    The job stays "downloading" (with a detail line) while the check runs,
+    so the page keeps polling. A failed check does not fail the download:
+    the file is on the server, it just will not load there.
+    """
+    _apply(
+        job_id,
+        final.model_copy(
+            update={"status": "downloading", "detail": "checking that it loads"}
+        ),
+    )
+    try:
+        check = server.check_load(model)
+    except DirectHostUnreachable as exc:
+        check = LoadCheck(status="failed", error=f"The server stopped answering: {exc}")
+    except Exception as exc:  # the download itself succeeded; keep it
+        check = LoadCheck(status="failed", error=str(exc))
+    with _lock:
+        job = _jobs.get(job_id)
+        if job is not None:
+            job.load_check = check.status
+            job.load_error = check.error
+    return final
 
 
 def _prune_finished() -> None:

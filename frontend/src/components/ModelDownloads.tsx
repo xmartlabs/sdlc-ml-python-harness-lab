@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api, ApiError } from "../api";
 import { defineMessages, useMessages } from "../i18n";
-import { createLatest, nextPollStep, pollDelay } from "../local/pullPolling.mjs";
+import { createLatest, nextPollStep, olderThan, pollDelay } from "../local/pullPolling.mjs";
 import type {
   LocalGuardReport,
   LocalHubModel,
@@ -70,7 +70,16 @@ const MESSAGES = defineMessages({
     runningElsewhere: (model: string) => `Downloading ${model} on this server`,
     orCommand: "Or run it on that machine yourself:",
     copy: "Copy",
-    copied: "Copied"
+    copied: "Copied",
+    otherQuants: "Others (1-2 bit, full precision)",
+    checkingLoad: "Downloaded. Checking that it loads…",
+    loadOk: "It loads on this server.",
+    loadSkipped: "Another model is loaded on this server, so the lab did not try loading this one. Step 4 will.",
+    loadFailed: "Downloaded, but the server cannot load it",
+    needsOllama: (have: string, need: string) =>
+      `Ollama ${have} on this server is too old for this file (needs ${need} or later). It will download but not load. Update Ollama on that machine: curl -fsSL https://ollama.com/install.sh | sh`,
+    splitNote: (need: string) =>
+      `This repo ships its vision weights as a separate file. Ollama older than ${need} cannot load it for recent models; the ollama.com/library build, when there is one, is the safer pick.`
   },
   es: {
     heading: "Descargar más modelos",
@@ -116,7 +125,16 @@ const MESSAGES = defineMessages({
     runningElsewhere: (model: string) => `Descargando ${model} en este servidor`,
     orCommand: "O corrélo vos en esa máquina:",
     copy: "Copiar",
-    copied: "Copiado"
+    copied: "Copiado",
+    otherQuants: "Otras (1-2 bits, precisión completa)",
+    checkingLoad: "Descargado. Comprobando que carga…",
+    loadOk: "Carga en este servidor.",
+    loadSkipped: "Hay otro modelo cargado en este servidor, así que el lab no probó cargar este. Lo hace el paso 4.",
+    loadFailed: "Se descargó, pero el servidor no puede cargarlo",
+    needsOllama: (have: string, need: string) =>
+      `El Ollama ${have} de este servidor es muy viejo para este archivo (necesita ${need} o más). Se va a descargar pero no va a cargar. Actualizá Ollama en esa máquina: curl -fsSL https://ollama.com/install.sh | sh`,
+    splitNote: (need: string) =>
+      `Este repo trae la parte de visión en un archivo aparte. Ollama anterior a ${need} no lo puede cargar en modelos recientes; si existe la versión de ollama.com/library, es la opción más segura.`
   }
 });
 
@@ -163,13 +181,15 @@ function alreadyOnServer(kind: LocalServerKind, quant: LocalHubQuant, repo: stri
 type ModelDownloadsProps = {
   kind: LocalServerKind;
   url: string;
+  /** The server's version from the connection test; "" when unknown. */
+  serverVersion: string;
   machine: MachineSpec | null;
   downloadedIds: string[];
   /** Called once a download completes, so the page can list the server's models again. */
   onDownloaded: () => void;
 };
 
-export function ModelDownloads({ kind, url, machine, downloadedIds, onDownloaded }: ModelDownloadsProps) {
+export function ModelDownloads({ kind, url, serverVersion, machine, downloadedIds, onDownloaded }: ModelDownloadsProps) {
   const m = useMessages(MESSAGES);
   const [tab, setTab] = useState<Tab>("recommended");
   const [models, setModels] = useState<LocalHubModel[]>([]);
@@ -323,7 +343,23 @@ export function ModelDownloads({ kind, url, machine, downloadedIds, onDownloaded
       );
     }
     if (job.status === "completed") {
-      return <p className="callout callout--ok model-download-progress">{m.doneNote(job.model)}</p>;
+      if (job.load_check === "failed") {
+        return (
+          <p className="model-download-progress model-download-error">
+            <strong>{m.loadFailed}:</strong> {job.load_error}
+          </p>
+        );
+      }
+      return (
+        <div className="callout callout--ok model-download-progress">
+          <p>{m.doneNote(job.model)}</p>
+          {job.load_check === "ok" ? <p className="muted small">{m.loadOk}</p> : null}
+          {job.load_check === "skipped" && kind === "ollama" ? <p className="muted small">{m.loadSkipped}</p> : null}
+        </div>
+      );
+    }
+    if (job.detail === "checking that it loads") {
+      return <p className="muted small model-download-progress">{m.checkingLoad}</p>;
     }
     const pct = job.total_bytes && job.completed_bytes ? Math.min(100, (job.completed_bytes / job.total_bytes) * 100) : 0;
     return (
@@ -354,6 +390,14 @@ export function ModelDownloads({ kind, url, machine, downloadedIds, onDownloaded
     const onServer = alreadyOnServer(kind, quant, model.repo, downloadedIds);
     const thisDone = jobKey === key && job?.status === "completed";
     const large = (quant.size_bytes ?? 0) > LARGE_DOWNLOAD_BYTES;
+    const tooOld = kind === "ollama" && olderThan(serverVersion, quant.min_ollama_version);
+    const common = model.quants.map((q, i) => ({ q, i })).filter(({ q }) => q.common);
+    const others = model.quants.map((q, i) => ({ q, i })).filter(({ q }) => !q.common);
+    const option = ({ q, i }: { q: LocalHubQuant; i: number }) => (
+      <option key={q.name} value={i}>
+        {q.name} · {gb(q.size_bytes)} GB
+      </option>
+    );
     return (
       <li className="model-download" key={model.repo}>
         <div className="model-download-main">
@@ -379,11 +423,14 @@ export function ModelDownloads({ kind, url, machine, downloadedIds, onDownloaded
             }}
             value={index}
           >
-            {model.quants.map((q, i) => (
-              <option key={q.name} value={i}>
-                {q.name} · {gb(q.size_bytes)} GB
-              </option>
-            ))}
+            {common.length > 0 && others.length > 0 ? (
+              <>
+                {common.map(option)}
+                <optgroup label={m.otherQuants}>{others.map(option)}</optgroup>
+              </>
+            ) : (
+              model.quants.map((q, i) => option({ q, i }))
+            )}
           </select>
           <span className={badge.className}>{badge.label}</span>
           {onServer || thisDone ? (
@@ -404,6 +451,11 @@ export function ModelDownloads({ kind, url, machine, downloadedIds, onDownloaded
           )}
         </div>
         {badge.className === "badge error" && confirming === key ? <p className="muted small">{m.tooBigNote}</p> : null}
+        {tooOld && !onServer ? (
+          <p className="callout callout--warning model-download-note">{m.needsOllama(serverVersion, quant.min_ollama_version)}</p>
+        ) : kind === "ollama" && model.separate_projector && !onServer && !serverVersion ? (
+          <p className="muted small model-download-note">{m.splitNote(quant.min_ollama_version || "0.30")}</p>
+        ) : null}
         {renderProgress(key)}
         {jobKey === key && job?.status === "failed" ? (
           <div className="local-setup-command">
@@ -522,16 +574,24 @@ export function ModelDownloads({ kind, url, machine, downloadedIds, onDownloaded
 
 /**
  * The quantization a row opens on: Q4_K_M when it fits (the usual choice), else
- * the largest file that fits, else Q4_K_M, else the smallest.
+ * the largest common file that fits, else any file that fits, else Q4_K_M, else
+ * the first (smallest common) one.
  */
 function defaultQuant(model: LocalHubModel): number {
   const fits = (q: LocalHubQuant) => q.verdict === "ok" || q.verdict === "tight";
   const q4 = model.quants.findIndex((q) => q.name.toUpperCase() === "Q4_K_M");
   if (q4 !== -1 && fits(model.quants[q4])) return q4;
-  let best = -1;
-  model.quants.forEach((q, i) => {
-    if (fits(q) && (best === -1 || (q.size_bytes ?? 0) > (model.quants[best].size_bytes ?? 0))) best = i;
-  });
-  if (best !== -1) return best;
+  const largestFitting = (onlyCommon: boolean) => {
+    let best = -1;
+    model.quants.forEach((q, i) => {
+      if (onlyCommon && !q.common) return;
+      if (fits(q) && (best === -1 || (q.size_bytes ?? 0) > (model.quants[best].size_bytes ?? 0))) best = i;
+    });
+    return best;
+  };
+  const common = largestFitting(true);
+  if (common !== -1) return common;
+  const any = largestFitting(false);
+  if (any !== -1) return any;
   return q4 !== -1 ? q4 : 0;
 }

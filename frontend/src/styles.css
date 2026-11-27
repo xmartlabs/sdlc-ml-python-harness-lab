@@ -6374,6 +6374,10 @@ button.guide-option[aria-pressed="true"] { border-color: var(--accent); backgrou
   transition: width 0.4s ease;
 }
 
+.model-download-note {
+  margin: 0.5rem 0 0;
+}
+
 .model-download-error {
   color: var(--danger);
 }

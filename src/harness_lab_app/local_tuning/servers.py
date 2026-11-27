@@ -25,6 +25,7 @@ Facts specific to each backend (see the design spec for the sourcing):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 import urllib.error
@@ -44,6 +45,7 @@ from harness_lab_app.local_tuning.contracts import (
     ArchShape,
     Completion,
     ConfigDiff,
+    LoadCheck,
     LoadConfig,
     LocalServer,
     ModelInfo,
@@ -71,6 +73,9 @@ _LMSTUDIO_RUNNABLE_TYPES = ("llm", "vlm")
 # this constant if large-model loads through the proxy need to survive past
 # five minutes; this module does not change nginx's own configuration.
 _LOAD_TIMEOUT_SECONDS = 600.0
+# The load check after a download uses a small context: it proves the file
+# runs, not that a chosen configuration fits.
+_LOAD_CHECK_CONTEXT = 2048
 
 # How long a download may go without a single progress line or status change
 # before the lab gives up on it. Ollama goes quiet while it verifies the
@@ -430,6 +435,18 @@ class LMStudioServer:
             tool_calls=_parse_tool_calls(message.get("tool_calls")),
         )
 
+    def version(self) -> str:
+        """LM Studio has no version endpoint the lab relies on."""
+        return ""
+
+    def check_load(self, model_id: str) -> LoadCheck:  # noqa: ARG002
+        """Not done on LM Studio: a download leaves no stable model key to load.
+
+        The key LM Studio assigns a Hugging Face download is its own; step 3
+        lists it, and the load there reports any failure in LM Studio's words.
+        """
+        return LoadCheck(status="skipped")
+
     def pull(
         self,
         model: str,
@@ -523,7 +540,16 @@ def _lmstudio_progress(payload: dict) -> PullProgress:
 
 
 def _ollama_shape(arch: str, model_info: dict) -> ArchShape | None:
-    """``ArchShape`` from ``/api/show``'s ``model_info``, the "exact" source."""
+    """``ArchShape`` from ``/api/show``'s ``model_info``, the "exact" source.
+
+    ``None`` when the flat reading would be wrong: a model whose sliding-window
+    layers have their own key length (Gemma 4) also shares KV between layers,
+    and ``/api/show`` lists the per-layer pattern only in its 12 MB verbose
+    form. The architecture table carries that shape instead (seen live on a
+    Jetson: the flat reading put Gemma 4 E4B at 3.4 GB of KV at 32k, not 0.6).
+    """
+    if f"{arch}.attention.key_length_swa" in model_info:
+        return None
     layers = as_int(model_info.get(f"{arch}.block_count"))
     kv_heads = as_int(model_info.get(f"{arch}.attention.head_count_kv"))
     head_dim = as_int(model_info.get(f"{arch}.attention.key_length"))
@@ -536,6 +562,49 @@ def _ollama_shape(arch: str, model_info: dict) -> ArchShape | None:
         return None
     return ArchShape(
         layers=layers, kv_layers=layers, kv_heads=kv_heads, head_dim=head_dim
+    )
+
+
+# Ollama 0.30 moved GGUF models to llama.cpp's own server, which runs the
+# split (text + mmproj) files Hugging Face repos ship for recent
+# architectures; earlier versions answer "unable to load model" for them
+# (ollama/ollama#14575, #15235). Ollama's library builds of the same models
+# carry their own floor, e.g. gemma4 requires 0.30.9.
+OLLAMA_SPLIT_GGUF_MIN_VERSION = "0.30.0"
+
+
+def version_tuple(version: str) -> tuple[int, ...]:
+    """ "0.24.0" -> (0, 24, 0); "0.30.0-rc1" -> (0, 30, 0); "" -> ()."""
+    parts: list[int] = []
+    for piece in version.strip().lstrip("v").split("."):
+        digits = ""
+        for char in piece:
+            if not char.isdigit():
+                break
+            digits += char
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+def explain_ollama_load_error(error: str, version: str) -> str:
+    """Ollama's "unable to load model: <blob path>" names no cause; add one."""
+    if "unable to load model" not in error:
+        return error
+    running = version_tuple(version)
+    if running and running < version_tuple(OLLAMA_SPLIT_GGUF_MIN_VERSION):
+        return (
+            f"Ollama {version} could not load this model. Older Ollama cannot "
+            "run many recent Hugging Face GGUF files (Gemma 4, Qwen 3.5 and "
+            "others that ship a separate vision file). Update Ollama on that "
+            "machine (curl -fsSL https://ollama.com/install.sh | sh) or use the "
+            f"model's ollama.com/library build. Ollama said: {error}"
+        )
+    return (
+        "Ollama could not load this model: its architecture or file layout may "
+        "not be supported by this Ollama build. Try the model's "
+        f"ollama.com/library build or another quantization. Ollama said: {error}"
     )
 
 
@@ -585,6 +654,12 @@ class OllamaServer:
             arch = str(details.get("family") or "")
             params = str(details.get("parameter_size") or "")
             quantization = str(details.get("quantization_level") or "")
+            if quantization.lower() in ("", "unknown") and name.startswith(
+                ("hf.co/", "huggingface.co/")
+            ):
+                # Hugging Face pulls report "unknown"; their tag names the file.
+                tag = name.rsplit(":", 1)[1] if ":" in name else ""
+                quantization = tag.upper() if tag else quantization
             max_context = None
             shape = None
             try:
@@ -725,6 +800,46 @@ class OllamaServer:
             prompt_tokens_per_second=prompt_tps,
             tool_calls=_parse_tool_calls(message.get("tool_calls")),
         )
+
+    def version(self) -> str:
+        try:
+            payload = _http(f"{self.base_url}/api/version", self.timeout)
+        except (DirectHostUnreachable, ServerError):
+            return ""
+        return str(payload.get("version") or "")
+
+    def check_load(self, model_id: str) -> LoadCheck:
+        """Warm ``model_id`` at a small context, then unload it.
+
+        Skipped when any model is loaded: the check must never evict a model a
+        run or the user is using. A failure carries Ollama's own words plus
+        what usually causes it (see :func:`explain_ollama_load_error`).
+        """
+        if self._running_by_name():
+            return LoadCheck(status="skipped")
+        try:
+            # Not ``keep_alive: 0`` here: with an empty prompt Ollama reads that
+            # as "unload" and answers at once without loading anything (seen
+            # live on 0.24, done_reason "unload"). Load, then unload.
+            _http(
+                f"{self.base_url}/api/generate",
+                _LOAD_TIMEOUT_SECONDS,
+                {
+                    "model": model_id,
+                    "prompt": "",
+                    "keep_alive": "1m",
+                    "options": {"num_ctx": _LOAD_CHECK_CONTEXT},
+                },
+            )
+        except ServerError as exc:
+            return LoadCheck(
+                status="failed",
+                error=explain_ollama_load_error(str(exc), self.version()),
+            )
+        # It loaded; if the unload fails, Ollama drops it after keep_alive.
+        with contextlib.suppress(DirectHostUnreachable, ServerError):
+            self.unload(model_id)
+        return LoadCheck(status="ok")
 
     def pull(
         self,

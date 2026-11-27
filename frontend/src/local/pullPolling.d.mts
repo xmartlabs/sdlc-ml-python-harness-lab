@@ -4,3 +4,5 @@ export function pollDelay(failures: number, baseMs?: number, maxMs?: number): nu
 export function nextPollStep(outcome: PollOutcome, failures: number, maxFailures?: number): { action: PollAction; failures: number };
 export interface Latest { next(): number; isLatest(ticket: number): boolean; cancel(): void }
 export function createLatest(): Latest;
+export function versionParts(version: string | null | undefined): number[];
+export function olderThan(version: string | null | undefined, min: string | null | undefined): boolean;

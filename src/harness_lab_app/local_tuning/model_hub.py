@@ -36,6 +36,7 @@ from harness_lab_app.local_tuning.contracts import (
     Verdict,
 )
 from harness_lab_app.local_tuning.memory_estimate import estimate_memory
+from harness_lab_app.local_tuning.servers import OLLAMA_SPLIT_GGUF_MIN_VERSION
 
 HF_ROOT = "https://huggingface.co"
 _HF_TIMEOUT_SECONDS = 8.0
@@ -126,6 +127,34 @@ _CURATED_SPECS: list[dict] = [
         "max_context": 131072,
         "quants": [("MXFP4", 12_110_000_000, "gpt-oss:20b")],
     },
+    # Gemma 4: the library builds need Ollama 0.30.9 (their manifest says so)
+    # and the Hugging Face files ship a separate vision file, which Ollama
+    # loads only from 0.30 on. Sizes from unsloth's repo; tools per the chat
+    # template and Ollama's capabilities.
+    {
+        "repo": "unsloth/gemma-4-E2B-it-GGUF",
+        "label": "Gemma 4 E2B",
+        "params": "2B",
+        "arch": "gemma4",
+        "tools": True,
+        "max_context": 131072,
+        "quants": [
+            ("Q4_K_M", 3_106_738_272, "gemma4:e2b", "0.30.9"),
+            ("Q8_0", 5_048_352_864, "", "0.30.0"),
+        ],
+    },
+    {
+        "repo": "unsloth/gemma-4-E4B-it-GGUF",
+        "label": "Gemma 4 E4B",
+        "params": "4B",
+        "arch": "gemma4",
+        "tools": True,
+        "max_context": 131072,
+        "quants": [
+            ("Q4_K_M", 4_977_171_584, "gemma4:e4b", "0.30.9"),
+            ("Q8_0", 8_192_953_472, "", "0.30.0"),
+        ],
+    },
     {
         "repo": "lmstudio-community/gemma-3-4b-it-GGUF",
         "label": "Gemma 3 4B",
@@ -146,15 +175,44 @@ def _hf_link(repo: str) -> str:
     return f"{HF_ROOT}/{repo}"
 
 
+# The quantizations most people pick: a good size/quality trade-off that
+# every runtime loads. Listed first; 1-2 bit, importance-matrix and
+# full-precision files follow, still selectable.
+_COMMON_QUANTS = frozenset(
+    {
+        "Q3_K_M",
+        "Q4_0",
+        "Q4_K_S",
+        "Q4_K_M",
+        "UD-Q4_K_XL",
+        "Q5_K_M",
+        "Q6_K",
+        "Q8_0",
+        "MXFP4",
+    }
+)
+
+
 def _quant(
-    repo: str, name: str, size_bytes: int | None, ollama_tag: str = ""
+    repo: str,
+    name: str,
+    size_bytes: int | None,
+    ollama_tag: str = "",
+    min_ollama_version: str = "",
 ) -> HubQuant:
     return HubQuant(
         name=name,
         size_bytes=size_bytes,
         ollama_model=ollama_tag or f"hf.co/{repo}:{name}",
         lmstudio_model=_hf_link(repo),
+        common=name.upper() in _COMMON_QUANTS,
+        min_ollama_version=min_ollama_version,
     )
+
+
+def _order(quants: list[HubQuant]) -> list[HubQuant]:
+    """Common quantizations first, each group smallest first."""
+    return sorted(quants, key=lambda q: (not q.common, q.size_bytes or 0))
 
 
 def curated_models() -> list[HubModel]:
@@ -241,8 +299,19 @@ def quants_from_tree(repo: str, tree: object) -> list[HubQuant]:
             continue
         seen.add(name)
         quants.append(_quant(repo, name, as_int(entry.get("size"))))
-    quants.sort(key=lambda q: q.size_bytes or 0)
-    return quants
+    return _order(quants)
+
+
+def has_separate_projector(tree: object) -> bool:
+    """True when the repo ships its vision weights as their own mmproj file."""
+    if not isinstance(tree, list):
+        return False
+    return any(
+        isinstance(entry, dict)
+        and "/" not in str(entry.get("path") or "")
+        and str(entry.get("path") or "").lower().startswith("mmproj")
+        for entry in tree
+    )
 
 
 def _hub_model_from_listing(entry: dict, tree: object) -> HubModel | None:
@@ -255,6 +324,12 @@ def _hub_model_from_listing(entry: dict, tree: object) -> HubModel | None:
     raw_gguf = entry.get("gguf")
     gguf: dict = raw_gguf if isinstance(raw_gguf, dict) else {}
     template = str(gguf.get("chat_template") or "")
+    split = has_separate_projector(tree)
+    if split:
+        # Ollama's hf.co pull fetches the mmproj file too, and Ollama before
+        # 0.30 cannot load that split layout for recent architectures.
+        for quant in quants:
+            quant.min_ollama_version = OLLAMA_SPLIT_GGUF_MIN_VERSION
     return HubModel(
         source="huggingface",
         repo=repo,
@@ -267,6 +342,7 @@ def _hub_model_from_listing(entry: dict, tree: object) -> HubModel | None:
         downloads=as_int(entry.get("downloads")),
         max_context=as_int(gguf.get("context_length")),
         quants=quants,
+        separate_projector=split,
     )
 
 
