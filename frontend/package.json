@@ -12,6 +12,7 @@
     "test:racing": "node --test src/gameplay/racing.test.mjs src/gameplay/runReplay.test.mjs src/scores/racingPlay.test.mjs",
     "test:game-runtime": "node --test ../game-runtime/server.test.mjs",
     "test:local": "node --test src/local/pullPolling.test.mjs",
+    "test:cases": "node --test src/caseGroups.test.mjs",
     "build:game": "vite build --config vite.game.config.ts"
   },
   "dependencies": {

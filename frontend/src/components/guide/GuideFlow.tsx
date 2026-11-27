@@ -23,7 +23,27 @@ export type GuideOption = {
   tip?: string;
   /** A short status pill: what exists today vs what is new. */
   tag?: { tone: "ok" | "warn" | "new"; text: string };
+  /**
+   * The shelf the card sits on. Options that share a group `id` are drawn under
+   * one heading, groups in the order they first appear; with fewer than two
+   * groups the step stays one flat grid.
+   */
+  group?: GuideOptionGroup;
 };
+
+export type GuideOptionGroup = { id: string; title: string; hint?: string };
+
+/** Options split by `group`, in first-appearance order; ungrouped ones share one shelf. */
+function groupOptions(options: GuideOption[]): { group: GuideOptionGroup; items: GuideOption[] }[] {
+  const out = new Map<string, { group: GuideOptionGroup; items: GuideOption[] }>();
+  for (const option of options) {
+    const group = option.group ?? { id: "", title: "" };
+    const shelf = out.get(group.id) ?? { group, items: [] };
+    shelf.items.push(option);
+    out.set(group.id, shelf);
+  }
+  return [...out.values()];
+}
 
 export type GuideStep = {
   key: string;
@@ -463,8 +483,9 @@ export function GuideFlow({
               </div>
             ) : (
               <>
-                <div className="guide-options">
-                  {(step.options?.(values) ?? []).map((option) => {
+                {(() => {
+                  const options = step.options?.(values) ?? [];
+                  const card = (option: GuideOption) => {
                     const chosen = values[step.key];
                     const pressed = Array.isArray(chosen) ? chosen.includes(option.id) : chosen === option.id;
                     return (
@@ -505,8 +526,29 @@ export function GuideFlow({
                         ) : null}
                       </div>
                     );
-                  })}
-                </div>
+                  };
+                  const groups = groupOptions(options);
+                  // Only shelves when there is more than one: a single heading
+                  // over every card says nothing.
+                  if (groups.length < 2) return <div className="guide-options">{options.map(card)}</div>;
+                  return (
+                    <div className="guide-groups">
+                      {groups.map(({ group, items }) => {
+                        const headingId = `guide-group-${step.key}-${group.id}`;
+                        return (
+                          <section aria-labelledby={headingId} className="guide-group" key={group.id}>
+                            <div className="guide-group-head">
+                              <h3 id={headingId}>{group.title}</h3>
+                              <span className="guide-group-count">{items.length}</span>
+                              {group.hint ? <span className="guide-group-hint">{group.hint}</span> : null}
+                            </div>
+                            <div className="guide-options">{items.map(card)}</div>
+                          </section>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
                 {step.kind === "many" ? (
                   <div className="guide-actions">
                     {(() => {
