@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
-from harness_lab_app.gameplay.contracts import Action, Frame, Replay, ReplayHeader
+from harness_lab_app.gameplay.contracts import (
+    Action,
+    EpisodeCancelled,
+    Frame,
+    Replay,
+    ReplayHeader,
+)
 from harness_lab_app.gameplay.replay import Recorder, observe, summarize
 
 if TYPE_CHECKING:
@@ -61,6 +67,8 @@ def run_episode(
             reply = policy(
                 current.model_copy(deep=True), config.decision_timeout_seconds
             )
+        except EpisodeCancelled:
+            outcome = "cancelled"
         except TimeoutError:
             outcome = "timeout"
         except Exception:  # provider errors must not leak credentials into artifacts

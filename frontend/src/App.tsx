@@ -51,6 +51,7 @@ import type {
   SessionState
 } from "./types";
 
+const RacingComparison = lazy(() => import("./pages/RacingComparison").then(module => ({ default: module.RacingComparison })));
 const Racing = lazy(() => import("./pages/RacingRuntime").then(module => ({ default: module.RacingRuntime })));
 
 const MESSAGES = defineMessages({
@@ -354,6 +355,7 @@ export default function App() {
         }
       >
         <Route element={<Home />} path="/" />
+        <Route element={<Suspense fallback={<p>Loading comparison…</p>}><RacingComparison /></Suspense>} path="/gameplay/racing/comparison" />
         <Route element={<Suspense fallback={<p>Loading time trial…</p>}><Racing /></Suspense>} path="/gameplay/racing" />
         {/* Capability hubs (ADR-0090): each links to screens that keep their routes. */}
         <Route element={<ModelsHub />} path="/models" />

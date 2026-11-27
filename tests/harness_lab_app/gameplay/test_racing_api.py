@@ -40,3 +40,65 @@ def test_gameplay_routes_are_covered_by_the_existing_session_gate(monkeypatch):
     assert client.get("/api/gameplay/racing/episodes").status_code == 401
     assert client.post("/api/gameplay/racing/human", json={}).status_code == 401
     assert client.post("/api/gameplay/racing/episodes", json={}).status_code == 401
+
+    assert client.get("/api/gameplay/racing/ghosts/race-" + "a" * 20).status_code == 401
+    assert client.post("/api/gameplay/racing/ghosts/calibration").status_code == 401
+    assert client.get("/api/gameplay/racing/comparisons/recordings").status_code == 401
+    assert (
+        client.post("/api/gameplay/racing/comparisons/sessions", json={}).status_code
+        == 401
+    )
+    assert client.post("/api/gameplay/racing/comparisons/examples").status_code == 401
+    assert (
+        client.post("/api/gameplay/racing/comparisons/human", json={}).status_code
+        == 401
+    )
+
+
+def test_human_ghost_runtime_errors_return_unavailable(monkeypatch):
+    from urllib.error import HTTPError, URLError
+
+    from harness_lab_app.db import get_session
+    from harness_lab_app.gameplay.racing_service import RacingService
+
+    app = FastAPI()
+    app.include_router(racing_router)
+    app.dependency_overrides[get_session] = lambda: None
+    payload = {
+        "ghost_episode_id": "race-" + "a" * 20,
+        "actions": [{"throttle": 1.0, "brake": 0.0, "steer": 0.0, "reset": 0.0}],
+    }
+    for error in (
+        URLError("private address"),
+        HTTPError("private address", 429, "full", None, None),
+        RuntimeError("private Node path"),
+    ):
+
+        def unavailable(*args, _error=error, **kwargs):
+            raise _error
+
+        monkeypatch.setattr(RacingService, "save_human", unavailable)
+        response = TestClient(app, raise_server_exceptions=False).post(
+            "/api/gameplay/racing/human", json=payload
+        )
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Game runtime is unavailable"}
+
+
+def test_calibration_preflight_runtime_error_returns_unavailable(monkeypatch):
+    from harness_lab_app.db import get_session
+    from harness_lab_app.gameplay.racing_service import RacingService
+
+    app = FastAPI()
+    app.include_router(racing_router)
+    app.dependency_overrides[get_session] = lambda: None
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("private Node path")
+
+    monkeypatch.setattr(RacingService, "create_calibration", unavailable)
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/api/gameplay/racing/ghosts/calibration"
+    )
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Game runtime is unavailable"}

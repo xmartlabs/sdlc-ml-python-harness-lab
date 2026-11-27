@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "test": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test:racing": "node --test src/gameplay/racing.test.mjs src/gameplay/runReplay.test.mjs src/scores/racingPlay.test.mjs",
+    "test:racing": "node --test src/gameplay/racing.test.mjs src/gameplay/runReplay.test.mjs src/scores/racingPlay.test.mjs src/gameplay/ghost.test.mjs src/gameplay/racingBenchmark.test.mjs src/gameplay/comparisonGhost.test.mjs src/gameplay/racingCamera.test.mjs",
     "test:game-runtime": "node --test ../game-runtime/server.test.mjs",
     "test:local": "node --test src/local/pullPolling.test.mjs",
     "test:cases": "node --test src/caseGroups.test.mjs",

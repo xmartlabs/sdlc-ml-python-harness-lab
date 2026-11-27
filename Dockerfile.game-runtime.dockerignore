@@ -16,3 +16,7 @@
 !game-runtime/server.test.mjs
 !scripts/
 !scripts/racing_bridge.mjs
+!benchmarks/
+!benchmarks/racing-play-v1/
+!benchmarks/racing-play-v1/starter/
+!benchmarks/racing-play-v1/starter/condition.mjs

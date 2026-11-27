@@ -161,3 +161,33 @@ runtime fingerprint. Calibration inputs through the human-save HTTP path complet
 12gates in22.4333 simulated racing seconds with no impacts, off-track time or resets.
 That is an instrument check, not a human/model benchmark. Routine development now
 uses scripted checks or only Gemma to conserve resources; larger models stay unloaded.
+
+## Recorded ghost challenges (PR3)
+
+Choose **Challenge ghost** beside a model's recorded attempt. The server verifies
+the recording against the current runtime; the game also checks its engine, track,
+seed, cadence and state snapshots. Missing, corrupt, incompatible or countdown-only
+recordings are rejected with an explanation. Meaningful partial attempts can be
+selected, but show **PARTIAL** and stop at their last known state; a timeout is never
+turned into a completed lap. **Practice vs SCRIPTED ghost** creates an explicitly
+labeled deterministic calibration reference when no useful model recording exists. Repeated practice
+requests reuse a completed, verified reference for the same engine build and seed
+rather than adding duplicate rows/artifacts; missing or invalid recordings are rebuilt.
+It performs no model inference and is never reported as a model benchmark.
+
+Selection starts a new human race with the reference beside it. A translucent
+purple car replays recorded controls on the human simulation tick, without collisions
+or effects on the human car. Both cars share countdown, pause and restart; thinking
+time is excluded. The HUD compares course-progress distance (not straight-line
+distance or an estimated time gap) and compares valid finish times against a finished
+reference. An unfinished reference has no lap-time target and cannot establish a
+lap-time win. Solo Watch playback remains separate and disables challenges until a
+new human start. Ghost selection/playback transitions are locked during active runs
+or pending verification to avoid discarding the current attempt.
+
+Saving a human challenge re-simulates its controls and records `ghost_episode_id`
+and `ghost_engine_sha256` in episode policy metadata and replay provenance. This
+preserves the selected reference; it does not authenticate the human's actual screen
+or prove a recording was not wholly replaced. Retain the reference artifacts and
+matching image when archiving a challenge. No online sharing, live agents or vision
+support is introduced.
