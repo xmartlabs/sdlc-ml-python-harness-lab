@@ -23,9 +23,9 @@ COPY --from=build /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /usr/lib/
 RUN addgroup -g 1000 node && adduser -D -u 1000 -G node node
 WORKDIR /game
 COPY --chown=node:node --from=build /build/frontend/game-dist ./game-runtime/public
-COPY --chown=node:node frontend/src/gameplay/racing.mjs ./frontend/src/gameplay/racing.mjs
-COPY --chown=node:node game-runtime/server.mjs game-runtime/cli.mjs ./game-runtime/
-COPY --chown=node:node scripts/racing_bridge.mjs ./scripts/racing_bridge.mjs
+COPY --chown=node:node frontend/src/gameplay/racing.mjs frontend/src/gameplay/racingBenchmark.mjs ./frontend/src/gameplay/
+COPY --chown=node:node game-runtime/server.mjs game-runtime/cli.mjs game-runtime/games.mjs ./game-runtime/
+COPY --chown=node:node scripts/racing_bridge.mjs scripts/racing_benchmark_bridge.mjs ./scripts/
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 CMD ["node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]

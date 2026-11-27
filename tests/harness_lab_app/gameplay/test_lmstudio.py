@@ -109,9 +109,22 @@ def test_direct_policy_uses_loaded_instance_and_records_usage(tmp_path, server):
     )
     assert replay.result.status == "completed"
     assert len(requests) == 2
-    assert requests[0][0] == "/api/v0/chat/completions"
+    assert requests[0][0] == "/v1/chat/completions"
     assert requests[0][1]["model"] == "instance-1"
     assert requests[0][1]["max_tokens"] == 512
+    body = requests[0][1]
+    assert body["reasoning_effort"] == "none"
+    assert body["temperature"] == 0
+    schema = body["response_format"]["json_schema"]["schema"]
+    assert (
+        schema["properties"]["observation_id"]["const"] == replay.initial.observation_id
+    )
+    assert schema["properties"]["controls"]["properties"]["move"] == {
+        "type": "number",
+        "minimum": -1.0,
+        "maximum": 1.0,
+    }
+    assert schema["properties"]["controls"]["additionalProperties"] is False
     provenance = replay.frames[0].provenance
     assert provenance["requested_model"] == "test/model"
     assert provenance["instance_id"] == "instance-1"

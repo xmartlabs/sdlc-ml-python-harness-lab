@@ -64,3 +64,14 @@ test('raw backslash cannot turn a public asset request into a private session',(
  }
  assert.equal((await(await fetch(base+'/health')).json()).sessions,0);
 }));
+
+test('fixed-game selection isolates rules and build identity in HTTP sessions',()=>withServer(async base=>{
+ const race=await call(base,'/v1/sessions',{seed:7,environment:'tidal-ring'});
+ const benchmark=await call(base,'/v1/sessions',{seed:7,environment:'tidal-ring-data-v1'});
+ assert.equal(race.status,201);assert.equal(benchmark.status,201);
+ assert.notEqual(race.body.engine_sha256,benchmark.body.engine_sha256);
+ const cooked=await call(base,`/v1/sessions/${benchmark.body.session_id}/step`,{controls:{throttle:0,brake:0,steer:0,reset:0},ticks:40});
+ assert.equal(cooked.body.state.track_id,'tidal-ring');assert.equal(cooked.body.state.tick,40);
+ const untouched=await call(base,`/v1/sessions/${race.body.session_id}`,undefined,'GET');assert.equal(untouched.body.state.tick,0);
+ assert.equal((await call(base,'/v1/sessions',{seed:7,environment:'unknown'})).status,400);
+}));

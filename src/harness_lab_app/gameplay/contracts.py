@@ -24,6 +24,7 @@ class EpisodeConfig(WireModel):
 class ControlBounds(WireModel):
     minimum: float
     maximum: float
+    integer: bool = Field(default=False, exclude_if=lambda value: not value)
 
     @model_validator(mode="after")
     def ordered(self) -> ControlBounds:
@@ -57,6 +58,8 @@ class Action(WireModel):
             bounds = observation.controls[name]
             if not bounds.minimum <= value <= bounds.maximum:
                 raise ValueError("Control outside advertised bounds")
+            if bounds.integer and not value.is_integer():
+                raise ValueError("Control must be an integer")
 
 
 class PolicyReply(WireModel):
@@ -65,7 +68,13 @@ class PolicyReply(WireModel):
     provenance: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-DecisionOutcome = Literal["applied", "invalid_action", "timeout", "provider_error"]
+class EpisodeCancelled(Exception):
+    """An explicit operator stop; never a fabricated action or provider failure."""
+
+
+DecisionOutcome = Literal[
+    "applied", "invalid_action", "timeout", "provider_error", "cancelled"
+]
 
 
 class Frame(WireModel):
@@ -81,7 +90,12 @@ class Frame(WireModel):
 
 class EpisodeResult(WireModel):
     status: Literal[
-        "completed", "budget_exhausted", "invalid_action", "timeout", "provider_error"
+        "completed",
+        "budget_exhausted",
+        "invalid_action",
+        "timeout",
+        "provider_error",
+        "cancelled",
     ]
     simulation_ticks: int = Field(ge=0)
     simulation_seconds: float = Field(ge=0)

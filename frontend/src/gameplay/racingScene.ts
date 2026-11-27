@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { TRACK } from './racing.mjs';
 import type { RaceObservation } from './racing.mjs';
+import {fitTrackOverview,followCameraPose,selectFollowTarget} from './racingCamera.mjs';
+import type {CameraOptions} from './racingCamera.mjs';
 
 /** Original geometry-only artwork. Rendering never advances or scores the game. */
 export function createRacingScene(canvas: HTMLCanvasElement) {
@@ -10,7 +12,8 @@ export function createRacingScene(canvas: HTMLCanvasElement) {
   renderer.shadowMap.type = THREE.PCFShadowMap;
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#8ac5cd');
-  scene.fog = new THREE.Fog('#8ac5cd', 95, 280);
+  const chaseFog = new THREE.Fog('#8ac5cd', 95, 280);
+  scene.fog = chaseFog;
   scene.add(new THREE.HemisphereLight('#def6ff', '#425947', 2.4));
   const sun = new THREE.DirectionalLight('#fff2d0', 3.1);
   sun.position.set(-35, 80, 35); sun.castShadow = true;
@@ -18,8 +21,9 @@ export function createRacingScene(canvas: HTMLCanvasElement) {
   sun.shadow.bias = -.0015; sun.shadow.normalBias = .15;
   Object.assign(sun.shadow.camera, { left: -80, right: 80, top: 80, bottom: -80, far: 180 });
   scene.add(sun);
-  const camera = new THREE.PerspectiveCamera(52, 1, .1, 500);
-  camera.position.set(85, 105, 100);
+  const followCamera = new THREE.PerspectiveCamera(52, 1, .1, 500);
+  const overviewCamera = new THREE.OrthographicCamera(-80, 80, 60, -60, .1, 500);
+  overviewCamera.up.set(0, 0, -1);
   const materials: THREE.Material[] = [];
   function material(color: string, roughness = .8) {
     const m = new THREE.MeshStandardMaterial({ color, roughness }); materials.push(m); return m;
@@ -94,15 +98,43 @@ export function createRacingScene(canvas: HTMLCanvasElement) {
   mesh(new THREE.BoxGeometry(.15, .12, 1.25), pale, 1.6, .7, 0, car);
   mesh(new THREE.BoxGeometry(.35, .15, 1.9), dark, -1.35, 1.2, 0, car);
   for (const x of [-1, 1]) for (const z of [-.85, .85]) mesh(new THREE.CylinderGeometry(.4, .4, .3, 12), tires, x, .4, z, car).rotation.x = Math.PI / 2;
-  const resize = () => { const width = canvas.clientWidth, height = canvas.clientHeight; renderer.setSize(width, height, false); camera.aspect = width / Math.max(height, 1); camera.updateProjectionMatrix(); };
+  // Spectator only: no reference to the human state or collision simulation.
+  const ghostCar = car.clone(); ghostCar.visible = false; scene.add(ghostCar);
+  ghostCar.traverse(object => {
+    if (object instanceof THREE.Mesh) {
+      const ghostMaterial = new THREE.MeshBasicMaterial({ color: '#d7a3ff', transparent: true, opacity: .48, depthWrite: false });
+      object.material = ghostMaterial; materials.push(ghostMaterial); object.castShadow = false; object.receiveShadow = false;
+    }
+  });
+  const resize = () => {
+    const width = Math.max(1, canvas.clientWidth), height = Math.max(1, canvas.clientHeight);
+    renderer.setSize(width, height, false);
+    followCamera.aspect = width / height; followCamera.updateProjectionMatrix();
+    const fit = fitTrackOverview(TRACK.centerline, TRACK.width / 2 + 3, width, height);
+    Object.assign(overviewCamera, {left: -fit.halfWidth, right: fit.halfWidth, top: fit.halfHeight, bottom: -fit.halfHeight});
+    overviewCamera.position.set(fit.centerX, 180, fit.centerZ);
+    overviewCamera.lookAt(fit.centerX, 0, fit.centerZ); overviewCamera.updateProjectionMatrix();
+  };
   const observer = new ResizeObserver(resize); observer.observe(canvas); resize();
-  let initialized = false;
+  let previousMode = '', previousTarget = -1;
   return {
-    render(state: RaceObservation, overview = false) {
+    render(state: RaceObservation, overview = false, ghost?: RaceObservation, options?: CameraOptions) {
+      ghostCar.visible = !!ghost;
+      if (ghost) { ghostCar.position.set(ghost.x, .18, ghost.z); ghostCar.rotation.y = -ghost.heading; }
       car.position.set(state.x, .12, state.z); car.rotation.y = -state.heading;
-      const target = overview ? new THREE.Vector3(82, 88, 88) : new THREE.Vector3(state.x - Math.cos(state.heading) * 16, 16, state.z - Math.sin(state.heading) * 16);
-      camera.position.lerp(target, initialized ? .09 : 1); initialized = true;
-      camera.lookAt(overview ? new THREE.Vector3(0, 0, 0) : new THREE.Vector3(state.x + Math.cos(state.heading) * 6, 0, state.z + Math.sin(state.heading) * 6));
+      const mode = options?.mode ?? (overview ? 'overview' : 'follow');
+      const targetIndex = options?.target ?? 0;
+      let camera: THREE.Camera = overviewCamera;
+      scene.fog = mode === 'overview' ? null : chaseFog;
+      if (mode === 'follow') {
+        const target = selectFollowTarget([state, ghost], targetIndex) ?? state;
+        const pose = followCameraPose(target);
+        const position = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z);
+        followCamera.position.lerp(position, previousMode === mode && previousTarget === targetIndex ? .09 : 1);
+        followCamera.lookAt(pose.lookAt.x, pose.lookAt.y, pose.lookAt.z);
+        camera = followCamera;
+      }
+      previousMode = mode; previousTarget = targetIndex;
       renderer.render(scene, camera);
     },
     dispose() { observer.disconnect(); scene.traverse(object => { if (object instanceof THREE.Mesh) object.geometry.dispose(); }); materials.forEach(m => m.dispose()); texture.dispose(); renderer.dispose(); }

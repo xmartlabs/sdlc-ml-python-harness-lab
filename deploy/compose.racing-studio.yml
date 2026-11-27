@@ -1,0 +1,72 @@
+# Standalone racing studio. Run from checkout root; no personal auth/source mounts.
+x-app: &app
+  build:
+    context: ..
+    dockerfile: Dockerfile.api
+  image: sdlc-ml-python-harness-lab-api:latest
+  restart: unless-stopped
+  environment: &environment
+    HARNESS_LAB_REPO_ROOT: /app
+    HARNESS_LAB_DATABASE_URL: sqlite:////app/data/app/racing-studio.db
+    HARNESS_LAB_GAMEPLAY_RUNTIME_URL: http://game-runtime:8080
+    HARNESS_LAB_REDIS_URL: redis://redis:6379/0
+    HARNESS_LAB_RUNNER_PYTHON: /opt/venv/bin/python
+    HARNESS_LAB_HOST_REPO_ROOT: ${PWD}
+    HARNESS_LAB_HOST_LOCAL_SOURCES_ROOT: ${PWD}
+    LMSTUDIO_BASE_URL: http://host.docker.internal:1234/v1
+  volumes:
+    - ${PWD}:/app
+    - ${RACING_STUDIO_DATA_DIR:-${PWD}/data/tmp/racing-studio}:/app/data
+  depends_on:
+    game-runtime:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+services:
+  api:
+    <<: *app
+    ports:
+      - '127.0.0.1:18009:8008'
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+  worker:
+    <<: *app
+    command: [celery, -A, harness_lab_app.celery_app, worker, -Q, runs, --loglevel=info, --concurrency=1, -n, 'runs@%h']
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+  game-runtime:
+    build:
+      context: ..
+      dockerfile: Dockerfile.game-runtime
+    image: harness-lab-game-runtime:studio
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    mem_limit: 192m
+    cpus: 1.0
+    pids_limit: 32
+    ports:
+      - '127.0.0.1:18080:8080'
+  frontend-prod:
+    build:
+      context: ..
+      dockerfile: Dockerfile.frontend.prod
+    image: harness-lab-frontend:studio
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:18081:80'
+    depends_on:
+      api:
+        condition: service_healthy
+      game-runtime:
+        condition: service_healthy

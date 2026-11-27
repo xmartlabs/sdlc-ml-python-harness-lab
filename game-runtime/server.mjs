@@ -1,16 +1,15 @@
 /** Baked fixed-game executable: static WebGL build + bounded headless sessions. */
 import { createServer } from 'node:http';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve, extname, sep } from 'node:path';
-import { createRace, stepRace, observeRace, raceMetrics, isTerminal, baselineControls, TRACK } from '../frontend/src/gameplay/racing.mjs';
+import {games,metadata} from './games.mjs';
 
-const engineHash=createHash('sha256').update(readFileSync(new URL('../frontend/src/gameplay/racing.mjs',import.meta.url))).digest('hex');
+const defaultGame=games.get('tidal-ring');
 export function createGameServer({maxSessions=32,ttlMs=900_000,staticRoot=fileURLToPath(new URL('./public/',import.meta.url)),now=Date.now}={}) {
  const sessions=new Map();
- const snapshot=(state,events=[])=>({state:observeRace(state),metrics:raceMetrics(state),terminal:isTerminal(state),events});
+ const snapshot=(session,events=[])=>({state:session.game.observe(session.state),metrics:session.game.metrics(session.state),terminal:session.game.terminal(session.state),events});
  const json=(response,status,body)=>{response.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});response.end(JSON.stringify(body));};
  const prune=()=>{for(const [id,session] of sessions)if(now()-session.touched>ttlMs)sessions.delete(id);};
  const timer=setInterval(prune,30_000);timer.unref();
@@ -21,7 +20,8 @@ export function createGameServer({maxSessions=32,ttlMs=900_000,staticRoot=fileUR
    // before routing so the public /game/ proxy cannot reach private /v1/.
    if(request.url.includes('\\'))return json(response,400,{error:'Invalid runtime request'});
    const path=new URL(request.url,'http://runtime').pathname;
-   if(request.method==='GET' && path==='/health')return json(response,200,{status:'ok',api_version:'game-runtime.v1',environment_id:TRACK.id,environment_version:TRACK.version,engine_sha256:engineHash,node_version:process.version,sessions:sessions.size});
+   if(request.method==='GET' && path==='/health')return json(response,200,{status:'ok',api_version:'game-runtime.v1',...metadata(defaultGame),games:[...games.values()].map(metadata),sessions:sessions.size});
+   if(request.method==='GET'&&path==='/game/build.json')return json(response,200,metadata(defaultGame));
    if(path.startsWith('/v1/')) {
     let payload={};
     if(request.method==='POST') {
@@ -29,23 +29,24 @@ export function createGameServer({maxSessions=32,ttlMs=900_000,staticRoot=fileUR
      payload=JSON.parse(raw);if(!payload||Array.isArray(payload)||typeof payload!=='object')throw new Error('Object required');
     }
     if(path==='/v1/sessions'&&request.method==='POST') {
-     if(Object.keys(payload).some(k=>k!=='seed')||!Number.isSafeInteger(payload.seed)||payload.seed<0||payload.seed>4294967295)throw new Error('Invalid seed');
+     if(Object.keys(payload).some(k=>!['seed','environment'].includes(k))||!Number.isSafeInteger(payload.seed)||payload.seed<0||payload.seed>4294967295)throw new Error('Invalid seed');
      if(sessions.size>=maxSessions)return json(response,429,{error:'Runtime session capacity reached'});
-     const id=randomUUID(),state=createRace(payload.seed);sessions.set(id,{state,touched:now()});
-     return json(response,201,{session_id:id,...snapshot(state),engine_sha256:engineHash,node_version:process.version});
+     const game=games.get(payload.environment||'tidal-ring');if(!game)throw new Error('Unknown fixed game');
+     const id=randomUUID(),session={game,state:game.create(payload.seed),touched:now()};sessions.set(id,session);
+     return json(response,201,{session_id:id,...snapshot(session),...metadata(game)});
     }
     const match=path.match(/^\/v1\/sessions\/([a-f0-9-]{36})(?:\/(step|baseline))?$/);
     const session=match&&sessions.get(match[1]);
     if(!session)return json(response,404,{error:'Unknown or expired game session'});
     session.touched=now();
     if(request.method==='DELETE'&&!match[2]){sessions.delete(match[1]);return json(response,200,{closed:true});}
-    if(request.method==='GET'&&!match[2])return json(response,200,snapshot(session.state));
-    if(request.method==='POST'&&match[2]==='baseline')return json(response,200,{...snapshot(session.state),baseline:baselineControls(session.state)});
+    if(request.method==='GET'&&!match[2])return json(response,200,snapshot(session));
+    if(request.method==='POST'&&match[2]==='baseline')return json(response,200,{...snapshot(session),baseline:session.game.baseline(session.state)});
     if(request.method==='POST'&&match[2]==='step') {
      if(Object.keys(payload).some(k=>!['controls','ticks'].includes(k))||!Number.isSafeInteger(payload.ticks)||payload.ticks<1||payload.ticks>240)throw new Error('Invalid interval');
      if(!payload.controls||Array.isArray(payload.controls)||typeof payload.controls!=='object')throw new Error('Controls required');
-     const events=stepRace(session.state,payload.controls,payload.ticks);
-     return json(response,200,snapshot(session.state,events));
+     const events=session.game.step(session.state,payload.controls,payload.ticks);
+     return json(response,200,snapshot(session,events));
     }
     return json(response,405,{error:'Unsupported operation'});
    }
